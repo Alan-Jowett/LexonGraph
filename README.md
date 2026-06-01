@@ -13,8 +13,10 @@ graph using a query embedding and fetch only the blocks needed to answer a quest
 Features
  
 - Semantic vector graph  
-  Embeddings are organized into a multi‑parent DAG of immutable blocks, each storing
-  centroids and links to children.
+  Embeddings are organized into a Merkle tree of immutable blocks. Each branch
+  block stores embedding-keyed entries that point to child blocks, while leaf
+  blocks store embedding-keyed entries with metadata and content. Higher-level
+  summaries such as centroids can be layered on top.
  
 - Log‑structured storage  
   All updates are append‑only. New blocks are created during monthly rebuilds and
@@ -38,7 +40,7 @@ Features
   historical point and safe reachability‑based garbage collection.
  
 - LLM‑native query model  
-  A query embedding is routed from the root through centroid‑nearest neighbors to
+  A query embedding is routed from the root through the block hierarchy to
   relevant chunks, messages, threads, or topics.
  
 ---
@@ -47,11 +49,16 @@ How It Works
  
 1. Immutable Blocks
 Each block contains:
-- A centroid embedding  
-- A list of child links  
-- Optional metadata (chunk, message, thread, WG, etc.)
+- A canonical CBOR payload
+- Compact integer map keys on wire
+- A block-scoped embedding specification
+- A sorted set of embedding-keyed entries
+- Either branch entries with child references or leaf entries with payloads
+- Optional extension metadata
  
 Blocks are never modified after creation.
+The format remains map-based so it can evolve without forcing positional tuple
+compatibility rules.
  
 2. Append‑Only Logs
 LexonGraph maintains:
@@ -72,7 +79,8 @@ When new data arrives:
 A client (e.g., an MCP server):
 1. Computes a query embedding.
 2. Fetches the root block.
-3. Greedily descends to the nearest child centroids.
+3. Greedily descends by scoring the embeddings or summaries stored in each
+   block.
 4. Repeats until reaching leaf blocks.
 5. Returns the top‑K relevant items.
  
@@ -86,8 +94,8 @@ Storage Layout
 /lexongraph/
     /blocks/
         /2026-05/
-            block-abc123.json
-            block-def456.json
+            block-abc123.cbor
+            block-def456.cbor
     /manifests/
         root-2026-05.json
     /logs/
@@ -97,6 +105,7 @@ Storage Layout
 ```
  
 Everything is immutable and content‑addressed.
+The canonical block format is defined in `docs/protocol/blocks.md`.
  
 ---
  
@@ -130,8 +139,8 @@ MIT
 Status
  
 LexonGraph is in early development.  
-APIs and block formats may evolve as the system stabilizes.
-`
+APIs and block formats may evolve as the system stabilizes. The canonical block
+protocol is specified in `docs/protocol/blocks.md`.
  
 ---
  
