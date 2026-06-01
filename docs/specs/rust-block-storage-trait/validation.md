@@ -40,8 +40,8 @@ present divergent content under that identifier.
 
 Request a block ID that is not present in the store.
 
-**Pass condition:** `get` returns explicit absence rather than an error shaped
-as success.
+**Pass condition:** `get` returns `Ok(None)` for the missing block ID, rather
+than returning a block or reporting an integrity or backend failure.
 
 **Traces to:** REQ-BLOCK-STORE-004, REQ-BLOCK-STORE-008
 

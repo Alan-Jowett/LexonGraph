@@ -67,8 +67,8 @@ backend-specific addressing details to consumers.
 
 ### REQ-BLOCK-STORE-008
 
-The crate shall surface explicit failures for lookup, backend access, malformed
-stored content, and block-identity mismatch, and shall not silently treat those
+The crate shall surface explicit failures for backend access, malformed stored
+content, and block-identity mismatch, and shall not silently treat those
 conditions as successful retrieval.
 
 ### REQ-BLOCK-STORE-009
