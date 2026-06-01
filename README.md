@@ -81,7 +81,7 @@ A client (e.g., an MCP server):
 2. Fetches the root block.
 3. Performs deterministic frontier search by scoring candidate embeddings,
    ranking them, and expanding the top frontier of unique child blocks.
-4. Repeats until the top results are leaf blocks.
+4. Repeats until the top results are leaf entries.
 5. Returns the top `N` leaf results.
 
 All reads are simple HTTP GETs, ideal for CDN caching.

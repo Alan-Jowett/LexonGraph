@@ -230,13 +230,14 @@ For branch blocks, entries are ordered by the tuple:
 
 `(embedding_bytes, child_block_id)`
 
-For leaf blocks, entries are ordered by their canonical entry encoding. This
-preserves deterministic ordering even when multiple leaf entries carry identical
-embedding bytes.
+For leaf blocks, entries are ordered by the canonical CBOR bytes of the
+version-1 LeafEntry map under the field-key registry defined by this
+specification. This preserves deterministic ordering even when multiple leaf
+entries carry identical embedding bytes.
 
 The following are invalid:
 
-- duplicate branch entries with the same `(embedding, child)` pair
+- duplicate branch entries with the same `(embedding_bytes, child_block_id)` pair
 - unsorted entries
 - branch entries missing `child`
 - leaf entries missing `metadata` or `content`
