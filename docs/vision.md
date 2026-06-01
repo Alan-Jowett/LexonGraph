@@ -4,11 +4,14 @@
 - Data is stored in immutable blocks.
 - Each block is identified by SHA‑256(canonical_cbor_bytes).
 - Blocks are small (16–32 KB) to fit within QUIC/HTTP‑3 initial congestion window.
-- A block is logically a map from an embedding to either:
-  - a child block reference
-  - a leaf node containing embedding, metadata, and content
-- Embeddings are encoded as typed bytes so different precisions and compressed
-  representations remain distinguishable.
+- Blocks are encoded as canonical CBOR maps.
+- Branch blocks map embeddings to child block references.
+- Leaf blocks map embeddings to metadata and content payloads.
+- Each block carries a shared embedding specification so dimensions and encoding
+  are not repeated per entry.
+- Embeddings are stored as raw bytes interpreted under the block's embedding
+  specification, so different precisions and compressed representations remain
+  distinguishable.
 - Entries are serialized in deterministic order so identical logical blocks hash
   identically.
 - Optional summaries such as centroids may be carried as higher-level indexing

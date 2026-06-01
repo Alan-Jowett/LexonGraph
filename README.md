@@ -14,8 +14,9 @@ Features
  
 - Semantic vector graph  
   Embeddings are organized into a Merkle tree of immutable blocks. Each branch
-  block stores embedding-keyed entries that point to child blocks or inline
-  leaves, and higher-level summaries such as centroids can be layered on top.
+  block stores embedding-keyed entries that point to child blocks, while leaf
+  blocks store embedding-keyed entries with metadata and content. Higher-level
+  summaries such as centroids can be layered on top.
  
 - Log‑structured storage  
   All updates are append‑only. New blocks are created during monthly rebuilds and
@@ -49,11 +50,14 @@ How It Works
 1. Immutable Blocks
 Each block contains:
 - A canonical CBOR payload
+- A block-scoped embedding specification
 - A sorted set of embedding-keyed entries
-- Either child block references or leaf payloads
+- Either branch entries with child references or leaf entries with payloads
 - Optional extension metadata
  
 Blocks are never modified after creation.
+The format remains map-based so it can evolve without forcing positional tuple
+compatibility rules.
  
 2. Append‑Only Logs
 LexonGraph maintains:
