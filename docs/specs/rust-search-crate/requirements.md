@@ -66,6 +66,15 @@ The public search operation shall require:
 - a traversal width `w`
 - a final result count `n`
 
+The public API boundary shall also require access to:
+
+- a block store capable of loading the root and selected child blocks
+- implementations of the required policy traits
+
+Those dependencies may be supplied either as direct operation inputs or through
+construction or configuration of the searcher instance that serves the
+operation.
+
 ### REQ-SEARCH-006
 
 The crate shall surface explicit failure when the root block cannot be loaded,

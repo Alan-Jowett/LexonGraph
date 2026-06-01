@@ -32,6 +32,18 @@ child expansion and scores all entries in that root block.
 
 ### VAL-SEARCH-002
 
+Inspect the public search API boundary.
+
+**Pass condition:** the API requires `root block ID`, `target embedding`, `w`,
+and `n`, and it also requires access to a block store plus the required policy
+trait implementations, whether those dependencies are supplied per invocation or
+bound through searcher construction or configuration.
+
+**Traces to:** REQ-SEARCH-001, REQ-SEARCH-004, REQ-SEARCH-005, REQ-SEARCH-007,
+REQ-SEARCH-008
+
+### VAL-SEARCH-003
+
 Run search twice with the same root block ID, target embedding, `n`, `w`,
 stored block set, and deterministic trait implementations.
 
@@ -40,7 +52,7 @@ explicit failure.
 
 **Traces to:** REQ-SEARCH-011
 
-### VAL-SEARCH-003
+### VAL-SEARCH-004
 
 Provide equal-embedding branch entries that point to different child block IDs.
 
@@ -50,7 +62,7 @@ ordering rules.
 
 **Traces to:** REQ-SEARCH-009, REQ-SEARCH-010
 
-### VAL-SEARCH-004
+### VAL-SEARCH-005
 
 Provide differently embedded branch entries that point to the same child block
 ID.
@@ -61,7 +73,7 @@ that child can be selected for expansion.
 
 **Traces to:** REQ-SEARCH-009, REQ-SEARCH-010
 
-### VAL-SEARCH-005
+### VAL-SEARCH-006
 
 Provide equal embeddings in leaf entries that reside in different leaf blocks.
 
@@ -70,7 +82,7 @@ appear in the final ordered results.
 
 **Traces to:** REQ-SEARCH-009, REQ-SEARCH-010
 
-### VAL-SEARCH-006
+### VAL-SEARCH-007
 
 Construct a search round where multiple ranked branch candidates refer to the
 same child block ID and at least one such child falls within the effective top
@@ -82,7 +94,7 @@ occurrences.
 
 **Traces to:** REQ-SEARCH-009, REQ-SEARCH-010
 
-### VAL-SEARCH-007
+### VAL-SEARCH-008
 
 Configure a compatibility trait that rejects a visited block's
 `embedding_spec` for the target embedding.
@@ -92,7 +104,7 @@ incompatible block.
 
 **Traces to:** REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-008
 
-### VAL-SEARCH-008
+### VAL-SEARCH-009
 
 Cause the block store to report absence or explicit failure for the root block
 ID or for a selected child block ID.
@@ -102,7 +114,7 @@ as though the missing block did not exist.
 
 **Traces to:** REQ-SEARCH-004, REQ-SEARCH-006
 
-### VAL-SEARCH-009
+### VAL-SEARCH-010
 
 Cause the block crate to reject loaded bytes as malformed, non-conforming, or
 invalid for the requested block ID.
@@ -112,7 +124,7 @@ that block.
 
 **Traces to:** REQ-SEARCH-003, REQ-SEARCH-006
 
-### VAL-SEARCH-010
+### VAL-SEARCH-011
 
 Supply scoring-trait implementations that use different similarity metrics but
 remain deterministic within the same compatibility context.
@@ -123,7 +135,7 @@ tie-break behavior.
 
 **Traces to:** REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-012
 
-### VAL-SEARCH-011
+### VAL-SEARCH-012
 
 Run search over a graph where the top `n` ranked candidates are all leaves
 before all reachable branch children have been expanded.
@@ -133,7 +145,7 @@ top `n` leaves without expanding lower-ranked remaining branches.
 
 **Traces to:** REQ-SEARCH-002, REQ-SEARCH-009
 
-### VAL-SEARCH-012
+### VAL-SEARCH-013
 
 Run search over a graph that cannot produce `n` reachable leaf candidates after
 all expandable branch candidates have been exhausted.
