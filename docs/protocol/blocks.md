@@ -223,12 +223,20 @@ maps rather than as a literal CBOR map keyed by embedding bytes.
 This keeps deterministic hashing straightforward while preserving room for
 future additive fields on blocks and entries.
 
-Entries are sorted by the raw `embedding` bytes interpreted under the enclosing
-block's `embedding_spec`.
+Entries are sorted deterministically under the enclosing block's
+`embedding_spec`.
+
+For branch blocks, entries are ordered by the tuple:
+
+`(embedding_bytes, child_block_id)`
+
+For leaf blocks, entries are ordered by their canonical entry encoding. This
+preserves deterministic ordering even when multiple leaf entries carry identical
+embedding bytes.
 
 The following are invalid:
 
-- duplicate embeddings in the same block
+- duplicate branch entries with the same `(embedding, child)` pair
 - unsorted entries
 - branch entries missing `child`
 - leaf entries missing `metadata` or `content`
@@ -273,12 +281,12 @@ The following illustrates the logical structure, not literal encoded bytes:
   embedding_spec: { dims: 1536, encoding: "f16le" },
   entries: [
     {
-      embedding: <bytes>,
-      child: <32-byte sha256>
+      embedding: <embedding-a>,
+      child: <child-a>
     },
     {
-      embedding: <bytes>,
-      child: <32-byte sha256>
+      embedding: <embedding-b>,
+      child: <child-b>
     }
   ]
 }
@@ -292,8 +300,8 @@ The corresponding canonical on-wire shape uses the field-key registry:
   1: "branch",
   2: { 0: 1536, 1: "f16le" },
   3: [
-    { 0: <bytes>, 1: <32-byte sha256> },
-    { 0: <bytes>, 1: <32-byte sha256> }
+    { 0: <embedding-a>, 1: <child-a> },
+    { 0: <embedding-b>, 1: <child-b> }
   ]
 }
 ```
@@ -339,7 +347,8 @@ revision:
 4. Leaf blocks contain only `{ embedding, metadata, content }` entries.
 5. Unknown extension fields under `ext` do not invalidate parsing for known
    versions.
-6. Duplicate or unsorted embeddings are rejected within a block.
+6. Redundant duplicate branch entries or unsorted entries are rejected within a
+   block.
 7. Updating a descendant changes the identifiers of all rewritten ancestors.
 8. Distinct embedding encodings remain distinguishable in canonical bytes.
 9. Canonical on-wire encoding uses the versioned integer field-key registry.
@@ -351,8 +360,11 @@ revision:
 This document specifies the block protocol only.
 
 Higher-level indexing concepts such as centroids, routing summaries, rebuild
-manifests, and transport strategy may be layered on top of this protocol, but
-they are not required fields of the version 1 block format.
+manifests, transport strategy, and the client-side search procedure may be
+layered on top of this protocol, but they are not required fields of the
+version 1 block format.
+
+The canonical search procedure is defined in `docs/protocol/search.md`.
 
 The compactness strategy for version 1 is:
 
