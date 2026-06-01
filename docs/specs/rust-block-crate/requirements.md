@@ -14,6 +14,11 @@ This document does not define canonicalization or wire-format rules. Those
 remain normative in `docs/protocol/blocks.md`. This document defines what the
 crate must do in order to conform to that protocol.
 
+## Terminology
+
+In this spec package, `block identifier`, `block ID`, and `block hash` refer to
+the same protocol-defined value: `sha256(canonical_cbor_bytes(block))`.
+
 ## Requirements
 
 ### REQ-BLOCK-CRATE-001
@@ -61,7 +66,7 @@ interpretation.
 ### REQ-BLOCK-CRATE-009
 
 Given logically identical inputs, the crate shall produce identical canonical
-bytes and identical block IDs across callers.
+bytes and identical block identifiers across callers.
 
 ### REQ-BLOCK-CRATE-010
 

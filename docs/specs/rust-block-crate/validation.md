@@ -61,7 +61,8 @@ defined by `docs/protocol/blocks.md`.
 
 ### VAL-006
 
-Attempt to accept a branch block with duplicate entry identity forbidden by
+Attempt to accept a branch block with duplicate entries having the same
+`(embedding_bytes, child_block_id)` pair, which is forbidden by
 `docs/protocol/blocks.md`.
 
 **Pass condition:** rejected as non-conforming.

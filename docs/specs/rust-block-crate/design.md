@@ -90,22 +90,22 @@ An explicit error taxonomy covering at least:
 
 ## API Surface
 
-### DSG-010 `build_branch_block(...)`
+### DSG-010 `build_branch_block(...) -> Result<BranchBlock, BlockError>`
 
 Constructs a branch block from required metadata and a typed branch-entry
 collection, then validates protocol conformance.
 
-### DSG-011 `build_leaf_block(...)`
+### DSG-011 `build_leaf_block(...) -> Result<LeafBlock, BlockError>`
 
 Constructs a leaf block from required metadata and a typed leaf-entry payload,
 then validates protocol conformance.
 
-### DSG-012 `serialize_block(&Block) -> SerializedBlock`
+### DSG-012 `serialize_block(&Block) -> Result<SerializedBlock, BlockError>`
 
 Serializes a typed block into canonical CBOR and returns both bytes and the
 derived hash.
 
-### DSG-013 `deserialize_block(bytes, expected_hash) -> ValidatedBlock`
+### DSG-013 `deserialize_block(bytes, expected_hash) -> Result<ValidatedBlock, BlockError>`
 
 Computes the hash of the supplied bytes, compares it to `expected_hash`, and
 only then accepts and decodes the block as valid.
