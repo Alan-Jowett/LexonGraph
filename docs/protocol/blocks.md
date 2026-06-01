@@ -46,12 +46,54 @@ Blocks are encoded as canonical CBOR.
 Canonical CBOR is required so that logically identical blocks produce identical
 bytes and therefore identical block identifiers.
 
+This document uses human-readable logical field names in prose. The canonical
+wire encoding uses compact integer field keys assigned by this specification.
+
 Unless a future revision says otherwise:
 
-- map keys use text strings
+- protocol-defined map keys use compact integers on wire
 - byte-oriented payloads use CBOR byte strings
 - unknown extension fields are allowed only inside `ext`
 - canonical map ordering is required
+
+### Logical Names vs Wire Keys
+
+Logical names such as `version`, `kind`, `embedding_spec`, `entries`,
+`embedding`, `child`, `metadata`, and `content` are documentation labels only.
+
+Canonical on-wire CBOR uses integer field keys. A decoder must interpret those
+keys according to the versioned field registry below, not by textual names.
+
+### Version 1 Field-Key Registry
+
+Top-level block map:
+
+- `0` -> `version`
+- `1` -> `kind`
+- `2` -> `embedding_spec`
+- `3` -> `entries`
+- `15` -> `ext`
+
+`embedding_spec` map:
+
+- `0` -> `dims`
+- `1` -> `encoding`
+
+Branch entry map:
+
+- `0` -> `embedding`
+- `1` -> `child`
+
+Leaf entry map:
+
+- `0` -> `embedding`
+- `1` -> `metadata`
+- `2` -> `content`
+
+`content` map:
+
+- `0` -> `media_type`
+- `1` -> `body`
 
 ## Block Identifier
 
@@ -110,6 +152,15 @@ Field requirements:
 - `embedding_spec` is required and applies to every entry in the block
 - `entries` is required and contains child references keyed by embedding bytes
 - `ext` is optional and reserved for forward-compatible extensions
+
+Normatively, a branch block defines the mapping:
+
+`embedding_bytes -> child_block_id`
+
+where:
+
+- `embedding_bytes` are interpreted under the block's `embedding_spec`
+- `child_block_id` is the raw SHA-256 identifier of the referenced child block
 
 ### BranchEntry
 
@@ -205,6 +256,8 @@ Version 1 evolution rules:
 4. New required top-level fields require a new `version`.
 5. New optional capabilities should prefer additive fields or `ext`.
 6. New block kinds require a new specification revision.
+7. Assigned integer field keys may not be reused for different meanings within
+   the same version.
 
 These rules preserve deterministic hashing while allowing controlled protocol
 growth.
@@ -231,6 +284,20 @@ The following illustrates the logical structure, not literal encoded bytes:
 }
 ```
 
+The corresponding canonical on-wire shape uses the field-key registry:
+
+```text
+{
+  0: 1,
+  1: "branch",
+  2: { 0: 1536, 1: "f16le" },
+  3: [
+    { 0: <bytes>, 1: <32-byte sha256> },
+    { 0: <bytes>, 1: <32-byte sha256> }
+  ]
+}
+```
+
 ```text
 {
   version: 1,
@@ -241,6 +308,21 @@ The following illustrates the logical structure, not literal encoded bytes:
       embedding: <bytes>,
       metadata: { source: "ietf-mail", message_id: "<...>" },
       content: { media_type: "text/plain", body: <bytes> }
+    }
+  ]
+}
+```
+
+```text
+{
+  0: 1,
+  1: "leaf",
+  2: { 0: 1536, 1: "f16le" },
+  3: [
+    {
+      0: <bytes>,
+      1: { source: "ietf-mail", message_id: "<...>" },
+      2: { 0: "text/plain", 1: <bytes> }
     }
   ]
 }
@@ -260,6 +342,9 @@ revision:
 6. Duplicate or unsorted embeddings are rejected within a block.
 7. Updating a descendant changes the identifiers of all rewritten ancestors.
 8. Distinct embedding encodings remain distinguishable in canonical bytes.
+9. Canonical on-wire encoding uses the versioned integer field-key registry.
+10. Reusing an assigned field key for a different meaning within the same
+    version is invalid.
 
 ## Relationship to Higher-Level Indexing
 
@@ -272,7 +357,8 @@ they are not required fields of the version 1 block format.
 The compactness strategy for version 1 is:
 
 1. canonical CBOR maps for future flexibility
-2. block-scoped `embedding_spec` to avoid repeated per-entry descriptors
-3. specialized branch and leaf block kinds to avoid mixed per-entry unions
-4. raw bytes for embeddings and child block IDs
-5. minimal nested wrappers in hot-path structures
+2. compact integer map keys on wire to avoid repeated text-key overhead
+3. block-scoped `embedding_spec` to avoid repeated per-entry descriptors
+4. specialized branch and leaf block kinds to avoid mixed per-entry unions
+5. raw bytes for embeddings and child block IDs
+6. minimal nested wrappers in hot-path structures

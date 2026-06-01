@@ -50,6 +50,7 @@ How It Works
 1. Immutable Blocks
 Each block contains:
 - A canonical CBOR payload
+- Compact integer map keys on wire
 - A block-scoped embedding specification
 - A sorted set of embedding-keyed entries
 - Either branch entries with child references or leaf entries with payloads

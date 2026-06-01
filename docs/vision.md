@@ -4,7 +4,8 @@
 - Data is stored in immutable blocks.
 - Each block is identified by SHA‑256(canonical_cbor_bytes).
 - Blocks are small (16–32 KB) to fit within QUIC/HTTP‑3 initial congestion window.
-- Blocks are encoded as canonical CBOR maps.
+- Blocks are encoded as canonical CBOR maps with compact integer field keys on
+  wire.
 - Branch blocks map embeddings to child block references.
 - Leaf blocks map embeddings to metadata and content payloads.
 - Each block carries a shared embedding specification so dimensions and encoding
