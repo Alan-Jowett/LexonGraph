@@ -39,15 +39,16 @@ Traversal latency is dominated by RTT × depth.
  
 3. Traversal Algorithm (Frontier Expansion)
 At each layer:
- 
-1. Maintain a frontier of n candidate blocks.
-2. Fetch all n blocks in parallel (1 RTT).
+
+1. Maintain a frontier width `W` of unique child blocks to expand.
+2. Fetch all frontier blocks in parallel (1 RTT).
 3. Score all embeddings in each block (matrix–vector multiply).
-4. Expand to all children of those n blocks.
-5. Rank children by centroid distance.
-6. Keep top n for the next layer.
-7. Repeat until leaves.
- 
+4. Rank branch candidates by similarity to the target embedding.
+5. De-duplicate ranked branch candidates by child block, keeping the best-ranked
+   occurrence of each block.
+6. Keep the top `W` unique child blocks for the next layer.
+7. Repeat until the top `N` ranked results are leaf nodes.
+
 This avoids boundary misses and is deterministic.
  
 ---

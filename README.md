@@ -79,12 +79,14 @@ When new data arrives:
 A client (e.g., an MCP server):
 1. Computes a query embedding.
 2. Fetches the root block.
-3. Greedily descends by scoring the embeddings or summaries stored in each
-   block.
-4. Repeats until reaching leaf blocks.
-5. Returns the top‑K relevant items.
- 
+3. Performs deterministic frontier search by scoring candidate embeddings,
+   ranking them, and expanding the top frontier of unique child blocks.
+4. Repeats until the top results are leaf entries.
+5. Returns the top `N` leaf results.
+
 All reads are simple HTTP GETs, ideal for CDN caching.
+
+The canonical traversal definition is in `docs/protocol/search.md`.
  
 ---
  
