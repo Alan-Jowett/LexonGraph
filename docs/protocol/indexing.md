@@ -45,6 +45,11 @@ is derived.
 
 This protocol does not define the item schema.
 
+A conforming indexing invocation requires a non-empty set of items.
+
+An empty item set is invalid. If invoked with zero items, indexing must fail
+explicitly rather than producing no root block.
+
 ### Embedding Function
 
 The embedding function maps indexed items, or implementation-defined derived
@@ -57,11 +62,11 @@ realize that function.
 ### Block Size Target
 
 The block size target is an indexing input that defines the maximum permissible
-size for produced intermediate node blocks.
+size in bytes for produced intermediate node blocks.
 
 This is a hard conformance limit for intermediate node blocks. A conforming
-indexing run must not produce an intermediate node block whose serialized form
-exceeds that input limit.
+indexing run must not produce an intermediate node block whose canonical
+serialized CBOR bytes exceed that input limit.
 
 This limit does not apply to leaf blocks in this revision. Leaf blocks are
 created directly from individual content items and are not split by this
@@ -136,7 +141,7 @@ blocks are realized as leaf blocks.
 
 The root output of indexing may be either:
 
-- a leaf block, when the indexed set fits directly into one leaf block, or
+- a leaf block, when exactly one content item is indexed, or
 - a node block, when the indexed set spans multiple blocks
 
 When node blocks are present, they reference leaf blocks, other node blocks, or
@@ -243,27 +248,30 @@ revision:
 
 1. A conforming indexing invocation accepts a set of items, an embedding
    function, a block size target, and an `embedding_spec`.
-2. A conforming indexing run produces a root block ID and a set of blocks that
+2. An empty item set is invalid and produces explicit failure.
+3. A conforming indexing run produces a root block ID and a set of blocks that
    conform to the Block Protocol.
-3. Produced blocks are immutable and content-addressed.
-4. Produced blocks form a tree through child references.
-5. Each produced block has exactly one canonical embedding.
-6. Canonical embeddings are deterministic, comparable, and stable across
+4. Produced blocks are immutable and content-addressed.
+5. Produced blocks form a tree through child references.
+6. Each produced block has exactly one canonical embedding.
+7. Canonical embeddings are deterministic, comparable, and stable across
    rebuilds of the same logical content under the same indexing context.
-7. Produced block entries are sorted by raw embedding bytes, with any additional
+8. The intermediate-node size limit is measured in canonical serialized CBOR
+   bytes.
+9. Produced block entries are sorted by raw embedding bytes, with any additional
    deterministic tie-breaks required by the Block Protocol.
-8. Produced child-bearing block entries are deduplicated by child block ID.
-9. The indexing root may be either a leaf block or a node block, depending on
+10. Produced child-bearing block entries are deduplicated by child block ID.
+11. The indexing root may be either a leaf block or a node block, depending on
    the indexed set.
-10. Node blocks contain references to leaf blocks, other node blocks, or both.
-11. Each content item produces exactly one leaf block containing exactly one
-    leaf entry.
-12. If only one leaf block exists, that leaf block becomes the root.
-13. Intermediate node blocks do not exceed the input block size limit.
-14. Intermediate node blocks contain at least 2 child entries.
-15. If more than one node exists at a layer, indexing creates a higher layer and
-    repeats until exactly one root node remains.
-16. Conformance does not depend on any specific intermediate-node grouping,
-    packing, or re-organization strategy.
-17. Conformance does not depend on any specific canonical-embedding algorithm,
-    clustering method, or routing-vector selection method.
+12. Node blocks contain references to leaf blocks, other node blocks, or both.
+13. Each content item produces exactly one leaf block containing exactly one
+   leaf entry.
+14. If only one leaf block exists, that leaf block becomes the root.
+15. Intermediate node blocks do not exceed the input block size limit.
+16. Intermediate node blocks contain at least 2 child entries.
+17. If more than one node exists at a layer, indexing creates a higher layer and
+   repeats until exactly one root node remains.
+18. Conformance does not depend on any specific intermediate-node grouping,
+   packing, or re-organization strategy.
+19. Conformance does not depend on any specific canonical-embedding algorithm,
+   clustering method, or routing-vector selection method.

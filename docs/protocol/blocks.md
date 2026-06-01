@@ -232,7 +232,7 @@ For branch blocks, entries are ordered by the tuple:
 
 `(embedding_bytes, child_block_id)`
 
-For leaf blocks, this revision requires exactly one `LeafEntry`, so no
+For leaf blocks, version 1 requires exactly one `LeafEntry`, so no
 multi-entry tie-break is needed within a leaf block. The one entry is still
 encoded inside the canonical array form shown above.
 
