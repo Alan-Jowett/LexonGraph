@@ -5,6 +5,9 @@
 Draft design specification for a Rust crate that implements the LexonGraph
 search protocol.
 
+In this spec package, lowercase `w` and `n` name the Rust API parameters that
+correspond to protocol-level `W` and `N` in `docs/protocol/search.md`.
+
 ## Design Goals
 
 The crate design is intended to be:

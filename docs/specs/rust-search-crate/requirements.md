@@ -31,6 +31,9 @@ embedding is compared against candidate embeddings, including the target
 embedding representation, the visited block's `embedding_spec`, and the
 comparison and ranking traits supplied for the invocation.
 
+In this spec package, lowercase `w` and `n` name the Rust API parameters that
+correspond to protocol-level `W` and `N` in `docs/protocol/search.md`.
+
 ## Requirements
 
 ### REQ-SEARCH-001
