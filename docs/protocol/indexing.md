@@ -90,9 +90,10 @@ The following invariants are normative:
 8. Every content item produces exactly one leaf block containing exactly one
    leaf entry.
 9. Intermediate node blocks do not exceed the input block size limit.
-10. Block entries are sorted by raw embedding bytes, with any additional
+10. Every intermediate node block contains at least 2 child entries.
+11. Block entries are sorted by raw embedding bytes, with any additional
     deterministic tie-breaks required by the Block Protocol.
-11. Child-bearing block entries are deduplicated by child block ID.
+12. Child-bearing block entries are deduplicated by child block ID.
 
 These invariants constrain the externally visible result of indexing. They do
 not prescribe the internal construction strategy that an implementation uses to
@@ -111,7 +112,7 @@ A conforming indexing run performs the following steps:
 4. Otherwise, create intermediate node blocks whose entries reference leaf
    blocks or lower-layer node blocks.
 5. Construct each intermediate node block so that its serialized form remains at
-   or below the input block size limit.
+   or below the input block size limit and contains at least 2 child entries.
 6. If more than one node block exists at the current highest layer, create a new
    higher layer of node blocks referencing the next layer down.
 7. Repeat step 6 until exactly one node exists.
@@ -259,9 +260,10 @@ revision:
     leaf entry.
 12. If only one leaf block exists, that leaf block becomes the root.
 13. Intermediate node blocks do not exceed the input block size limit.
-14. If more than one node exists at a layer, indexing creates a higher layer and
+14. Intermediate node blocks contain at least 2 child entries.
+15. If more than one node exists at a layer, indexing creates a higher layer and
     repeats until exactly one root node remains.
-15. Conformance does not depend on any specific intermediate-node grouping,
+16. Conformance does not depend on any specific intermediate-node grouping,
     packing, or re-organization strategy.
-16. Conformance does not depend on any specific canonical-embedding algorithm,
+17. Conformance does not depend on any specific canonical-embedding algorithm,
     clustering method, or routing-vector selection method.
