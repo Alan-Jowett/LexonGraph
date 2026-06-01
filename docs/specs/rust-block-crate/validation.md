@@ -166,3 +166,14 @@ valid logical block.
 computed over non-canonical bytes.
 
 **Traces to:** REQ-BLOCK-CRATE-004, REQ-BLOCK-CRATE-005
+
+### VAL-018
+
+Realize the block-crate specification as a compiled Rust crate in the
+repository and execute its automated verification suite.
+
+**Pass condition:** the repository contains a Rust crate implementing the
+specified public API surface, and the automated tests cover the behavioral
+validation entries `VAL-001` through `VAL-017`.
+
+**Traces to:** REQ-BLOCK-CRATE-010

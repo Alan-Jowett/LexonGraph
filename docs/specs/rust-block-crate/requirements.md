@@ -70,8 +70,9 @@ bytes and identical block identifiers across callers.
 
 ### REQ-BLOCK-CRATE-010
 
-This pass defines specification artifacts only. No Rust implementation is
-required by this document.
+This pass requires a Rust implementation of this specification package,
+including automated verification artifacts that realize the validation surface
+defined in `docs/specs/rust-block-crate/validation.md`.
 
 ### REQ-BLOCK-CRATE-011
 

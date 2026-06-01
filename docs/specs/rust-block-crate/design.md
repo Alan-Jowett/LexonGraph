@@ -120,6 +120,18 @@ hashes independently of decode.
 Decomposes a validated block into block metadata and a typed entry collection
 without embedding search- or indexing-specific behavior.
 
+### DSG-016 `Implementation realization`
+
+This specification package shall be realized as a concrete Rust crate in the
+repository, and the implementation shall expose the typed API surface defined by
+`DSG-001` through `DSG-015`.
+
+### DSG-017 `Verification realization`
+
+The repository shall include automated tests that realize the validation
+entries in `docs/specs/rust-block-crate/validation.md`, with each validation
+entry mapped to one or more executable tests.
+
 ## Decode and Verification Flow
 
 The deserialize path is:
@@ -169,3 +181,4 @@ Both consumers use the same typed model and protocol-conformance logic.
 | DSG-013 | REQ-BLOCK-CRATE-003, 011, 013 |
 | DSG-014 | REQ-BLOCK-CRATE-004, 011, 012 |
 | DSG-015 | REQ-BLOCK-CRATE-003, 006 |
+| DSG-016..017 | REQ-BLOCK-CRATE-010 |
