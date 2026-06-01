@@ -2,15 +2,21 @@
  
 1. Block Model
 - Data is stored in immutable blocks.
-- Each block is identified by SHA‑256(block_bytes).
+- Each block is identified by SHA‑256(canonical_cbor_bytes).
 - Blocks are small (16–32 KB) to fit within QUIC/HTTP‑3 initial congestion window.
-- Blocks contain:
-  - embeddings (precision depends on layer)
-  - centroid
-  - child block IDs (SHA‑256)
-  - metadata
- 
-This forms a Merkle‑DAG.
+- A block is logically a map from an embedding to either:
+  - a child block reference
+  - a leaf node containing embedding, metadata, and content
+- Embeddings are encoded as typed bytes so different precisions and compressed
+  representations remain distinguishable.
+- Entries are serialized in deterministic order so identical logical blocks hash
+  identically.
+- Optional summaries such as centroids may be carried as higher-level indexing
+  metadata, but they are not required by the canonical block protocol.
+
+At the protocol layer, this forms a Merkle tree.
+
+The canonical wire and layout specification is in `docs/protocol/blocks.md`.
  
 ---
  
@@ -51,7 +57,7 @@ To reduce block size and depth:
  
 Upper layers only need coarse geometry; leaves need precision.
  
-Quantization shrinks upper layers → more centroids per block → shallower DAG.
+Quantization shrinks upper layers → more entries per block → shallower tree.
  
 ---
  
@@ -61,7 +67,7 @@ Because monthly deltas are small:
 - Append new items to an ingest segment.
 - When ingest reaches threshold, run balanced k‑means on only the new items.
 - Produce new blocks.
-- Link them into the existing DAG.
+- Link them into the existing tree.
 - Periodically (e.g., yearly) do a full rebuild for global optimization.
  
 This minimizes compute and write amplification.
@@ -82,7 +88,7 @@ Compute is irrelevant; network dominates.
 - Immutable blocks → perfect caching + dedupe.
 - Content addressing → safety + determinism.
 - Small blocks → avoid slow‑start.
-- Shallow DAG → minimize RTT layers.
+- Shallow tree → minimize RTT layers.
 - Frontier search → avoid boundary misses.
 - Quantized upper layers → reduce depth.
  
