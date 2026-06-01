@@ -156,3 +156,13 @@ the versioned field-key registry.
 **Pass condition:** rejected explicitly.
 
 **Traces to:** REQ-BLOCK-CRATE-005, REQ-BLOCK-CRATE-008
+
+### VAL-017
+
+Attempt to accept a non-canonical CBOR encoding that decodes to an otherwise
+valid logical block.
+
+**Pass condition:** rejected explicitly rather than accepted under a hash
+computed over non-canonical bytes.
+
+**Traces to:** REQ-BLOCK-CRATE-004, REQ-BLOCK-CRATE-005

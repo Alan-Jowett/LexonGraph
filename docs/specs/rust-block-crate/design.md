@@ -130,10 +130,15 @@ The deserialize path is:
 4. decode CBOR only for content accepted by hash
 5. interpret integer wire keys according to the versioned protocol registry
 6. validate protocol conformance
-7. return the typed block with its verified hash
+7. re-encode the decoded block to canonical CBOR and require byte-for-byte
+   equality with the supplied `bytes`
+8. reject the input if the supplied bytes are not the canonical encoding of the
+   decoded block
+9. return the typed block with its verified hash
 
 This makes hash verification part of the crate trust boundary rather than an
-optional caller-side convention.
+optional caller-side convention, while still requiring the accepted bytes to be
+the canonical encoding mandated by `docs/protocol/blocks.md`.
 
 ## Consumer Usage Model
 
