@@ -16,16 +16,18 @@ The indexing protocol is designed to be:
 
 - deterministic at the protocol boundary
 - compatible with immutable content-addressed blocks
+- explicit about the required construction steps
 - explicit about required normalization invariants
 - stable across rebuilds given the same indexing context
-- permissive about internal indexing strategy
+- permissive about internal packing and clustering strategy
 
 ## Scope
 
-This protocol defines only the contract for what a conforming indexing run must
-accept and produce.
+This protocol defines the required high-level procedure, inputs, outputs, and
+invariants for a conforming indexing run.
 
-It does not define a mandatory indexing algorithm.
+It does not define the internal heuristics used to pack, cluster, split, or
+re-organize intermediate nodes while satisfying those requirements.
 
 ## Inputs
 
@@ -54,11 +56,16 @@ realize that function.
 
 ### Block Size Target
 
-The block size target is an indexing input that influences block construction.
+The block size target is an indexing input that defines the maximum permissible
+size for produced intermediate node blocks.
 
-It is a target used by the indexing implementation when building blocks. It is
-not, by itself, a protocol-level guarantee that every produced block satisfies a
-universal serialized-size limit.
+This is a hard conformance limit for intermediate node blocks. A conforming
+indexing run must not produce an intermediate node block whose serialized form
+exceeds that input limit.
+
+This limit does not apply to leaf blocks in this revision. Leaf blocks are
+created directly from individual content items and are not split by this
+protocol.
 
 ### EmbeddingSpec
 
@@ -80,18 +87,46 @@ The following invariants are normative:
 6. A canonical embedding is comparable within the indexing context.
 7. A canonical embedding is stable across rebuilds of the same logical content
    under the same indexing context.
-8. Block entries are sorted by raw embedding bytes.
-9. Child-bearing block entries are deduplicated by child block ID.
+8. Every content item produces exactly one leaf block containing exactly one
+   leaf entry.
+9. Intermediate node blocks do not exceed the input block size limit.
+10. Block entries are sorted by raw embedding bytes, with any additional
+    deterministic tie-breaks required by the Block Protocol.
+11. Child-bearing block entries are deduplicated by child block ID.
 
 These invariants constrain the externally visible result of indexing. They do
 not prescribe the internal construction strategy that an implementation uses to
 arrive at that result.
 
+## Indexing Procedure
+
+A conforming indexing run performs the following steps:
+
+1. For each content item, generate an embedding compatible with the supplied
+   `embedding_spec`.
+2. For each content item, create exactly one leaf block containing exactly one
+   leaf entry derived from that item.
+3. If exactly one leaf block exists, that leaf block is the root and indexing
+   stops.
+4. Otherwise, create intermediate node blocks whose entries reference leaf
+   blocks or lower-layer node blocks.
+5. Construct each intermediate node block so that its serialized form remains at
+   or below the input block size limit.
+6. If more than one node block exists at the current highest layer, create a new
+   higher layer of node blocks referencing the next layer down.
+7. Repeat step 6 until exactly one node exists.
+8. The final remaining node is the root block.
+
+This protocol defines the required layering procedure and its externally visible
+constraints. It does not define the internal strategy used to decide which child
+blocks are grouped together in a particular intermediate node block.
+
 ## Indexing Result Semantics
 
 At the indexing layer, LexonGraph distinguishes two structural roles:
 
-- a **leaf block**, which terminates traversal with indexed payloads
+- a **leaf block**, which terminates traversal with indexed payloads for one
+  content item
 - a **node block**, which collects references to leaf blocks or other node
   blocks
 
@@ -105,6 +140,12 @@ The root output of indexing may be either:
 
 When node blocks are present, they reference leaf blocks, other node blocks, or
 both, subject to the block protocol.
+
+Each leaf block contains exactly one leaf entry derived from exactly one content
+item.
+
+Each node-block entry references one child block and uses that child block's
+canonical embedding as the entry embedding.
 
 ## Canonical Embedding Requirements
 
@@ -130,10 +171,14 @@ produced and consumed.
 
 Before a produced block is finalized:
 
-- its entries must be sorted by raw embedding bytes in ascending bytewise order
+- its entries must be sorted by raw embedding bytes in ascending bytewise order,
+  with any additional deterministic tie-breaks required by the Block Protocol
 - if multiple entries reference the same child block ID, they must be
   deduplicated so that the finalized block contains at most one entry for that
   child block ID
+
+For leaf blocks, this revision's one-entry-per-leaf rule makes entry ordering
+trivial.
 
 This protocol does not define which duplicate survives deduplication when an
 implementation's internal construction process yields multiple candidate entries
@@ -155,10 +200,18 @@ root under the indexing result.
 
 This protocol intentionally does not define:
 
-- how items are grouped into blocks
+- how leaf blocks or lower-layer node blocks are grouped into intermediate node
+  blocks
 - how canonical embeddings are computed
 - how clusters are formed
 - how routing vectors are chosen
+- how an implementation packs, splits, or re-organizes intermediate node blocks
+  in order to remain under the intermediate-node size limit
+
+This protocol also does not require leaf content to be stored inline. For large
+content items, an implementation may store a reference to external content in
+the leaf payload instead of the content itself, but this revision does not
+require that strategy.
 
 Implementations may choose different strategies for those concerns while still
 conforming to this protocol, provided the required inputs, outputs, and
@@ -196,11 +249,19 @@ revision:
 5. Each produced block has exactly one canonical embedding.
 6. Canonical embeddings are deterministic, comparable, and stable across
    rebuilds of the same logical content under the same indexing context.
-7. Produced block entries are sorted by raw embedding bytes.
+7. Produced block entries are sorted by raw embedding bytes, with any additional
+   deterministic tie-breaks required by the Block Protocol.
 8. Produced child-bearing block entries are deduplicated by child block ID.
 9. The indexing root may be either a leaf block or a node block, depending on
    the indexed set.
 10. Node blocks contain references to leaf blocks, other node blocks, or both.
-11. Conformance does not depend on any specific item-grouping strategy.
-12. Conformance does not depend on any specific canonical-embedding algorithm,
+11. Each content item produces exactly one leaf block containing exactly one
+    leaf entry.
+12. If only one leaf block exists, that leaf block becomes the root.
+13. Intermediate node blocks do not exceed the input block size limit.
+14. If more than one node exists at a layer, indexing creates a higher layer and
+    repeats until exactly one root node remains.
+15. Conformance does not depend on any specific intermediate-node grouping,
+    packing, or re-organization strategy.
+16. Conformance does not depend on any specific canonical-embedding algorithm,
     clustering method, or routing-vector selection method.

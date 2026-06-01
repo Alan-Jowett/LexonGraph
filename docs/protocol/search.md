@@ -56,8 +56,7 @@ the resulting scores are used for ranking, deduplication, and traversal.
 Search candidates are not identified by embedding value alone.
 
 - A branch candidate is distinguished by the referenced `child` block ID.
-- A leaf candidate is distinguished by its containing block ID and its
-  deterministic entry position within that block.
+- A leaf candidate is distinguished by its containing block ID.
 
 Equal embeddings do not imply equal candidates.
 
@@ -65,7 +64,7 @@ The following are all legal and must be treated as distinct until the protocol
 explicitly says otherwise:
 
 - equal embeddings that point to different child blocks
-- equal embeddings that correspond to different leaf entries
+- equal embeddings that correspond to different leaf blocks
 - different embeddings that point to the same child block
 
 Block identity is the block hash defined by the block protocol, not the
@@ -85,7 +84,7 @@ A conforming ranking order is:
 2. candidate kind, with leaf candidates ordered before branch candidates
 3. candidate identity:
    - branch candidates by `child` block ID in ascending bytewise order
-   - leaf candidates by containing block ID and deterministic entry position
+   - leaf candidates by containing block ID in ascending bytewise order
 
 This ordering is canonical for this revision.
 
@@ -183,3 +182,4 @@ revision:
 9. Search terminates when the top `N` ranked candidates are all leaves.
 10. Incompatible `embedding_spec`, missing blocks, and malformed blocks produce
     explicit failure.
+11. Equal embeddings in different leaf blocks remain distinct leaf candidates.

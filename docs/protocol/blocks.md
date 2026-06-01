@@ -189,6 +189,8 @@ LeafBlock {
 }
 ```
 
+In version 1, `entries` for a leaf block must contain exactly one `LeafEntry`.
+
 ### LeafEntry
 
 ```text
@@ -230,10 +232,9 @@ For branch blocks, entries are ordered by the tuple:
 
 `(embedding_bytes, child_block_id)`
 
-For leaf blocks, entries are ordered by the canonical CBOR bytes of the
-version-1 LeafEntry map under the field-key registry defined by this
-specification. This preserves deterministic ordering even when multiple leaf
-entries carry identical embedding bytes.
+For leaf blocks, this revision requires exactly one `LeafEntry`, so no
+multi-entry tie-break is needed within a leaf block. The one entry is still
+encoded inside the canonical array form shown above.
 
 The following are invalid:
 
@@ -241,6 +242,7 @@ The following are invalid:
 - unsorted entries
 - branch entries missing `child`
 - leaf entries missing `metadata` or `content`
+- leaf blocks whose `entries` array does not contain exactly one `LeafEntry`
 
 ## Merkle Tree Semantics
 
@@ -350,10 +352,11 @@ revision:
    versions.
 6. Redundant duplicate branch entries or unsorted entries are rejected within a
    block.
-7. Updating a descendant changes the identifiers of all rewritten ancestors.
-8. Distinct embedding encodings remain distinguishable in canonical bytes.
-9. Canonical on-wire encoding uses the versioned integer field-key registry.
-10. Reusing an assigned field key for a different meaning within the same
+7. Leaf blocks whose `entries` array length is not exactly one are rejected.
+8. Updating a descendant changes the identifiers of all rewritten ancestors.
+9. Distinct embedding encodings remain distinguishable in canonical bytes.
+10. Canonical on-wire encoding uses the versioned integer field-key registry.
+11. Reusing an assigned field key for a different meaning within the same
     version is invalid.
 
 ## Relationship to Higher-Level Indexing
