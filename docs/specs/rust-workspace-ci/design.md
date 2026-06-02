@@ -54,7 +54,8 @@ Pull request triggers are further limited to Rust-workspace-relevant paths:
 ### DSG-CI-003 `Concurrency`
 
 The workflow uses GitHub Actions concurrency to cancel superseded runs for the
-same workflow and branch or pull request.
+same workflow and pull request when a pull request number is available, and for
+the same workflow and Git ref otherwise.
 
 ### DSG-CI-004 `Execution environment`
 
