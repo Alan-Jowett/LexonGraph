@@ -101,8 +101,11 @@ where:
 
 - `A[i]` is the assigned cluster index for point `i`
 - `C[j]` is the raw stored centroid for cluster `j`
-- `normalized(C[j])` is derived according to the zero-norm handling rules in
-  this protocol
+- `normalized(C[j])` means the normalized centroid representation used for
+  distance computations for cluster `j`, derived from the raw centroid `C[j]`
+  and, when `||C[j]|| < epsilon`, from the corresponding materialized
+  membership set `S[j]` according to the zero-norm handling rules in this
+  protocol
 
 ## Required Invariants
 
@@ -201,8 +204,8 @@ Normative graph semantics:
 ### Deterministic Assignment Selection
 
 If multiple optimal assignments exist, the implementation must choose the
-lexicographically minimal assignment vector induced by the protocol's
-deterministic ordering rules.
+lexicographically minimal assignment vector when comparing the tuple
+`(A[0], A[1], ..., A[n-1])` in ascending point-index order.
 
 To preserve that result, point-to-cluster edges must be generated in this
 canonical order:
