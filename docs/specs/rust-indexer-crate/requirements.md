@@ -16,10 +16,12 @@ This document is layered on top of:
 - `docs/protocol/blocks.md`
 - `docs/specs/rust-block-crate/`
 - `docs/specs/rust-block-storage-trait/`
+- `docs/specs/rust-embeddings-trait/`
 
-This document does not redefine block encoding, block identifiers, or
-storage-backend semantics. Those concerns remain owned by the block protocol,
-block crate, and block-storage trait crate.
+This document does not redefine block encoding, block identifiers,
+storage-backend semantics, or the shared embedding-provider contract. Those
+concerns remain owned by the block protocol, block crate, block-storage trait
+crate, and shared embeddings-trait crate.
 
 ## Terminology
 
@@ -92,9 +94,12 @@ implementation-defined policy concerns through trait-based extension points.
 
 ### REQ-INDEXER-012
 
-At minimum, the crate shall expose trait-governed policy boundaries for content
-resolution, embedding generation, canonical-embedding selection, and
-intermediate-node grouping or packing behavior.
+At minimum, the crate shall expose or depend on trait-governed policy
+boundaries for content resolution, embedding generation, canonical-embedding
+selection, and intermediate-node grouping or packing behavior.
+
+The embedding-generation boundary shall be consumed from the shared
+embeddings-trait crate rather than defined by the indexer crate itself.
 
 ### REQ-INDEXER-013
 
@@ -107,6 +112,10 @@ Given the same logical item set, metadata, content references resolving to the
 same logical content, `embedding_spec`, block size target, and deterministic
 trait implementations within the same indexing context, the crate shall produce
 the same root block ID and the same persisted block set.
+
+When embedding generation is delegated to a provider supplied through the shared
+embeddings-trait crate, determinism is defined over the provider behavior and
+configuration that affect the produced embedding output.
 
 ### REQ-INDEXER-015
 
@@ -124,7 +133,6 @@ The crate shall provide reusable conformance-test harnesses for the
 implementation-defined policy traits it defines for:
 
 - content resolution
-- embedding generation
 - canonical-embedding selection
 - node packing
 
@@ -138,7 +146,18 @@ tests without broadening the crate's default production-facing API.
 
 The crate shall not redefine or duplicate reusable conformance-test contracts
 for dependency surfaces already owned by subordinate specifications, including
-the block crate and block-storage trait crate.
+the block crate, block-storage trait crate, and embeddings-trait crate.
+
+### REQ-INDEXER-020
+
+The crate shall depend on the shared embeddings-trait crate for the
+embedding-provider contract used by indexing.
+
+### REQ-INDEXER-021
+
+The crate shall not bundle provider-specific embedding implementations or
+embedding-provider conformance helpers that are owned by the shared
+embeddings-trait crate or provider-specific crates layered on top of it.
 
 ## Out of Scope
 
@@ -148,19 +167,23 @@ This crate does not define or own:
 - block-ID derivation rules
 - storage backend implementations
 - search traversal or ranking behavior
-- any single required embedding model or embedding runtime
+- the shared embedding-provider trait contract
+- provider-specific embedding implementations such as OpenAI-compatible clients
+- any single required embedding model, endpoint, deployment configuration, or
+  runtime for all consumers
 - any single required canonical-embedding algorithm
 - any single required grouping, clustering, routing, or packing strategy
-- reusable conformance contracts already owned by the block crate or
-  block-storage trait crate
+- reusable conformance contracts already owned by the block crate,
+  block-storage trait crate, or embeddings-trait crate
 
 ## Relationship to Other Specifications
 
 This document is subordinate to `docs/protocol/indexing.md` and
 `docs/protocol/blocks.md`.
 
-This document is also subordinate to the `docs/specs/rust-block-crate/` and
-`docs/specs/rust-block-storage-trait/` specification packages for their
+This document is also subordinate to the `docs/specs/rust-block-crate/`,
+`docs/specs/rust-block-storage-trait/`, and
+`docs/specs/rust-embeddings-trait/` specification packages for their
 respective concerns.
 
 If this document appears to conflict with those authorities, they are

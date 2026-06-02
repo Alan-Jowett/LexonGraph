@@ -15,6 +15,10 @@ Protocol-level indexing invariants referenced here remain normatively defined by
 block-ID expectations remain normatively defined by `docs/protocol/blocks.md`
 and the `docs/specs/rust-block-crate/` specification package.
 
+The shared embedding-provider trait contract and provider-specific embedding
+implementations are validated by their own specification packages. This package
+validates only how the indexer consumes that dependency surface.
+
 ## Validation Entries
 
 ### VAL-INDEXER-001
@@ -109,13 +113,14 @@ applicable without requiring backend-specific API changes in the indexer crate.
 
 ### VAL-INDEXER-010
 
-Use different embedding-generation or node-packing policy implementations that
-all satisfy the crate's trait contracts.
+Use different embedding-provider implementations satisfying the shared
+embeddings-trait contract, together with different node-packing policy
+implementations satisfying the indexer-owned trait contracts.
 
 **Pass condition:** the indexer remains conforming without changing its public
 API boundary.
 
-**Traces to:** REQ-INDEXER-011, REQ-INDEXER-012
+**Traces to:** REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-020
 
 ### VAL-INDEXER-011
 
@@ -123,7 +128,7 @@ Provide distinct content references that resolve to the same logical content in
 the same indexing context.
 
 **Pass condition:** if metadata, `embedding_spec`, block size target, and
-deterministic policy behavior are otherwise the same, the root block ID and
+deterministic dependency behavior are otherwise the same, the root block ID and
 persisted block set remain the same.
 
 **Traces to:** REQ-INDEXER-009, REQ-INDEXER-014
@@ -145,32 +150,34 @@ Inspect the crate's public surface.
 **Pass condition:** the crate's default public surface exposes the runtime
 indexing contract and related public types only, keeps implementer-facing
 conformance helpers behind an opt-in non-default test-oriented surface, and
-does not redefine block or block-store conformance surfaces.
+does not expose provider-specific embedding implementations or redefine block,
+block-store, or embeddings-trait conformance surfaces.
 
-**Traces to:** REQ-INDEXER-017, REQ-INDEXER-018, REQ-INDEXER-019
+**Traces to:** REQ-INDEXER-017, REQ-INDEXER-018, REQ-INDEXER-019,
+REQ-INDEXER-021
 
 ### VAL-INDEXER-014
 
 Use the crate's opt-in conformance-test helper surface from a downstream crate
-that implements one or more of the indexer policy traits.
+that implements one or more of the indexer-owned policy traits.
 
 **Pass condition:** the downstream crate can depend on the helper surface in
-tests and run the shared conformance checks without changing the default
-production-facing API of the indexer crate.
+tests and run the shared conformance checks for `ContentResolver`,
+`CanonicalEmbeddingPolicy`, and `NodePackingPolicy` without changing the
+default production-facing API of the indexer crate.
 
 **Traces to:** REQ-INDEXER-017, REQ-INDEXER-018
 
 ### VAL-INDEXER-015
 
 Run the shared conformance harnesses against deterministic implementations of
-`ContentResolver`, `EmbeddingProvider`, `CanonicalEmbeddingPolicy`, and
-`NodePackingPolicy`, including fixtures that intentionally violate each trait's
-contract.
+`ContentResolver`, `CanonicalEmbeddingPolicy`, and `NodePackingPolicy`,
+including fixtures that intentionally violate each trait's contract.
 
 **Pass condition:** the shared helpers accept contract-satisfying
 implementations, reject contract-violating implementations at the appropriate
-trait boundary, and rely on the existing block and block-store conformance
-surfaces rather than redefining them.
+trait boundary, and rely on the existing block, block-store, and
+embeddings-trait conformance surfaces rather than redefining them.
 
 **Traces to:** REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-017,
 REQ-INDEXER-018, REQ-INDEXER-019
@@ -184,3 +191,15 @@ realize the validation surface in this specification package, including runtime
 indexing behavior and the opt-in trait-conformance helper surface.
 
 **Traces to:** REQ-INDEXER-015
+
+### VAL-INDEXER-017
+
+Invoke the indexer with an embedding-provider implementation supplied through
+the shared embeddings-trait contract that performs asynchronous work before
+returning a valid embedding.
+
+**Pass condition:** the indexing operation awaits the provider successfully and
+produces the same protocol-conforming result shape as with an in-memory
+deterministic fixture.
+
+**Traces to:** REQ-INDEXER-012, REQ-INDEXER-020
