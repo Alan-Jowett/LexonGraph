@@ -94,6 +94,9 @@ Resolution is the extension point that allows content to originate from memory,
 filesystem, Azure Blob, S3, or similar systems without exposing those backend
 details in the indexer API.
 
+In this revision, the resolved content includes the media type and bytes that
+will be stored inline in the produced leaf entry's `content` payload.
+
 ### DSG-INDEXER-007 `EmbeddingProvider`
 
 A trait that accepts resolved content plus the indexing context needed for
@@ -145,7 +148,7 @@ The fixed orchestration flow is:
 2. for each indexing item, resolve its content reference
 3. generate one item-level embedding compatible with `embedding_spec`
 4. construct exactly one leaf block containing exactly one leaf entry derived
-   from that item
+   from that item and storing the resolved content inline
 5. persist each produced leaf block through the block store
 6. if one leaf block exists, return that leaf block as the root
 7. otherwise, repeatedly invoke the node-packing policy to obtain candidate
@@ -170,6 +173,41 @@ If those trait implementations are deterministic and the logical inputs are the
 same, the indexer produces the same root block ID and the same persisted block
 set.
 
+### DSG-INDEXER-013 `Implementation realization`
+
+This specification package shall be realized as a concrete Rust crate in the
+repository, and the implementation shall expose the public API boundary,
+orchestration behavior, and policy traits defined by this document.
+
+### DSG-INDEXER-014 `Verification realization`
+
+The repository shall include automated tests that realize the validation
+entries in `docs/specs/rust-indexer-crate/validation.md`, with each validation
+entry mapped to one or more executable tests.
+
+### DSG-INDEXER-015 `Feature-gated conformance module`
+
+The crate exposes a public conformance-test helper surface behind a non-default
+Cargo feature intended for downstream tests only.
+
+That feature is not part of the default runtime API and does not change the
+production-facing indexing contract.
+
+### DSG-INDEXER-016 `Harness shape`
+
+The conformance-test helper surface provides reusable checks for the
+`ContentResolver`, `EmbeddingProvider`, `CanonicalEmbeddingPolicy`, and
+`NodePackingPolicy` trait contracts.
+
+To verify those trait contracts without requiring production implementations in
+the crate, the helper surface may define test-only harness contracts that
+supply deterministic fixtures, trait implementations under test, and any
+policy-specific assertions needed for the validation cases.
+
+The helper surface does not redefine conformance for the block crate or the
+block-storage trait crate, which continue to own their respective reusable
+conformance contracts.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -177,10 +215,13 @@ set.
 | DSG-INDEXER-001 | REQ-INDEXER-001, REQ-INDEXER-002, REQ-INDEXER-005 |
 | DSG-INDEXER-002 | REQ-INDEXER-003, REQ-INDEXER-004, REQ-INDEXER-005 |
 | DSG-INDEXER-003..005 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-010 |
-| DSG-INDEXER-006 | REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012 |
+| DSG-INDEXER-006 | REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-016 |
 | DSG-INDEXER-007 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-014 |
 | DSG-INDEXER-008 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-014 |
 | DSG-INDEXER-009 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013 |
 | DSG-INDEXER-010 | REQ-INDEXER-001, REQ-INDEXER-004, REQ-INDEXER-006, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-013 |
-| DSG-INDEXER-011 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013 |
+| DSG-INDEXER-011 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-016 |
 | DSG-INDEXER-012 | REQ-INDEXER-014 |
+| DSG-INDEXER-013 | REQ-INDEXER-001 |
+| DSG-INDEXER-014 | REQ-INDEXER-015 |
+| DSG-INDEXER-015..016 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-017, REQ-INDEXER-018, REQ-INDEXER-019 |
