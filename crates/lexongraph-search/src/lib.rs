@@ -492,23 +492,37 @@ mod conformance_support {
     {
         let target = harness.target();
         let compatible_spec = harness.compatible_spec();
-        harness
-            .conforming_policy()
+        let policy = harness.conforming_policy();
+        policy
             .ensure_compatible(&target, &compatible_spec)
             .map_err(|error| {
                 ConformanceError::Expectation(format!(
                     "expected compatible embedding spec to be accepted, got {error}"
                 ))
             })?;
+        policy
+            .ensure_compatible(&target, &compatible_spec)
+            .map_err(|error| {
+                ConformanceError::Expectation(format!(
+                    "expected repeated compatible embedding-spec check to remain accepted, got {error}"
+                ))
+            })?;
 
         let incompatible_spec = harness.incompatible_spec();
-        if harness
-            .conforming_policy()
+        if policy
             .ensure_compatible(&target, &incompatible_spec)
             .is_ok()
         {
             return Err(ConformanceError::Expectation(
                 "expected incompatible embedding spec to be rejected".into(),
+            ));
+        }
+        if policy
+            .ensure_compatible(&target, &incompatible_spec)
+            .is_ok()
+        {
+            return Err(ConformanceError::Expectation(
+                "expected repeated incompatible embedding-spec check to remain rejected".into(),
             ));
         }
 
@@ -542,11 +556,25 @@ mod conformance_support {
                         "expected conforming scorer to produce a score, got {error}"
                     ))
                 })?;
+        let repeated_preferred_score =
+            scorer
+                .score(&target, &preferred, &embedding_spec)
+                .map_err(|error| {
+                    ConformanceError::Expectation(format!(
+                        "expected repeated preferred-candidate scoring call to succeed, got {error}"
+                    ))
+                })?;
         if preferred_score != harness.expected_score() {
             return Err(ConformanceError::Expectation(format!(
                 "expected score {:?}, got {:?}",
                 harness.expected_score(),
                 preferred_score
+            )));
+        }
+        if preferred_score != repeated_preferred_score {
+            return Err(ConformanceError::Expectation(format!(
+                "expected repeated preferred-candidate score {:?}, got {:?}",
+                preferred_score, repeated_preferred_score
             )));
         }
 

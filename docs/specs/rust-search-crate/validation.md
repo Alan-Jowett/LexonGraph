@@ -155,41 +155,6 @@ results as success.
 
 **Traces to:** REQ-SEARCH-006, REQ-SEARCH-009
 
-### VAL-SEARCH-019
-
-Construct ranked ties between:
-
-- leaf and branch candidates with equal scores
-- branch candidates with equal scores and different child block IDs
-- leaf candidates with equal scores and different containing block IDs
-
-**Pass condition:** search uses the canonical protocol ordering for those ties:
-leaf before branch, then ascending block ID within candidate kind.
-
-**Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
-
-### VAL-SEARCH-020
-
-Run search over a multi-round graph where one or more leaf candidates are found
-before lower-ranked branches are exhausted, but termination has not yet been
-reached.
-
-**Pass condition:** the previously found leaf candidates remain in the frontier
-across later rounds and continue to compete in the final ranking until
-termination.
-
-**Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
-
-### VAL-SEARCH-021
-
-Invoke search once with `w = 0`, and once with `n = 0`.
-
-**Pass condition:** `w = 0` fails explicitly. `n = 0` succeeds with an empty
-ordered result after the root block has still been loaded and its entries
-scored, and without any child expansion.
-
-**Traces to:** REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018
-
 ### VAL-SEARCH-014
 
 Inspect the crate's public surface.
@@ -246,3 +211,38 @@ realize the validation surface in this specification package, including runtime
 search behavior and the opt-in trait-conformance helper surface.
 
 **Traces to:** REQ-SEARCH-014
+
+### VAL-SEARCH-019
+
+Construct ranked ties between:
+
+- leaf and branch candidates with equal scores
+- branch candidates with equal scores and different child block IDs
+- leaf candidates with equal scores and different containing block IDs
+
+**Pass condition:** search uses the canonical protocol ordering for those ties:
+leaf before branch, then ascending block ID within candidate kind.
+
+**Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
+
+### VAL-SEARCH-020
+
+Run search over a multi-round graph where one or more leaf candidates are found
+before lower-ranked branches are exhausted, but termination has not yet been
+reached.
+
+**Pass condition:** the previously found leaf candidates remain in the frontier
+across later rounds and continue to compete in the final ranking until
+termination.
+
+**Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
+
+### VAL-SEARCH-021
+
+Invoke search once with `w = 0`, and once with `n = 0`.
+
+**Pass condition:** `w = 0` fails explicitly. `n = 0` succeeds with an empty
+ordered result after the root block has still been loaded and its entries
+scored, and without any child expansion.
+
+**Traces to:** REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018
