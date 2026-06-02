@@ -110,7 +110,33 @@ trait semantics while remaining non-public as a production backend surface.
 
 Inspect the crate's public surface.
 
-**Pass condition:** the crate exposes the storage contract and related public
-types only, and does not expose concrete production backend implementations.
+**Pass condition:** the crate's default public surface exposes the storage
+contract and related public types only, does not expose concrete production
+backend implementations, and keeps any implementer-facing conformance helper
+behind an opt-in non-default test-oriented surface.
 
-**Traces to:** REQ-BLOCK-STORE-009, REQ-BLOCK-STORE-010
+**Traces to:** REQ-BLOCK-STORE-009, REQ-BLOCK-STORE-010,
+REQ-BLOCK-STORE-013
+
+### VAL-STORE-011
+
+Use the crate's opt-in conformance-test helper surface from a downstream crate
+that implements `BlockStore`.
+
+**Pass condition:** the downstream crate can depend on the helper surface in
+tests and run the shared conformance checks without changing the default
+production-facing API of the trait crate.
+
+**Traces to:** REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013
+
+### VAL-STORE-012
+
+Run the downstream conformance harness against a backend under test while
+supplying test-only hooks for corruption scenarios.
+
+**Pass condition:** the shared harness can verify round-trip, idempotence,
+absence, integrity-mismatch, and malformed-content behavior without requiring
+backend-specific methods on the production `BlockStore` trait.
+
+**Traces to:** REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008,
+REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013

@@ -85,6 +85,18 @@ support tests for the crate's contract.
 The crate shall not own search traversal behavior, indexing strategy, block
 canonicalization policy, wire-format policy, or protocol evolution rules.
 
+### REQ-BLOCK-STORE-012
+
+The crate shall provide a reusable conformance-test harness that downstream
+`BlockStore` implementers can invoke from their own test suites to verify the
+required `put`/`get` contract semantics.
+
+### REQ-BLOCK-STORE-013
+
+The reusable conformance-test harness shall be exposed through an opt-in,
+non-default test-oriented surface so downstream implementers can use it in
+tests without broadening the crate's default production-facing API.
+
 ## Out of Scope
 
 This crate does not define or own:
