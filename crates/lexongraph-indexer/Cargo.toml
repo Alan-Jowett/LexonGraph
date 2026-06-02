@@ -11,8 +11,10 @@ edition = "2024"
 conformance = ["dep:pollster"]
 
 [dependencies]
+half = "2.7.1"
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-dcbc = { path = "../lexongraph-dcbc" }
 lexongraph-embeddings-trait = { version = "0.1.0", path = "../lexongraph-embeddings-trait" }
 pollster = { version = "0.4.0", optional = true }
 

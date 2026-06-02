@@ -55,6 +55,7 @@ The indexer crate depends on:
   derivation, and protocol-conforming block validation
 - the block-storage trait crate for backend-agnostic block persistence and
   retrieval
+- the DCBC crate for the built-in default node-packing clustering engine
 - the embeddings-trait crate for the shared embedding-provider contract used by
   indexing
 
@@ -131,6 +132,10 @@ This trait owns implementation-defined grouping and packing choices, but the
 core indexer remains responsible for enforcing protocol invariants such as
 minimum child count, maximum serialized size, ordering, and deduplication.
 
+The crate also provides a built-in default implementation of this trait backed
+by the shared DCBC crate, while continuing to accept downstream
+implementations.
+
 ## API Surface
 
 ### DSG-INDEXER-010 `Indexer`
@@ -149,6 +154,12 @@ accepts:
 and returns an awaitable result equivalent to
 `Result<IndexingResult, IndexerError>`.
 
+The public API includes both:
+
+- a primary default-instantiation path that supplies the built-in DCBC-backed
+  node-packing policy automatically
+- an explicit override path that accepts a caller-supplied `NodePackingPolicy`
+
 ## Orchestration Flow
 
 ### DSG-INDEXER-011 `Core indexing pipeline`
@@ -163,8 +174,9 @@ The fixed orchestration flow is:
    from that item and storing the resolved content inline
 5. persist each produced leaf block through the block store
 6. if one leaf block exists, return that leaf block as the root
-7. otherwise, repeatedly invoke the node-packing policy to obtain candidate
-   child groups for the current layer
+7. otherwise, repeatedly invoke the selected node-packing policy, whether the
+   built-in default or a caller-supplied override, to obtain candidate child
+   groups for the current layer
 8. derive each child-bearing block's canonical embedding through the
    canonical-embedding policy
 9. normalize candidate node entries by sorting by raw embedding bytes and
@@ -232,21 +244,54 @@ The indexer crate accepts embedding providers through the shared
 embeddings-trait contract but does not include provider-specific implementations
 or provider-specific conformance helpers in its default or opt-in API surface.
 
+### DSG-INDEXER-018 `Default DCBC-backed node-packing realization`
+
+The crate exposes a built-in default `NodePackingPolicy` implementation that
+uses the shared DCBC crate to cluster current-layer child embeddings into
+candidate groups.
+
+That realization derives the DCBC input vectors and scalar parameters
+deterministically from the ordered child layer and block size target, invokes
+the DCBC crate through its public API, and maps the DCBC assignment result back
+into child-index groups without changing the core indexer's ownership of
+protocol normalization or block-validity checks.
+
+### DSG-INDEXER-019 `Primary default constructor path`
+
+The crate exposes a primary constructor or equivalent default-instantiation API
+for `Indexer` that requires the resolver, embedding provider, and
+canonical-embedding policy, and internally instantiates the built-in
+DCBC-backed node-packing policy.
+
+This path is the default production-facing way to construct the indexer when no
+custom node-packing behavior is required.
+
+### DSG-INDEXER-020 `Custom node-packing override path`
+
+The crate also exposes an explicit constructor or equivalent API that accepts a
+caller-supplied `NodePackingPolicy`.
+
+Using that override path preserves the existing policy seam for downstream
+consumers that need non-default grouping or packing behavior.
+
 ## Traceability
 
 | Design ID | Satisfies |
 |---|---|
 | DSG-INDEXER-001 | REQ-INDEXER-001, REQ-INDEXER-002, REQ-INDEXER-005 |
-| DSG-INDEXER-002 | REQ-INDEXER-003, REQ-INDEXER-004, REQ-INDEXER-005, REQ-INDEXER-020 |
+| DSG-INDEXER-002 | REQ-INDEXER-003, REQ-INDEXER-004, REQ-INDEXER-005, REQ-INDEXER-020, REQ-INDEXER-022 |
 | DSG-INDEXER-003..005 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-010 |
 | DSG-INDEXER-006 | REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-016 |
 | DSG-INDEXER-007 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-020, REQ-INDEXER-021 |
 | DSG-INDEXER-008 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-014 |
-| DSG-INDEXER-009 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013 |
-| DSG-INDEXER-010 | REQ-INDEXER-001, REQ-INDEXER-004, REQ-INDEXER-006, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-013, REQ-INDEXER-020 |
-| DSG-INDEXER-011 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-016, REQ-INDEXER-020 |
+| DSG-INDEXER-009 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-023, REQ-INDEXER-026, REQ-INDEXER-027 |
+| DSG-INDEXER-010 | REQ-INDEXER-001, REQ-INDEXER-004, REQ-INDEXER-006, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-013, REQ-INDEXER-020, REQ-INDEXER-024, REQ-INDEXER-025 |
+| DSG-INDEXER-011 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-016, REQ-INDEXER-020, REQ-INDEXER-026 |
 | DSG-INDEXER-012 | REQ-INDEXER-014 |
 | DSG-INDEXER-013 | REQ-INDEXER-001 |
 | DSG-INDEXER-014 | REQ-INDEXER-015 |
 | DSG-INDEXER-015..016 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-017, REQ-INDEXER-018, REQ-INDEXER-019 |
 | DSG-INDEXER-017 | REQ-INDEXER-019, REQ-INDEXER-021 |
+| DSG-INDEXER-018 | REQ-INDEXER-022, REQ-INDEXER-023, REQ-INDEXER-026, REQ-INDEXER-027 |
+| DSG-INDEXER-019 | REQ-INDEXER-024 |
+| DSG-INDEXER-020 | REQ-INDEXER-025 |

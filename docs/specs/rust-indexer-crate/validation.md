@@ -205,3 +205,61 @@ produces the same protocol-conforming result shape as with an in-memory
 deterministic fixture.
 
 **Traces to:** REQ-INDEXER-012, REQ-INDEXER-020
+
+### VAL-INDEXER-018
+
+Construct the indexer through its primary default-instantiation path and index
+multiple items that require one or more intermediate layers.
+
+**Pass condition:** the indexing operation succeeds without the caller
+supplying a `NodePackingPolicy`, and the resulting blocks conform to the same
+runtime invariants as the explicit-policy path.
+
+**Traces to:** REQ-INDEXER-023, REQ-INDEXER-024
+
+### VAL-INDEXER-019
+
+Construct one indexer through the primary default-instantiation path and a
+second indexer through the explicit custom-policy override path, then index the
+same logical item set with both.
+
+**Pass condition:** the default path uses the built-in DCBC-backed policy
+without requiring explicit policy injection, while the override path accepts a
+caller-supplied `NodePackingPolicy` and remains conforming without changing the
+rest of the runtime contract.
+
+**Traces to:** REQ-INDEXER-024, REQ-INDEXER-025
+
+### VAL-INDEXER-020
+
+Run indexing twice through the primary default-instantiation path with the same
+logical item set, `embedding_spec`, block size target, and deterministic
+dependency behavior.
+
+**Pass condition:** the built-in DCBC-backed node-packing behavior yields the
+same root block ID and persisted block set across both runs.
+
+**Traces to:** REQ-INDEXER-027
+
+### VAL-INDEXER-021
+
+Use the built-in default node-packing behavior with a block size target that is
+too small for the candidate intermediate-node grouping it proposes.
+
+**Pass condition:** indexing fails explicitly through the core indexer's
+protocol-enforcement path rather than emitting an oversized or otherwise
+non-conforming intermediate node.
+
+**Traces to:** REQ-INDEXER-022, REQ-INDEXER-026
+
+### VAL-INDEXER-022
+
+Inspect the indexer crate's dependency manifest and the implementation of its
+built-in default node-packing realization.
+
+**Pass condition:** the `lexongraph-indexer` crate depends on the shared
+`lexongraph-dcbc` crate, and the built-in default `NodePackingPolicy`
+realization delegates DCBC clustering behavior through that dependency rather
+than reimplementing DCBC semantics locally.
+
+**Traces to:** REQ-INDEXER-022

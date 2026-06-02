@@ -18,12 +18,14 @@ This document is layered on top of:
 - `docs/protocol/blocks.md`
 - `docs/specs/rust-block-crate/`
 - `docs/specs/rust-block-storage-trait/`
+- `docs/specs/rust-dcbc-crate/`
 - `docs/specs/rust-embeddings-trait/`
 
 This document does not redefine block encoding, block identifiers,
 storage-backend semantics, or the shared embedding-provider contract. Those
 concerns remain owned by the block protocol, block crate, block-storage trait
-crate, and shared embeddings-trait crate.
+crate, shared embeddings-trait crate, and the DCBC crate specification for the
+default node-packing clustering behavior layered into this crate.
 
 ## Terminology
 
@@ -103,10 +105,15 @@ selection, and intermediate-node grouping or packing behavior.
 The embedding-generation boundary shall be consumed from the shared
 embeddings-trait crate rather than defined by the indexer crate itself.
 
+The node-packing boundary shall remain overridable by downstream consumers even
+when the crate provides a built-in default implementation.
+
 ### REQ-INDEXER-013
 
 The core indexer shall own the protocol-required orchestration, layering,
-normalization, block construction, and block persistence flow.
+normalization, block construction, and block persistence flow, including the
+default-construction path that wires in the crate's built-in node-packing
+implementation.
 
 ### REQ-INDEXER-014
 
@@ -161,6 +168,45 @@ The crate shall not bundle provider-specific embedding implementations or
 embedding-provider conformance helpers that are owned by the shared
 embeddings-trait crate or provider-specific crates layered on top of it.
 
+### REQ-INDEXER-022
+
+The crate shall depend on the shared `lexongraph-dcbc` crate for its built-in
+default `NodePackingPolicy` realization rather than reimplementing DCBC
+clustering semantics locally inside the indexer crate.
+
+### REQ-INDEXER-023
+
+The crate shall provide a built-in default `NodePackingPolicy` implementation
+that uses `lexongraph-dcbc` to derive deterministic candidate child groups for
+intermediate-node construction from current-layer child embeddings.
+
+### REQ-INDEXER-024
+
+The crate shall provide a primary default-instantiation path for the indexer
+runtime API that uses the built-in DCBC-backed node-packing implementation
+without requiring callers to pass a node-packing policy explicitly.
+
+### REQ-INDEXER-025
+
+The crate shall continue to provide an explicit API path that accepts a
+caller-supplied `NodePackingPolicy`, allowing downstream users to replace the
+built-in default node-packing behavior.
+
+### REQ-INDEXER-026
+
+The built-in DCBC-backed node-packing implementation shall remain subordinate
+to the core indexer's protocol-conformance checks. It may propose candidate
+groupings, but the core indexer shall continue to own enforcement of minimum
+child count, maximum serialized size, ordering, deduplication, and explicit
+failure semantics for invalid candidates.
+
+### REQ-INDEXER-027
+
+Given the same ordered current-layer children, embedding bytes, block size
+target, and deterministic DCBC dependency behavior, the built-in default
+node-packing implementation shall produce the same candidate grouping result or
+the same explicit failure.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -184,10 +230,9 @@ This document is subordinate to `docs/protocol/indexing.md` and
 `docs/protocol/blocks.md`.
 
 This document is also subordinate to the `docs/specs/rust-block-crate/`,
-`docs/specs/rust-block-storage-trait/`, and
+`docs/specs/rust-block-storage-trait/`, `docs/specs/rust-dcbc-crate/`, and
 `docs/specs/rust-embeddings-trait/` specification packages for their
 respective concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.
-
