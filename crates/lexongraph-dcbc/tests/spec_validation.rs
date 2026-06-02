@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
+
 use std::path::Path;
 
 use lexongraph_dcbc::{

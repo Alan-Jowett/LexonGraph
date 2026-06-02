@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
+
 #[cfg(feature = "tch")]
 use lexongraph_dcbc::{DcbcInput, TorchBackend, run_dcbc, run_dcbc_with_backend};
 

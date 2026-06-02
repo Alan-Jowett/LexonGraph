@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
+
 use crate::{DcbcError, assignment_cost, costs_equal};
 
 const OPTIONAL_CAPACITY_PENALTY: f64 = 8.0;
