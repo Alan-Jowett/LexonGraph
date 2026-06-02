@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust OpenAI Embeddings Crate Requirements
 
 ## Status
@@ -88,3 +90,4 @@ concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.
+

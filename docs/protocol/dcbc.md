@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Deterministic Capacity-Constrained Balanced Clustering (DCBC) Protocol
 
 ## Status
@@ -338,3 +340,4 @@ revision:
 20. The reported objective value is computed after the final iteration under the
     protocol's distance semantics.
 21. Repeated runs on identical ordered inputs produce identical outputs.
+

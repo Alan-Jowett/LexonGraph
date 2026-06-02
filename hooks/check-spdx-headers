@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+
+set -euo pipefail
+
+mode="${1:-}"
+if [[ "$mode" != "--all" && "$mode" != "--staged" ]]; then
+    echo "Usage: hooks/check-spdx-headers --all|--staged" >&2
+    exit 2
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+md_line1='<!-- SPDX-License-Identifier: MIT'
+md_line2='  Copyright (c) 2026 LexonGraph contributors -->'
+md_front_matter_line2='# SPDX-License-Identifier: MIT'
+md_front_matter_line3='# Copyright (c) 2026 LexonGraph contributors'
+slash_line1='// SPDX-License-Identifier: MIT'
+slash_line2='// Copyright (c) 2026 LexonGraph contributors'
+hash_line1='# SPDX-License-Identifier: MIT'
+hash_line2='# Copyright (c) 2026 LexonGraph contributors'
+
+trim_cr() {
+    local value="$1"
+    printf '%s' "${value%$'\r'}"
+}
+
+is_governed_path() {
+    case "$1" in
+        *.md|*.rs|*.toml|*.yml|.gitignore)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+read_repo_file() {
+    if [[ "$mode" == "--staged" ]]; then
+        git show ":$1"
+    else
+        cat "$1"
+    fi
+}
+
+check_markdown_header() {
+    local file="$1"
+    local content="$2"
+    local line1 line2 line3
+
+    line1="$(trim_cr "$(sed -n '1p' <<<"$content")")"
+    line2="$(trim_cr "$(sed -n '2p' <<<"$content")")"
+    line3="$(trim_cr "$(sed -n '3p' <<<"$content")")"
+
+    if [[ "$line1" == "$md_line1" && "$line2" == "$md_line2" ]]; then
+        return 0
+    fi
+
+    if [[ "$line1" == "---" && "$line2" == "$md_front_matter_line2" && "$line3" == "$md_front_matter_line3" ]]; then
+        return 0
+    fi
+
+    echo "ERROR: Missing or incomplete SPDX header in $file" >&2
+    echo "  Expected Markdown header:" >&2
+    echo "    $md_line1" >&2
+    echo "    $md_line2" >&2
+    echo "  Or, for files that begin with YAML front matter:" >&2
+    echo "    ---" >&2
+    echo "    $md_front_matter_line2" >&2
+    echo "    $md_front_matter_line3" >&2
+    return 1
+}
+
+check_two_line_header() {
+    local file="$1"
+    local content="$2"
+    local expected1="$3"
+    local expected2="$4"
+    local line1 line2
+
+    line1="$(trim_cr "$(sed -n '1p' <<<"$content")")"
+    line2="$(trim_cr "$(sed -n '2p' <<<"$content")")"
+
+    if [[ "$line1" == "$expected1" && "$line2" == "$expected2" ]]; then
+        return 0
+    fi
+
+    echo "ERROR: Missing or incomplete SPDX header in $file" >&2
+    echo "  Expected:" >&2
+    echo "    $expected1" >&2
+    echo "    $expected2" >&2
+    return 1
+}
+
+error=0
+
+if [[ "$mode" == "--staged" ]]; then
+    list_command=(git diff --cached --name-only --diff-filter=ACMR -z --)
+else
+    list_command=(git ls-files -z)
+fi
+
+while IFS= read -r -d '' file; do
+    if ! is_governed_path "$file"; then
+        continue
+    fi
+
+    content="$(read_repo_file "$file")"
+
+    case "$file" in
+        *.md)
+            check_markdown_header "$file" "$content" || error=1
+            ;;
+        *.rs)
+            check_two_line_header "$file" "$content" "$slash_line1" "$slash_line2" || error=1
+            ;;
+        *.toml|*.yml|.gitignore)
+            check_two_line_header "$file" "$content" "$hash_line1" "$hash_line2" || error=1
+            ;;
+    esac
+done < <("${list_command[@]}")
+
+if [[ "$error" -ne 0 ]]; then
+    exit 1
+fi

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Search Crate Design
 
 ## Status
@@ -242,3 +244,4 @@ candidate scoring before terminating successfully with an empty
 | DSG-SEARCH-014 | REQ-SEARCH-015, REQ-SEARCH-016 |
 | DSG-SEARCH-015 | REQ-SEARCH-015, REQ-SEARCH-016, REQ-SEARCH-017 |
 | DSG-SEARCH-016 | REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018 |
+

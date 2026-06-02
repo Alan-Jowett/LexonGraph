@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Block Crate Validation
 
 ## Status
@@ -177,3 +179,4 @@ specified public API surface, and the automated tests cover the behavioral
 validation entries `VAL-001` through `VAL-017`.
 
 **Traces to:** REQ-BLOCK-CRATE-010
+

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
 [workspace]
 members = [
     "crates/lexongraph-block",
@@ -9,3 +11,4 @@ members = [
     "crates/lexongraph-search",
 ]
 resolver = "2"
+

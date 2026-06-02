@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
 [package]
 name = "lexongraph-search"
 version = "0.1.0"
@@ -11,3 +13,4 @@ conformance = []
 [dependencies]
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
+

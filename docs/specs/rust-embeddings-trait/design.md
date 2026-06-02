@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Embeddings Trait Design
 
 ## Status
@@ -111,3 +113,4 @@ independent embedding-provider traits.
 | DSG-EMBED-TRAIT-004 | REQ-EMBED-TRAIT-005 |
 | DSG-EMBED-TRAIT-005..006 | REQ-EMBED-TRAIT-007, REQ-EMBED-TRAIT-008 |
 | DSG-EMBED-TRAIT-007 | REQ-EMBED-TRAIT-001, REQ-EMBED-TRAIT-009, REQ-EMBED-TRAIT-010 |
+

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust DCBC Crate Design
 
 ## Status
@@ -201,3 +203,4 @@ entry mapped to one or more executable tests.
 | DSG-DCBC-016 | REQ-DCBC-012, REQ-DCBC-013 |
 | DSG-DCBC-017 | REQ-DCBC-006, REQ-DCBC-014 |
 | DSG-DCBC-018..019 | REQ-DCBC-015 |
+

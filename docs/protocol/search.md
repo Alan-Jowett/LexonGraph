@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph Search Protocol
 
 ## Status
@@ -190,3 +192,4 @@ revision:
 10. Incompatible `embedding_spec`, missing blocks, and malformed blocks produce
     explicit failure.
 11. Equal embeddings in different leaf blocks remain distinct leaf candidates.
+

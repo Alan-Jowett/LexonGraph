@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider, EmbeddingSpec};
 
 #[derive(Clone, Copy)]

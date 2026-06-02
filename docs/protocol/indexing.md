@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph Indexing Protocol
 
 ## Status
@@ -275,3 +277,4 @@ revision:
    packing, or re-organization strategy.
 19. Conformance does not depend on any specific canonical-embedding algorithm,
    clustering method, or routing-vector selection method.
+

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust DCBC Crate Validation
 
 ## Status
@@ -174,3 +176,4 @@ Inspect repository verification artifacts for the crate.
 defined in this specification package.
 
 **Traces to:** REQ-DCBC-015
+

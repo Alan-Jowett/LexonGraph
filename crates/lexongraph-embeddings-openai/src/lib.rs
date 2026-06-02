@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 use std::fmt;
 use std::str;
 use std::sync::Arc;

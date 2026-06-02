@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;

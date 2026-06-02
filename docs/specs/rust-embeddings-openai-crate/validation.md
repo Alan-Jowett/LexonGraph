@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust OpenAI Embeddings Crate Validation
 
 ## Status
@@ -73,3 +75,4 @@ embeddings crate.
 realize the validation surface in this specification package.
 
 **Traces to:** REQ-EMBED-OAI-008
+

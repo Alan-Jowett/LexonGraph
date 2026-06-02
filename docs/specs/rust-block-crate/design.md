@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Block Crate Design
 
 ## Status
@@ -182,3 +184,4 @@ Both consumers use the same typed model and protocol-conformance logic.
 | DSG-014 | REQ-BLOCK-CRATE-004, 011, 012 |
 | DSG-015 | REQ-BLOCK-CRATE-003, 006 |
 | DSG-016..017 | REQ-BLOCK-CRATE-010 |
+

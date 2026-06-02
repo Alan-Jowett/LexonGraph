@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust DCBC Crate Requirements
 
 ## Status
@@ -143,3 +145,4 @@ This document is subordinate to `docs/protocol/dcbc.md`.
 
 If this document appears to conflict with the protocol document, the protocol
 document is authoritative.
+

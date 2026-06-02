@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+bash "$repo_root/hooks/check-spdx-headers" --staged

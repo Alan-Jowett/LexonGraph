@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 use httpmock::prelude::*;
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_embeddings_openai::{

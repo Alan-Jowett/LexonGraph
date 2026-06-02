@@ -1,9 +1,11 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Workspace CI Validation
 
 ## Status
 
-Draft validation specification for the repository CI workflow that verifies the
-Rust workspace.
+Draft validation specification for the repository quality gates that verify the
+Rust workspace and enforce repository-managed SPDX header policy.
 
 ## Validation Scope
 
@@ -14,7 +16,7 @@ repository CI workflow.
 
 ### VAL-CI-001
 
-Open a pull request that changes a Rust-workspace-relevant path.
+Open a pull request that changes a repository-quality-relevant path.
 
 **Pass condition:** the CI workflow is triggered.
 
@@ -22,8 +24,8 @@ Open a pull request that changes a Rust-workspace-relevant path.
 
 ### VAL-CI-002
 
-Open a pull request that changes only paths outside the configured Rust CI path
-filter.
+Open a pull request that changes only paths outside the configured repository
+quality path filter.
 
 **Pass condition:** the CI workflow is not triggered solely by that change.
 
@@ -64,9 +66,46 @@ newest run remains authoritative.
 
 ### VAL-CI-007
 
+Introduce or expose a governed tracked file with a missing or incomplete SPDX
+header.
+
+**Pass condition:** the SPDX CI job fails.
+
+**Traces to:** REQ-CI-010, REQ-CI-014
+
+### VAL-CI-008
+
+Stage a governed file whose working-tree content has the SPDX header but whose
+staged content does not.
+
+**Pass condition:** the pre-commit hook fails, demonstrating that it reads the
+staged index rather than the working tree.
+
+**Traces to:** REQ-CI-012
+
+### VAL-CI-009
+
+Inspect contributor documentation and repository hook artifacts.
+
+**Pass condition:** the repository documents `git config core.hooksPath hooks`
+and provides the referenced hook artifacts in-repo.
+
+**Traces to:** REQ-CI-009, REQ-CI-013
+
+### VAL-CI-010
+
+Inspect governed Markdown files with leading YAML front matter.
+
+**Pass condition:** the SPDX notice is present without removing the opening
+front-matter delimiter.
+
+**Traces to:** REQ-CI-010
+
+### VAL-CI-011
+
 Inspect the workflow definition.
 
 **Pass condition:** it uses stable Rust, least-privilege permissions, Rust-aware
-caching, and no release or publish automation.
+caching, an SPDX verification job, and no release or publish automation.
 
-**Traces to:** REQ-CI-006, REQ-CI-007, REQ-CI-008
+**Traces to:** REQ-CI-006, REQ-CI-007, REQ-CI-008, REQ-CI-014

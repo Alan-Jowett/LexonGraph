@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Embeddings Trait Validation
 
 ## Status
@@ -77,3 +79,4 @@ provider-specific embedding crates depend on the shared embeddings-trait crate
 and do not define independent embedding-provider contracts.
 
 **Traces to:** REQ-EMBED-TRAIT-010
+

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust OpenAI Embeddings Crate Design
 
 ## Status
@@ -122,3 +124,4 @@ response translation.
 | DSG-EMBED-OAI-006 | REQ-EMBED-OAI-006 |
 | DSG-EMBED-OAI-007 | REQ-EMBED-OAI-007 |
 | DSG-EMBED-OAI-008 | REQ-EMBED-OAI-008 |
+

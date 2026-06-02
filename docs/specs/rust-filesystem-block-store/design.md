@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Filesystem Block Store Design
 
 ## Status
@@ -184,3 +186,4 @@ The crate adds backend-specific tests for:
 | DSG-FS-STORE-009 | REQ-FS-STORE-005 |
 | DSG-FS-STORE-010 | REQ-FS-STORE-001, REQ-FS-STORE-006, REQ-FS-STORE-007 |
 | DSG-FS-STORE-011..012 | REQ-FS-STORE-009 |
+

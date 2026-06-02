@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 //! Local-filesystem `BlockStore` implementation for LexonGraph blocks.
 
 use std::fs;

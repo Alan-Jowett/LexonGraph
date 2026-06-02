@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Filesystem Block Store Requirements
 
 ## Status
@@ -115,3 +117,4 @@ respective concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.
+

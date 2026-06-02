@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph
 
 LexonGraph is a semantic indexing and retrieval system built around immutable,
@@ -87,7 +89,18 @@ cargo test --workspace --locked
 The CI workflow lives in `.github/workflows/ci.yml` and currently runs on:
 
 - pushes to `main`
-- pull requests targeting `main` (filtered via `paths:` to `Cargo.toml`, `Cargo.lock`, `crates/**`, and `.github/workflows/ci.yml`)
+- pull requests targeting `main` (filtered via `paths:` to repository-quality-relevant files including Rust workspace files, docs, hooks, `.gitignore`, `.gitattributes`, and workflow configuration)
+
+To enable the repository-managed local checks, configure Git to use the
+versioned hook directory:
+
+```bash
+git config core.hooksPath hooks
+```
+
+The `pre-commit` hook enforces SPDX headers on staged governed files, and CI
+re-checks the full tracked repository surface.
+
 ## Repository layout
 
 ```text
@@ -103,6 +116,7 @@ The CI workflow lives in `.github/workflows/ci.yml` and currently runs on:
 |  |- specs/
 |  `- vision.md
 |- .github/workflows/ci.yml
+|- hooks/
 |- Cargo.toml
 `- README.md
 ```

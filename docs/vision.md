@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph: Block‑Based Semantic Index (Architecture Summary)
  
 1. Block Model
@@ -98,3 +100,4 @@ Compute is irrelevant; network dominates.
 - Quantized upper layers → reduce depth.
  
 ---
+
