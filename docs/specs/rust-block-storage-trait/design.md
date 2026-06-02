@@ -131,6 +131,30 @@ contract tests.
 That implementation exists solely to validate the trait semantics and is not a
 supported production backend surface.
 
+### DSG-STORE-011 `Feature-gated conformance module`
+
+The crate exposes a public conformance-test helper surface behind a non-default
+Cargo feature intended for downstream tests only.
+
+That feature is not part of the default crate surface and does not change the
+runtime `BlockStore` contract used by production consumers.
+
+### DSG-STORE-012 `Harness shape`
+
+The conformance-test helper surface provides reusable checks for the validation
+entries in this spec package.
+
+To cover integrity-mismatch and malformed-content scenarios without adding
+backend-specific methods to `BlockStore`, the helper surface may define a
+test-only harness contract that supplies:
+
+- a way to create a fresh store instance for an individual conformance case
+- a way to seed raw stored bytes under a chosen block ID for corruption tests
+
+The helper surface may also provide convenience runners that bundle multiple
+validation cases into a single invocation when the caller supplies the required
+test hooks.
+
 ## Consumer Usage Model
 
 ### Indexing
@@ -161,3 +185,5 @@ Both consumers use the same backend-neutral contract.
 | DSG-STORE-008 | REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-007 |
 | DSG-STORE-009 | REQ-BLOCK-STORE-009 |
 | DSG-STORE-010 | REQ-BLOCK-STORE-010 |
+| DSG-STORE-011 | REQ-BLOCK-STORE-013 |
+| DSG-STORE-012 | REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013 |

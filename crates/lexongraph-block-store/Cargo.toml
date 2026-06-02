@@ -3,5 +3,10 @@ name = "lexongraph-block-store"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Intended for use from downstream test code via `[dev-dependencies]`.
+# Enabling this in `[dependencies]` broadens the crate's public API surface.
+conformance = []
+
 [dependencies]
 lexongraph-block = { path = "../lexongraph-block" }
