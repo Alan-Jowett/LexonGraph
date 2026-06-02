@@ -70,7 +70,7 @@ impl FilesystemBlockStore {
         match fs::read(published_path) {
             Ok(existing_bytes) if existing_bytes == canonical_bytes => Ok(*block_id),
             Ok(_) => Err(backend_failure(format!(
-                "integrity conflict at {} for block {}",
+                "integrity conflict at {} for block {} after publish error {error}",
                 published_path.display(),
                 block_id
             ))),

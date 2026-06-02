@@ -128,7 +128,7 @@ fn val_fs_store_007_publish_only_exposes_complete_target_files() {
                         break;
                     }
                 }
-                std::hint::spin_loop();
+                std::thread::yield_now();
             }
         })
     };
