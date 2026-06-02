@@ -2,6 +2,7 @@
 members = [
     "crates/lexongraph-block",
     "crates/lexongraph-block-store",
+    "crates/lexongraph-block-store-fs",
     "crates/lexongraph-indexer",
     "crates/lexongraph-search",
 ]

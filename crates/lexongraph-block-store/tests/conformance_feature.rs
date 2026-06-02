@@ -61,7 +61,7 @@ impl BlockStoreConformanceHarness for MemoryHarness {
         block_id: &BlockHash,
         bytes: &[u8],
     ) -> Result<(), String> {
-        store.raw_insert(block_id.clone(), bytes.to_vec());
+        store.raw_insert(*block_id, bytes.to_vec());
         Ok(())
     }
 }

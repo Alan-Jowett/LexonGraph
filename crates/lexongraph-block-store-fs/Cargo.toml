@@ -1,0 +1,12 @@
+[package]
+name = "lexongraph-block-store-fs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+tempfile = "3"
+
+[dev-dependencies]
+lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }

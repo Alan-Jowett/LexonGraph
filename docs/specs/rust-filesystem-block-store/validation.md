@@ -1,0 +1,126 @@
+# Rust Filesystem Block Store Validation
+
+## Status
+
+Draft validation specification for a Rust crate that implements the LexonGraph
+block-storage contract on a local filesystem.
+
+## Validation Scope
+
+These validation entries define the expected conformance surface for the local
+filesystem backend in addition to the parent block-store trait validation
+surface.
+
+Block validity, canonical serialization, block-ID derivation, and the
+backend-neutral `BlockStore` contract remain normatively defined by
+`docs/protocol/blocks.md`, `docs/specs/rust-block-crate/`, and
+`docs/specs/rust-block-storage-trait/`.
+
+## Validation Entries
+
+### VAL-FS-STORE-001
+
+Construct the filesystem-backed store with a caller-supplied directory path.
+
+**Pass condition:** construction succeeds for an accessible root, and the
+consumer is not required to know any implementation-specific path layout below
+that root.
+
+**Traces to:** REQ-FS-STORE-002, REQ-FS-STORE-003
+
+### VAL-FS-STORE-002
+
+Store a valid typed block through `put`, then inspect the on-disk location used
+for the published block file.
+
+**Pass condition:** the implementation derives one deterministic path below the
+store root for that block ID and stores the canonical bytes at that location.
+
+**Traces to:** REQ-FS-STORE-004
+
+### VAL-FS-STORE-003
+
+Attempt to retrieve a block ID whose published file is absent.
+
+**Pass condition:** `get` returns `Ok(None)`.
+
+**Traces to:** REQ-FS-STORE-006
+
+### VAL-FS-STORE-004
+
+Populate the published file path for a requested block ID with bytes whose
+verified identity differs from that block ID.
+
+**Pass condition:** `get` fails explicitly with an integrity-mismatch error.
+
+**Traces to:** REQ-FS-STORE-006
+
+### VAL-FS-STORE-005
+
+Populate the published file path for a requested block ID with malformed or
+protocol-invalid bytes.
+
+**Pass condition:** `get` fails explicitly with a malformed-content error and
+does not report absence.
+
+**Traces to:** REQ-FS-STORE-006
+
+### VAL-FS-STORE-006
+
+Pre-populate the published file path for a block ID with bytes that differ from
+the canonical bytes of the block supplied to `put`.
+
+**Pass condition:** `put` fails explicitly and leaves the conflicting published
+bytes in place.
+
+**Traces to:** REQ-FS-STORE-007
+
+### VAL-FS-STORE-007
+
+Observe the store root while `put` publishes a block.
+
+**Pass condition:** readers observe either no published file or a complete
+published block file, and never a partially published target file.
+
+**Traces to:** REQ-FS-STORE-005
+
+### VAL-FS-STORE-008
+
+Use two or more store instances bound to the same store root to publish the
+same logical block concurrently.
+
+**Pass condition:** all successful publishers report the same block ID, the
+store converges on one valid published block file for that ID, and readers can
+subsequently load that block successfully.
+
+**Traces to:** REQ-FS-STORE-005, REQ-FS-STORE-008
+
+### VAL-FS-STORE-009
+
+Inspect the implementation after a successful publish.
+
+**Pass condition:** no staging file remains at the target path, and the
+published block file is located below the configured store root.
+
+**Traces to:** REQ-FS-STORE-003, REQ-FS-STORE-005
+
+### VAL-FS-STORE-010
+
+Run the parent block-store conformance suite against the filesystem-backed
+implementation.
+
+**Pass condition:** the backend satisfies the shared `put`/`get` contract
+without backend-specific changes to the parent trait API.
+
+**Traces to:** REQ-FS-STORE-001, REQ-FS-STORE-009
+
+### VAL-FS-STORE-011
+
+Inspect the repository verification artifacts for the filesystem block-store
+crate.
+
+**Pass condition:** the repository includes automated tests that realize this
+validation surface and reuse the parent crate's conformance helpers where they
+cover the same contract.
+
+**Traces to:** REQ-FS-STORE-009
