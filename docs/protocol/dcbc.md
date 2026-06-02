@@ -66,9 +66,11 @@ must fail explicitly.
 
 This revision requires `T >= 1`. A conforming invocation must also satisfy:
 
+- `k >= 1`
 - `L >= 1`
-- `kL <= n`
-- `n <= kN`
+- `L <= N`
+- `k * L <= n`
+- `n <= k * N`
 
 If those conditions do not hold, the invocation is invalid and must fail
 explicitly.
@@ -128,11 +130,14 @@ Distance comparisons must treat values as equal when:
 
 ### Tie-Breaking Rules
 
-When this protocol requires a deterministic choice among tied alternatives, the
-canonical ordering is:
+This protocol uses context-specific deterministic tie-breaking rules:
 
-1. smaller cluster index
-2. smaller point index
+1. When choosing among candidate clusters for a fixed point, prefer the smaller
+   cluster index.
+2. When choosing among candidate points for a fixed cluster or initialization
+   step, prefer the smaller point index.
+3. When a procedure depends on a canonical ordering over point-cluster pairs,
+   use ascending point index and then ascending cluster index.
 
 ## Initialization Procedure
 
@@ -174,6 +179,7 @@ and upper bounds over the logical graph:
 Normative graph semantics:
 
 - source-to-point capacity is `1`
+- point-to-cluster capacity is `1`
 - point-to-cluster edge cost is the cosine distance from `X[i]` to the
   normalized form of centroid `C[j]`
 - cluster-to-sink lower bound is `L`
@@ -259,7 +265,9 @@ This revision does not guarantee invariance under reordering of the input array.
 A conforming implementation must fail explicitly if:
 
 - the capacity constraints are infeasible
+- `k < 1`
 - `L < 1`
+- `L > N`
 - `T < 1`
 - any input value is `NaN` or infinite
 - any input vector has zero norm
@@ -286,23 +294,26 @@ revision of the DCBC protocol.
 The following validation cases define the minimum conformance surface for this
 revision:
 
-1. Invalid capacity bounds fail explicitly when `kL > n` or `n > kN`.
-2. Inputs with `L < 1` fail explicitly.
-3. Inputs with `T < 1` fail explicitly.
-4. Inputs containing `NaN` or infinite values fail explicitly.
-5. Inputs containing zero-norm vectors fail explicitly.
-6. Initialization always chooses `X[0]` as the first centroid.
-7. Later initialization choices follow farthest-point selection with smaller
+1. Invalid capacity bounds fail explicitly when `k * L > n` or `n > k * N`.
+2. Inputs with `k < 1` fail explicitly.
+3. Inputs with `L < 1` fail explicitly.
+4. Inputs with `L > N` fail explicitly.
+5. Inputs with `T < 1` fail explicitly.
+6. Inputs containing `NaN` or infinite values fail explicitly.
+7. Inputs containing zero-norm vectors fail explicitly.
+8. Initialization always chooses `X[0]` as the first centroid.
+9. Later initialization choices follow farthest-point selection with smaller
    point index as the tie-break.
-8. Assignment produces exactly one cluster assignment per point.
-9. Every cluster size after assignment satisfies `L <= |S[j]| <= N`.
-10. Assignment selection is deterministic when multiple optimal solutions exist.
-11. Assignment edge generation follows ascending point index, then ascending
+10. Assignment produces exactly one cluster assignment per point.
+11. Every cluster size after assignment satisfies `L <= |S[j]| <= N`.
+12. Assignment selection is deterministic when multiple optimal solutions exist.
+13. Assignment edge generation follows ascending point index, then ascending
     cluster index.
-12. Centroid summation uses ascending point-index order.
-13. Zero-norm raw centroids use the smallest-index cluster member for normalized
+14. Point-to-cluster edges have unit capacity.
+15. Centroid summation uses ascending point-index order.
+16. Zero-norm raw centroids use the smallest-index cluster member for normalized
     distance computations while preserving the raw stored centroid.
-14. The protocol runs exactly `T` iterations with no early stopping.
-15. The reported objective value is computed after the final iteration under the
+17. The protocol runs exactly `T` iterations with no early stopping.
+18. The reported objective value is computed after the final iteration under the
     protocol's distance semantics.
-16. Repeated runs on identical ordered inputs produce identical outputs.
+19. Repeated runs on identical ordered inputs produce identical outputs.
