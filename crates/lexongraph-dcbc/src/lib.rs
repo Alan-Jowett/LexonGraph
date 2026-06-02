@@ -144,6 +144,14 @@ impl fmt::Display for DcbcError {
 impl std::error::Error for DcbcError {}
 
 pub trait NumericBackend {
+    /// Computes a row-major point-by-centroid cosine-distance matrix over already
+    /// normalized vectors.
+    ///
+    /// The returned matrix must have `normalized_points.len() *
+    /// normalized_centroids.len()` entries in ascending point index, then
+    /// ascending centroid index order. Distances are expected to follow the
+    /// protocol's cosine-distance semantics, so callers may rely on them being
+    /// finite and bounded to the `[0, 2]` range for normalized vectors.
     fn pairwise_cosine_distances(
         &self,
         normalized_points: &[&[f64]],

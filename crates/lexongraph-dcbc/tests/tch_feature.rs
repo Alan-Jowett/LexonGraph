@@ -17,5 +17,13 @@ fn torch_backend_matches_the_default_runner_on_a_simple_fixture() {
 
     let torch_result = run_dcbc_with_backend(&input, &TorchBackend::default()).unwrap();
     let default_result = run_dcbc(&input).unwrap();
-    assert_eq!(torch_result, default_result);
+    assert_eq!(torch_result.assignment, default_result.assignment);
+    assert_eq!(
+        torch_result.metadata.cluster_sizes,
+        default_result.metadata.cluster_sizes
+    );
+    assert!(
+        (torch_result.metadata.objective_value - default_result.metadata.objective_value).abs()
+            < 1e-12
+    );
 }

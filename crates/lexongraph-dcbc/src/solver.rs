@@ -3,6 +3,9 @@
 
 use crate::{DcbcError, assignment_cost, costs_equal};
 
+// For normalized vectors, cosine distance stays in [0, 2]. Using a penalty
+// strictly above that range keeps every mandatory cluster slot cheaper than
+// replacing it with an optional slot in the min-cost-flow formulation.
 const OPTIONAL_CAPACITY_PENALTY: f64 = 8.0;
 
 pub(crate) fn solve_lexicographic_assignment(
