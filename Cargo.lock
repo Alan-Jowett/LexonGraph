@@ -109,6 +109,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-block-store"
+version = "0.1.0"
+dependencies = [
+ "lexongraph-block",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
