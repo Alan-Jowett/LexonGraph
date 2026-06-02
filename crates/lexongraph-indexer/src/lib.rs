@@ -154,7 +154,7 @@ impl NodePackingPolicy for DcbcNodePackingPolicy {
                 "default DCBC node packing requires at least two children".into(),
             ));
         }
-        let vectors = decode_embeddings_as_f64(children, spec).map_err(DcbcNodePackingError)?;
+        validate_dcbc_embedding_encoding(spec).map_err(DcbcNodePackingError)?;
         if children.len() == 2 {
             return Ok(vec![vec![0, 1]]);
         }
@@ -171,6 +171,7 @@ impl NodePackingPolicy for DcbcNodePackingPolicy {
             return Ok(vec![(0..children.len()).collect()]);
         }
 
+        let vectors = decode_embeddings_as_f64(children, spec).map_err(DcbcNodePackingError)?;
         let cluster_count = min_cluster_count;
         let min_cluster_size = children.len() / cluster_count;
         let max_cluster_size = children.len().div_ceil(cluster_count);
@@ -510,10 +511,23 @@ fn decode_embeddings_as_f64(
     children: &[IndexedChild],
     spec: &EmbeddingSpec,
 ) -> Result<Vec<Vec<f64>>, String> {
+    validate_dcbc_embedding_encoding(spec)?;
     children
         .iter()
         .map(|child| decode_embedding_as_f64(&child.embedding, spec))
         .collect()
+}
+
+fn validate_dcbc_embedding_encoding(spec: &EmbeddingSpec) -> Result<(), String> {
+    match spec.encoding.as_str() {
+        "i8" | "f32le" | "f16le" => Ok(()),
+        "pq4" => {
+            Err("pq4 embeddings cannot be used with the default DCBC node-packing policy".into())
+        }
+        other => Err(format!(
+            "unsupported embedding encoding {other:?} for default DCBC node packing"
+        )),
+    }
 }
 
 fn decode_embedding_as_f64(embedding: &[u8], spec: &EmbeddingSpec) -> Result<Vec<f64>, String> {
@@ -541,12 +555,8 @@ fn decode_embedding_as_f64(embedding: &[u8], spec: &EmbeddingSpec) -> Result<Vec
                 Ok(f16::from_le_bytes(bytes).to_f64())
             })
             .collect(),
-        "pq4" => {
-            Err("pq4 embeddings cannot be used with the default DCBC node-packing policy".into())
-        }
-        other => Err(format!(
-            "unsupported embedding encoding {other:?} for default DCBC node packing"
-        )),
+        "pq4" => unreachable!("pq4 is rejected by validate_dcbc_embedding_encoding"),
+        other => unreachable!("unsupported encoding {other:?} rejected earlier"),
     }
 }
 
