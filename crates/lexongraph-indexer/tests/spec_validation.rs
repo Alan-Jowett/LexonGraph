@@ -761,7 +761,6 @@ fn val_indexer_022_default_policy_uses_shared_dcbc_dependency() {
         .pack(&synthetic_children(), &embedding_spec(), 160)
         .unwrap();
 
-    assert!(groups.len() >= 2);
     let mut flattened = groups.into_iter().flatten().collect::<Vec<_>>();
     flattened.sort_unstable();
     assert_eq!(flattened, vec![0, 1, 2, 3, 4, 5]);

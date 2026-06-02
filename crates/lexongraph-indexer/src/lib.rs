@@ -592,13 +592,28 @@ fn max_children_per_branch(
     }
 
     let mut low = 2;
-    let mut high = child_count;
-    while low < high {
-        let mid = (low + high).div_ceil(2);
+    let mut high = 2;
+    while high < child_count {
+        let candidate = (high.saturating_mul(2)).min(child_count);
+        if serialized_branch_size(spec, candidate)? <= block_size_target {
+            low = candidate;
+            high = candidate;
+        } else {
+            high = candidate;
+            break;
+        }
+    }
+
+    if low == child_count {
+        return Ok(child_count);
+    }
+
+    while low + 1 < high {
+        let mid = low + (high - low) / 2;
         if serialized_branch_size(spec, mid)? <= block_size_target {
             low = mid;
         } else {
-            high = mid - 1;
+            high = mid;
         }
     }
     Ok(low)
