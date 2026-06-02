@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Block Storage Trait Requirements
 
 ## Status
@@ -119,3 +121,4 @@ specification package for typed block modeling and block verification behavior.
 
 If this document appears to conflict with either of those authorities, they are
 authoritative for their respective concerns.
+

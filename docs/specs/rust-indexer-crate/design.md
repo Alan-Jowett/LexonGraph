@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Indexer Crate Design
 
 ## Status
@@ -225,3 +227,4 @@ conformance contracts.
 | DSG-INDEXER-013 | REQ-INDEXER-001 |
 | DSG-INDEXER-014 | REQ-INDEXER-015 |
 | DSG-INDEXER-015..016 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-017, REQ-INDEXER-018, REQ-INDEXER-019 |
+

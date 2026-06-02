@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 #![cfg(feature = "conformance")]
 
 use std::cell::Cell;

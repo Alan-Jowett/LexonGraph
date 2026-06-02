@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Block Storage Trait Validation
 
 ## Status
@@ -140,3 +142,4 @@ backend-specific methods on the production `BlockStore` trait.
 
 **Traces to:** REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008,
 REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013
+

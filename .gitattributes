@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+
+hooks/pre-commit text eol=lf
+hooks/check-spdx-headers text eol=lf

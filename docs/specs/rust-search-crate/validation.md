@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Search Crate Validation
 
 ## Status
@@ -246,3 +248,4 @@ ordered result after the root block has still been loaded and its entries
 scored, and without any child expansion.
 
 **Traces to:** REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018
+

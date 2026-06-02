@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Indexer Crate Validation
 
 ## Status
@@ -184,3 +186,4 @@ realize the validation surface in this specification package, including runtime
 indexing behavior and the opt-in trait-conformance helper surface.
 
 **Traces to:** REQ-INDEXER-015
+

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 use lexongraph_block::{
     BlockHash, BranchBlock, Content, EmbeddingSpec, TypedEntries, into_entries,
 };

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Block Crate Requirements
 
 ## Status
@@ -107,3 +109,4 @@ This document is subordinate to `docs/protocol/blocks.md`.
 If this document appears to conflict with the protocol document, the protocol
 document is authoritative for wire format, canonicalization, and validity
 rules.
+

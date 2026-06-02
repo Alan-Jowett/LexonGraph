@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
 name: CI
 
 on:
@@ -9,6 +11,12 @@ on:
       - Cargo.toml
       - Cargo.lock
       - crates/**
+      - docs/**
+      - hooks/**
+      - README.md
+      - .gitignore
+      - .gitattributes
+      - .github/skills/**
       - .github/workflows/ci.yml
 
 concurrency:
@@ -22,6 +30,15 @@ permissions:
   contents: read
 
 jobs:
+  spdx:
+    name: Check SPDX headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check SPDX headers
+        run: bash hooks/check-spdx-headers --all
+
   fmt:
     name: Check formatting
     runs-on: ubuntu-latest

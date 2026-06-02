@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph Block Protocol
 
 ## Status
@@ -378,3 +380,4 @@ The compactness strategy for version 1 is:
 4. specialized branch and leaf block kinds to avoid mixed per-entry unions
 5. raw bytes for embeddings and child block IDs
 6. minimal nested wrappers in hot-path structures
+

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
 use ciborium::ser::into_writer;
 use ciborium::value::{Integer, Value};
 use lexongraph_block::{

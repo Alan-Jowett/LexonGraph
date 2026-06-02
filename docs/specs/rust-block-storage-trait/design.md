@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Block Storage Trait Design
 
 ## Status
@@ -187,3 +189,4 @@ Both consumers use the same backend-neutral contract.
 | DSG-STORE-010 | REQ-BLOCK-STORE-010 |
 | DSG-STORE-011 | REQ-BLOCK-STORE-013 |
 | DSG-STORE-012 | REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013 |
+

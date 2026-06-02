@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Rust Filesystem Block Store Validation
 
 ## Status
@@ -124,3 +126,4 @@ validation surface and reuse the parent crate's conformance helpers where they
 cover the same contract.
 
 **Traces to:** REQ-FS-STORE-009
+
