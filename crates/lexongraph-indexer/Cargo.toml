@@ -6,8 +6,13 @@ edition = "2024"
 [features]
 # Intended for use from downstream test code via `[dev-dependencies]`.
 # Enabling this in `[dependencies]` broadens the crate's public API surface.
-conformance = []
+conformance = ["dep:pollster"]
 
 [dependencies]
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-embeddings-trait = { version = "0.1.0", path = "../lexongraph-embeddings-trait" }
+pollster = { version = "0.4.0", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["macros", "rt"] }

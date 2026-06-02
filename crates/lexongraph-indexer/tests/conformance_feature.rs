@@ -2,13 +2,11 @@
 
 use lexongraph_block::{BranchBlock, Content};
 use lexongraph_indexer::conformance::{
-    CanonicalEmbeddingPolicyConformanceHarness, ContentResolverConformanceHarness,
-    EmbeddingProviderConformanceHarness, FixtureError, NodePackingPolicyConformanceHarness,
-    run_content_resolver_suite, run_embedding_provider_suite, run_full_trait_suite,
+    CanonicalEmbeddingPolicyConformanceHarness, ContentResolverConformanceHarness, FixtureError,
+    NodePackingPolicyConformanceHarness, run_content_resolver_suite, run_full_trait_suite,
 };
 use lexongraph_indexer::{
-    CanonicalEmbeddingPolicy, ContentResolver, EmbeddingProvider, IndexItem, IndexedChild,
-    NodePackingPolicy,
+    CanonicalEmbeddingPolicy, ContentResolver, IndexItem, IndexedChild, NodePackingPolicy,
 };
 
 #[derive(Clone)]
@@ -69,54 +67,6 @@ impl ContentResolverConformanceHarness for ContentHarness {
 
     fn unusable_resolver(&self) -> Self::Resolver {
         ResolverFixture(ResolverMode::Unusable)
-    }
-}
-
-#[derive(Clone)]
-enum ProviderMode {
-    Good,
-    Fail,
-    WrongLength,
-}
-
-#[derive(Clone)]
-struct ProviderFixture(ProviderMode);
-
-impl EmbeddingProvider for ProviderFixture {
-    type Error = FixtureError;
-
-    fn embed(
-        &self,
-        content: &Content,
-        _: &lexongraph_block::EmbeddingSpec,
-    ) -> Result<Vec<u8>, Self::Error> {
-        match self.0 {
-            ProviderMode::Good => Ok(vec![content.body[0], 0x20]),
-            ProviderMode::Fail => Err(FixtureError("embed failure".into())),
-            ProviderMode::WrongLength => Ok(vec![0x01]),
-        }
-    }
-}
-
-struct EmbeddingHarness;
-
-impl EmbeddingProviderConformanceHarness for EmbeddingHarness {
-    type Provider = ProviderFixture;
-
-    fn expected_embedding(&self) -> Vec<u8> {
-        vec![b'f', 0x20]
-    }
-
-    fn conforming_provider(&self) -> Self::Provider {
-        ProviderFixture(ProviderMode::Good)
-    }
-
-    fn failing_provider(&self) -> Self::Provider {
-        ProviderFixture(ProviderMode::Fail)
-    }
-
-    fn invalid_length_provider(&self) -> Self::Provider {
-        ProviderFixture(ProviderMode::WrongLength)
     }
 }
 
@@ -233,17 +183,6 @@ fn downstream_crates_can_run_the_content_resolver_suite() {
 }
 
 #[test]
-fn downstream_crates_can_run_the_embedding_provider_suite() {
-    run_embedding_provider_suite(&EmbeddingHarness).unwrap();
-}
-
-#[test]
 fn downstream_crates_can_run_the_full_trait_suite() {
-    run_full_trait_suite(
-        &ContentHarness,
-        &EmbeddingHarness,
-        &CanonicalHarness,
-        &PackingHarness,
-    )
-    .unwrap();
+    run_full_trait_suite(&ContentHarness, &CanonicalHarness, &PackingHarness).unwrap();
 }

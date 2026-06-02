@@ -19,6 +19,7 @@ use lexongraph_block::{
     serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexItem<R> {
@@ -102,12 +103,6 @@ pub trait ContentResolver<R> {
     fn resolve(&self, content_ref: &R) -> Result<Content, Self::Error>;
 }
 
-pub trait EmbeddingProvider {
-    type Error: std::error::Error;
-
-    fn embed(&self, content: &Content, spec: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error>;
-}
-
 pub trait CanonicalEmbeddingPolicy {
     type Error: std::error::Error;
 
@@ -155,7 +150,7 @@ where
     CEP: CanonicalEmbeddingPolicy,
     NPP: NodePackingPolicy,
 {
-    pub fn index<R>(
+    pub async fn index<R>(
         &self,
         items: &[IndexItem<R>],
         embedding_spec: EmbeddingSpec,
@@ -185,7 +180,14 @@ where
 
             let embedding = self
                 .embedding_provider
-                .embed(&content, &embedding_spec)
+                .embed(
+                    &EmbeddingInput {
+                        media_type: content.media_type.clone(),
+                        body: content.body.clone(),
+                    },
+                    &embedding_spec,
+                )
+                .await
                 .map_err(|error| IndexerError::EmbeddingFailure(error.to_string()))?;
             validate_embedding_bytes(&embedding, &embedding_spec, "item")
                 .map_err(IndexerError::EmbeddingFailure)?;
@@ -509,15 +511,6 @@ mod conformance_support {
         fn unusable_resolver(&self) -> Self::Resolver;
     }
 
-    pub trait EmbeddingProviderConformanceHarness {
-        type Provider: EmbeddingProvider;
-
-        fn expected_embedding(&self) -> Vec<u8>;
-        fn conforming_provider(&self) -> Self::Provider;
-        fn failing_provider(&self) -> Self::Provider;
-        fn invalid_length_provider(&self) -> Self::Provider;
-    }
-
     pub trait CanonicalEmbeddingPolicyConformanceHarness {
         type Policy: CanonicalEmbeddingPolicy;
 
@@ -540,338 +533,291 @@ mod conformance_support {
     where
         H: ContentResolverConformanceHarness,
     {
-        let store = MemoryBlockStore::default();
-        let item = harness.sample_item();
-        let indexer = Indexer::new(
-            harness.conforming_resolver(),
-            FixedEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            PairPackingPolicy,
-        );
-        let result = indexer.index(
-            &[item],
-            fixture_embedding_spec(),
-            fixture_block_size_target(),
-            &store,
-        )?;
-        let loaded = store
-            .get(&result.root_id)
-            .map_err(IndexerError::Storage)?
-            .ok_or_else(|| {
-                ConformanceError::Expectation("expected indexed root block to be present".into())
-            })?;
-        match into_entries(loaded) {
-            TypedEntries::Leaf(_, entries) if entries[0].content == harness.expected_content() => {}
-            TypedEntries::Leaf(_, entries) => {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected resolved content {:?}, got {:?}",
-                    harness.expected_content(),
-                    entries[0].content
-                )));
+        pollster::block_on(async {
+            let store = MemoryBlockStore::default();
+            let item = harness.sample_item();
+            let indexer = Indexer::new(
+                harness.conforming_resolver(),
+                FixedEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                PairPackingPolicy,
+            );
+            let result = indexer
+                .index(
+                    &[item],
+                    fixture_embedding_spec(),
+                    fixture_block_size_target(),
+                    &store,
+                )
+                .await?;
+            let loaded = store
+                .get(&result.root_id)
+                .map_err(IndexerError::Storage)?
+                .ok_or_else(|| {
+                    ConformanceError::Expectation(
+                        "expected indexed root block to be present".into(),
+                    )
+                })?;
+            match into_entries(loaded) {
+                TypedEntries::Leaf(_, entries)
+                    if entries[0].content == harness.expected_content() => {}
+                TypedEntries::Leaf(_, entries) => {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected resolved content {:?}, got {:?}",
+                        harness.expected_content(),
+                        entries[0].content
+                    )));
+                }
+                TypedEntries::Branch(_, _) => {
+                    return Err(ConformanceError::Expectation(
+                        "expected a leaf root for a single indexed item".into(),
+                    ));
+                }
             }
-            TypedEntries::Branch(_, _) => {
-                return Err(ConformanceError::Expectation(
-                    "expected a leaf root for a single indexed item".into(),
-                ));
-            }
-        }
 
-        let store = MemoryBlockStore::default();
-        let item = harness.sample_item();
-        let indexer = Indexer::new(
-            harness.failing_resolver(),
-            FixedEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            PairPackingPolicy,
-        );
-        expect_indexer_error(
-            indexer.index(
-                &[item],
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::ContentResolution(_)),
-            "expected content-resolution failure",
-        )?;
+            let store = MemoryBlockStore::default();
+            let item = harness.sample_item();
+            let indexer = Indexer::new(
+                harness.failing_resolver(),
+                FixedEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                PairPackingPolicy,
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &[item],
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::ContentResolution(_)),
+                "expected content-resolution failure",
+            )?;
 
-        let store = MemoryBlockStore::default();
-        let item = harness.sample_item();
-        let indexer = Indexer::new(
-            harness.unusable_resolver(),
-            FixedEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            PairPackingPolicy,
-        );
-        expect_indexer_error(
-            indexer.index(
-                &[item],
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::UnusableContent(_)),
-            "expected unusable-content failure",
-        )
-    }
-
-    pub fn run_embedding_provider_suite<H>(harness: &H) -> ConformanceResult
-    where
-        H: EmbeddingProviderConformanceHarness,
-    {
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            harness.conforming_provider(),
-            FixedCanonicalEmbeddingPolicy,
-            PairPackingPolicy,
-        );
-        let result = indexer.index(
-            &[fixture_single_item()],
-            fixture_embedding_spec(),
-            fixture_block_size_target(),
-            &store,
-        )?;
-        let loaded = store
-            .get(&result.root_id)
-            .map_err(IndexerError::Storage)?
-            .ok_or_else(|| {
-                ConformanceError::Expectation("expected indexed root block to be present".into())
-            })?;
-        match into_entries(loaded) {
-            TypedEntries::Leaf(_, entries)
-                if entries[0].embedding == harness.expected_embedding() => {}
-            TypedEntries::Leaf(_, entries) => {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected embedding {:?}, got {:?}",
-                    harness.expected_embedding(),
-                    entries[0].embedding
-                )));
-            }
-            TypedEntries::Branch(_, _) => {
-                return Err(ConformanceError::Expectation(
-                    "expected a leaf root for a single indexed item".into(),
-                ));
-            }
-        }
-
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            harness.failing_provider(),
-            FixedCanonicalEmbeddingPolicy,
-            PairPackingPolicy,
-        );
-        expect_indexer_error(
-            indexer.index(
-                &[fixture_single_item()],
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::EmbeddingFailure(_)),
-            "expected embedding-generation failure",
-        )?;
-
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            harness.invalid_length_provider(),
-            FixedCanonicalEmbeddingPolicy,
-            PairPackingPolicy,
-        );
-        expect_indexer_error(
-            indexer.index(
-                &[fixture_single_item()],
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::EmbeddingFailure(_)),
-            "expected invalid embedding length failure",
-        )
+            let store = MemoryBlockStore::default();
+            let item = harness.sample_item();
+            let indexer = Indexer::new(
+                harness.unusable_resolver(),
+                FixedEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                PairPackingPolicy,
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &[item],
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::UnusableContent(_)),
+                "expected unusable-content failure",
+            )
+        })
     }
 
     pub fn run_canonical_embedding_policy_suite<H>(harness: &H) -> ConformanceResult
     where
         H: CanonicalEmbeddingPolicyConformanceHarness,
     {
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            harness.conforming_policy(),
-            PairPackingPolicy,
-        );
-        let result = indexer.index(
-            &fixture_multi_items(),
-            fixture_embedding_spec(),
-            fixture_block_size_target(),
-            &store,
-        )?;
-        let loaded = store
-            .get(&result.root_id)
-            .map_err(IndexerError::Storage)?
-            .ok_or_else(|| {
-                ConformanceError::Expectation("expected indexed root block to be present".into())
-            })?;
-        match into_entries(loaded) {
-            TypedEntries::Branch(_, entries) if entries.len() >= 2 => {}
-            TypedEntries::Branch(_, entries) => {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected a branch root with at least two entries, got {}",
-                    entries.len()
-                )));
+        pollster::block_on(async {
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                harness.conforming_policy(),
+                PairPackingPolicy,
+            );
+            let result = indexer
+                .index(
+                    &fixture_multi_items(),
+                    fixture_embedding_spec(),
+                    fixture_block_size_target(),
+                    &store,
+                )
+                .await?;
+            let loaded = store
+                .get(&result.root_id)
+                .map_err(IndexerError::Storage)?
+                .ok_or_else(|| {
+                    ConformanceError::Expectation(
+                        "expected indexed root block to be present".into(),
+                    )
+                })?;
+            match into_entries(loaded) {
+                TypedEntries::Branch(_, entries) if entries.len() >= 2 => {}
+                TypedEntries::Branch(_, entries) => {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected a branch root with at least two entries, got {}",
+                        entries.len()
+                    )));
+                }
+                TypedEntries::Leaf(_, _) => {
+                    return Err(ConformanceError::Expectation(
+                        "expected multi-item indexing to produce a branch root".into(),
+                    ));
+                }
             }
-            TypedEntries::Leaf(_, _) => {
-                return Err(ConformanceError::Expectation(
-                    "expected multi-item indexing to produce a branch root".into(),
-                ));
-            }
-        }
 
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            harness.failing_policy(),
-            PairPackingPolicy,
-        );
-        expect_indexer_error(
-            indexer.index(
-                &fixture_multi_items(),
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::CanonicalEmbeddingFailure(_)),
-            "expected canonical-embedding failure",
-        )?;
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                harness.failing_policy(),
+                PairPackingPolicy,
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &fixture_multi_items(),
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::CanonicalEmbeddingFailure(_)),
+                "expected canonical-embedding failure",
+            )?;
 
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            harness.invalid_length_policy(),
-            PairPackingPolicy,
-        );
-        expect_indexer_error(
-            indexer.index(
-                &fixture_multi_items(),
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::CanonicalEmbeddingFailure(_)),
-            "expected invalid canonical-embedding length failure",
-        )
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                harness.invalid_length_policy(),
+                PairPackingPolicy,
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &fixture_multi_items(),
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::CanonicalEmbeddingFailure(_)),
+                "expected invalid canonical-embedding length failure",
+            )
+        })
     }
 
     pub fn run_node_packing_policy_suite<H>(harness: &H) -> ConformanceResult
     where
         H: NodePackingPolicyConformanceHarness,
     {
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            harness.conforming_policy(),
-        );
-        indexer.index(
-            &fixture_multi_items(),
-            fixture_embedding_spec(),
-            fixture_block_size_target(),
-            &store,
-        )?;
+        pollster::block_on(async {
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                harness.conforming_policy(),
+            );
+            indexer
+                .index(
+                    &fixture_multi_items(),
+                    fixture_embedding_spec(),
+                    fixture_block_size_target(),
+                    &store,
+                )
+                .await?;
 
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            harness.failing_policy(),
-        );
-        expect_indexer_error(
-            indexer.index(
-                &fixture_multi_items(),
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::NodePackingFailure(_)),
-            "expected node-packing failure",
-        )?;
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                harness.failing_policy(),
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &fixture_multi_items(),
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::NodePackingFailure(_)),
+                "expected node-packing failure",
+            )?;
 
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            harness.singleton_group_policy(),
-        );
-        expect_indexer_error(
-            indexer.index(
-                &fixture_multi_items(),
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::NodePackingFailure(_)),
-            "expected singleton-group failure",
-        )?;
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                harness.singleton_group_policy(),
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &fixture_multi_items(),
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::NodePackingFailure(_)),
+                "expected singleton-group failure",
+            )?;
 
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            harness.out_of_bounds_policy(),
-        );
-        expect_indexer_error(
-            indexer.index(
-                &fixture_multi_items(),
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::NodePackingFailure(_)),
-            "expected out-of-bounds packing failure",
-        )?;
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                harness.out_of_bounds_policy(),
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &fixture_multi_items(),
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::NodePackingFailure(_)),
+                "expected out-of-bounds packing failure",
+            )?;
 
-        let store = MemoryBlockStore::default();
-        let indexer = Indexer::new(
-            FixedResolver,
-            FixedMultiEmbeddingProvider,
-            FixedCanonicalEmbeddingPolicy,
-            harness.missing_child_policy(),
-        );
-        expect_indexer_error(
-            indexer.index(
-                &fixture_multi_items(),
-                fixture_embedding_spec(),
-                fixture_block_size_target(),
-                &store,
-            ),
-            |error| matches!(error, IndexerError::NodePackingFailure(_)),
-            "expected missing-child packing failure",
-        )
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::new(
+                FixedResolver,
+                FixedMultiEmbeddingProvider,
+                FixedCanonicalEmbeddingPolicy,
+                harness.missing_child_policy(),
+            );
+            expect_indexer_error(
+                indexer
+                    .index(
+                        &fixture_multi_items(),
+                        fixture_embedding_spec(),
+                        fixture_block_size_target(),
+                        &store,
+                    )
+                    .await,
+                |error| matches!(error, IndexerError::NodePackingFailure(_)),
+                "expected missing-child packing failure",
+            )
+        })
     }
 
-    pub fn run_full_trait_suite<CR, EP, CEP, NPP>(
+    pub fn run_full_trait_suite<CR, CEP, NPP>(
         content_harness: &CR,
-        embedding_harness: &EP,
         canonical_harness: &CEP,
         packing_harness: &NPP,
     ) -> ConformanceResult
     where
         CR: ContentResolverConformanceHarness,
-        EP: EmbeddingProviderConformanceHarness,
         CEP: CanonicalEmbeddingPolicyConformanceHarness,
         NPP: NodePackingPolicyConformanceHarness,
     {
         run_content_resolver_suite(content_harness)?;
-        run_embedding_provider_suite(embedding_harness)?;
         run_canonical_embedding_policy_suite(canonical_harness)?;
         run_node_packing_policy_suite(packing_harness)
     }
@@ -896,7 +842,11 @@ mod conformance_support {
     impl EmbeddingProvider for FixedEmbeddingProvider {
         type Error = FixtureError;
 
-        fn embed(&self, _: &Content, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
+        async fn embed(
+            &self,
+            _: &EmbeddingInput,
+            _: &EmbeddingSpec,
+        ) -> Result<Vec<u8>, Self::Error> {
             Ok(vec![0x10, 0x20])
         }
     }
@@ -907,8 +857,12 @@ mod conformance_support {
     impl EmbeddingProvider for FixedMultiEmbeddingProvider {
         type Error = FixtureError;
 
-        fn embed(&self, content: &Content, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
-            let first = *content
+        async fn embed(
+            &self,
+            input: &EmbeddingInput,
+            _: &EmbeddingSpec,
+        ) -> Result<Vec<u8>, Self::Error> {
+            let first = *input
                 .body
                 .first()
                 .ok_or_else(|| FixtureError("expected non-empty fixture content".into()))?;
@@ -981,13 +935,6 @@ mod conformance_support {
         256
     }
 
-    fn fixture_single_item() -> IndexItem<u8> {
-        IndexItem {
-            metadata: vec![],
-            content_ref: b'f',
-        }
-    }
-
     fn fixture_multi_items() -> Vec<IndexItem<u8>> {
         vec![
             IndexItem {
@@ -1049,9 +996,8 @@ pub mod conformance {
 
     pub use super::conformance_support::{
         CanonicalEmbeddingPolicyConformanceHarness, ConformanceError, ConformanceResult,
-        ContentResolverConformanceHarness, EmbeddingProviderConformanceHarness, FixtureError,
-        NodePackingPolicyConformanceHarness, run_canonical_embedding_policy_suite,
-        run_content_resolver_suite, run_embedding_provider_suite, run_full_trait_suite,
+        ContentResolverConformanceHarness, FixtureError, NodePackingPolicyConformanceHarness,
+        run_canonical_embedding_policy_suite, run_content_resolver_suite, run_full_trait_suite,
         run_node_packing_policy_suite,
     };
 }
