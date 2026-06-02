@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 
@@ -6,24 +7,27 @@ use lexongraph_block::{
     Block, BlockError, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
     compute_block_hash, serialize_block,
 };
+use lexongraph_block_store::conformance::{
+    BlockStoreConformanceHarness, BlockStoreFactory, run_full_suite,
+};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_fs::FilesystemBlockStore;
+use tempfile::TempDir;
 
 #[test]
 fn val_fs_store_001_002_009_constructor_and_publish_path_are_deterministic() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let crate_manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
-    let workspace_manifest =
-        std::fs::read_to_string(manifest_dir.join("..").join("..").join("Cargo.toml")).unwrap();
     let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
     let block = sample_leaf_block("path");
     let serialized = serialize_block(&block).unwrap();
+    let canonical_root = temp_dir.path().canonicalize().unwrap();
 
     let block_id = store.put(&block).unwrap();
     let expected_path = expected_block_path(temp_dir.path(), &block_id);
 
     assert_eq!(block_id, serialized.hash);
+    assert!(canonical_root.is_dir());
+    assert!(expected_path.starts_with(&canonical_root));
     assert_eq!(std::fs::read(&expected_path).unwrap(), serialized.bytes);
     assert_eq!(
         shard_filenames(expected_path.parent().unwrap()),
@@ -35,8 +39,6 @@ fn val_fs_store_001_002_009_constructor_and_publish_path_are_deterministic() {
                 .into_owned()
         ]
     );
-    assert!(crate_manifest.contains("name = \"lexongraph-block-store-fs\""));
-    assert!(workspace_manifest.contains("crates/lexongraph-block-store-fs"));
 }
 
 #[test]
@@ -172,12 +174,7 @@ fn val_fs_store_008_concurrent_same_block_publishers_converge() {
 
 #[test]
 fn val_fs_store_010_parent_conformance_requirements_are_realized_by_tests() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source =
-        std::fs::read_to_string(manifest_dir.join("tests").join("conformance_feature.rs")).unwrap();
-
-    assert!(source.contains("run_full_suite"));
-    assert!(source.contains("BlockStoreConformanceHarness"));
+    run_full_suite(&FilesystemHarness::default()).unwrap();
 }
 
 #[test]
@@ -236,4 +233,55 @@ fn shard_filenames(path: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+#[derive(Default)]
+struct FilesystemHarness {
+    roots: Mutex<Vec<TempDir>>,
+}
+
+#[derive(Clone, Debug)]
+struct HarnessStore {
+    inner: FilesystemBlockStore,
+    root: PathBuf,
+}
+
+impl BlockStore for HarnessStore {
+    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+        self.inner.put(block)
+    }
+
+    fn get(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        self.inner.get(block_id)
+    }
+}
+
+impl BlockStoreFactory for FilesystemHarness {
+    type Store = HarnessStore;
+
+    fn fresh_store(&self) -> Self::Store {
+        let root = tempfile::tempdir().unwrap();
+        let store = HarnessStore {
+            inner: FilesystemBlockStore::new(root.path()).unwrap(),
+            root: root.path().canonicalize().unwrap(),
+        };
+        self.roots.lock().unwrap().push(root);
+        store
+    }
+}
+
+impl BlockStoreConformanceHarness for FilesystemHarness {
+    fn inject_raw_bytes(
+        &self,
+        store: &Self::Store,
+        block_id: &BlockHash,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        let path = expected_block_path(&store.root, block_id);
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(|error| error.to_string())?;
+        std::fs::write(path, bytes).map_err(|error| error.to_string())
+    }
 }
