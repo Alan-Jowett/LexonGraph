@@ -176,6 +176,54 @@ Candidate ranking and accumulation preserve the protocol distinction between:
 The crate does not collapse those candidates before the protocol-defined
 deduplication points.
 
+### DSG-SEARCH-012 `Repository realization`
+
+The repository shall contain a Rust Cargo package for the search crate within
+the workspace, and that package shall realize the public search contract and
+search-owned conformance-helper surface defined by this specification package.
+
+### DSG-SEARCH-013 `Verification realization`
+
+The repository shall include automated tests that realize the validation
+entries in `docs/specs/rust-search-crate/validation.md`, with each validation
+entry mapped to one or more executable tests.
+
+### DSG-SEARCH-014 `Feature-gated conformance module`
+
+The crate exposes a public conformance-test helper surface behind a non-default
+Cargo feature intended for downstream tests only.
+
+That feature is not part of the default runtime API and does not change the
+production-facing search contract.
+
+### DSG-SEARCH-015 `Harness shape`
+
+The conformance-test helper surface provides reusable checks for the
+search-owned policy traits defined by this document, including at minimum
+`EmbeddingCompatibility` and `CandidateScorer`.
+
+If implementation introduces additional search-owned policy traits, the helper
+surface may also provide reusable checks for those traits.
+
+To verify those trait contracts without requiring production implementations in
+the crate, the helper surface may define test-only harness contracts that
+supply deterministic fixtures, trait implementations under test, and any
+policy-specific assertions needed for the validation cases.
+
+The helper surface does not redefine conformance for the block crate or the
+block-storage trait crate, which continue to own their respective reusable
+conformance contracts.
+
+### DSG-SEARCH-016 `Zero-value parameter semantics`
+
+The search API rejects `w = 0` with an explicit error before entering the
+expansion loop.
+
+The search API may accept `n = 0`. In that case, the engine still performs the
+root-block load, compatibility checks, root candidate loading, and root
+candidate scoring before terminating successfully with an empty
+`SearchResult`.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -189,3 +237,8 @@ deduplication points.
 | DSG-SEARCH-009 | REQ-SEARCH-002, REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-012 |
 | DSG-SEARCH-010 | REQ-SEARCH-011 |
 | DSG-SEARCH-011 | REQ-SEARCH-002, REQ-SEARCH-010 |
+| DSG-SEARCH-012 | REQ-SEARCH-013 |
+| DSG-SEARCH-013 | REQ-SEARCH-014 |
+| DSG-SEARCH-014 | REQ-SEARCH-015, REQ-SEARCH-016 |
+| DSG-SEARCH-015 | REQ-SEARCH-015, REQ-SEARCH-016, REQ-SEARCH-017 |
+| DSG-SEARCH-016 | REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018 |

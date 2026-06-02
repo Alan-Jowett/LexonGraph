@@ -120,6 +120,49 @@ The crate shall not require any specific embedding model, similarity metric, or
 ranking heuristic beyond the deterministic ordering and tie-break behavior
 mandated by `docs/protocol/search.md`.
 
+### REQ-SEARCH-013
+
+The repository shall include a Rust crate that realizes the requirements and
+design in this specification package.
+
+### REQ-SEARCH-014
+
+The repository shall include automated verification artifacts that realize the
+validation surface defined in `docs/specs/rust-search-crate/validation.md`.
+
+### REQ-SEARCH-015
+
+The crate shall provide reusable conformance-test harnesses for the
+implementation-defined search-owned policy traits it defines, including at
+minimum:
+
+- embedding compatibility checks
+- candidate scoring
+
+If implementation requires additional search-owned policy traits, the crate may
+also provide reusable conformance-test harnesses for those traits.
+
+### REQ-SEARCH-016
+
+The reusable conformance-test harnesses shall be exposed through an opt-in,
+non-default, test-oriented surface so downstream implementers can use them in
+tests without broadening the crate's default production-facing API.
+
+### REQ-SEARCH-017
+
+The crate shall not redefine or duplicate reusable conformance-test contracts
+for dependency surfaces already owned by subordinate specifications, including
+the block crate and block-storage trait crate.
+
+### REQ-SEARCH-018
+
+The crate shall treat `w = 0` as invalid input and fail explicitly.
+
+The crate may accept `n = 0`; in that case it shall still load the root block
+and score the root candidate set under the normal compatibility and scoring
+rules, then return success with an empty ordered result without child
+expansion.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -131,6 +174,8 @@ This crate does not define or own:
 - any single required embedding model or embedding runtime
 - any single required similarity metric
 - any policy that overrides the protocol-defined ordering and tie-break rules
+- reusable conformance contracts already owned by the block crate or
+  block-storage trait crate
 
 ## Relationship to Other Specifications
 
