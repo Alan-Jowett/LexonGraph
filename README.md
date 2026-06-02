@@ -1,148 +1,122 @@
 # LexonGraph
- 
-LexonGraph is a log‑structured semantic index for large archival corpora.  
-It stores embeddings as immutable blocks in a navigable vector graph, enabling fast
-centroid‑guided search over millions of documents using only simple object storage
-(local filesystem or Azure Blob Storage) fronted by a CDN.
- 
-LexonGraph is designed for LLM‑native retrieval: an MCP server or agent can walk the
-graph using a query embedding and fetch only the blocks needed to answer a question.
- 
----
- 
-Features
- 
-- Semantic vector graph  
-  Embeddings are organized into a Merkle tree of immutable blocks. Each branch
-  block stores embedding-keyed entries that point to child blocks, while leaf
-  blocks store embedding-keyed entries with metadata and content. Higher-level
-  summaries such as centroids can be layered on top.
- 
-- Log‑structured storage  
-  All updates are append‑only. New blocks are created during monthly rebuilds and
-  old blocks are retired via tombstones.
- 
-- Immutable, CDN‑friendly blocks  
-  Every block is content‑addressed and safe to cache indefinitely. No in‑place
-  mutation, no locking, no race conditions.
- 
-- Local or cloud backends  
-  Works with:
-  - Local filesystem (for offline or embedded use)
-  - Azure Blob Storage (for global, CDN‑accelerated access)
- 
-- Efficient monthly compaction  
-  New mailbox archives or document batches are ingested and merged into the index
-  during a scheduled rebuild. Write amplification is amortized across the batch.
- 
-- Time‑travel and auditability  
-  Archived block lists and link tombstones allow reconstruction of the graph at any
-  historical point and safe reachability‑based garbage collection.
- 
-- LLM‑native query model  
-  A query embedding is routed from the root through the block hierarchy to
-  relevant chunks, messages, threads, or topics.
- 
----
- 
-How It Works
- 
-1. Immutable Blocks
-Each block contains:
-- A canonical CBOR payload
-- Compact integer map keys on wire
-- A block-scoped embedding specification
-- A sorted set of embedding-keyed entries
-- Either branch entries with child references or leaf entries with payloads
-- Optional extension metadata
- 
-Blocks are never modified after creation.
-The format remains map-based so it can evolve without forcing positional tuple
-compatibility rules.
- 
-2. Append‑Only Logs
-LexonGraph maintains:
-- Archived Block List — records retired blocks  
-- Link Log — records link creation  
-- Link Tombstones — record link removal  
- 
-These logs allow full reconstruction and safe garbage collection.
- 
-3. Monthly Rebuild
-When new data arrives:
-1. New chunks/messages are embedded and appended.
-2. A compaction pass clusters embeddings and builds new index blocks.
-3. New blocks are written; old ones are retired.
-4. A new root manifest is published.
- 
-4. Querying
-A client (e.g., an MCP server):
-1. Computes a query embedding.
-2. Fetches the root block.
-3. Performs deterministic frontier search by scoring candidate embeddings,
-   ranking them, and expanding the top frontier of unique child blocks.
-4. Repeats until the top results are leaf entries.
-5. Returns the top `N` leaf results.
 
-All reads are simple HTTP GETs, ideal for CDN caching.
+LexonGraph is a semantic indexing and retrieval system built around immutable,
+content-addressed blocks. The repository now includes the canonical protocol
+documents, traceable specification packages, a Rust workspace that implements
+the current core crates, and CI that enforces the workspace quality gates.
 
-The canonical traversal definition is in `docs/protocol/search.md`.
- 
----
- 
-Storage Layout
- 
+## Repository status
+
+LexonGraph is still evolving, but this repository is no longer just an
+architecture sketch. It currently contains:
+
+- canonical protocol documents for blocks, search, indexing, and DCBC
+- requirements/design/validation spec packages for the current Rust work
+- implemented Rust crates for blocks, storage contracts, filesystem storage,
+  indexing, and search
+- GitHub Actions CI for formatting, linting, and tests
+
+The README is a summary. The protocol documents in `docs/protocol/` are the
+authoritative source for wire format and protocol behavior.
+
+## Architecture at a glance
+
+- **Immutable blocks** are encoded as canonical CBOR maps and addressed by
+  `sha256(canonical_cbor_bytes(block))`.
+- **Branch blocks** point to child blocks, forming a Merkle-linked structure.
+- **Leaf blocks** carry embeddings, metadata, and inline content payloads.
+- **Search** uses deterministic frontier expansion over ranked candidates.
+- **Indexing** builds deterministic block sets from application-supplied items.
+- **DCBC** defines deterministic capacity-constrained balanced clustering for
+  clustering and packing workflows.
+
+## Core documents
+
+| Area | Document | Purpose |
+| --- | --- | --- |
+| Vision | `docs/vision.md` | High-level architecture summary and design direction |
+| Block protocol | `docs/protocol/blocks.md` | Canonical block encoding, invariants, and block identity |
+| Search protocol | `docs/protocol/search.md` | Deterministic traversal, ranking, and termination semantics |
+| Indexing protocol | `docs/protocol/indexing.md` | Deterministic index-construction inputs, invariants, and outputs |
+| DCBC protocol | `docs/protocol/dcbc.md` | Deterministic capacity-constrained balanced clustering rules |
+
+## Specification packages
+
+The repository uses spec packages under `docs/specs/`. Each package follows the
+same structure:
+
+- `requirements.md` for the required behavior and boundaries
+- `design.md` for the derived design
+- `validation.md` for the verification surface
+
+Current packages cover:
+
+- `rust-block-crate`
+- `rust-block-storage-trait`
+- `rust-filesystem-block-store`
+- `rust-indexer-crate`
+- `rust-search-crate`
+- `rust-workspace-ci`
+
+## Rust workspace
+
+The top-level Cargo workspace currently contains:
+
+| Crate | Role |
+| --- | --- |
+| `lexongraph-block` | Typed block model, validation, canonical CBOR serialization, and block-hash derivation |
+| `lexongraph-block-store` | Backend-agnostic `BlockStore` trait plus conformance harnesses |
+| `lexongraph-block-store-fs` | Local filesystem implementation of the block-store contract |
+| `lexongraph-indexer` | Protocol-conforming indexing orchestration with trait-based policy hooks |
+| `lexongraph-search` | Protocol-conforming search orchestration with trait-based policy hooks |
+
+At the moment, the implemented storage backend in this repository is the local
+filesystem block store. Broader deployment shapes remain part of the overall
+architecture direction rather than the current workspace implementation.
+
+## Contributor entrypoint
+
+For Rust changes, use the same workspace commands enforced by CI:
+
+```bash
+cargo fmt --check --all
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
-/lexongraph/
-    /blocks/
-        /2026-05/
-            block-abc123.cbor
-            block-def456.cbor
-    /manifests/
-        root-2026-05.json
-    /logs/
-        archived-blocks-2026-05.jsonl
-        links-2026-05.jsonl
-        tombstones-2026-05.jsonl
+
+The CI workflow lives in `.github/workflows/ci.yml` and currently runs on:
+
+- pushes to `main`
+- pull requests targeting `main`
+
+## Repository layout
+
+```text
+.
+|- crates/
+|  |- lexongraph-block
+|  |- lexongraph-block-store
+|  |- lexongraph-block-store-fs
+|  |- lexongraph-indexer
+|  `- lexongraph-search
+|- docs/
+|  |- protocol/
+|  |- specs/
+|  `- vision.md
+|- .github/workflows/ci.yml
+|- Cargo.toml
+`- README.md
 ```
- 
-Everything is immutable and content‑addressed.
-The canonical block format is defined in `docs/protocol/blocks.md`.
- 
----
- 
-Use Cases
- 
-- Long‑term archival search (e.g., 40 years of IETF mailing lists)
-- Semantic retrieval for LLM agents
-- Distributed or offline‑first knowledge stores
-- Large document collections with infrequent updates
-- Systems requiring reproducible, versioned semantic indexes
- 
----
- 
-Roadmap
- 
-- Rust and Python client libraries
-- Parallel compaction pipeline
-- Optional HNSW‑style shortcut links
-- Bloom‑filter‑based freshness overlay
-- WASM‑based local query engine
-- MCP server integration
- 
----
- 
-License
- 
+
+## Current focus
+
+The repository is centered on making the protocol surface and Rust
+implementation converge cleanly:
+
+- protocol-first definitions in `docs/protocol/`
+- traceable crate-level requirements in `docs/specs/`
+- verification-backed Rust implementations in `crates/`
+
+## License
+
 MIT
- 
----
- 
-Status
- 
-LexonGraph is in early development.  
-APIs and block formats may evolve as the system stabilizes. The canonical block
-protocol is specified in `docs/protocol/blocks.md`.
- 
----
- 
