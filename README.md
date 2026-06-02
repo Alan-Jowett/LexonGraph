@@ -87,8 +87,7 @@ cargo test --workspace --locked
 The CI workflow lives in `.github/workflows/ci.yml` and currently runs on:
 
 - pushes to `main`
-- pull requests targeting `main`
-
+- pull requests targeting `main` (filtered via `paths:` to `Cargo.toml`, `Cargo.lock`, `crates/**`, and `.github/workflows/ci.yml`)
 ## Repository layout
 
 ```text
