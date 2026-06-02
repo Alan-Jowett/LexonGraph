@@ -281,6 +281,35 @@ fn val_indexer_002_and_005_single_item_produces_leaf_root() {
 }
 
 #[test]
+fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
+    let store = MemoryBlockStore::default();
+    let indexer = Indexer::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+        PairPackingPolicy,
+    );
+
+    let result = indexer
+        .index(
+            &[item("alpha"), item("alpha")],
+            embedding_spec(),
+            256,
+            &store,
+        )
+        .unwrap();
+
+    assert_eq!(result.block_ids.len(), 1);
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Leaf(_, entries) => assert_eq!(entries[0].content.body, b"alpha".to_vec()),
+        TypedEntries::Branch(_, _) => {
+            panic!("expected duplicate leaf layer to collapse to a leaf root")
+        }
+    }
+}
+
+#[test]
 fn val_indexer_003_resolution_and_embedding_failures_are_explicit() {
     let store = MemoryBlockStore::default();
     let failing_resolver = Indexer::new(

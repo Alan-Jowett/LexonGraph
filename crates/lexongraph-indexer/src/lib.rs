@@ -9,6 +9,7 @@
 //! let _ = std::any::type_name::<conformance::ConformanceError>();
 //! ```
 
+use std::collections::HashMap;
 use std::fmt;
 
 pub use lexongraph_block::{BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata};
@@ -211,6 +212,7 @@ where
         }
 
         current_layer.sort_by(compare_indexed_children);
+        current_layer = deduplicate_layer_by_child(current_layer);
 
         while current_layer.len() > 1 {
             let groups = self
@@ -274,7 +276,7 @@ where
             }
 
             next_layer.sort_by(compare_indexed_children);
-            current_layer = next_layer;
+            current_layer = deduplicate_layer_by_child(next_layer);
         }
 
         persisted_block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
@@ -297,7 +299,7 @@ fn validate_group_partition(
 
     let child_count = children.len();
     let mut seen = vec![0_u8; child_count];
-    let mut child_group_owners: Vec<(BlockHash, usize)> = Vec::new();
+    let mut child_group_owners = HashMap::with_capacity(child_count);
     for (group_index, group) in groups.iter().enumerate() {
         if group.is_empty() {
             return Err("node packing returned an empty group".into());
@@ -316,16 +318,12 @@ fn validate_group_partition(
         group_children.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
         group_children.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
         for child in group_children {
-            if let Some((_, owner_group)) = child_group_owners
-                .iter()
-                .find(|(owned_child, _)| owned_child == &child)
-            {
+            if let Some(owner_group) = child_group_owners.insert(child, group_index) {
                 return Err(format!(
                     "node packing assigned child {} to groups {} and {}, which would create a DAG",
                     child, owner_group, group_index
                 ));
             }
-            child_group_owners.push((child, group_index));
         }
     }
 
@@ -371,17 +369,22 @@ fn normalize_branch_entries(mut entries: Vec<BranchEntry>) -> Vec<BranchEntry> {
     deduplicated
 }
 
+fn deduplicate_layer_by_child(mut layer: Vec<IndexedChild>) -> Vec<IndexedChild> {
+    layer.sort_by(|left, right| {
+        left.child
+            .as_bytes()
+            .cmp(right.child.as_bytes())
+            .then_with(|| left.embedding.cmp(&right.embedding))
+    });
+    layer.dedup_by(|left, right| left.child == right.child);
+    layer.sort_by(compare_indexed_children);
+    layer
+}
+
 fn compare_indexed_children(left: &IndexedChild, right: &IndexedChild) -> std::cmp::Ordering {
-    compare_branch_entries(
-        &BranchEntry {
-            embedding: left.embedding.clone(),
-            child: left.child,
-        },
-        &BranchEntry {
-            embedding: right.embedding.clone(),
-            child: right.child,
-        },
-    )
+    left.embedding
+        .cmp(&right.embedding)
+        .then_with(|| left.child.as_bytes().cmp(right.child.as_bytes()))
 }
 
 fn compare_branch_entries(left: &BranchEntry, right: &BranchEntry) -> std::cmp::Ordering {
