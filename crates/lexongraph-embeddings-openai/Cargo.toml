@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-embeddings-openai"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-openai = { version = "0.40.3", features = ["embedding"] }
+lexongraph-block = { version = "0.1.0", path = "../lexongraph-block" }
+lexongraph-embeddings-trait = { version = "0.1.0", path = "../lexongraph-embeddings-trait" }
+
+[dev-dependencies]
+httpmock = "0.8.3"
+tokio = { version = "1.52.3", features = ["macros", "rt"] }
+

@@ -4,9 +4,10 @@ use lexongraph_block::{
     BlockHash, BranchBlock, Content, EmbeddingSpec, TypedEntries, into_entries,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_indexer::{
-    CanonicalEmbeddingPolicy, ContentResolver, EmbeddingProvider, IndexItem, IndexedChild, Indexer,
-    IndexerError, NodePackingPolicy,
+    CanonicalEmbeddingPolicy, ContentResolver, IndexItem, IndexedChild, Indexer, IndexerError,
+    NodePackingPolicy,
 };
 
 use std::cell::RefCell;
@@ -92,12 +93,16 @@ struct AsciiEmbeddingProvider;
 impl EmbeddingProvider for AsciiEmbeddingProvider {
     type Error = FixtureError;
 
-    fn embed(&self, content: &Content, spec: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
-        let first = *content
+    async fn embed(
+        &self,
+        input: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        let first = *input
             .body
             .first()
             .ok_or_else(|| FixtureError("expected non-empty content".into()))?;
-        let second = content.body.len() as u8;
+        let second = input.body.len() as u8;
         let embedding = vec![first, second];
         if spec.encoding == "i8" && spec.dims == 2 {
             Ok(embedding)
@@ -113,7 +118,7 @@ struct FailingEmbeddingProvider;
 impl EmbeddingProvider for FailingEmbeddingProvider {
     type Error = FixtureError;
 
-    fn embed(&self, _: &Content, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
+    async fn embed(&self, _: &EmbeddingInput, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
         Err(FixtureError("embedding model offline".into()))
     }
 }
@@ -124,7 +129,7 @@ struct WrongLengthEmbeddingProvider;
 impl EmbeddingProvider for WrongLengthEmbeddingProvider {
     type Error = FixtureError;
 
-    fn embed(&self, _: &Content, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
+    async fn embed(&self, _: &EmbeddingInput, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
         Ok(vec![0x01])
     }
 }
@@ -238,8 +243,8 @@ impl NodePackingPolicy for FailingPackingPolicy {
     }
 }
 
-#[test]
-fn val_indexer_001_empty_input_fails_explicitly() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_001_empty_input_fails_explicitly() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -250,13 +255,14 @@ fn val_indexer_001_empty_input_fails_explicitly() {
 
     let error = indexer
         .index::<&'static str>(&[], embedding_spec(), 256, &store)
+        .await
         .unwrap_err();
 
     assert_eq!(error, IndexerError::EmptyInput);
 }
 
-#[test]
-fn val_indexer_002_and_005_single_item_produces_leaf_root() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_002_and_005_single_item_produces_leaf_root() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -267,6 +273,7 @@ fn val_indexer_002_and_005_single_item_produces_leaf_root() {
 
     let result = indexer
         .index(&[item("alpha")], embedding_spec(), 256, &store)
+        .await
         .unwrap();
 
     assert_eq!(result.block_ids.len(), 1);
@@ -282,8 +289,8 @@ fn val_indexer_002_and_005_single_item_produces_leaf_root() {
     }
 }
 
-#[test]
-fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -299,6 +306,7 @@ fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
             256,
             &store,
         )
+        .await
         .unwrap();
 
     assert_eq!(result.block_ids.len(), 1);
@@ -311,8 +319,8 @@ fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
     }
 }
 
-#[test]
-fn val_indexer_003_resolution_and_embedding_failures_are_explicit() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_003_resolution_and_embedding_failures_are_explicit() {
     let store = MemoryBlockStore::default();
     let failing_resolver = Indexer::new(
         FailingResolver,
@@ -340,25 +348,33 @@ fn val_indexer_003_resolution_and_embedding_failures_are_explicit() {
     );
 
     assert!(matches!(
-        failing_resolver.index(&[item("alpha")], embedding_spec(), 256, &store),
+        failing_resolver
+            .index(&[item("alpha")], embedding_spec(), 256, &store)
+            .await,
         Err(IndexerError::ContentResolution(_))
     ));
     assert!(matches!(
-        unusable_resolver.index(&[item("alpha")], embedding_spec(), 256, &store),
+        unusable_resolver
+            .index(&[item("alpha")], embedding_spec(), 256, &store)
+            .await,
         Err(IndexerError::UnusableContent(_))
     ));
     assert!(matches!(
-        failing_embedder.index(&[item("alpha")], embedding_spec(), 256, &store),
+        failing_embedder
+            .index(&[item("alpha")], embedding_spec(), 256, &store)
+            .await,
         Err(IndexerError::EmbeddingFailure(_))
     ));
     assert!(matches!(
-        wrong_length_embedder.index(&[item("alpha")], embedding_spec(), 256, &store),
+        wrong_length_embedder
+            .index(&[item("alpha")], embedding_spec(), 256, &store)
+            .await,
         Err(IndexerError::EmbeddingFailure(_))
     ));
 }
 
-#[test]
-fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_deterministic() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_deterministic() {
     let first_store = MemoryBlockStore::default();
     let second_store = MemoryBlockStore::default();
     let indexer = Indexer::new(
@@ -375,6 +391,7 @@ fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_determini
             256,
             &first_store,
         )
+        .await
         .unwrap();
     let second = indexer
         .index(
@@ -383,6 +400,7 @@ fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_determini
             256,
             &second_store,
         )
+        .await
         .unwrap();
 
     assert_eq!(first.root_id, second.root_id);
@@ -401,6 +419,7 @@ fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_determini
             256,
             &MemoryBlockStore::default(),
         )
+        .await
         .unwrap();
     let alias_second = alias_resolver
         .index(
@@ -409,14 +428,15 @@ fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_determini
             256,
             &MemoryBlockStore::default(),
         )
+        .await
         .unwrap();
 
     assert_eq!(alias_first.root_id, alias_second.root_id);
     assert_eq!(alias_first.block_ids, alias_second.block_ids);
 }
 
-#[test]
-fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root_remains() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root_remains() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -432,6 +452,7 @@ fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root_remai
             256,
             &store,
         )
+        .await
         .unwrap();
 
     assert_eq!(store.len(), 7);
@@ -442,8 +463,8 @@ fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root_remai
     }
 }
 
-#[test]
-fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitly() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitly() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -458,6 +479,7 @@ fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitly() {
             256,
             &store,
         )
+        .await
         .unwrap();
 
     for block_id in result.block_ids {
@@ -482,6 +504,7 @@ fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitly() {
             24,
             &MemoryBlockStore::default(),
         )
+        .await
         .unwrap_err();
     assert!(matches!(
         error,
@@ -489,8 +512,8 @@ fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitly() {
     ));
 }
 
-#[test]
-fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -506,6 +529,7 @@ fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id() {
             256,
             &store,
         )
+        .await
         .unwrap();
 
     let root = store.get(&result.root_id).unwrap().unwrap();
@@ -520,8 +544,8 @@ fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id() {
     }
 }
 
-#[test]
-fn val_indexer_009_distinct_resolver_types_share_the_same_contract() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_009_distinct_resolver_types_share_the_same_contract() {
     let store = MemoryBlockStore::default();
     let memory_indexer = Indexer::new(
         MapResolver,
@@ -543,6 +567,7 @@ fn val_indexer_009_distinct_resolver_types_share_the_same_contract() {
             256,
             &store,
         )
+        .await
         .unwrap();
     let alias = alias_indexer
         .index(
@@ -551,13 +576,14 @@ fn val_indexer_009_distinct_resolver_types_share_the_same_contract() {
             256,
             &MemoryBlockStore::default(),
         )
+        .await
         .unwrap();
 
     assert_eq!(memory.block_ids.len(), alias.block_ids.len());
 }
 
-#[test]
-fn val_indexer_010_different_policy_implementations_share_the_same_api_boundary() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_010_different_policy_implementations_share_the_same_api_boundary() {
     let first = Indexer::new(
         MapResolver,
         AsciiEmbeddingProvider,
@@ -579,6 +605,7 @@ fn val_indexer_010_different_policy_implementations_share_the_same_api_boundary(
                 256,
                 &MemoryBlockStore::default(),
             )
+            .await
             .is_ok()
     );
     assert!(
@@ -596,12 +623,13 @@ fn val_indexer_010_different_policy_implementations_share_the_same_api_boundary(
                 256,
                 &MemoryBlockStore::default(),
             )
+            .await
             .is_ok()
     );
 }
 
-#[test]
-fn val_indexer_012_resolved_content_is_stored_inline() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_012_resolved_content_is_stored_inline() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
@@ -612,6 +640,7 @@ fn val_indexer_012_resolved_content_is_stored_inline() {
 
     let result = indexer
         .index(&[item("alpha")], embedding_spec(), 256, &store)
+        .await
         .unwrap();
 
     let root = store.get(&result.root_id).unwrap().unwrap();
@@ -624,8 +653,8 @@ fn val_indexer_012_resolved_content_is_stored_inline() {
     }
 }
 
-#[test]
-fn val_indexer_canonical_and_packing_failures_are_explicit() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_canonical_and_packing_failures_are_explicit() {
     let canonical_error = Indexer::new(
         MapResolver,
         AsciiEmbeddingProvider,
@@ -638,6 +667,7 @@ fn val_indexer_canonical_and_packing_failures_are_explicit() {
         256,
         &MemoryBlockStore::default(),
     )
+    .await
     .unwrap_err();
     assert!(matches!(
         canonical_error,
@@ -656,6 +686,7 @@ fn val_indexer_canonical_and_packing_failures_are_explicit() {
         256,
         &MemoryBlockStore::default(),
     )
+    .await
     .unwrap_err();
     assert!(matches!(
         canonical_length_error,
@@ -674,6 +705,7 @@ fn val_indexer_canonical_and_packing_failures_are_explicit() {
         256,
         &MemoryBlockStore::default(),
     )
+    .await
     .unwrap_err();
     assert!(matches!(
         singleton_error,
@@ -692,6 +724,7 @@ fn val_indexer_canonical_and_packing_failures_are_explicit() {
         256,
         &MemoryBlockStore::default(),
     )
+    .await
     .unwrap_err();
     assert!(matches!(failing_error, IndexerError::NodePackingFailure(_)));
 }

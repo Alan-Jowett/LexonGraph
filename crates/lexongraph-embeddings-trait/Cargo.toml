@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-embeddings-trait"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lexongraph-block = { version = "0.1.0", path = "../lexongraph-block" }
+pollster = { version = "0.4.0", optional = true }
+
+[features]
+conformance = ["dep:pollster"]
+
+[dev-dependencies]
+pollster = "0.4.0"
+

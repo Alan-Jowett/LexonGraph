@@ -1,0 +1,78 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+# Rust OpenAI Embeddings Crate Validation
+
+## Status
+
+Draft validation specification for a Rust crate that implements the shared
+LexonGraph embedding-provider contract against OpenAI-compatible embeddings
+endpoints.
+
+## Validation Scope
+
+These validation entries define the expected conformance surface for the
+OpenAI-compatible embedding-provider crate.
+
+## Validation Entries
+
+### VAL-EMBED-OAI-001
+
+Use the crate from a downstream consumer that depends only on the
+embeddings-trait crate and this provider crate.
+
+**Pass condition:** the downstream consumer can instantiate the provider
+without depending on the indexer crate or search crate.
+
+**Traces to:** REQ-EMBED-OAI-001, REQ-EMBED-OAI-002, REQ-EMBED-OAI-007
+
+### VAL-EMBED-OAI-002
+
+Use the provider with a controlled OpenAI-compatible endpoint fixture that
+returns a successful embedding response for one UTF-8 text input.
+
+**Pass condition:** the provider issues one-input request semantics, receives
+one embedding vector, and returns bytes compatible with the requested
+`EmbeddingSpec`.
+
+**Traces to:** REQ-EMBED-OAI-005, REQ-EMBED-OAI-006, REQ-EMBED-OAI-008
+
+### VAL-EMBED-OAI-003
+
+Configure the provider for distinct endpoint styles, including an
+OpenAI-compatible base URL and an Azure OpenAI deployment.
+
+**Pass condition:** the provider constructs provider-specific requests using the
+supplied configuration without changing the shared embedding-provider contract.
+
+**Traces to:** REQ-EMBED-OAI-003, REQ-EMBED-OAI-008
+
+### VAL-EMBED-OAI-004
+
+Provide embedding input whose media type is non-text or whose bytes are not
+valid UTF-8.
+
+**Pass condition:** the provider fails explicitly before reporting success and
+before silently coercing the input.
+
+**Traces to:** REQ-EMBED-OAI-004
+
+### VAL-EMBED-OAI-005
+
+Provide an `EmbeddingSpec` whose encoding or dimensionality cannot be satisfied
+by the provider's translated OpenAI-compatible response.
+
+**Pass condition:** the provider fails explicitly rather than returning bytes
+with a mismatched length or undocumented encoding.
+
+**Traces to:** REQ-EMBED-OAI-006
+
+### VAL-EMBED-OAI-006
+
+Inspect the repository verification artifacts for the OpenAI-compatible
+embeddings crate.
+
+**Pass condition:** the repository includes executable automated tests that
+realize the validation surface in this specification package.
+
+**Traces to:** REQ-EMBED-OAI-008
+
