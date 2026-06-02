@@ -287,7 +287,10 @@ where
     }
 }
 
-fn validate_group_partition(groups: &[Vec<usize>], children: &[IndexedChild]) -> Result<(), String> {
+fn validate_group_partition(
+    groups: &[Vec<usize>],
+    children: &[IndexedChild],
+) -> Result<(), String> {
     if groups.is_empty() {
         return Err("node packing returned no groups".into());
     }
@@ -319,9 +322,7 @@ fn validate_group_partition(groups: &[Vec<usize>], children: &[IndexedChild]) ->
             {
                 return Err(format!(
                     "node packing assigned child {} to groups {} and {}, which would create a DAG",
-                    child,
-                    owner_group,
-                    group_index
+                    child, owner_group, group_index
                 ));
             }
             child_group_owners.push((child, group_index));
