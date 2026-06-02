@@ -75,7 +75,10 @@ This revision uses a sharded layout derived from the hexadecimal block ID:
 
 Example:
 
-`<store-root>\ab\cd\abcdef...0123.cbor`
+`<store-root>/ab/cd/abcdef...0123.cbor`
+
+The path separators shown in this example are illustrative; the implementation
+uses platform-native separators through Rust `Path` joins.
 
 This layout is an implementation detail for this crate and is not promoted into
 the backend-neutral parent contract.
