@@ -3,6 +3,7 @@ members = [
     "crates/lexongraph-block",
     "crates/lexongraph-block-store",
     "crates/lexongraph-block-store-fs",
+    "crates/lexongraph-dcbc",
     "crates/lexongraph-embeddings-openai",
     "crates/lexongraph-embeddings-trait",
     "crates/lexongraph-indexer",
