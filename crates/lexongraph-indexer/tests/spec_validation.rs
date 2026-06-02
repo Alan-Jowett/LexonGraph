@@ -6,8 +6,8 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_indexer::{
-    CanonicalEmbeddingPolicy, ContentResolver, IndexItem, IndexedChild, Indexer, IndexerError,
-    NodePackingPolicy,
+    CanonicalEmbeddingPolicy, ContentResolver, DcbcNodePackingPolicy, IndexItem, IndexedChild,
+    Indexer, IndexerError, NodePackingPolicy,
 };
 
 use std::cell::RefCell;
@@ -135,6 +135,25 @@ impl EmbeddingProvider for WrongLengthEmbeddingProvider {
 }
 
 #[derive(Clone, Copy)]
+struct ZeroEmbeddingProvider;
+
+impl EmbeddingProvider for ZeroEmbeddingProvider {
+    type Error = FixtureError;
+
+    async fn embed(
+        &self,
+        _: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        if spec.encoding == "i8" && spec.dims == 2 {
+            Ok(vec![0x00, 0x00])
+        } else {
+            Err(FixtureError("unexpected embedding spec".into()))
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct FirstChildCanonicalPolicy;
 
 impl CanonicalEmbeddingPolicy for FirstChildCanonicalPolicy {
@@ -250,7 +269,6 @@ async fn val_indexer_001_empty_input_fails_explicitly() {
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let error = indexer
@@ -268,7 +286,6 @@ async fn val_indexer_002_and_005_single_item_produces_leaf_root() {
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let result = indexer
@@ -296,7 +313,6 @@ async fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let result = indexer
@@ -322,25 +338,25 @@ async fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_003_resolution_and_embedding_failures_are_explicit() {
     let store = MemoryBlockStore::default();
-    let failing_resolver = Indexer::new(
+    let failing_resolver = Indexer::with_node_packing_policy(
         FailingResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
         PairPackingPolicy,
     );
-    let unusable_resolver = Indexer::new(
+    let unusable_resolver = Indexer::with_node_packing_policy(
         UnusableResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
         PairPackingPolicy,
     );
-    let failing_embedder = Indexer::new(
+    let failing_embedder = Indexer::with_node_packing_policy(
         MapResolver,
         FailingEmbeddingProvider,
         FirstChildCanonicalPolicy,
         PairPackingPolicy,
     );
-    let wrong_length_embedder = Indexer::new(
+    let wrong_length_embedder = Indexer::with_node_packing_policy(
         MapResolver,
         WrongLengthEmbeddingProvider,
         FirstChildCanonicalPolicy,
@@ -381,7 +397,6 @@ async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_det
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let first = indexer
@@ -410,7 +425,6 @@ async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_det
         AliasResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
     let alias_first = alias_resolver
         .index(
@@ -438,7 +452,7 @@ async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_det
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root_remains() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(
+    let indexer = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
@@ -470,7 +484,6 @@ async fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitl
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
     let result = indexer
         .index(
@@ -491,7 +504,7 @@ async fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitl
         }
     }
 
-    let too_small = Indexer::new(
+    let too_small = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
@@ -519,7 +532,6 @@ async fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id()
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let result = indexer
@@ -551,13 +563,11 @@ async fn val_indexer_009_distinct_resolver_types_share_the_same_contract() {
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
     let alias_indexer = Indexer::new(
         AliasResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let memory = memory_indexer
@@ -588,9 +598,8 @@ async fn val_indexer_010_different_policy_implementations_share_the_same_api_bou
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
-    let second = Indexer::new(
+    let second = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         ReverseCanonicalPolicy,
@@ -629,13 +638,191 @@ async fn val_indexer_010_different_policy_implementations_share_the_same_api_bou
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn val_indexer_018_default_constructor_uses_builtin_node_packing() {
+    let store = MemoryBlockStore::default();
+    let indexer = Indexer::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+    );
+
+    let result = indexer
+        .index(
+            &[
+                item("alpha"),
+                item("bravo"),
+                item("charlie"),
+                item("delta"),
+                item("echo"),
+                item("foxtrot"),
+            ],
+            embedding_spec(),
+            160,
+            &store,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.block_ids.len() > 6);
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    assert!(matches!(into_entries(root), TypedEntries::Branch(_, _)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_019_default_and_override_paths_both_work() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+    let default_result = Indexer::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+    )
+    .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+    .await
+    .unwrap();
+    let override_result = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+        PairPackingPolicy,
+    )
+    .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+    .await
+    .unwrap();
+
+    assert!(!default_result.block_ids.is_empty());
+    assert!(!override_result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_020_default_dcbc_packing_is_deterministic() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+    let first = Indexer::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+    )
+    .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+    .await
+    .unwrap();
+    let second = Indexer::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+    )
+    .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+    .await
+    .unwrap();
+
+    assert_eq!(first.root_id, second.root_id);
+    assert_eq!(first.block_ids, second.block_ids);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_021_default_packing_uses_core_size_enforcement_for_tiny_targets() {
+    let error = Indexer::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+    )
+    .index(
+        &[item("alpha"), item("bravo")],
+        embedding_spec(),
+        24,
+        &MemoryBlockStore::default(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        IndexerError::IntermediateNodeTooLarge { .. }
+    ));
+}
+
+#[test]
+fn val_indexer_022_default_policy_uses_shared_dcbc_dependency() {
+    assert!(include_str!("../Cargo.toml").contains("lexongraph-dcbc"));
+
+    let groups = DcbcNodePackingPolicy
+        .pack(&synthetic_children(), &embedding_spec(), 160)
+        .unwrap();
+
+    let mut flattened = groups.into_iter().flatten().collect::<Vec<_>>();
+    flattened.sort_unstable();
+    assert_eq!(flattened, vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn default_policy_rejects_pq4_embeddings() {
+    let error = DcbcNodePackingPolicy
+        .pack(&pq4_children(), &pq4_embedding_spec(), 96)
+        .unwrap_err();
+
+    assert!(error.to_string().contains("pq4"));
+}
+
+#[test]
+fn default_policy_decodes_f32le_embeddings() {
+    let groups = DcbcNodePackingPolicy
+        .pack(&f32le_children(), &f32le_embedding_spec(), 160)
+        .unwrap();
+
+    let mut flattened = groups.into_iter().flatten().collect::<Vec<_>>();
+    flattened.sort_unstable();
+    assert_eq!(flattened, vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn default_policy_decodes_f16le_embeddings() {
+    let groups = DcbcNodePackingPolicy
+        .pack(&f16le_children(), &f16le_embedding_spec(), 160)
+        .unwrap();
+
+    let mut flattened = groups.into_iter().flatten().collect::<Vec<_>>();
+    flattened.sort_unstable();
+    assert_eq!(flattened, vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn default_policy_surfaces_zero_norm_embeddings_explicitly() {
+    let error = Indexer::new(
+        MapResolver,
+        ZeroEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+    )
+    .index(
+        &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+        embedding_spec(),
+        96,
+        &MemoryBlockStore::default(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, IndexerError::NodePackingFailure(_)));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_indexer_012_resolved_content_is_stored_inline() {
     let store = MemoryBlockStore::default();
     let indexer = Indexer::new(
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
-        PairPackingPolicy,
     );
 
     let result = indexer
@@ -655,7 +842,7 @@ async fn val_indexer_012_resolved_content_is_stored_inline() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_canonical_and_packing_failures_are_explicit() {
-    let canonical_error = Indexer::new(
+    let canonical_error = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         FailingCanonicalPolicy,
@@ -674,7 +861,7 @@ async fn val_indexer_canonical_and_packing_failures_are_explicit() {
         IndexerError::CanonicalEmbeddingFailure(_)
     ));
 
-    let canonical_length_error = Indexer::new(
+    let canonical_length_error = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         WrongLengthCanonicalPolicy,
@@ -693,7 +880,7 @@ async fn val_indexer_canonical_and_packing_failures_are_explicit() {
         IndexerError::CanonicalEmbeddingFailure(_)
     ));
 
-    let singleton_error = Indexer::new(
+    let singleton_error = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
@@ -712,7 +899,7 @@ async fn val_indexer_canonical_and_packing_failures_are_explicit() {
         IndexerError::NodePackingFailure(_)
     ));
 
-    let failing_error = Indexer::new(
+    let failing_error = Indexer::with_node_packing_policy(
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
@@ -813,6 +1000,102 @@ fn embedding_spec() -> EmbeddingSpec {
         dims: 2,
         encoding: "i8".into(),
     }
+}
+
+fn pq4_embedding_spec() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "pq4".into(),
+    }
+}
+
+fn f32le_embedding_spec() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f32le".into(),
+    }
+}
+
+fn f16le_embedding_spec() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f16le".into(),
+    }
+}
+
+fn synthetic_children() -> Vec<IndexedChild> {
+    vec![
+        indexed_child(0, [97, 5]),
+        indexed_child(1, [98, 5]),
+        indexed_child(2, [99, 7]),
+        indexed_child(3, [100, 5]),
+        indexed_child(4, [101, 4]),
+        indexed_child(5, [102, 7]),
+    ]
+}
+
+fn pq4_children() -> Vec<IndexedChild> {
+    (0..4)
+        .map(|index| IndexedChild {
+            embedding: vec![0x12],
+            child: synthetic_hash(index),
+        })
+        .collect()
+}
+
+fn f32le_children() -> Vec<IndexedChild> {
+    vec![
+        float_indexed_child(0, 1.0_f32.to_le_bytes(), 0.5_f32.to_le_bytes()),
+        float_indexed_child(1, 1.1_f32.to_le_bytes(), 0.5_f32.to_le_bytes()),
+        float_indexed_child(2, 4.0_f32.to_le_bytes(), 0.25_f32.to_le_bytes()),
+        float_indexed_child(3, 4.1_f32.to_le_bytes(), 0.25_f32.to_le_bytes()),
+        float_indexed_child(4, 8.0_f32.to_le_bytes(), 0.75_f32.to_le_bytes()),
+        float_indexed_child(5, 8.1_f32.to_le_bytes(), 0.75_f32.to_le_bytes()),
+    ]
+}
+
+fn f16le_children() -> Vec<IndexedChild> {
+    vec![
+        half_indexed_child(0, 1.0, 0.5),
+        half_indexed_child(1, 1.1, 0.5),
+        half_indexed_child(2, 4.0, 0.25),
+        half_indexed_child(3, 4.1, 0.25),
+        half_indexed_child(4, 8.0, 0.75),
+        half_indexed_child(5, 8.1, 0.75),
+    ]
+}
+
+fn indexed_child(index: u8, embedding: [u8; 2]) -> IndexedChild {
+    IndexedChild {
+        embedding: embedding.to_vec(),
+        child: synthetic_hash(index),
+    }
+}
+
+fn float_indexed_child(index: u8, first: [u8; 4], second: [u8; 4]) -> IndexedChild {
+    let mut embedding = Vec::with_capacity(8);
+    embedding.extend_from_slice(&first);
+    embedding.extend_from_slice(&second);
+    IndexedChild {
+        embedding,
+        child: synthetic_hash(index),
+    }
+}
+
+fn half_indexed_child(index: u8, first: f32, second: f32) -> IndexedChild {
+    let mut embedding = Vec::with_capacity(4);
+    embedding.extend_from_slice(&half::f16::from_f32(first).to_le_bytes());
+    embedding.extend_from_slice(&half::f16::from_f32(second).to_le_bytes());
+    IndexedChild {
+        embedding,
+        child: synthetic_hash(index),
+    }
+}
+
+fn synthetic_hash(index: u8) -> BlockHash {
+    let mut bytes = [0_u8; BlockHash::LEN];
+    bytes[0] = index;
+    BlockHash::from_bytes(bytes)
 }
 
 fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {

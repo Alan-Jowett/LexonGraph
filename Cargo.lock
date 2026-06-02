@@ -1220,8 +1220,10 @@ dependencies = [
 name = "lexongraph-indexer"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lexongraph-block",
  "lexongraph-block-store",
+ "lexongraph-dcbc",
  "lexongraph-embeddings-trait",
  "pollster",
  "tokio",

@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use half::f16;
 pub use lexongraph_block::{BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata};
 
 use lexongraph_block::{
@@ -21,6 +22,7 @@ use lexongraph_block::{
     serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_dcbc::{DcbcInput, run_dcbc};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,16 +124,91 @@ pub trait NodePackingPolicy {
     ) -> Result<Vec<Vec<usize>>, Self::Error>;
 }
 
+const DCBC_DEFAULT_ITERATION_COUNT: usize = 1;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DcbcNodePackingPolicy;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DcbcNodePackingError(String);
+
+impl fmt::Display for DcbcNodePackingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for DcbcNodePackingError {}
+
+impl NodePackingPolicy for DcbcNodePackingPolicy {
+    type Error = DcbcNodePackingError;
+
+    fn pack(
+        &self,
+        children: &[IndexedChild],
+        spec: &EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Result<Vec<Vec<usize>>, Self::Error> {
+        if children.len() < 2 {
+            return Err(DcbcNodePackingError(
+                "default DCBC node packing requires at least two children".into(),
+            ));
+        }
+        validate_dcbc_embedding_encoding(spec).map_err(DcbcNodePackingError)?;
+        if children.len() == 2 {
+            return Ok(vec![vec![0, 1]]);
+        }
+
+        let max_group_size = max_children_per_branch(spec, block_size_target, children.len())
+            .map_err(DcbcNodePackingError)?;
+        if children.len() <= max_group_size {
+            return Ok(vec![(0..children.len()).collect()]);
+        }
+
+        let min_cluster_count = children.len().div_ceil(max_group_size.max(1));
+        let max_cluster_count = children.len() / 2;
+        if min_cluster_count > max_cluster_count {
+            return Ok(vec![(0..children.len()).collect()]);
+        }
+
+        let vectors = decode_embeddings_as_f64(children, spec).map_err(DcbcNodePackingError)?;
+        let cluster_count = min_cluster_count;
+        let min_cluster_size = children.len() / cluster_count;
+        let max_cluster_size = children.len().div_ceil(cluster_count);
+        let input = DcbcInput {
+            x: vectors,
+            cluster_count,
+            min_cluster_size,
+            max_cluster_size,
+            iteration_count: DCBC_DEFAULT_ITERATION_COUNT,
+        };
+        let result = run_dcbc(&input)
+            .map_err(|error| DcbcNodePackingError(format!("dcbc clustering failed: {error}")))?;
+        assignment_to_groups(&result.assignment, cluster_count).map_err(DcbcNodePackingError)
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct Indexer<CR, EP, CEP, NPP> {
+pub struct Indexer<CR, EP, CEP, NPP = DcbcNodePackingPolicy> {
     resolver: CR,
     embedding_provider: EP,
     canonical_embedding_policy: CEP,
     node_packing_policy: NPP,
 }
 
+impl<CR, EP, CEP> Indexer<CR, EP, CEP, DcbcNodePackingPolicy> {
+    pub fn new(resolver: CR, embedding_provider: EP, canonical_embedding_policy: CEP) -> Self {
+        Self::with_node_packing_policy(
+            resolver,
+            embedding_provider,
+            canonical_embedding_policy,
+            DcbcNodePackingPolicy,
+        )
+    }
+}
+
 impl<CR, EP, CEP, NPP> Indexer<CR, EP, CEP, NPP> {
-    pub fn new(
+    pub fn with_node_packing_policy(
         resolver: CR,
         embedding_provider: EP,
         canonical_embedding_policy: CEP,
@@ -430,6 +507,145 @@ fn expected_embedding_len(spec: &EmbeddingSpec) -> Option<usize> {
     }
 }
 
+fn decode_embeddings_as_f64(
+    children: &[IndexedChild],
+    spec: &EmbeddingSpec,
+) -> Result<Vec<Vec<f64>>, String> {
+    validate_dcbc_embedding_encoding(spec)?;
+    children
+        .iter()
+        .map(|child| decode_embedding_as_f64(&child.embedding, spec))
+        .collect()
+}
+
+fn validate_dcbc_embedding_encoding(spec: &EmbeddingSpec) -> Result<(), String> {
+    match spec.encoding.as_str() {
+        "i8" | "f32le" | "f16le" => Ok(()),
+        "pq4" => {
+            Err("pq4 embeddings cannot be used with the default DCBC node-packing policy".into())
+        }
+        other => Err(format!(
+            "unsupported embedding encoding {other:?} for default DCBC node packing"
+        )),
+    }
+}
+
+fn decode_embedding_as_f64(embedding: &[u8], spec: &EmbeddingSpec) -> Result<Vec<f64>, String> {
+    validate_embedding_bytes(embedding, spec, "node-packing input")?;
+    match spec.encoding.as_str() {
+        "i8" => Ok(embedding
+            .iter()
+            .map(|byte| i8::from_le_bytes([*byte]) as f64)
+            .collect()),
+        "f32le" => embedding
+            .chunks_exact(4)
+            .map(|chunk| {
+                let bytes: [u8; 4] = chunk
+                    .try_into()
+                    .map_err(|_| "invalid f32le embedding chunk length".to_string())?;
+                Ok(f32::from_le_bytes(bytes) as f64)
+            })
+            .collect(),
+        "f16le" => embedding
+            .chunks_exact(2)
+            .map(|chunk| {
+                let bytes: [u8; 2] = chunk
+                    .try_into()
+                    .map_err(|_| "invalid f16le embedding chunk length".to_string())?;
+                Ok(f16::from_le_bytes(bytes).to_f64())
+            })
+            .collect(),
+        "pq4" => unreachable!("pq4 is rejected by validate_dcbc_embedding_encoding"),
+        other => unreachable!("unsupported encoding {other:?} rejected earlier"),
+    }
+}
+
+fn assignment_to_groups(
+    assignment: &[usize],
+    cluster_count: usize,
+) -> Result<Vec<Vec<usize>>, String> {
+    let mut groups = vec![Vec::new(); cluster_count];
+    for (child_index, &cluster_index) in assignment.iter().enumerate() {
+        let Some(group) = groups.get_mut(cluster_index) else {
+            return Err(format!(
+                "dcbc assignment referenced cluster {cluster_index}, but only {cluster_count} clusters were configured"
+            ));
+        };
+        group.push(child_index);
+    }
+    groups.retain(|group| !group.is_empty());
+    Ok(groups)
+}
+
+fn max_children_per_branch(
+    spec: &EmbeddingSpec,
+    block_size_target: usize,
+    child_count: usize,
+) -> Result<usize, String> {
+    if child_count < 2 {
+        return Ok(child_count);
+    }
+
+    let min_size = serialized_branch_size(spec, 2)?;
+    if min_size > block_size_target {
+        return Ok(1);
+    }
+
+    let mut low = 2;
+    let mut high = 2;
+    while high < child_count {
+        let candidate = (high.saturating_mul(2)).min(child_count);
+        if serialized_branch_size(spec, candidate)? <= block_size_target {
+            low = candidate;
+            high = candidate;
+        } else {
+            high = candidate;
+            break;
+        }
+    }
+
+    if low == child_count {
+        return Ok(child_count);
+    }
+
+    while low + 1 < high {
+        let mid = low + (high - low) / 2;
+        if serialized_branch_size(spec, mid)? <= block_size_target {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    Ok(low)
+}
+
+fn serialized_branch_size(spec: &EmbeddingSpec, entry_count: usize) -> Result<usize, String> {
+    let embedding_len = expected_embedding_len(spec).ok_or_else(|| {
+        format!(
+            "unsupported embedding encoding {:?} for branch-size estimation",
+            spec.encoding
+        )
+    })?;
+    let entries = (0..entry_count)
+        .map(|index| BranchEntry {
+            embedding: vec![0; embedding_len],
+            child: synthetic_block_hash(index),
+        })
+        .collect();
+    let branch = build_branch_block(VERSION_1, spec.clone(), entries, None)
+        .map_err(|error| format!("failed to build synthetic branch block: {error}"))?;
+    let block = Block::Branch(branch);
+    serialize_block(&block)
+        .map(|serialized| serialized.bytes.len())
+        .map_err(|error| format!("failed to serialize synthetic branch block: {error}"))
+}
+
+fn synthetic_block_hash(index: usize) -> BlockHash {
+    let mut bytes = [0_u8; BlockHash::LEN];
+    bytes[..std::mem::size_of::<usize>()].copy_from_slice(&index.to_le_bytes());
+    BlockHash::from_bytes(bytes)
+}
+
 #[cfg(feature = "conformance")]
 mod conformance_support {
     use std::cell::RefCell;
@@ -538,7 +754,7 @@ mod conformance_support {
         pollster::block_on(async {
             let store = MemoryBlockStore::default();
             let item = harness.sample_item();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 harness.conforming_resolver(),
                 FixedEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -579,7 +795,7 @@ mod conformance_support {
 
             let store = MemoryBlockStore::default();
             let item = harness.sample_item();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 harness.failing_resolver(),
                 FixedEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -600,7 +816,7 @@ mod conformance_support {
 
             let store = MemoryBlockStore::default();
             let item = harness.sample_item();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 harness.unusable_resolver(),
                 FixedEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -627,7 +843,7 @@ mod conformance_support {
     {
         pollster::block_on(async {
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 harness.conforming_policy(),
@@ -665,7 +881,7 @@ mod conformance_support {
             }
 
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 harness.failing_policy(),
@@ -685,7 +901,7 @@ mod conformance_support {
             )?;
 
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 harness.invalid_length_policy(),
@@ -712,7 +928,7 @@ mod conformance_support {
     {
         pollster::block_on(async {
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -728,7 +944,7 @@ mod conformance_support {
                 .await?;
 
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -748,7 +964,7 @@ mod conformance_support {
             )?;
 
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -768,7 +984,7 @@ mod conformance_support {
             )?;
 
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
@@ -788,7 +1004,7 @@ mod conformance_support {
             )?;
 
             let store = MemoryBlockStore::default();
-            let indexer = Indexer::new(
+            let indexer = Indexer::with_node_packing_policy(
                 FixedResolver,
                 FixedMultiEmbeddingProvider,
                 FixedCanonicalEmbeddingPolicy,
