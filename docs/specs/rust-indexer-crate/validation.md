@@ -127,3 +127,60 @@ deterministic policy behavior are otherwise the same, the root block ID and
 persisted block set remain the same.
 
 **Traces to:** REQ-INDEXER-009, REQ-INDEXER-014
+
+### VAL-INDEXER-012
+
+Index one item whose content reference resolves successfully to a media type and
+content bytes.
+
+**Pass condition:** the produced leaf entry stores that resolved media type and
+those resolved bytes inline in the leaf `content` payload.
+
+**Traces to:** REQ-INDEXER-009, REQ-INDEXER-013, REQ-INDEXER-016
+
+### VAL-INDEXER-013
+
+Inspect the crate's public surface.
+
+**Pass condition:** the crate's default public surface exposes the runtime
+indexing contract and related public types only, keeps implementer-facing
+conformance helpers behind an opt-in non-default test-oriented surface, and
+does not redefine block or block-store conformance surfaces.
+
+**Traces to:** REQ-INDEXER-017, REQ-INDEXER-018, REQ-INDEXER-019
+
+### VAL-INDEXER-014
+
+Use the crate's opt-in conformance-test helper surface from a downstream crate
+that implements one or more of the indexer policy traits.
+
+**Pass condition:** the downstream crate can depend on the helper surface in
+tests and run the shared conformance checks without changing the default
+production-facing API of the indexer crate.
+
+**Traces to:** REQ-INDEXER-017, REQ-INDEXER-018
+
+### VAL-INDEXER-015
+
+Run the shared conformance harnesses against deterministic implementations of
+`ContentResolver`, `EmbeddingProvider`, `CanonicalEmbeddingPolicy`, and
+`NodePackingPolicy`, including fixtures that intentionally violate each trait's
+contract.
+
+**Pass condition:** the shared helpers accept contract-satisfying
+implementations, reject contract-violating implementations at the appropriate
+trait boundary, and rely on the existing block and block-store conformance
+surfaces rather than redefining them.
+
+**Traces to:** REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-017,
+REQ-INDEXER-018, REQ-INDEXER-019
+
+### VAL-INDEXER-016
+
+Inspect the repository verification artifacts for the indexer crate.
+
+**Pass condition:** the repository includes executable automated tests that
+realize the validation surface in this specification package, including runtime
+indexing behavior and the opt-in trait-conformance helper surface.
+
+**Traces to:** REQ-INDEXER-015

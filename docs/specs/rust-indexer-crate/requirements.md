@@ -108,6 +108,38 @@ same logical content, `embedding_spec`, block size target, and deterministic
 trait implementations within the same indexing context, the crate shall produce
 the same root block ID and the same persisted block set.
 
+### REQ-INDEXER-015
+
+The repository shall include automated verification artifacts that realize the
+validation surface defined in `docs/specs/rust-indexer-crate/validation.md`.
+
+### REQ-INDEXER-016
+
+In this revision, successful content resolution shall supply the media type and
+bytes stored inline in the produced leaf entry's `content` payload.
+
+### REQ-INDEXER-017
+
+The crate shall provide reusable conformance-test harnesses for the
+implementation-defined policy traits it defines for:
+
+- content resolution
+- embedding generation
+- canonical-embedding selection
+- node packing
+
+### REQ-INDEXER-018
+
+The reusable conformance-test harnesses shall be exposed through an opt-in,
+non-default, test-oriented surface so downstream implementers can use them in
+tests without broadening the crate's default production-facing API.
+
+### REQ-INDEXER-019
+
+The crate shall not redefine or duplicate reusable conformance-test contracts
+for dependency surfaces already owned by subordinate specifications, including
+the block crate and block-storage trait crate.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -119,6 +151,8 @@ This crate does not define or own:
 - any single required embedding model or embedding runtime
 - any single required canonical-embedding algorithm
 - any single required grouping, clustering, routing, or packing strategy
+- reusable conformance contracts already owned by the block crate or
+  block-storage trait crate
 
 ## Relationship to Other Specifications
 
