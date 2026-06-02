@@ -56,9 +56,14 @@ A conforming DCBC invocation requires:
 Input order is normative for this protocol. Several deterministic choices,
 including initialization and tie-breaking, depend on ascending input index.
 
-All input vectors must contain finite numeric values and have non-zero norm.
-Inputs containing `NaN`, infinite values, or zero-norm vectors are invalid and
-must fail explicitly.
+All input vectors must:
+
+- have the same dimensionality
+- contain finite numeric values
+- have non-zero norm under the protocol's Euclidean norm
+
+Inputs containing mixed dimensionality, `NaN`, infinite values, or zero-norm
+vectors are invalid and must fail explicitly.
 
 ### Clustering Parameters
 
@@ -79,6 +84,14 @@ explicitly.
 
 This revision uses cosine distance with normalized centroids for assignment and
 objective evaluation.
+
+For this protocol:
+
+- `dot(x, y)` is the standard Euclidean dot product over the shared input
+  dimensionality
+- `||v||` is the Euclidean norm `sqrt(sum_m v_m^2)`
+- `normalize(v)` is `v / ||v||`
+- `cosine_distance(x, y)` is `1 - dot(x, y) / (||x|| * ||y||)`
 
 The objective is:
 
@@ -224,7 +237,8 @@ The summation order must be ascending point index.
 
 If the norm of the raw centroid for cluster `j` is smaller than `epsilon`, the
 normalized centroid used for distance computations must be derived from the
-smallest-index point in that cluster.
+smallest-index point in the same materialized membership set `S[j]` that was
+used to compute that raw centroid.
 
 Normatively:
 
@@ -299,21 +313,25 @@ revision:
 3. Inputs with `L < 1` fail explicitly.
 4. Inputs with `L > N` fail explicitly.
 5. Inputs with `T < 1` fail explicitly.
-6. Inputs containing `NaN` or infinite values fail explicitly.
-7. Inputs containing zero-norm vectors fail explicitly.
-8. Initialization always chooses `X[0]` as the first centroid.
-9. Later initialization choices follow farthest-point selection with smaller
+6. Inputs containing mixed vector dimensionality fail explicitly.
+7. Inputs containing `NaN` or infinite values fail explicitly.
+8. Inputs containing zero-norm vectors fail explicitly.
+9. Cosine distance, normalization, dot products, and norms follow the protocol's
+   Euclidean definitions.
+10. Initialization always chooses `X[0]` as the first centroid.
+11. Later initialization choices follow farthest-point selection with smaller
    point index as the tie-break.
-10. Assignment produces exactly one cluster assignment per point.
-11. Every cluster size after assignment satisfies `L <= |S[j]| <= N`.
-12. Assignment selection is deterministic when multiple optimal solutions exist.
-13. Assignment edge generation follows ascending point index, then ascending
+12. Assignment produces exactly one cluster assignment per point.
+13. Every cluster size after assignment satisfies `L <= |S[j]| <= N`.
+14. Assignment selection is deterministic when multiple optimal solutions exist.
+15. Assignment edge generation follows ascending point index, then ascending
     cluster index.
-14. Point-to-cluster edges have unit capacity.
-15. Centroid summation uses ascending point-index order.
-16. Zero-norm raw centroids use the smallest-index cluster member for normalized
+16. Point-to-cluster edges have unit capacity.
+17. Centroid summation uses ascending point-index order.
+18. Zero-norm raw centroids use the smallest-index cluster member from the same
+    materialized membership set used to compute the raw centroid for normalized
     distance computations while preserving the raw stored centroid.
-17. The protocol runs exactly `T` iterations with no early stopping.
-18. The reported objective value is computed after the final iteration under the
+19. The protocol runs exactly `T` iterations with no early stopping.
+20. The reported objective value is computed after the final iteration under the
     protocol's distance semantics.
-19. Repeated runs on identical ordered inputs produce identical outputs.
+21. Repeated runs on identical ordered inputs produce identical outputs.
