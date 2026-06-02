@@ -133,10 +133,11 @@ fn val_fs_store_007_publish_only_exposes_complete_target_files() {
         })
     };
 
-    assert_eq!(store.put(&block).unwrap(), serialized.hash);
+    let put_result = store.put(&block);
     stop.store(true, Ordering::Release);
     watcher.join().unwrap();
 
+    assert_eq!(put_result.unwrap(), serialized.hash);
     assert!(!saw_partial.load(Ordering::Acquire));
     assert_eq!(
         std::fs::read(&published_path).unwrap(),
