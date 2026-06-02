@@ -7,10 +7,9 @@
 //! fn exercise_contract(
 //!     store: &dyn BlockStore,
 //!     block: &Block,
-//!     block_id: &BlockHash,
 //! ) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-//!     let _ = store.put(block)?;
-//!     store.get(block_id)
+//!     let block_id = store.put(block)?;
+//!     store.get(&block_id)
 //! }
 //! ```
 //!
