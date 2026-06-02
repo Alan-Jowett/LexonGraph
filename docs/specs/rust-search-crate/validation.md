@@ -154,3 +154,95 @@ all expandable branch candidates have been exhausted.
 results as success.
 
 **Traces to:** REQ-SEARCH-006, REQ-SEARCH-009
+
+### VAL-SEARCH-019
+
+Construct ranked ties between:
+
+- leaf and branch candidates with equal scores
+- branch candidates with equal scores and different child block IDs
+- leaf candidates with equal scores and different containing block IDs
+
+**Pass condition:** search uses the canonical protocol ordering for those ties:
+leaf before branch, then ascending block ID within candidate kind.
+
+**Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
+
+### VAL-SEARCH-020
+
+Run search over a multi-round graph where one or more leaf candidates are found
+before lower-ranked branches are exhausted, but termination has not yet been
+reached.
+
+**Pass condition:** the previously found leaf candidates remain in the frontier
+across later rounds and continue to compete in the final ranking until
+termination.
+
+**Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
+
+### VAL-SEARCH-021
+
+Invoke search once with `w = 0`, and once with `n = 0`.
+
+**Pass condition:** `w = 0` fails explicitly. `n = 0` succeeds with an empty
+ordered result after the root block has still been loaded and its entries
+scored, and without any child expansion.
+
+**Traces to:** REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018
+
+### VAL-SEARCH-014
+
+Inspect the crate's public surface.
+
+**Pass condition:** the crate's default public surface exposes the runtime
+search contract and related public types only, keeps implementer-facing
+conformance helpers behind an opt-in non-default test-oriented surface, and
+does not redefine block or block-store conformance surfaces.
+
+**Traces to:** REQ-SEARCH-015, REQ-SEARCH-016, REQ-SEARCH-017
+
+### VAL-SEARCH-015
+
+Use the crate's opt-in conformance-test helper surface from a downstream crate
+that implements one or more search-owned policy traits.
+
+**Pass condition:** the downstream crate can depend on the helper surface in
+tests and run the shared conformance checks without changing the default
+production-facing API of the search crate.
+
+**Traces to:** REQ-SEARCH-015, REQ-SEARCH-016
+
+### VAL-SEARCH-016
+
+Run the shared conformance harnesses against deterministic implementations of
+the search-owned policy traits, including fixtures that intentionally violate
+each trait's contract.
+
+**Pass condition:** the shared helpers accept contract-satisfying
+implementations, reject contract-violating implementations at the appropriate
+trait boundary, and rely on the existing block and block-store conformance
+surfaces rather than redefining them.
+
+**Traces to:** REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-015,
+REQ-SEARCH-016, REQ-SEARCH-017
+
+### VAL-SEARCH-017
+
+Inspect the repository's Rust workspace and package artifacts for the search
+crate.
+
+**Pass condition:** the repository contains a Rust crate for the search
+contract, and that crate is wired into the workspace as the implementation
+artifact for this specification package.
+
+**Traces to:** REQ-SEARCH-013
+
+### VAL-SEARCH-018
+
+Inspect the repository verification artifacts for the search crate.
+
+**Pass condition:** the repository includes executable automated tests that
+realize the validation surface in this specification package, including runtime
+search behavior and the opt-in trait-conformance helper surface.
+
+**Traces to:** REQ-SEARCH-014

@@ -35,6 +35,13 @@ A search invocation requires:
 - `W` is the number of unique child blocks selected for expansion in each round
 - `N` is the number of final leaf results returned
 
+`W` must be at least 1. An invocation with `W = 0` is invalid and must fail
+explicitly.
+
+`N` may be 0. An invocation with `N = 0` still loads the root block and scores
+its current candidate set, then terminates successfully with an empty result
+before any child expansion.
+
 ## Embedding Requirements
 
 The search protocol imposes the following requirements on the embedding domain

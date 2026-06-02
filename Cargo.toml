@@ -1,3 +1,8 @@
 [workspace]
-members = ["crates/lexongraph-block", "crates/lexongraph-block-store", "crates/lexongraph-indexer"]
+members = [
+    "crates/lexongraph-block",
+    "crates/lexongraph-block-store",
+    "crates/lexongraph-indexer",
+    "crates/lexongraph-search",
+]
 resolver = "2"
