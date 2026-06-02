@@ -776,6 +776,28 @@ fn default_policy_rejects_pq4_embeddings() {
     assert!(error.to_string().contains("pq4"));
 }
 
+#[test]
+fn default_policy_decodes_f32le_embeddings() {
+    let groups = DcbcNodePackingPolicy
+        .pack(&f32le_children(), &f32le_embedding_spec(), 160)
+        .unwrap();
+
+    let mut flattened = groups.into_iter().flatten().collect::<Vec<_>>();
+    flattened.sort_unstable();
+    assert_eq!(flattened, vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn default_policy_decodes_f16le_embeddings() {
+    let groups = DcbcNodePackingPolicy
+        .pack(&f16le_children(), &f16le_embedding_spec(), 160)
+        .unwrap();
+
+    let mut flattened = groups.into_iter().flatten().collect::<Vec<_>>();
+    flattened.sort_unstable();
+    assert_eq!(flattened, vec![0, 1, 2, 3, 4, 5]);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn default_policy_surfaces_zero_norm_embeddings_explicitly() {
     let error = Indexer::new(
@@ -988,6 +1010,20 @@ fn pq4_embedding_spec() -> EmbeddingSpec {
     }
 }
 
+fn f32le_embedding_spec() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f32le".into(),
+    }
+}
+
+fn f16le_embedding_spec() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f16le".into(),
+    }
+}
+
 fn synthetic_children() -> Vec<IndexedChild> {
     vec![
         indexed_child(0, [97, 5]),
@@ -1008,9 +1044,51 @@ fn pq4_children() -> Vec<IndexedChild> {
         .collect()
 }
 
+fn f32le_children() -> Vec<IndexedChild> {
+    vec![
+        float_indexed_child(0, 1.0_f32.to_le_bytes(), 0.5_f32.to_le_bytes()),
+        float_indexed_child(1, 1.1_f32.to_le_bytes(), 0.5_f32.to_le_bytes()),
+        float_indexed_child(2, 4.0_f32.to_le_bytes(), 0.25_f32.to_le_bytes()),
+        float_indexed_child(3, 4.1_f32.to_le_bytes(), 0.25_f32.to_le_bytes()),
+        float_indexed_child(4, 8.0_f32.to_le_bytes(), 0.75_f32.to_le_bytes()),
+        float_indexed_child(5, 8.1_f32.to_le_bytes(), 0.75_f32.to_le_bytes()),
+    ]
+}
+
+fn f16le_children() -> Vec<IndexedChild> {
+    vec![
+        half_indexed_child(0, 1.0, 0.5),
+        half_indexed_child(1, 1.1, 0.5),
+        half_indexed_child(2, 4.0, 0.25),
+        half_indexed_child(3, 4.1, 0.25),
+        half_indexed_child(4, 8.0, 0.75),
+        half_indexed_child(5, 8.1, 0.75),
+    ]
+}
+
 fn indexed_child(index: u8, embedding: [u8; 2]) -> IndexedChild {
     IndexedChild {
         embedding: embedding.to_vec(),
+        child: synthetic_hash(index),
+    }
+}
+
+fn float_indexed_child(index: u8, first: [u8; 4], second: [u8; 4]) -> IndexedChild {
+    let mut embedding = Vec::with_capacity(8);
+    embedding.extend_from_slice(&first);
+    embedding.extend_from_slice(&second);
+    IndexedChild {
+        embedding,
+        child: synthetic_hash(index),
+    }
+}
+
+fn half_indexed_child(index: u8, first: f32, second: f32) -> IndexedChild {
+    let mut embedding = Vec::with_capacity(4);
+    embedding.extend_from_slice(&half::f16::from_f32(first).to_le_bytes());
+    embedding.extend_from_slice(&half::f16::from_f32(second).to_le_bytes());
+    IndexedChild {
+        embedding,
         child: synthetic_hash(index),
     }
 }

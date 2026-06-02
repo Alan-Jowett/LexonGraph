@@ -124,7 +124,7 @@ pub trait NodePackingPolicy {
     ) -> Result<Vec<Vec<usize>>, Self::Error>;
 }
 
-pub const DCBC_DEFAULT_ITERATION_COUNT: usize = 1;
+const DCBC_DEFAULT_ITERATION_COUNT: usize = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DcbcNodePackingPolicy;
