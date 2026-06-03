@@ -2,6 +2,10 @@
   Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph
 
+[![CI](https://github.com/Alan-Jowett/LexonGraph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Alan-Jowett/LexonGraph/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/Alan-Jowett/LexonGraph/badge.svg?branch=main)](https://coveralls.io/github/Alan-Jowett/LexonGraph?branch=main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 LexonGraph is a semantic indexing and retrieval system built around immutable,
 content-addressed blocks. The repository now includes the canonical protocol
 documents, traceable specification packages, an implemented Rust workspace for
@@ -17,7 +21,7 @@ architecture sketch. It currently contains:
 - implemented Rust crates for blocks, storage contracts, filesystem storage,
   deterministic clustering, indexing, search, and embedding-provider
   integration
-- GitHub Actions CI for formatting, linting, and tests
+- GitHub Actions CI for formatting, linting, tests, and coverage reporting
 
 The README is a summary. The protocol documents in `docs/protocol/` are the
 authoritative source for wire format and protocol behavior.

@@ -24,6 +24,8 @@ The repository quality gates own:
 - formatting verification
 - lint verification
 - Rust test execution
+- Rust coverage execution and publication
+- README surfacing of repository quality/status badges
 - SPDX header verification
 - contributor-facing local Git hook enforcement
 - hosted CI triggering and cancellation behavior
@@ -33,7 +35,8 @@ The repository quality gates do not own:
 - release automation
 - package publishing
 - artifact distribution
-- coverage or fuzzing jobs
+- minimum coverage threshold enforcement
+- fuzzing jobs
 
 ## Workflow Shape
 
@@ -96,6 +99,33 @@ and runs:
 The workflow contains a test job that restores Cargo cache and runs:
 
 `cargo test --workspace --locked`
+
+### DSG-CI-016 `Coverage job`
+
+The workflow contains a dedicated coverage job that:
+
+- runs on `ubuntu-latest`
+- uses the stable Rust toolchain with the `llvm-tools` component
+- restores Rust-aware cache state suitable for repeated coverage runs
+- installs `cargo-llvm-cov`
+- generates an `lcov.info` report for the Rust workspace test suite
+
+### DSG-CI-017 `Coveralls publication`
+
+The coverage job publishes the generated `lcov.info` report to Coveralls from
+GitHub Actions using repository-provided workflow credentials.
+
+### DSG-CI-018 `README badges`
+
+The repository README displays a compact badge row near the top of the document
+that links to:
+
+- the main-branch status badge for `.github/workflows/ci.yml`
+- the main-branch Coveralls coverage badge for the repository
+- the repository MIT license
+
+The README badge set is limited to status surfaces that currently exist in this
+repository and does not advertise workflows that are not present.
 
 ### DSG-CI-009 `Governed file set and header forms`
 
@@ -160,7 +190,7 @@ The workflow does not include:
 - crate publishing
 - GitHub release creation
 - release artifact upload
-- coverage reporting
+- minimum coverage threshold enforcement
 - fuzzing
 - platform-matrix expansion
 
@@ -172,6 +202,9 @@ The workflow does not include:
 | DSG-CI-006 | REQ-CI-003, REQ-CI-008 |
 | DSG-CI-007 | REQ-CI-004, REQ-CI-007, REQ-CI-008 |
 | DSG-CI-008 | REQ-CI-005, REQ-CI-008 |
+| DSG-CI-016 | REQ-CI-007, REQ-CI-015 |
+| DSG-CI-017 | REQ-CI-016 |
+| DSG-CI-018 | REQ-CI-017 |
 | DSG-CI-009 | REQ-CI-010, REQ-CI-011 |
 | DSG-CI-010 | REQ-CI-010, REQ-CI-012, REQ-CI-014 |
 | DSG-CI-011 | REQ-CI-009, REQ-CI-012 |
