@@ -204,6 +204,10 @@ The root block ID identifies the root of the constructed tree.
 The produced block set is the complete block set required to materialize that
 root under the indexing result.
 
+Every produced leaf block shall encode its payload using the Block Protocol's
+`Content` structure. This protocol does not define a reference-shaped
+alternative for leaf payloads.
+
 ## Explicit Non-Goals
 
 This protocol intentionally does not define:
@@ -216,10 +220,8 @@ This protocol intentionally does not define:
 - how an implementation packs, splits, or re-organizes intermediate node blocks
   in order to remain under the intermediate-node size limit
 
-This protocol also does not require leaf content to be stored inline. For large
-content items, an implementation may store a reference to external content in
-the leaf payload instead of the content itself, but this revision does not
-require that strategy.
+This protocol does not redefine the Block Protocol leaf-entry or `Content`
+shape, and it does not define an alternate leaf-payload representation.
 
 Implementations may choose different strategies for those concerns while still
 conforming to this protocol, provided the required inputs, outputs, and
@@ -277,4 +279,3 @@ revision:
    packing, or re-organization strategy.
 19. Conformance does not depend on any specific canonical-embedding algorithm,
    clustering method, or routing-vector selection method.
-
