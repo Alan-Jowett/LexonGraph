@@ -58,8 +58,8 @@ This means:
 
 ### Coverage
 
-Coverage was gathered with repository-standard workspace LCOV generation and
-then filtered to `crates/lexongraph-embeddings-trait/src/lib.rs`.
+Coverage was gathered with `cargo llvm-cov --workspace --all-features --locked --lcov --output-path lcov.info`
+and then filtered to `crates/lexongraph-embeddings-trait/src/lib.rs`.
 
 - raw LCOV for the audited file: `46 / 75 = 61.33%`
 
