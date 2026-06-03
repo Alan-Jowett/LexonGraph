@@ -224,7 +224,7 @@ pub struct Indexer<
 }
 
 impl<CR, EP> Indexer<CR, EP, ArithmeticMeanCanonicalEmbeddingPolicy, DcbcNodePackingPolicy> {
-    pub fn new(resolver: CR, embedding_provider: EP) -> Self {
+    pub fn with_defaults(resolver: CR, embedding_provider: EP) -> Self {
         Self::with_node_packing_policy(
             resolver,
             embedding_provider,
@@ -235,17 +235,21 @@ impl<CR, EP> Indexer<CR, EP, ArithmeticMeanCanonicalEmbeddingPolicy, DcbcNodePac
 }
 
 impl<CR, EP, CEP> Indexer<CR, EP, CEP, DcbcNodePackingPolicy> {
-    pub fn with_canonical_embedding_policy(
-        resolver: CR,
-        embedding_provider: EP,
-        canonical_embedding_policy: CEP,
-    ) -> Self {
+    pub fn new(resolver: CR, embedding_provider: EP, canonical_embedding_policy: CEP) -> Self {
         Self::with_node_packing_policy(
             resolver,
             embedding_provider,
             canonical_embedding_policy,
             DcbcNodePackingPolicy,
         )
+    }
+
+    pub fn with_canonical_embedding_policy(
+        resolver: CR,
+        embedding_provider: EP,
+        canonical_embedding_policy: CEP,
+    ) -> Self {
+        Self::new(resolver, embedding_provider, canonical_embedding_policy)
     }
 }
 
@@ -556,7 +560,7 @@ fn decode_embeddings_as_f64(
     validate_dcbc_embedding_encoding(spec)?;
     children
         .iter()
-        .map(|child| decode_embedding_as_f64(&child.embedding, spec))
+        .map(|child| decode_embedding_as_f64(&child.embedding, spec, "node-packing input"))
         .collect()
 }
 
@@ -572,8 +576,12 @@ fn validate_dcbc_embedding_encoding(spec: &EmbeddingSpec) -> Result<(), String> 
     }
 }
 
-fn decode_embedding_as_f64(embedding: &[u8], spec: &EmbeddingSpec) -> Result<Vec<f64>, String> {
-    validate_embedding_bytes(embedding, spec, "node-packing input")?;
+fn decode_embedding_as_f64(
+    embedding: &[u8],
+    spec: &EmbeddingSpec,
+    context: &str,
+) -> Result<Vec<f64>, String> {
+    validate_embedding_bytes(embedding, spec, context)?;
     match spec.encoding.as_str() {
         "i8" => Ok(embedding
             .iter()
@@ -620,7 +628,7 @@ fn arithmetic_mean_canonical_embedding(block: &BranchBlock) -> Result<Vec<u8>, S
     let mut sums = vec![0.0_f64; dims];
 
     for (entry_index, entry) in block.entries.iter().enumerate() {
-        let decoded = decode_embedding_as_f64(&entry.embedding, &block.embedding_spec)
+        let decoded = decode_embedding_as_f64(&entry.embedding, &block.embedding_spec, "canonical")
             .map_err(|error| format!("failed to decode branch entry {entry_index}: {error}"))?;
         for (dimension, (sum, value)) in sums.iter_mut().zip(decoded).enumerate() {
             if !value.is_finite() {

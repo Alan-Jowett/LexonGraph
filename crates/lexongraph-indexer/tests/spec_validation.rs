@@ -266,7 +266,7 @@ impl NodePackingPolicy for FailingPackingPolicy {
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_001_empty_input_fails_explicitly() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let error = indexer
         .index::<&'static str>(&[], embedding_spec(), 256, &store)
@@ -279,7 +279,7 @@ async fn val_indexer_001_empty_input_fails_explicitly() {
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_002_and_005_single_item_produces_leaf_root() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let result = indexer
         .index(&[item("alpha")], embedding_spec(), 256, &store)
@@ -302,7 +302,7 @@ async fn val_indexer_002_and_005_single_item_produces_leaf_root() {
 #[tokio::test(flavor = "current_thread")]
 async fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let result = indexer
         .index(
@@ -382,7 +382,7 @@ async fn val_indexer_003_resolution_and_embedding_failures_are_explicit() {
 async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_deterministic() {
     let first_store = MemoryBlockStore::default();
     let second_store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let first = indexer
         .index(
@@ -406,7 +406,7 @@ async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_det
     assert_eq!(first.root_id, second.root_id);
     assert_eq!(first.block_ids, second.block_ids);
 
-    let alias_resolver = Indexer::new(AliasResolver, AsciiEmbeddingProvider);
+    let alias_resolver = Indexer::with_defaults(AliasResolver, AsciiEmbeddingProvider);
     let alias_first = alias_resolver
         .index(
             &[item("alias-a"), item("alias-b")],
@@ -461,7 +461,7 @@ async fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitly() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
     let result = indexer
         .index(
             &[item("alpha"), item("bravo"), item("charlie")],
@@ -505,7 +505,7 @@ async fn val_indexer_007_intermediate_nodes_respect_size_limit_or_fail_explicitl
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let result = indexer
         .index(
@@ -532,8 +532,8 @@ async fn val_indexer_008_child_entries_are_sorted_and_deduplicated_by_child_id()
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_009_distinct_resolver_types_share_the_same_contract() {
     let store = MemoryBlockStore::default();
-    let memory_indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
-    let alias_indexer = Indexer::new(AliasResolver, AsciiEmbeddingProvider);
+    let memory_indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
+    let alias_indexer = Indexer::with_defaults(AliasResolver, AsciiEmbeddingProvider);
 
     let memory = memory_indexer
         .index(
@@ -605,7 +605,7 @@ async fn val_indexer_010_different_policy_implementations_share_the_same_api_bou
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_018_default_constructor_uses_builtin_node_packing() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let result = indexer
         .index(
@@ -639,10 +639,19 @@ async fn val_indexer_019_default_and_override_paths_both_work() {
         item("echo"),
         item("foxtrot"),
     ];
-    let default_result = Indexer::new(MapResolver, AsciiEmbeddingProvider)
+    let default_result = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider)
         .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
         .await
         .unwrap();
+    let explicit_default_result = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        DcbcNodePackingPolicy,
+    )
+    .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+    .await
+    .unwrap();
     let canonical_override_result = Indexer::with_canonical_embedding_policy(
         MapResolver,
         AsciiEmbeddingProvider,
@@ -662,6 +671,8 @@ async fn val_indexer_019_default_and_override_paths_both_work() {
     .unwrap();
 
     assert!(!default_result.block_ids.is_empty());
+    assert_eq!(default_result.root_id, explicit_default_result.root_id);
+    assert_eq!(default_result.block_ids, explicit_default_result.block_ids);
     assert!(!canonical_override_result.block_ids.is_empty());
     assert!(!override_result.block_ids.is_empty());
 }
@@ -676,11 +687,11 @@ async fn val_indexer_020_default_dcbc_packing_is_deterministic() {
         item("echo"),
         item("foxtrot"),
     ];
-    let first = Indexer::new(MapResolver, AsciiEmbeddingProvider)
+    let first = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider)
         .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
         .await
         .unwrap();
-    let second = Indexer::new(MapResolver, AsciiEmbeddingProvider)
+    let second = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider)
         .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
         .await
         .unwrap();
@@ -691,7 +702,7 @@ async fn val_indexer_020_default_dcbc_packing_is_deterministic() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_021_default_packing_uses_core_size_enforcement_for_tiny_targets() {
-    let error = Indexer::new(MapResolver, AsciiEmbeddingProvider)
+    let error = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider)
         .index(
             &[item("alpha"), item("bravo")],
             embedding_spec(),
@@ -831,7 +842,7 @@ fn default_policy_decodes_f16le_embeddings() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn default_policy_surfaces_zero_norm_embeddings_explicitly() {
-    let error = Indexer::new(MapResolver, ZeroEmbeddingProvider)
+    let error = Indexer::with_defaults(MapResolver, ZeroEmbeddingProvider)
         .index(
             &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
             embedding_spec(),
@@ -847,7 +858,7 @@ async fn default_policy_surfaces_zero_norm_embeddings_explicitly() {
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_012_resolved_content_is_stored_inline() {
     let store = MemoryBlockStore::default();
-    let indexer = Indexer::new(MapResolver, AsciiEmbeddingProvider);
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
 
     let result = indexer
         .index(&[item("alpha")], embedding_spec(), 256, &store)
