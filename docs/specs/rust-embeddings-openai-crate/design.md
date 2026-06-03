@@ -52,9 +52,10 @@ The crate does not redefine those dependency-owned contracts.
 
 The crate defines provider-specific configuration types that cover at least:
 
-- an OpenAI-compatible base URL plus model or request identity
-- Azure OpenAI API base, deployment identifier, API version, and request
-  identity
+- an OpenAI-compatible API base, API key, model, and optional request-identity
+  fields `org_id` and `project_id`
+- Azure OpenAI API base, API key, deployment identifier, API version, and
+  model
 
 These configuration types remain provider-specific and do not broaden the
 shared trait crate or indexer crate API boundaries.
@@ -86,9 +87,14 @@ in this revision.
 
 ### DSG-EMBED-OAI-006 `Response translation`
 
-The provider receives one embedding vector from the OpenAI-compatible endpoint
-and translates that vector into the byte representation required by the
-supplied `EmbeddingSpec`.
+For the single-input request path in this revision, the provider requires the
+OpenAI-compatible endpoint response to contain exactly one embedding vector.
+If the endpoint returns zero or multiple embeddings, the provider fails
+explicitly before translating bytes.
+
+When the endpoint returns exactly one embedding vector, the provider translates
+that vector into the byte representation required by the supplied
+`EmbeddingSpec`.
 
 In this revision, the provider may support only the subset of encodings that
 can be specified and implemented without undocumented or lossy translation. Any
@@ -109,8 +115,9 @@ enabling an opt-in feature on the shared trait crate or indexer crate.
 
 This specification package shall be realized as a concrete Rust crate in the
 repository, and the repository shall include automated tests that exercise
-provider configuration, request execution, explicit failure behavior, and
-response translation.
+provider configuration including optional OpenAI-compatible request identity,
+request execution, explicit failure behavior including response-cardinality
+rejection, and response translation.
 
 ## Traceability
 
@@ -121,7 +128,6 @@ response translation.
 | DSG-EMBED-OAI-003 | REQ-EMBED-OAI-001, REQ-EMBED-OAI-002 |
 | DSG-EMBED-OAI-004 | REQ-EMBED-OAI-004 |
 | DSG-EMBED-OAI-005 | REQ-EMBED-OAI-005 |
-| DSG-EMBED-OAI-006 | REQ-EMBED-OAI-006 |
+| DSG-EMBED-OAI-006 | REQ-EMBED-OAI-005, REQ-EMBED-OAI-006, REQ-EMBED-OAI-009 |
 | DSG-EMBED-OAI-007 | REQ-EMBED-OAI-007 |
 | DSG-EMBED-OAI-008 | REQ-EMBED-OAI-008 |
-

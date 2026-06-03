@@ -7,6 +7,11 @@
 Coverage-driven audit of `crates/lexongraph-embeddings-openai/src/lib.rs`
 against the `docs/specs/rust-embeddings-openai-crate/` package.
 
+The repository has since adopted the two confirmed drift findings from this
+audit into the governing spec and validation surface. The findings below remain
+the baseline rationale for that repair, but the current repository is expected
+to realize them through updated specification and test artifacts.
+
 ## Summary
 
 The audited file is at **73.68% line coverage** because the current test suite

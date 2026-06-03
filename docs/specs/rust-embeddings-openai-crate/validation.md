@@ -39,10 +39,13 @@ one embedding vector, and returns bytes compatible with the requested
 ### VAL-EMBED-OAI-003
 
 Configure the provider for distinct endpoint styles, including an
-OpenAI-compatible base URL and an Azure OpenAI deployment.
+OpenAI-compatible base URL with optional `org_id` and `project_id`, and an
+Azure OpenAI deployment.
 
 **Pass condition:** the provider constructs provider-specific requests using the
-supplied configuration without changing the shared embedding-provider contract.
+supplied configuration without changing the shared embedding-provider contract,
+including forwarding the optional OpenAI-compatible request-identity fields
+when present.
 
 **Traces to:** REQ-EMBED-OAI-003, REQ-EMBED-OAI-008
 
@@ -76,3 +79,13 @@ realize the validation surface in this specification package.
 
 **Traces to:** REQ-EMBED-OAI-008
 
+### VAL-EMBED-OAI-007
+
+Use the provider with a controlled OpenAI-compatible endpoint fixture that
+returns zero embeddings or multiple embeddings for a single UTF-8 text input.
+
+**Pass condition:** the provider fails explicitly rather than returning bytes,
+silently selecting one embedding, or masking the response-cardinality
+mismatch.
+
+**Traces to:** REQ-EMBED-OAI-005, REQ-EMBED-OAI-008, REQ-EMBED-OAI-009
