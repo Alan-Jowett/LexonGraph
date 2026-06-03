@@ -212,23 +212,25 @@ Construct the indexer through its primary default-instantiation path and index
 multiple items that require one or more intermediate layers.
 
 **Pass condition:** the indexing operation succeeds without the caller
-supplying a `NodePackingPolicy`, and the resulting blocks conform to the same
-runtime invariants as the explicit-policy path.
+supplying either a `CanonicalEmbeddingPolicy` or a `NodePackingPolicy`, and the
+resulting blocks conform to the same runtime invariants as the explicit-policy
+path.
 
-**Traces to:** REQ-INDEXER-023, REQ-INDEXER-024
+**Traces to:** REQ-INDEXER-023, REQ-INDEXER-024, REQ-INDEXER-028
 
 ### VAL-INDEXER-019
 
 Construct one indexer through the primary default-instantiation path and a
-second indexer through the explicit custom-policy override path, then index the
-same logical item set with both.
+second indexer through a custom canonical-policy or full explicit-policy
+override path, then index the same logical item set with both.
 
-**Pass condition:** the default path uses the built-in DCBC-backed policy
-without requiring explicit policy injection, while the override path accepts a
-caller-supplied `NodePackingPolicy` and remains conforming without changing the
-rest of the runtime contract.
+**Pass condition:** the default path uses the built-in arithmetic-mean
+canonical policy and built-in DCBC-backed node-packing policy without explicit
+policy injection, while the override path accepts caller-supplied policy
+implementations and remains conforming without changing the rest of the runtime
+contract.
 
-**Traces to:** REQ-INDEXER-024, REQ-INDEXER-025
+**Traces to:** REQ-INDEXER-024, REQ-INDEXER-025, REQ-INDEXER-028
 
 ### VAL-INDEXER-020
 
@@ -263,3 +265,27 @@ realization delegates DCBC clustering behavior through that dependency rather
 than reimplementing DCBC semantics locally.
 
 **Traces to:** REQ-INDEXER-022
+
+### VAL-INDEXER-023
+
+Construct branch blocks with known finalized entry embeddings under supported
+encodings (`i8`, `f16le`, and `f32le`) and invoke the built-in arithmetic-mean
+canonical policy directly.
+
+**Pass condition:** the built-in policy returns the expected component-wise
+arithmetic mean encoded according to the block `embedding_spec`, including
+midpoint ties away from zero for `i8`.
+
+**Traces to:** REQ-INDEXER-028, REQ-INDEXER-029
+
+### VAL-INDEXER-024
+
+Invoke the built-in arithmetic-mean canonical policy on branch blocks whose
+stored entry embeddings use an unsupported encoding or produce a non-finite
+arithmetic mean.
+
+**Pass condition:** canonical-embedding derivation fails explicitly at the
+canonical-policy boundary; the indexer does not silently substitute a different
+vector or continue as though canonical embedding succeeded.
+
+**Traces to:** REQ-INDEXER-029

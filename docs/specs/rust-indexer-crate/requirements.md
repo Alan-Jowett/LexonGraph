@@ -112,8 +112,8 @@ when the crate provides a built-in default implementation.
 
 The core indexer shall own the protocol-required orchestration, layering,
 normalization, block construction, and block persistence flow, including the
-default-construction path that wires in the crate's built-in node-packing
-implementation.
+default-construction path that wires in the crate's built-in
+canonical-embedding and node-packing implementations.
 
 ### REQ-INDEXER-014
 
@@ -183,8 +183,9 @@ intermediate-node construction from current-layer child embeddings.
 ### REQ-INDEXER-024
 
 The crate shall provide a primary default-instantiation path for the indexer
-runtime API that uses the built-in DCBC-backed node-packing implementation
-without requiring callers to pass a node-packing policy explicitly.
+runtime API that uses the built-in arithmetic-mean `CanonicalEmbeddingPolicy`
+and the built-in DCBC-backed `NodePackingPolicy` without requiring callers to
+pass either policy explicitly.
 
 ### REQ-INDEXER-025
 
@@ -206,6 +207,22 @@ Given the same ordered current-layer children, embedding bytes, block size
 target, and deterministic DCBC dependency behavior, the built-in default
 node-packing implementation shall produce the same candidate grouping result or
 the same explicit failure.
+
+### REQ-INDEXER-028
+
+The crate shall provide a built-in default `CanonicalEmbeddingPolicy`
+implementation whose canonical embedding for a produced child-bearing block is
+the component-wise arithmetic mean of the embeddings stored in that block's
+finalized entries.
+
+### REQ-INDEXER-029
+
+The built-in arithmetic-mean canonical-embedding implementation shall decode
+stored entry embeddings according to the block `embedding_spec`, compute the
+mean in deterministic entry order using `f64`, re-encode the result for
+supported arithmetic encodings (`i8`, `f16le`, `f32le`), and fail explicitly
+for empty entry sets, unsupported encodings, non-finite values, or results that
+cannot be represented under the block `embedding_spec`.
 
 ## Out of Scope
 

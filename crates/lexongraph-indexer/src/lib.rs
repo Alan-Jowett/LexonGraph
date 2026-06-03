@@ -124,6 +124,28 @@ pub trait NodePackingPolicy {
     ) -> Result<Vec<Vec<usize>>, Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArithmeticMeanCanonicalEmbeddingPolicy;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArithmeticMeanCanonicalEmbeddingError(String);
+
+impl fmt::Display for ArithmeticMeanCanonicalEmbeddingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for ArithmeticMeanCanonicalEmbeddingError {}
+
+impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
+    type Error = ArithmeticMeanCanonicalEmbeddingError;
+
+    fn canonical_embedding(&self, block: &BranchBlock) -> Result<Vec<u8>, Self::Error> {
+        arithmetic_mean_canonical_embedding(block).map_err(ArithmeticMeanCanonicalEmbeddingError)
+    }
+}
+
 const DCBC_DEFAULT_ITERATION_COUNT: usize = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -189,15 +211,35 @@ impl NodePackingPolicy for DcbcNodePackingPolicy {
 }
 
 #[derive(Clone, Debug)]
-pub struct Indexer<CR, EP, CEP, NPP = DcbcNodePackingPolicy> {
+pub struct Indexer<
+    CR,
+    EP,
+    CEP = ArithmeticMeanCanonicalEmbeddingPolicy,
+    NPP = DcbcNodePackingPolicy,
+> {
     resolver: CR,
     embedding_provider: EP,
     canonical_embedding_policy: CEP,
     node_packing_policy: NPP,
 }
 
+impl<CR, EP> Indexer<CR, EP, ArithmeticMeanCanonicalEmbeddingPolicy, DcbcNodePackingPolicy> {
+    pub fn new(resolver: CR, embedding_provider: EP) -> Self {
+        Self::with_node_packing_policy(
+            resolver,
+            embedding_provider,
+            ArithmeticMeanCanonicalEmbeddingPolicy,
+            DcbcNodePackingPolicy,
+        )
+    }
+}
+
 impl<CR, EP, CEP> Indexer<CR, EP, CEP, DcbcNodePackingPolicy> {
-    pub fn new(resolver: CR, embedding_provider: EP, canonical_embedding_policy: CEP) -> Self {
+    pub fn with_canonical_embedding_policy(
+        resolver: CR,
+        embedding_provider: EP,
+        canonical_embedding_policy: CEP,
+    ) -> Self {
         Self::with_node_packing_policy(
             resolver,
             embedding_provider,
@@ -555,8 +597,132 @@ fn decode_embedding_as_f64(embedding: &[u8], spec: &EmbeddingSpec) -> Result<Vec
                 Ok(f16::from_le_bytes(bytes).to_f64())
             })
             .collect(),
-        "pq4" => unreachable!("pq4 is rejected by validate_dcbc_embedding_encoding"),
-        other => unreachable!("unsupported encoding {other:?} rejected earlier"),
+        "pq4" => Err("pq4 embeddings cannot be decoded as arithmetic vectors".into()),
+        other => Err(format!(
+            "unsupported embedding encoding {other:?} for arithmetic decoding"
+        )),
+    }
+}
+
+fn arithmetic_mean_canonical_embedding(block: &BranchBlock) -> Result<Vec<u8>, String> {
+    if block.entries.is_empty() {
+        return Err(
+            "built-in arithmetic-mean canonical policy requires at least one branch entry".into(),
+        );
+    }
+
+    let dims = usize::try_from(block.embedding_spec.dims).map_err(|_| {
+        format!(
+            "branch embedding dims {} do not fit in usize",
+            block.embedding_spec.dims
+        )
+    })?;
+    let mut sums = vec![0.0_f64; dims];
+
+    for (entry_index, entry) in block.entries.iter().enumerate() {
+        let decoded = decode_embedding_as_f64(&entry.embedding, &block.embedding_spec)
+            .map_err(|error| format!("failed to decode branch entry {entry_index}: {error}"))?;
+        for (dimension, (sum, value)) in sums.iter_mut().zip(decoded).enumerate() {
+            if !value.is_finite() {
+                return Err(format!(
+                    "branch entry {entry_index} contains a non-finite value at dimension {dimension}"
+                ));
+            }
+            *sum += value;
+            if !sum.is_finite() {
+                return Err(format!(
+                    "arithmetic-mean sum overflowed or became non-finite at dimension {dimension}"
+                ));
+            }
+        }
+    }
+
+    let divisor = block.entries.len() as f64;
+    for (dimension, sum) in sums.iter_mut().enumerate() {
+        *sum /= divisor;
+        if !sum.is_finite() {
+            return Err(format!(
+                "arithmetic-mean result became non-finite at dimension {dimension}"
+            ));
+        }
+    }
+
+    encode_embedding_from_f64(&sums, &block.embedding_spec)
+}
+
+fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec<u8>, String> {
+    let dims = usize::try_from(spec.dims)
+        .map_err(|_| format!("embedding dims {} do not fit in usize", spec.dims))?;
+    if values.len() != dims {
+        return Err(format!(
+            "mean embedding dimension {} does not match expected dimension {dims}",
+            values.len()
+        ));
+    }
+
+    match spec.encoding.as_str() {
+        "f32le" => {
+            let mut bytes = Vec::with_capacity(dims * std::mem::size_of::<f32>());
+            for (dimension, value) in values.iter().copied().enumerate() {
+                if !value.is_finite() {
+                    return Err(format!(
+                        "cannot encode non-finite arithmetic mean at dimension {dimension}"
+                    ));
+                }
+                let encoded = value as f32;
+                if !encoded.is_finite() {
+                    return Err(format!(
+                        "arithmetic mean overflowed f32 encoding at dimension {dimension}"
+                    ));
+                }
+                bytes.extend_from_slice(&encoded.to_le_bytes());
+            }
+            Ok(bytes)
+        }
+        "f16le" => {
+            let mut bytes = Vec::with_capacity(dims * std::mem::size_of::<u16>());
+            for (dimension, value) in values.iter().copied().enumerate() {
+                if !value.is_finite() {
+                    return Err(format!(
+                        "cannot encode non-finite arithmetic mean at dimension {dimension}"
+                    ));
+                }
+                let encoded = f16::from_f64(value);
+                if !encoded.to_f64().is_finite() {
+                    return Err(format!(
+                        "arithmetic mean overflowed f16 encoding at dimension {dimension}"
+                    ));
+                }
+                bytes.extend_from_slice(&encoded.to_le_bytes());
+            }
+            Ok(bytes)
+        }
+        "i8" => values
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(dimension, value)| {
+                if !value.is_finite() {
+                    return Err(format!(
+                        "cannot encode non-finite arithmetic mean at dimension {dimension}"
+                    ));
+                }
+                let rounded = value.round();
+                if rounded < f64::from(i8::MIN) || rounded > f64::from(i8::MAX) {
+                    return Err(format!(
+                        "arithmetic mean {rounded} exceeds i8 range at dimension {dimension}"
+                    ));
+                }
+                Ok((rounded as i8).to_le_bytes()[0])
+            })
+            .collect(),
+        "pq4" => Err(
+            "pq4 embeddings are not supported by the built-in arithmetic-mean canonical policy"
+                .into(),
+        ),
+        other => Err(format!(
+            "unsupported embedding encoding {other:?} for arithmetic-mean canonical policy"
+        )),
     }
 }
 

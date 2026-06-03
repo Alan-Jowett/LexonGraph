@@ -123,6 +123,10 @@ embedding is needed as the parent-entry embedding for a child block.
 The indexer crate requires the result to be deterministic, comparable within
 the indexing context, and stable across rebuilds of the same logical content.
 
+The crate also provides a built-in default realization of this trait. That
+default operates on the branch block's finalized stored entries rather than on
+pre-normalization candidate inputs.
+
 ### DSG-INDEXER-009 `NodePackingPolicy`
 
 A trait that determines how leaf blocks or lower-layer node blocks are grouped
@@ -156,9 +160,13 @@ and returns an awaitable result equivalent to
 
 The public API includes both:
 
-- a primary default-instantiation path that supplies the built-in DCBC-backed
+- a primary default-instantiation path that supplies the built-in
+  arithmetic-mean canonical-embedding policy and the built-in DCBC-backed
   node-packing policy automatically
-- an explicit override path that accepts a caller-supplied `NodePackingPolicy`
+- a constructor path that accepts a caller-supplied `CanonicalEmbeddingPolicy`
+  while continuing to use the built-in DCBC-backed node-packing policy
+- an explicit override path that accepts caller-supplied
+  `CanonicalEmbeddingPolicy` and `NodePackingPolicy`
 
 ## Orchestration Flow
 
@@ -177,13 +185,15 @@ The fixed orchestration flow is:
 7. otherwise, repeatedly invoke the selected node-packing policy, whether the
    built-in default or a caller-supplied override, to obtain candidate child
    groups for the current layer
-8. derive each child-bearing block's canonical embedding through the
-   canonical-embedding policy
-9. normalize candidate node entries by sorting by raw embedding bytes and
+8. normalize candidate node entries by sorting by raw embedding bytes and
    deduplicating by child block ID
-10. construct and persist intermediate node blocks under the protocol-defined
-    size limit
-11. repeat until exactly one root block remains
+9. construct each intermediate branch block from those finalized entries and
+   validate it against the block protocol
+10. derive each child-bearing block's canonical embedding through the
+   canonical-embedding policy applied to that finalized branch block
+11. construct and persist intermediate node blocks under the protocol-defined
+   size limit
+12. repeat until exactly one root block remains
 
 The core indexer owns this flow even when implementation-defined policy traits
 participate in individual steps.
@@ -259,20 +269,60 @@ protocol normalization or block-validity checks.
 ### DSG-INDEXER-019 `Primary default constructor path`
 
 The crate exposes a primary constructor or equivalent default-instantiation API
-for `Indexer` that requires the resolver, embedding provider, and
-canonical-embedding policy, and internally instantiates the built-in
-DCBC-backed node-packing policy.
+for `Indexer` that requires the resolver and embedding provider, and internally
+instantiates both the built-in arithmetic-mean canonical-embedding policy and
+the built-in DCBC-backed node-packing policy.
 
 This path is the default production-facing way to construct the indexer when no
-custom node-packing behavior is required.
+custom canonical-embedding or node-packing behavior is required.
 
-### DSG-INDEXER-020 `Custom node-packing override path`
+### DSG-INDEXER-020 `Custom canonical-policy constructor path`
 
-The crate also exposes an explicit constructor or equivalent API that accepts a
-caller-supplied `NodePackingPolicy`.
+The crate also exposes a constructor or equivalent API that accepts a
+caller-supplied `CanonicalEmbeddingPolicy` while continuing to instantiate the
+built-in DCBC-backed node-packing policy.
 
-Using that override path preserves the existing policy seam for downstream
-consumers that need non-default grouping or packing behavior.
+Using that path preserves the canonical-embedding policy seam for downstream
+consumers that need a non-default routing representative without also requiring
+custom node-packing behavior.
+
+### DSG-INDEXER-021 `Explicit full-policy override path`
+
+The crate also exposes an explicit constructor or equivalent API that accepts
+caller-supplied `CanonicalEmbeddingPolicy` and `NodePackingPolicy`
+implementations.
+
+Using that override path preserves the existing policy seams for downstream
+consumers that need non-default canonical embedding and grouping or packing
+behavior.
+
+### DSG-INDEXER-022 `Built-in arithmetic-mean canonical policy`
+
+The crate exposes a built-in default `CanonicalEmbeddingPolicy`
+implementation that computes a branch block's canonical embedding as the
+component-wise arithmetic mean of the embeddings stored in that block's
+finalized entries.
+
+The branch block must already reflect protocol-required entry normalization, so
+the default canonical embedding is deterministic over persisted block content.
+
+### DSG-INDEXER-023 `Deterministic numeric encoding for built-in canonical means`
+
+The built-in arithmetic-mean canonical policy:
+
+1. decodes stored entry embeddings according to the branch block
+   `embedding_spec`
+2. computes each component mean in `f64` using deterministic finalized entry
+   order
+3. re-encodes supported outputs as follows:
+   - `f32le`: direct `f64` to IEEE-754 binary32 cast, written little-endian
+   - `f16le`: direct `f64` to IEEE-754 binary16 conversion, written
+     little-endian
+   - `i8`: round to nearest integer with midpoint ties away from zero, then
+     encode as signed 8-bit
+4. fails explicitly for empty branch-entry sets, unsupported encodings,
+   non-finite decoded or reduced values, and means that overflow the target
+   encoding
 
 ## Traceability
 
@@ -283,10 +333,10 @@ consumers that need non-default grouping or packing behavior.
 | DSG-INDEXER-003..005 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-010 |
 | DSG-INDEXER-006 | REQ-INDEXER-007, REQ-INDEXER-008, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-016 |
 | DSG-INDEXER-007 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-020, REQ-INDEXER-021 |
-| DSG-INDEXER-008 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-014 |
+| DSG-INDEXER-008 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-014, REQ-INDEXER-028 |
 | DSG-INDEXER-009 | REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-023, REQ-INDEXER-026, REQ-INDEXER-027 |
-| DSG-INDEXER-010 | REQ-INDEXER-001, REQ-INDEXER-004, REQ-INDEXER-006, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-013, REQ-INDEXER-020, REQ-INDEXER-024, REQ-INDEXER-025 |
-| DSG-INDEXER-011 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-016, REQ-INDEXER-020, REQ-INDEXER-026 |
+| DSG-INDEXER-010 | REQ-INDEXER-001, REQ-INDEXER-004, REQ-INDEXER-006, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-013, REQ-INDEXER-020, REQ-INDEXER-024, REQ-INDEXER-025, REQ-INDEXER-028 |
+| DSG-INDEXER-011 | REQ-INDEXER-001, REQ-INDEXER-006, REQ-INDEXER-009, REQ-INDEXER-010, REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-013, REQ-INDEXER-016, REQ-INDEXER-020, REQ-INDEXER-026, REQ-INDEXER-028 |
 | DSG-INDEXER-012 | REQ-INDEXER-014 |
 | DSG-INDEXER-013 | REQ-INDEXER-001 |
 | DSG-INDEXER-014 | REQ-INDEXER-015 |
@@ -294,4 +344,7 @@ consumers that need non-default grouping or packing behavior.
 | DSG-INDEXER-017 | REQ-INDEXER-019, REQ-INDEXER-021 |
 | DSG-INDEXER-018 | REQ-INDEXER-022, REQ-INDEXER-023, REQ-INDEXER-026, REQ-INDEXER-027 |
 | DSG-INDEXER-019 | REQ-INDEXER-024 |
-| DSG-INDEXER-020 | REQ-INDEXER-025 |
+| DSG-INDEXER-020 | REQ-INDEXER-024, REQ-INDEXER-025 |
+| DSG-INDEXER-021 | REQ-INDEXER-025 |
+| DSG-INDEXER-022 | REQ-INDEXER-013, REQ-INDEXER-024, REQ-INDEXER-028 |
+| DSG-INDEXER-023 | REQ-INDEXER-028, REQ-INDEXER-029 |
