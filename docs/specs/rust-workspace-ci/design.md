@@ -108,7 +108,8 @@ The workflow contains a dedicated coverage job that:
 - uses the stable Rust toolchain with the `llvm-tools` component
 - restores Rust-aware cache state suitable for repeated coverage runs
 - installs `cargo-llvm-cov`
-- generates an `lcov.info` report for the Rust workspace test suite
+- generates an `lcov.info` report for the Rust workspace test suite with all
+  Cargo features enabled
 
 ### DSG-CI-017 `Coveralls publication`
 

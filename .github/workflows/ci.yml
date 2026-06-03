@@ -106,7 +106,7 @@ jobs:
         run: cargo install cargo-llvm-cov --locked
 
       - name: Generate coverage
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path lcov.info
 
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2

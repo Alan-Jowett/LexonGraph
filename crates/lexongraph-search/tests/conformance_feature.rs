@@ -11,8 +11,9 @@ use lexongraph_search::DefaultEmbeddingCompatibility;
 use lexongraph_search::EmbeddingCompatibility;
 use lexongraph_search::EncodedTargetEmbedding;
 use lexongraph_search::conformance::{
-    CandidateScorerConformanceHarness, EmbeddingCompatibilityConformanceHarness, FixtureError,
-    run_candidate_scorer_suite, run_embedding_compatibility_suite, run_full_trait_suite,
+    CandidateScorerConformanceHarness, ConformanceError, EmbeddingCompatibilityConformanceHarness,
+    FixtureError, run_candidate_scorer_suite, run_embedding_compatibility_suite,
+    run_full_trait_suite,
 };
 
 #[derive(Clone)]
@@ -204,6 +205,8 @@ impl EmbeddingCompatibility<EncodedTargetEmbedding> for DefaultCompatibilityFixt
 
 struct DefaultCompatibilityHarness;
 
+struct RejectingCompatibilityHarness;
+
 impl EmbeddingCompatibilityConformanceHarness for DefaultCompatibilityHarness {
     type Target = EncodedTargetEmbedding;
     type Policy = DefaultCompatibilityFixture;
@@ -229,6 +232,35 @@ impl EmbeddingCompatibilityConformanceHarness for DefaultCompatibilityHarness {
 
     fn nondeterministic_policy(&self) -> Self::Policy {
         DefaultCompatibilityFixture::Flaky
+    }
+}
+
+impl EmbeddingCompatibilityConformanceHarness for RejectingCompatibilityHarness {
+    type Target = ();
+    type Policy = CompatibilityFixture;
+
+    fn target(&self) -> Self::Target {}
+
+    fn compatible_spec(&self) -> EmbeddingSpec {
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        }
+    }
+
+    fn incompatible_spec(&self) -> EmbeddingSpec {
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f64le".into(),
+        }
+    }
+
+    fn conforming_policy(&self) -> Self::Policy {
+        CompatibilityFixture(CompatibilityMode::Conforming)
+    }
+
+    fn nondeterministic_policy(&self) -> Self::Policy {
+        CompatibilityFixture(CompatibilityMode::Flaky)
     }
 }
 
@@ -279,6 +311,8 @@ impl CandidateScorer<EncodedTargetEmbedding> for DefaultScorerFixture {
 
 struct DefaultScorerHarness;
 
+struct WrongExpectedScoreHarness;
+
 impl CandidateScorerConformanceHarness for DefaultScorerHarness {
     type Target = EncodedTargetEmbedding;
     type Score = <DefaultCandidateScorer as CandidateScorer<EncodedTargetEmbedding>>::Score;
@@ -323,6 +357,45 @@ impl CandidateScorerConformanceHarness for DefaultScorerHarness {
     }
 }
 
+impl CandidateScorerConformanceHarness for WrongExpectedScoreHarness {
+    type Target = ();
+    type Score = i32;
+    type Scorer = ScorerFixture;
+
+    fn target(&self) -> Self::Target {}
+
+    fn embedding_spec(&self) -> EmbeddingSpec {
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "i8".into(),
+        }
+    }
+
+    fn preferred_candidate_embedding(&self) -> Vec<u8> {
+        vec![9, 0]
+    }
+
+    fn alternate_candidate_embedding(&self) -> Vec<u8> {
+        vec![3, 0]
+    }
+
+    fn expected_score(&self) -> Self::Score {
+        42
+    }
+
+    fn conforming_scorer(&self) -> Self::Scorer {
+        ScorerFixture(ScorerMode::Conforming)
+    }
+
+    fn failing_scorer(&self) -> Self::Scorer {
+        ScorerFixture(ScorerMode::Failing)
+    }
+
+    fn nondeterministic_scorer(&self) -> Self::Scorer {
+        ScorerFixture(ScorerMode::Flaky)
+    }
+}
+
 #[test]
 fn downstream_crates_can_run_the_embedding_compatibility_suite() {
     run_embedding_compatibility_suite(&CompatibilityHarness).unwrap();
@@ -346,6 +419,25 @@ fn crate_defaults_satisfy_the_embedding_compatibility_harness() {
 #[test]
 fn crate_defaults_satisfy_the_candidate_scorer_harness() {
     run_candidate_scorer_suite(&DefaultScorerHarness).unwrap();
+}
+
+#[test]
+fn embedding_compatibility_suite_reports_helper_expectation_failures() {
+    let error = run_embedding_compatibility_suite(&RejectingCompatibilityHarness).unwrap_err();
+    assert!(matches!(
+        error,
+        ConformanceError::Expectation(message)
+            if message.contains("expected compatible embedding spec to be accepted")
+    ));
+}
+
+#[test]
+fn candidate_scorer_suite_reports_helper_expectation_failures() {
+    let error = run_candidate_scorer_suite(&WrongExpectedScoreHarness).unwrap_err();
+    assert!(matches!(
+        error,
+        ConformanceError::Expectation(message) if message.contains("expected score")
+    ));
 }
 
 fn embedding_spec_f32() -> EmbeddingSpec {

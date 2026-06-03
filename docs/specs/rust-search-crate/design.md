@@ -80,6 +80,9 @@ An explicit error taxonomy covering at least:
 Scoring-policy failure is surfaced as an explicit search-boundary failure and is
 not treated as a silent skip.
 
+That failure is surfaced uniformly for candidate scoring from visited branch and
+leaf blocks.
+
 ### DSG-SEARCH-005 `SearchCandidate`
 
 An internal typed representation of one ranked candidate in the current search
@@ -169,6 +172,9 @@ Zero-magnitude target or candidate embeddings, non-finite encoded
 floating-point values, and embedding specifications whose dimensionality is too
 large to validate safely are also surfaced as explicit failures rather than
 producing arbitrary scores.
+
+For the supported default-scorer encodings, those checks apply consistently
+across each decoding path, including `f32le` and `f64le`.
 
 ## API Surface
 
@@ -287,6 +293,10 @@ At minimum, those assertions verify repeated-input stability for
 contract-satisfying implementations, explicit rejection or failure for
 contract-violating fixtures, preferred-candidate ordering for candidate
 scorers, and detection of nondeterministic implementations.
+
+The repository verification surface may also directly exercise representative
+helper-owned expectation failures so those diagnostics remain part of the
+specified helper behavior.
 
 The helper surface does not redefine conformance for the block crate or the
 block-storage trait crate, which continue to own their respective reusable
