@@ -91,12 +91,63 @@ The conformance-test helper surface provides reusable checks for the shared
 
 The helper surface may define test-only harness contracts that supply:
 
+- a sample input
+- a compatible embedding specification
+- an exact expected embedding byte vector for the conforming fixture
 - a conforming provider fixture
 - a provider fixture that fails explicitly
 - a provider fixture that returns output incompatible with the requested
   `EmbeddingSpec`
 
-### DSG-EMBED-TRAIT-007 `Implementation realization`
+The helper surface shall treat those fixture roles as contract-relevant, not
+merely advisory, when evaluating downstream harnesses.
+
+### DSG-EMBED-TRAIT-007 `Conforming fixture exactness`
+
+The reusable conformance suite shall validate the conforming provider fixture in
+two stages:
+
+1. confirm the returned bytes are compatible with the requested
+   `EmbeddingSpec`
+2. confirm the returned bytes exactly equal the harness-provided
+   `expected_embedding`
+
+Length compatibility alone is insufficient for the conforming fixture path.
+
+### DSG-EMBED-TRAIT-008 `Misconfigured fixture rejection`
+
+The reusable conformance suite shall reject a downstream harness with an
+expectation-category conformance failure when:
+
+- the supposed failing provider fixture succeeds
+- the supposed invalid-output provider fixture returns bytes that satisfy the
+  requested `EmbeddingSpec`
+- the supposed conforming provider fixture returns bytes that are compatible
+  with the requested `EmbeddingSpec` but do not equal `expected_embedding`
+
+### DSG-EMBED-TRAIT-009 `Encoding validation boundary`
+
+The conformance suite shall validate embedding-byte compatibility only for the
+set of `EmbeddingSpec.encoding` values that the helper explicitly understands.
+
+For known supported encodings, the helper shall derive the required byte length
+from `EmbeddingSpec.dims` and reject mismatched lengths.
+
+For unsupported or future encodings, the helper shall fail closed with an
+expectation-category conformance failure rather than inferring acceptance from
+length or silently bypassing validation.
+
+### DSG-EMBED-TRAIT-010 `Public conformance error surface`
+
+The public conformance surface shall expose distinct error categories for:
+
+- provider-execution failure
+- conformance-expectation failure
+
+Those categories and their routing behavior are contractual. The exact display
+strings used for diagnostics are not contractual.
+
+### DSG-EMBED-TRAIT-011 `Implementation realization`
 
 This specification package shall be realized as a concrete Rust crate in the
 repository, and downstream crates such as the indexer crate and provider
@@ -112,5 +163,8 @@ independent embedding-provider traits.
 | DSG-EMBED-TRAIT-003 | REQ-EMBED-TRAIT-001, REQ-EMBED-TRAIT-004, REQ-EMBED-TRAIT-006, REQ-EMBED-TRAIT-010 |
 | DSG-EMBED-TRAIT-004 | REQ-EMBED-TRAIT-005 |
 | DSG-EMBED-TRAIT-005..006 | REQ-EMBED-TRAIT-007, REQ-EMBED-TRAIT-008 |
-| DSG-EMBED-TRAIT-007 | REQ-EMBED-TRAIT-001, REQ-EMBED-TRAIT-009, REQ-EMBED-TRAIT-010 |
-
+| DSG-EMBED-TRAIT-007 | REQ-EMBED-TRAIT-011 |
+| DSG-EMBED-TRAIT-008 | REQ-EMBED-TRAIT-007, REQ-EMBED-TRAIT-012 |
+| DSG-EMBED-TRAIT-009 | REQ-EMBED-TRAIT-013 |
+| DSG-EMBED-TRAIT-010 | REQ-EMBED-TRAIT-014 |
+| DSG-EMBED-TRAIT-011 | REQ-EMBED-TRAIT-001, REQ-EMBED-TRAIT-009, REQ-EMBED-TRAIT-010 |

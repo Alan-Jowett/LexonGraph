@@ -66,7 +66,8 @@ or runtime.
 ### REQ-EMBED-TRAIT-007
 
 The crate shall provide reusable conformance-test harnesses for the shared
-embedding-provider trait it defines.
+embedding-provider trait it defines, including specified acceptance and
+rejection semantics for downstream fixtures.
 
 ### REQ-EMBED-TRAIT-008
 
@@ -78,13 +79,42 @@ tests without broadening the crate's default production-facing API.
 
 The repository shall include automated verification artifacts that realize the
 validation surface defined in
-`docs/specs/rust-embeddings-trait/validation.md`.
+`docs/specs/rust-embeddings-trait/validation.md`, including nominal and helper
+rejection behavior.
 
 ### REQ-EMBED-TRAIT-010
 
 The indexer crate and provider-specific embedding crates shall depend on this
 shared trait crate rather than defining independent embedding-provider
 contracts.
+
+### REQ-EMBED-TRAIT-011
+
+The conformance harness shall require the conforming provider fixture to return
+embedding bytes that are both compatible with the requested `EmbeddingSpec` and
+exactly equal to the harness-provided `expected_embedding`.
+
+### REQ-EMBED-TRAIT-012
+
+The conformance helper shall reject a downstream harness when:
+
+- the supposed failing provider fixture succeeds
+- the supposed invalid-output provider fixture returns embedding bytes that
+  satisfy the requested `EmbeddingSpec`
+
+### REQ-EMBED-TRAIT-013
+
+The conformance helper shall reject `EmbeddingSpec.encoding` values that it
+does not support for conformance validation, including future protocol
+encodings that may be defined by `docs/protocol/blocks.md` but are not yet
+understood by the helper implementation.
+
+### REQ-EMBED-TRAIT-014
+
+The public conformance-helper contract shall define `ConformanceError`
+categories and category-level rejection behavior for provider failures and
+expectation failures, while leaving exact display wording as non-normative
+diagnostic detail.
 
 ## Out of Scope
 
@@ -106,4 +136,3 @@ specification package for block-owned concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.
-
