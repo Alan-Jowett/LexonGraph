@@ -51,6 +51,24 @@ pub trait EmbeddingCompatibility<Target> {
     ) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedTargetEmbedding {
+    pub bytes: Vec<u8>,
+    pub embedding_spec: EmbeddingSpec,
+}
+
+impl EncodedTargetEmbedding {
+    pub fn new(bytes: Vec<u8>, embedding_spec: EmbeddingSpec) -> Self {
+        Self {
+            bytes,
+            embedding_spec,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DefaultEmbeddingCompatibility;
+
 pub trait CandidateScorer<Target> {
     type Error: std::error::Error;
     type Score: Ord;
@@ -62,6 +80,121 @@ pub trait CandidateScorer<Target> {
         candidate_embedding: &[u8],
         embedding_spec: &EmbeddingSpec,
     ) -> Result<Self::Score, Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DefaultCandidateScorer;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CosineScore(u64);
+
+impl CosineScore {
+    fn from_f64(value: f64) -> Result<Self, DefaultPolicyError> {
+        if !value.is_finite() {
+            return Err(DefaultPolicyError::NonFiniteScore);
+        }
+        Ok(Self(total_order_key_f64(value)))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DefaultPolicyError {
+    IncompatibleEmbeddingSpec {
+        target: EmbeddingSpec,
+        candidate: EmbeddingSpec,
+    },
+    UnsupportedEncoding {
+        encoding: String,
+    },
+    InvalidByteLength {
+        role: &'static str,
+        encoding: String,
+        dims: u64,
+        expected: usize,
+        actual: usize,
+    },
+    DimensionOverflow {
+        encoding: String,
+        dims: u64,
+    },
+    ZeroMagnitude {
+        role: &'static str,
+    },
+    NonFiniteValue {
+        role: &'static str,
+        index: usize,
+    },
+    NonFiniteScore,
+}
+
+impl fmt::Display for DefaultPolicyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IncompatibleEmbeddingSpec { target, candidate } => write!(
+                f,
+                "target embedding spec ({}, {} dims) does not match candidate embedding spec ({}, {} dims)",
+                target.encoding, target.dims, candidate.encoding, candidate.dims
+            ),
+            Self::UnsupportedEncoding { encoding } => {
+                write!(f, "unsupported embedding encoding {encoding}")
+            }
+            Self::InvalidByteLength {
+                role,
+                encoding,
+                dims,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "{role} embedding length {actual} does not match encoding {encoding} with {dims} dims (expected {expected} bytes)"
+            ),
+            Self::DimensionOverflow { encoding, dims } => write!(
+                f,
+                "embedding spec with encoding {encoding} and {dims} dims is too large to validate"
+            ),
+            Self::ZeroMagnitude { role } => {
+                write!(f, "{role} embedding must not have zero magnitude")
+            }
+            Self::NonFiniteValue { role, index } => {
+                write!(
+                    f,
+                    "{role} embedding contains a non-finite value at index {index}"
+                )
+            }
+            Self::NonFiniteScore => write!(f, "cosine similarity produced a non-finite score"),
+        }
+    }
+}
+
+impl std::error::Error for DefaultPolicyError {}
+
+impl EmbeddingCompatibility<EncodedTargetEmbedding> for DefaultEmbeddingCompatibility {
+    type Error = DefaultPolicyError;
+
+    fn ensure_compatible(
+        &self,
+        target: &EncodedTargetEmbedding,
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<(), Self::Error> {
+        ensure_matching_specs(&target.embedding_spec, embedding_spec)
+    }
+}
+
+impl CandidateScorer<EncodedTargetEmbedding> for DefaultCandidateScorer {
+    type Error = DefaultPolicyError;
+    type Score = CosineScore;
+
+    fn score(
+        &self,
+        target: &EncodedTargetEmbedding,
+        candidate_embedding: &[u8],
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<Self::Score, Self::Error> {
+        ensure_matching_specs(&target.embedding_spec, embedding_spec)?;
+        let target_vector = decode_embedding(&target.bytes, &target.embedding_spec, "target")?;
+        let candidate_vector = decode_embedding(candidate_embedding, embedding_spec, "candidate")?;
+        cosine_similarity(&target_vector, &candidate_vector)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -423,6 +556,121 @@ fn select_children_to_expand<Score: Ord>(
     }
 
     selected
+}
+
+fn ensure_matching_specs(
+    target: &EmbeddingSpec,
+    candidate: &EmbeddingSpec,
+) -> Result<(), DefaultPolicyError> {
+    if target.encoding == candidate.encoding && target.dims == candidate.dims {
+        Ok(())
+    } else {
+        Err(DefaultPolicyError::IncompatibleEmbeddingSpec {
+            target: target.clone(),
+            candidate: candidate.clone(),
+        })
+    }
+}
+
+fn decode_embedding(
+    bytes: &[u8],
+    spec: &EmbeddingSpec,
+    role: &'static str,
+) -> Result<Vec<f64>, DefaultPolicyError> {
+    let width = element_width(spec)?;
+    let expected = expected_byte_len(spec, width)?;
+    if bytes.len() != expected {
+        return Err(DefaultPolicyError::InvalidByteLength {
+            role,
+            encoding: spec.encoding.clone(),
+            dims: spec.dims,
+            expected,
+            actual: bytes.len(),
+        });
+    }
+
+    match spec.encoding.as_str() {
+        "f32le" => bytes
+            .chunks_exact(width)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let value = f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+                if value.is_finite() {
+                    Ok(value as f64)
+                } else {
+                    Err(DefaultPolicyError::NonFiniteValue { role, index })
+                }
+            })
+            .collect(),
+        "f64le" => bytes
+            .chunks_exact(width)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let value = f64::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(DefaultPolicyError::NonFiniteValue { role, index })
+                }
+            })
+            .collect(),
+        _ => Err(DefaultPolicyError::UnsupportedEncoding {
+            encoding: spec.encoding.clone(),
+        }),
+    }
+}
+
+fn element_width(spec: &EmbeddingSpec) -> Result<usize, DefaultPolicyError> {
+    match spec.encoding.as_str() {
+        "f32le" => Ok(std::mem::size_of::<f32>()),
+        "f64le" => Ok(std::mem::size_of::<f64>()),
+        _ => Err(DefaultPolicyError::UnsupportedEncoding {
+            encoding: spec.encoding.clone(),
+        }),
+    }
+}
+
+fn expected_byte_len(spec: &EmbeddingSpec, width: usize) -> Result<usize, DefaultPolicyError> {
+    let expected = spec.dims.checked_mul(width as u64).ok_or_else(|| {
+        DefaultPolicyError::DimensionOverflow {
+            encoding: spec.encoding.clone(),
+            dims: spec.dims,
+        }
+    })?;
+    usize::try_from(expected).map_err(|_| DefaultPolicyError::DimensionOverflow {
+        encoding: spec.encoding.clone(),
+        dims: spec.dims,
+    })
+}
+
+fn cosine_similarity(target: &[f64], candidate: &[f64]) -> Result<CosineScore, DefaultPolicyError> {
+    let mut dot = 0.0f64;
+    let mut target_norm_sq = 0.0f64;
+    let mut candidate_norm_sq = 0.0f64;
+
+    for (&target_value, &candidate_value) in target.iter().zip(candidate) {
+        dot += target_value * candidate_value;
+        target_norm_sq += target_value * target_value;
+        candidate_norm_sq += candidate_value * candidate_value;
+    }
+
+    if target_norm_sq == 0.0 {
+        return Err(DefaultPolicyError::ZeroMagnitude { role: "target" });
+    }
+    if candidate_norm_sq == 0.0 {
+        return Err(DefaultPolicyError::ZeroMagnitude { role: "candidate" });
+    }
+
+    CosineScore::from_f64(dot / (target_norm_sq.sqrt() * candidate_norm_sq.sqrt()))
+}
+
+fn total_order_key_f64(value: f64) -> u64 {
+    let bits = value.to_bits();
+    if bits >> 63 == 0 {
+        bits ^ (1_u64 << 63)
+    } else {
+        !bits
+    }
 }
 
 #[cfg(any(test, feature = "conformance"))]

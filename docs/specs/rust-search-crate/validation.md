@@ -249,3 +249,38 @@ scored, and without any child expansion.
 
 **Traces to:** REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018
 
+### VAL-SEARCH-022
+
+Inspect the crate's default runtime API surface.
+
+**Pass condition:** the crate exposes a public encoded target-embedding
+representation plus public default implementations of `EmbeddingCompatibility`
+and `CandidateScorer`, while still allowing callers to supply their own policy
+implementations through the existing trait-based search API.
+
+**Traces to:** REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-019, REQ-SEARCH-020,
+REQ-SEARCH-021
+
+### VAL-SEARCH-023
+
+Run the crate-provided default compatibility policy against visited blocks whose
+`embedding_spec` values alternately match and differ from the target
+embedding's specification.
+
+**Pass condition:** matching encoding and dimensionality are accepted;
+mismatched encoding or dimensionality is rejected explicitly.
+
+**Traces to:** REQ-SEARCH-006, REQ-SEARCH-019, REQ-SEARCH-021
+
+### VAL-SEARCH-024
+
+Run the crate-provided default scorer with compatible embeddings, then with one
+or more unsupported encodings or target or candidate byte sequences whose
+lengths are inconsistent with the applicable embedding specification.
+
+**Pass condition:** compatible inputs produce a deterministic cosine-based score
+with a total ordering compatible with search ranking, and unsupported encodings
+or inconsistent byte lengths fail explicitly rather than producing arbitrary
+scores.
+
+**Traces to:** REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021

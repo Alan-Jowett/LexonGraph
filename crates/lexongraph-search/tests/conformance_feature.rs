@@ -6,7 +6,10 @@ use std::cell::Cell;
 
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_search::CandidateScorer;
+use lexongraph_search::DefaultCandidateScorer;
+use lexongraph_search::DefaultEmbeddingCompatibility;
 use lexongraph_search::EmbeddingCompatibility;
+use lexongraph_search::EncodedTargetEmbedding;
 use lexongraph_search::conformance::{
     CandidateScorerConformanceHarness, EmbeddingCompatibilityConformanceHarness, FixtureError,
     run_candidate_scorer_suite, run_embedding_compatibility_suite, run_full_trait_suite,
@@ -163,6 +166,163 @@ impl CandidateScorerConformanceHarness for ScorerHarness {
     }
 }
 
+#[derive(Clone)]
+enum DefaultCompatibilityFixture {
+    Conforming,
+    Flaky,
+}
+
+impl EmbeddingCompatibility<EncodedTargetEmbedding> for DefaultCompatibilityFixture {
+    type Error = FixtureError;
+
+    fn ensure_compatible(
+        &self,
+        target: &EncodedTargetEmbedding,
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<(), Self::Error> {
+        match self {
+            Self::Conforming => DefaultEmbeddingCompatibility
+                .ensure_compatible(target, embedding_spec)
+                .map_err(|error| FixtureError(error.to_string())),
+            Self::Flaky => {
+                thread_local! {
+                    static FLIP: Cell<bool> = const { Cell::new(false) };
+                }
+                FLIP.with(|flip| {
+                    let next = !flip.get();
+                    flip.set(next);
+                    if next {
+                        Ok(())
+                    } else {
+                        Err(FixtureError("flaky compatibility".into()))
+                    }
+                })
+            }
+        }
+    }
+}
+
+struct DefaultCompatibilityHarness;
+
+impl EmbeddingCompatibilityConformanceHarness for DefaultCompatibilityHarness {
+    type Target = EncodedTargetEmbedding;
+    type Policy = DefaultCompatibilityFixture;
+
+    fn target(&self) -> Self::Target {
+        EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32())
+    }
+
+    fn compatible_spec(&self) -> EmbeddingSpec {
+        embedding_spec_f32()
+    }
+
+    fn incompatible_spec(&self) -> EmbeddingSpec {
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f64le".into(),
+        }
+    }
+
+    fn conforming_policy(&self) -> Self::Policy {
+        DefaultCompatibilityFixture::Conforming
+    }
+
+    fn nondeterministic_policy(&self) -> Self::Policy {
+        DefaultCompatibilityFixture::Flaky
+    }
+}
+
+#[derive(Clone)]
+enum DefaultScorerFixture {
+    Conforming,
+    Failing,
+    Flaky,
+}
+
+impl CandidateScorer<EncodedTargetEmbedding> for DefaultScorerFixture {
+    type Error = FixtureError;
+    type Score = <DefaultCandidateScorer as CandidateScorer<EncodedTargetEmbedding>>::Score;
+
+    fn score(
+        &self,
+        target: &EncodedTargetEmbedding,
+        candidate_embedding: &[u8],
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<Self::Score, Self::Error> {
+        match self {
+            Self::Conforming => DefaultCandidateScorer
+                .score(target, candidate_embedding, embedding_spec)
+                .map_err(|error| FixtureError(error.to_string())),
+            Self::Failing => Err(FixtureError("scorer failure".into())),
+            Self::Flaky => {
+                thread_local! {
+                    static DELTA: Cell<bool> = const { Cell::new(false) };
+                }
+                let base = DefaultCandidateScorer
+                    .score(target, candidate_embedding, embedding_spec)
+                    .map_err(|error| FixtureError(error.to_string()))?;
+                DELTA.with(|delta| {
+                    let next = !delta.get();
+                    delta.set(next);
+                    if next {
+                        Ok(base)
+                    } else {
+                        DefaultCandidateScorer
+                            .score(target, &f32_embedding([0.0, 1.0]), &embedding_spec_f32())
+                            .map_err(|error| FixtureError(error.to_string()))
+                    }
+                })
+            }
+        }
+    }
+}
+
+struct DefaultScorerHarness;
+
+impl CandidateScorerConformanceHarness for DefaultScorerHarness {
+    type Target = EncodedTargetEmbedding;
+    type Score = <DefaultCandidateScorer as CandidateScorer<EncodedTargetEmbedding>>::Score;
+    type Scorer = DefaultScorerFixture;
+
+    fn target(&self) -> Self::Target {
+        EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32())
+    }
+
+    fn embedding_spec(&self) -> EmbeddingSpec {
+        embedding_spec_f32()
+    }
+
+    fn preferred_candidate_embedding(&self) -> Vec<u8> {
+        f32_embedding([1.0, 0.0])
+    }
+
+    fn alternate_candidate_embedding(&self) -> Vec<u8> {
+        f32_embedding([0.0, 1.0])
+    }
+
+    fn expected_score(&self) -> Self::Score {
+        DefaultCandidateScorer
+            .score(
+                &self.target(),
+                &self.preferred_candidate_embedding(),
+                &self.embedding_spec(),
+            )
+            .unwrap()
+    }
+
+    fn conforming_scorer(&self) -> Self::Scorer {
+        DefaultScorerFixture::Conforming
+    }
+
+    fn failing_scorer(&self) -> Self::Scorer {
+        DefaultScorerFixture::Failing
+    }
+
+    fn nondeterministic_scorer(&self) -> Self::Scorer {
+        DefaultScorerFixture::Flaky
+    }
+}
+
 #[test]
 fn downstream_crates_can_run_the_embedding_compatibility_suite() {
     run_embedding_compatibility_suite(&CompatibilityHarness).unwrap();
@@ -176,4 +336,28 @@ fn downstream_crates_can_run_the_candidate_scorer_suite() {
 #[test]
 fn downstream_crates_can_run_the_full_trait_suite() {
     run_full_trait_suite(&CompatibilityHarness, &ScorerHarness).unwrap();
+}
+
+#[test]
+fn crate_defaults_satisfy_the_embedding_compatibility_harness() {
+    run_embedding_compatibility_suite(&DefaultCompatibilityHarness).unwrap();
+}
+
+#[test]
+fn crate_defaults_satisfy_the_candidate_scorer_harness() {
+    run_candidate_scorer_suite(&DefaultScorerHarness).unwrap();
+}
+
+fn embedding_spec_f32() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f32le".into(),
+    }
+}
+
+fn f32_embedding(values: [f32; 2]) -> Vec<u8> {
+    values
+        .into_iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
 }

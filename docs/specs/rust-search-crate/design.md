@@ -101,6 +101,9 @@ current search invocation.
 This trait defines compatibility policy, but the search crate owns when that
 compatibility check is required and how failure is surfaced.
 
+The crate may provide public default implementations of this trait, but callers
+remain free to supply their own implementations.
+
 ### DSG-SEARCH-007 `CandidateScorer`
 
 A trait that accepts the target embedding, one candidate embedding, and the
@@ -109,6 +112,55 @@ protocol's primary ordering key.
 
 The trait may define how similarity or distance is computed, but it does not
 replace the protocol-defined tie-break rules.
+
+The crate may provide public default implementations of this trait, but callers
+remain free to supply their own implementations.
+
+### DSG-SEARCH-017 `EncodedTargetEmbedding`
+
+The crate defines a public target-embedding representation used by the
+crate-provided default policy implementations.
+
+That representation carries:
+
+- the raw encoded target-embedding bytes
+- the target embedding's `EmbeddingSpec`
+
+This type does not become a mandatory search input for custom policies; it is a
+crate-owned convenience for the default policy surface only.
+
+### DSG-SEARCH-018 `DefaultEmbeddingCompatibility`
+
+The crate exposes a public default `EmbeddingCompatibility` implementation for
+`EncodedTargetEmbedding`.
+
+That implementation accepts a visited block when:
+
+- the target and visited `embedding_spec.encoding` values are equal
+- the target and visited `embedding_spec.dims` values are equal
+
+and rejects the block explicitly otherwise.
+
+### DSG-SEARCH-019 `DefaultCandidateScorer`
+
+The crate exposes a public default `CandidateScorer` implementation for
+`EncodedTargetEmbedding`.
+
+That implementation:
+
+- validates that the candidate embedding bytes are well-formed for the visited
+  block's `EmbeddingSpec`
+- validates that the target bytes are well-formed for the target
+  `EmbeddingSpec`
+- requires the target and visited embedding specifications to be compatible
+  under the default compatibility policy
+- computes a deterministic cosine similarity, or an equivalent standard
+  cosine-based comparison, over the decoded target and candidate vectors
+- returns a score representation with total ordering suitable for the crate's
+  deterministic ranking boundary
+
+Unsupported encodings and inconsistent byte lengths are surfaced as explicit
+scoring or compatibility failures rather than being silently normalized.
 
 ## API Surface
 
@@ -124,6 +176,10 @@ A public orchestration type or trait exposing a search operation that accepts:
 - implementations of the required policy traits
 
 and returns `Result<SearchResult, SearchError>`.
+
+The crate's runtime API also exposes the public default policy types and the
+crate-owned encoded target-embedding representation needed to use them, without
+removing the existing ability to pass caller-defined policy implementations.
 
 ## Orchestration Flow
 
@@ -235,7 +291,7 @@ candidate scoring before terminating successfully with an empty
 | DSG-SEARCH-003..005 | REQ-SEARCH-001, REQ-SEARCH-006, REQ-SEARCH-009, REQ-SEARCH-010 |
 | DSG-SEARCH-006 | REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-011 |
 | DSG-SEARCH-007 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-011, REQ-SEARCH-012 |
-| DSG-SEARCH-008 | REQ-SEARCH-001, REQ-SEARCH-004, REQ-SEARCH-005, REQ-SEARCH-007, REQ-SEARCH-009 |
+| DSG-SEARCH-008 | REQ-SEARCH-001, REQ-SEARCH-004, REQ-SEARCH-005, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-019, REQ-SEARCH-020, REQ-SEARCH-021 |
 | DSG-SEARCH-009 | REQ-SEARCH-002, REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-012 |
 | DSG-SEARCH-010 | REQ-SEARCH-011 |
 | DSG-SEARCH-011 | REQ-SEARCH-002, REQ-SEARCH-010 |
@@ -244,4 +300,6 @@ candidate scoring before terminating successfully with an empty
 | DSG-SEARCH-014 | REQ-SEARCH-015, REQ-SEARCH-016 |
 | DSG-SEARCH-015 | REQ-SEARCH-015, REQ-SEARCH-016, REQ-SEARCH-017 |
 | DSG-SEARCH-016 | REQ-SEARCH-005, REQ-SEARCH-006, REQ-SEARCH-018 |
-
+| DSG-SEARCH-017 | REQ-SEARCH-020, REQ-SEARCH-021 |
+| DSG-SEARCH-018 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-019, REQ-SEARCH-021 |
+| DSG-SEARCH-019 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021 |
