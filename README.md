@@ -13,7 +13,7 @@ LexonGraph is still evolving, but the repository is no longer just an
 architecture sketch. It currently contains:
 
 - canonical protocol documents for blocks, search, indexing, and DCBC
-- requirements/design/validation spec packages for the current Rust work
+- requirements/design/validation spec packages for the current Rust workspace
 - implemented Rust crates for blocks, storage contracts, filesystem storage,
   deterministic clustering, indexing, search, and embedding-provider
   integration
