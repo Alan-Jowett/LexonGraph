@@ -4,18 +4,19 @@
 
 LexonGraph is a semantic indexing and retrieval system built around immutable,
 content-addressed blocks. The repository now includes the canonical protocol
-documents, traceable specification packages, a Rust workspace that implements
-the current core crates, and CI that enforces the workspace quality gates.
+documents, traceable specification packages, an implemented Rust workspace for
+the core repository surface, and CI that enforces the workspace quality gates.
 
 ## Repository status
 
-LexonGraph is still evolving, but this repository is no longer just an
+LexonGraph is still evolving, but the repository is no longer just an
 architecture sketch. It currently contains:
 
 - canonical protocol documents for blocks, search, indexing, and DCBC
 - requirements/design/validation spec packages for the current Rust work
 - implemented Rust crates for blocks, storage contracts, filesystem storage,
-  indexing, and search
+  deterministic clustering, indexing, search, and embedding-provider
+  integration
 - GitHub Actions CI for formatting, linting, and tests
 
 The README is a summary. The protocol documents in `docs/protocol/` are the
@@ -27,9 +28,12 @@ authoritative source for wire format and protocol behavior.
   `sha256(canonical_cbor_bytes(block))`.
 - **Branch blocks** point to child blocks, forming a Merkle-linked structure.
 - **Leaf blocks** carry embeddings, metadata, and inline content payloads.
+- **Embedding providers** are split between a provider-agnostic trait crate and
+  concrete provider implementations.
 - **Search** uses deterministic frontier expansion over ranked candidates.
-- **Indexing** builds deterministic block sets from application-supplied items.
-- **DCBC** defines deterministic capacity-constrained balanced clustering for
+- **Indexing** builds deterministic block sets from application-supplied items
+  and uses DCBC-backed packing by default.
+- **DCBC** provides deterministic capacity-constrained balanced clustering for
   clustering and packing workflows.
 
 ## Core documents
@@ -55,6 +59,9 @@ Current packages cover:
 
 - `rust-block-crate`
 - `rust-block-storage-trait`
+- `rust-dcbc-crate`
+- `rust-embeddings-openai-crate`
+- `rust-embeddings-trait`
 - `rust-filesystem-block-store`
 - `rust-indexer-crate`
 - `rust-search-crate`
@@ -69,7 +76,10 @@ The top-level Cargo workspace currently contains:
 | `lexongraph-block` | Typed block model, validation, canonical CBOR serialization, and block-hash derivation |
 | `lexongraph-block-store` | Backend-agnostic `BlockStore` trait plus conformance harnesses |
 | `lexongraph-block-store-fs` | Local filesystem implementation of the block-store contract |
-| `lexongraph-indexer` | Protocol-conforming indexing orchestration with trait-based policy hooks |
+| `lexongraph-dcbc` | Deterministic capacity-constrained balanced clustering implementation |
+| `lexongraph-embeddings-trait` | Shared async embedding-provider contract plus opt-in conformance helpers |
+| `lexongraph-embeddings-openai` | OpenAI-compatible and Azure OpenAI embedding-provider implementation |
+| `lexongraph-indexer` | Protocol-conforming indexing orchestration with embedding-provider and node-packing policy hooks |
 | `lexongraph-search` | Protocol-conforming search orchestration with trait-based policy hooks |
 
 At the moment, the implemented storage backend in this repository is the local
@@ -109,6 +119,9 @@ re-checks the full tracked repository surface.
 |  |- lexongraph-block
 |  |- lexongraph-block-store
 |  |- lexongraph-block-store-fs
+|  |- lexongraph-dcbc
+|  |- lexongraph-embeddings-openai
+|  |- lexongraph-embeddings-trait
 |  |- lexongraph-indexer
 |  `- lexongraph-search
 |- docs/
@@ -123,8 +136,8 @@ re-checks the full tracked repository surface.
 
 ## Current focus
 
-The repository is centered on making the protocol surface and Rust
-implementation converge cleanly:
+The repository is centered on keeping the protocol surface, crate-level specs,
+and implemented Rust workspace aligned:
 
 - protocol-first definitions in `docs/protocol/`
 - traceable crate-level requirements in `docs/specs/`
