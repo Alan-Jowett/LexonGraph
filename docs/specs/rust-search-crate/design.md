@@ -77,6 +77,9 @@ An explicit error taxonomy covering at least:
 - scoring-policy failure
 - search exhaustion before `n` reachable leaves
 
+Scoring-policy failure is surfaced as an explicit search-boundary failure and is
+not treated as a silent skip.
+
 ### DSG-SEARCH-005 `SearchCandidate`
 
 An internal typed representation of one ranked candidate in the current search
@@ -162,6 +165,11 @@ That implementation:
 Unsupported encodings and inconsistent byte lengths are surfaced as explicit
 scoring or compatibility failures rather than being silently normalized.
 
+Zero-magnitude target or candidate embeddings, non-finite encoded
+floating-point values, and embedding specifications whose dimensionality is too
+large to validate safely are also surfaced as explicit failures rather than
+producing arbitrary scores.
+
 ## API Surface
 
 ### DSG-SEARCH-008 `Searcher`
@@ -212,6 +220,13 @@ The fixed orchestration flow is:
 
 The core search engine owns this flow even when policy traits participate in
 individual steps.
+
+Within one invocation, a child block ID becomes permanently ineligible for
+later expansion once step 11 loads it.
+
+Step 12, together with the per-invocation expanded-child tracking, removes
+branch candidates that target child block IDs already expanded in the
+invocation so stale branch entries do not survive into later frontier rankings.
 
 ### DSG-SEARCH-010 `Deterministic ordering boundary`
 
@@ -268,6 +283,11 @@ the crate, the helper surface may define test-only harness contracts that
 supply deterministic fixtures, trait implementations under test, and any
 policy-specific assertions needed for the validation cases.
 
+At minimum, those assertions verify repeated-input stability for
+contract-satisfying implementations, explicit rejection or failure for
+contract-violating fixtures, preferred-candidate ordering for candidate
+scorers, and detection of nondeterministic implementations.
+
 The helper surface does not redefine conformance for the block crate or the
 block-storage trait crate, which continue to own their respective reusable
 conformance contracts.
@@ -292,7 +312,7 @@ candidate scoring before terminating successfully with an empty
 | DSG-SEARCH-006 | REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-011 |
 | DSG-SEARCH-007 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-011, REQ-SEARCH-012 |
 | DSG-SEARCH-008 | REQ-SEARCH-001, REQ-SEARCH-004, REQ-SEARCH-005, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-019, REQ-SEARCH-020, REQ-SEARCH-021 |
-| DSG-SEARCH-009 | REQ-SEARCH-002, REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-012 |
+| DSG-SEARCH-009 | REQ-SEARCH-002, REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-012, REQ-SEARCH-022, REQ-SEARCH-023 |
 | DSG-SEARCH-010 | REQ-SEARCH-011 |
 | DSG-SEARCH-011 | REQ-SEARCH-002, REQ-SEARCH-010 |
 | DSG-SEARCH-012 | REQ-SEARCH-013 |
