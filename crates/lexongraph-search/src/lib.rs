@@ -191,9 +191,7 @@ impl CandidateScorer<EncodedTargetEmbedding> for DefaultCandidateScorer {
         embedding_spec: &EmbeddingSpec,
     ) -> Result<Self::Score, Self::Error> {
         ensure_matching_specs(&target.embedding_spec, embedding_spec)?;
-        let target_vector = decode_embedding(&target.bytes, &target.embedding_spec, "target")?;
-        let candidate_vector = decode_embedding(candidate_embedding, embedding_spec, "candidate")?;
-        cosine_similarity(&target_vector, &candidate_vector)
+        cosine_similarity_bytes(&target.bytes, candidate_embedding, embedding_spec)
     }
 }
 
@@ -572,11 +570,11 @@ fn ensure_matching_specs(
     }
 }
 
-fn decode_embedding(
+fn validate_embedding_bytes(
     bytes: &[u8],
     spec: &EmbeddingSpec,
     role: &'static str,
-) -> Result<Vec<f64>, DefaultPolicyError> {
+) -> Result<usize, DefaultPolicyError> {
     let width = element_width(spec)?;
     let expected = expected_byte_len(spec, width)?;
     if bytes.len() != expected {
@@ -588,36 +586,111 @@ fn decode_embedding(
             actual: bytes.len(),
         });
     }
+    Ok(width)
+}
+
+fn cosine_similarity_bytes(
+    target: &[u8],
+    candidate: &[u8],
+    spec: &EmbeddingSpec,
+) -> Result<CosineScore, DefaultPolicyError> {
+    let width = validate_embedding_bytes(target, spec, "target")?;
+    validate_embedding_bytes(candidate, spec, "candidate")?;
 
     match spec.encoding.as_str() {
-        "f32le" => bytes
-            .chunks_exact(width)
-            .enumerate()
-            .map(|(index, chunk)| {
-                let value = f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
-                if value.is_finite() {
-                    Ok(value as f64)
-                } else {
-                    Err(DefaultPolicyError::NonFiniteValue { role, index })
+        "f32le" => {
+            let mut dot = 0.0f64;
+            let mut target_norm_sq = 0.0f64;
+            let mut candidate_norm_sq = 0.0f64;
+
+            for (index, (target_chunk, candidate_chunk)) in target
+                .chunks_exact(width)
+                .zip(candidate.chunks_exact(width))
+                .enumerate()
+            {
+                let target_value =
+                    f32::from_le_bytes(target_chunk.try_into().expect("chunk size is validated"));
+                if !target_value.is_finite() {
+                    return Err(DefaultPolicyError::NonFiniteValue {
+                        role: "target",
+                        index,
+                    });
                 }
-            })
-            .collect(),
-        "f64le" => bytes
-            .chunks_exact(width)
-            .enumerate()
-            .map(|(index, chunk)| {
-                let value = f64::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
-                if value.is_finite() {
-                    Ok(value)
-                } else {
-                    Err(DefaultPolicyError::NonFiniteValue { role, index })
+
+                let candidate_value = f32::from_le_bytes(
+                    candidate_chunk.try_into().expect("chunk size is validated"),
+                );
+                if !candidate_value.is_finite() {
+                    return Err(DefaultPolicyError::NonFiniteValue {
+                        role: "candidate",
+                        index,
+                    });
                 }
-            })
-            .collect(),
+
+                let target_value = target_value as f64;
+                let candidate_value = candidate_value as f64;
+                dot += target_value * candidate_value;
+                target_norm_sq += target_value * target_value;
+                candidate_norm_sq += candidate_value * candidate_value;
+            }
+
+            cosine_similarity_from_parts(dot, target_norm_sq, candidate_norm_sq)
+        }
+        "f64le" => {
+            let mut dot = 0.0f64;
+            let mut target_norm_sq = 0.0f64;
+            let mut candidate_norm_sq = 0.0f64;
+
+            for (index, (target_chunk, candidate_chunk)) in target
+                .chunks_exact(width)
+                .zip(candidate.chunks_exact(width))
+                .enumerate()
+            {
+                let target_value =
+                    f64::from_le_bytes(target_chunk.try_into().expect("chunk size is validated"));
+                if !target_value.is_finite() {
+                    return Err(DefaultPolicyError::NonFiniteValue {
+                        role: "target",
+                        index,
+                    });
+                }
+
+                let candidate_value = f64::from_le_bytes(
+                    candidate_chunk.try_into().expect("chunk size is validated"),
+                );
+                if !candidate_value.is_finite() {
+                    return Err(DefaultPolicyError::NonFiniteValue {
+                        role: "candidate",
+                        index,
+                    });
+                }
+
+                dot += target_value * candidate_value;
+                target_norm_sq += target_value * target_value;
+                candidate_norm_sq += candidate_value * candidate_value;
+            }
+
+            cosine_similarity_from_parts(dot, target_norm_sq, candidate_norm_sq)
+        }
         _ => Err(DefaultPolicyError::UnsupportedEncoding {
             encoding: spec.encoding.clone(),
         }),
     }
+}
+
+fn cosine_similarity_from_parts(
+    dot: f64,
+    target_norm_sq: f64,
+    candidate_norm_sq: f64,
+) -> Result<CosineScore, DefaultPolicyError> {
+    if target_norm_sq == 0.0 {
+        return Err(DefaultPolicyError::ZeroMagnitude { role: "target" });
+    }
+    if candidate_norm_sq == 0.0 {
+        return Err(DefaultPolicyError::ZeroMagnitude { role: "candidate" });
+    }
+
+    CosineScore::from_f64(dot / (target_norm_sq.sqrt() * candidate_norm_sq.sqrt()))
 }
 
 fn element_width(spec: &EmbeddingSpec) -> Result<usize, DefaultPolicyError> {
@@ -641,27 +714,6 @@ fn expected_byte_len(spec: &EmbeddingSpec, width: usize) -> Result<usize, Defaul
         encoding: spec.encoding.clone(),
         dims: spec.dims,
     })
-}
-
-fn cosine_similarity(target: &[f64], candidate: &[f64]) -> Result<CosineScore, DefaultPolicyError> {
-    let mut dot = 0.0f64;
-    let mut target_norm_sq = 0.0f64;
-    let mut candidate_norm_sq = 0.0f64;
-
-    for (&target_value, &candidate_value) in target.iter().zip(candidate) {
-        dot += target_value * candidate_value;
-        target_norm_sq += target_value * target_value;
-        candidate_norm_sq += candidate_value * candidate_value;
-    }
-
-    if target_norm_sq == 0.0 {
-        return Err(DefaultPolicyError::ZeroMagnitude { role: "target" });
-    }
-    if candidate_norm_sq == 0.0 {
-        return Err(DefaultPolicyError::ZeroMagnitude { role: "candidate" });
-    }
-
-    CosineScore::from_f64(dot / (target_norm_sq.sqrt() * candidate_norm_sq.sqrt()))
 }
 
 fn total_order_key_f64(value: f64) -> u64 {

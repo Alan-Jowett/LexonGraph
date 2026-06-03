@@ -101,7 +101,7 @@ current search invocation.
 This trait defines compatibility policy, but the search crate owns when that
 compatibility check is required and how failure is surfaced.
 
-The crate may provide public default implementations of this trait, but callers
+The crate provides public default implementations of this trait, but callers
 remain free to supply their own implementations.
 
 ### DSG-SEARCH-007 `CandidateScorer`
@@ -113,7 +113,7 @@ protocol's primary ordering key.
 The trait may define how similarity or distance is computed, but it does not
 replace the protocol-defined tie-break rules.
 
-The crate may provide public default implementations of this trait, but callers
+The crate provides public default implementations of this trait, but callers
 remain free to supply their own implementations.
 
 ### DSG-SEARCH-017 `EncodedTargetEmbedding`

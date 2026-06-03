@@ -89,7 +89,7 @@ search cannot produce `n` reachable leaf candidates.
 The crate shall keep protocol-required search orchestration separate from
 implementation-defined policy concerns through trait-based extension points.
 
-The crate may also provide public default implementations of those policy
+The crate shall also provide public default implementations of those policy
 traits, but those defaults shall remain optional and shall not prevent callers
 from supplying their own implementations.
 
