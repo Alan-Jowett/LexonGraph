@@ -104,7 +104,7 @@ fn val_fs_store_006_and_016_conflicting_existing_bytes_fail_without_overwrite() 
 
     let error = store.put(&block).unwrap_err();
 
-    assert!(matches!(error, BlockStoreError::BackendFailure(_)));
+    expect_backend_failure_contains(error, "integrity conflict");
     assert_eq!(std::fs::read(&published_path).unwrap(), conflicting_bytes);
 }
 
@@ -392,7 +392,6 @@ fn assert_put_pre_publication_failure(ops: ScriptedFsOps, expected_message: &str
     assert!(!published_path.exists());
 }
 
-#[cfg(feature = "inject")]
 fn expect_backend_failure_contains(error: BlockStoreError, expected_fragment: &str) {
     match error {
         BlockStoreError::BackendFailure(message) => {
