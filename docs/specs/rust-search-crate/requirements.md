@@ -82,8 +82,8 @@ operation.
 The crate shall surface explicit failure when the root block cannot be loaded,
 when a selected child block cannot be loaded, when a visited block is malformed,
 when a visited block is incompatible with the target embedding, when candidate
-scoring fails for a visited block, or when the search cannot produce `n`
-reachable leaf candidates.
+scoring fails for candidates loaded from a visited block regardless of candidate
+kind, or when the search cannot produce `n` reachable leaf candidates.
 
 ### REQ-SEARCH-007
 
@@ -161,6 +161,10 @@ Candidate-scoring harnesses shall also verify that a preferred candidate can
 outrank a lower-ranked alternate candidate within the same compatible scoring
 context.
 
+The repository verification artifacts shall also include representative direct
+checks of helper-owned expectation failures so the reusable harness surface is
+validated on both success and failure paths.
+
 If implementation requires additional search-owned policy traits, the crate may
 also provide reusable conformance-test harnesses for those traits.
 
@@ -217,6 +221,9 @@ with the applicable embedding specification, when target or candidate
 embeddings have zero magnitude, when encoded floating-point values are
 non-finite, or when an embedding specification's dimensionality is too large to
 validate safely.
+
+For the crate's supported default-scorer floating-point encodings, those
+guardrails shall apply consistently across each supported decoding path.
 
 ### REQ-SEARCH-022
 

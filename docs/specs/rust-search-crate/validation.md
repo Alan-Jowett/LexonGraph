@@ -189,9 +189,9 @@ each trait's contract.
 implementations, reject contract-violating implementations at the appropriate
 trait boundary, detect nondeterministic implementations, verify repeated-input
 stability for conforming implementations, verify preferred candidates outrank
-lower-ranked alternate candidates for candidate scorers, and rely on the
-existing block and block-store conformance surfaces rather than redefining
-them.
+lower-ranked alternate candidates for candidate scorers, expose
+representative helper-owned expectation failures, and rely on the existing
+block and block-store conformance surfaces rather than redefining them.
 
 **Traces to:** REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-015,
 REQ-SEARCH-016, REQ-SEARCH-017
@@ -213,7 +213,8 @@ Inspect the repository verification artifacts for the search crate.
 
 **Pass condition:** the repository includes executable automated tests that
 realize the validation surface in this specification package, including runtime
-search behavior and the opt-in trait-conformance helper surface.
+search behavior and the opt-in trait-conformance helper surface, including
+representative direct checks of helper-owned expectation failures.
 
 **Traces to:** REQ-SEARCH-014
 
@@ -287,17 +288,19 @@ specifications whose dimensionality is too large to validate safely.
 with a total ordering compatible with search ranking, and unsupported encodings
 or inconsistent byte lengths fail explicitly rather than producing arbitrary
 scores. Zero-magnitude embeddings, non-finite encoded values, and dimension
-overflow also fail explicitly.
+overflow also fail explicitly across the supported `f32le` and `f64le`
+decoding paths.
 
 **Traces to:** REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021
 
 ### VAL-SEARCH-025
 
 Invoke search with a scorer that rejects one or more candidates in a visited
-block.
+leaf block and in a visited branch block.
 
-**Pass condition:** search fails explicitly with a scoring failure rather than
-silently skipping those candidates or reporting partial success.
+**Pass condition:** search fails explicitly with a scoring failure for both
+candidate kinds rather than silently skipping those candidates or reporting
+partial success.
 
 **Traces to:** REQ-SEARCH-006
 

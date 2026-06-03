@@ -903,6 +903,38 @@ fn val_search_024_default_candidate_scorer_is_cosine_ranked_and_fails_explicitly
             .unwrap()
     );
 
+    let non_finite_f64_target =
+        EncodedTargetEmbedding::new(f64_embedding([f64::NAN, 0.0]), embedding_spec_f64());
+    let non_finite_f64_target_error = scorer
+        .score(
+            &non_finite_f64_target,
+            &f64_embedding([1.0, 0.0]),
+            &embedding_spec_f64(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        non_finite_f64_target_error,
+        DefaultPolicyError::NonFiniteValue {
+            role: "target",
+            index: 0
+        }
+    ));
+
+    let non_finite_f64_candidate_error = scorer
+        .score(
+            &f64_target,
+            &f64_embedding([f64::NEG_INFINITY, 0.0]),
+            &embedding_spec_f64(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        non_finite_f64_candidate_error,
+        DefaultPolicyError::NonFiniteValue {
+            role: "candidate",
+            index: 0
+        }
+    ));
+
     let unsupported_target = EncodedTargetEmbedding::new(i8_embedding([1, 0]), embedding_spec_i8());
     let unsupported_error = scorer
         .score(
@@ -1000,15 +1032,29 @@ fn val_search_024_default_candidate_scorer_is_cosine_ranked_and_fails_explicitly
 #[test]
 fn val_search_025_scoring_failures_fail_explicitly() {
     let store = MemoryBlockStore::default();
-    let root_id = store
+    let leaf_root_id = store
         .put(&leaf_block(i8_embedding([4, 0]), "root"))
         .unwrap();
 
-    let error = Searcher::new(AcceptAllCompatibility, FailingScorer)
-        .search(&root_id, &(), 1, 1, &store)
+    let leaf_error = Searcher::new(AcceptAllCompatibility, FailingScorer)
+        .search(&leaf_root_id, &(), 1, 1, &store)
         .unwrap_err();
+    assert!(matches!(leaf_error, SearchError::ScoringFailure { .. }));
 
-    assert!(matches!(error, SearchError::ScoringFailure { .. }));
+    let branch_child = store
+        .put(&leaf_block(i8_embedding([6, 0]), "child"))
+        .unwrap();
+    let branch_root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([9, 0], branch_child)],
+        ))
+        .unwrap();
+
+    let branch_error = Searcher::new(AcceptAllCompatibility, FailingScorer)
+        .search(&branch_root_id, &(), 1, 1, &store)
+        .unwrap_err();
+    assert!(matches!(branch_error, SearchError::ScoringFailure { .. }));
 }
 
 #[test]

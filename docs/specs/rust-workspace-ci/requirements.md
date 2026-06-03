@@ -107,8 +107,8 @@ has an incomplete required header.
 ### REQ-CI-015
 
 The GitHub Actions workflow shall include a dedicated coverage job that runs
-the Rust workspace test suite under coverage instrumentation and emits an LCOV
-coverage report.
+the Rust workspace test suite with all Cargo features enabled under coverage
+instrumentation and emits an LCOV coverage report.
 
 ### REQ-CI-016
 

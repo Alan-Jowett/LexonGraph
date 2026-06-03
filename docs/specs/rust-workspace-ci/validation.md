@@ -117,8 +117,8 @@ Inspect the workflow definition for the coverage job.
 
 **Pass condition:** the workflow defines a dedicated coverage job that uses the
 stable Rust toolchain with `llvm-tools`, installs `cargo-llvm-cov`, generates
-an `lcov.info` report for the workspace test suite, and uploads that report to
-Coveralls.
+an `lcov.info` report for the workspace test suite with all Cargo features
+enabled, and uploads that report to Coveralls.
 
 **Traces to:** REQ-CI-007, REQ-CI-015, REQ-CI-016
 
