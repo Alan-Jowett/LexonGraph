@@ -764,6 +764,20 @@ fn val_indexer_023_builtin_canonical_policy_computes_f16le_arithmetic_mean() {
 
 #[test]
 fn val_indexer_024_builtin_canonical_policy_fails_explicitly() {
+    let empty_error = ArithmeticMeanCanonicalEmbeddingPolicy
+        .canonical_embedding(&BranchBlock {
+            version: VERSION_1,
+            embedding_spec: embedding_spec(),
+            entries: vec![],
+            ext: None,
+        })
+        .unwrap_err();
+    assert!(
+        empty_error
+            .to_string()
+            .contains("at least one branch entry")
+    );
+
     let unsupported_error = ArithmeticMeanCanonicalEmbeddingPolicy
         .canonical_embedding(&synthetic_branch_block(
             pq4_embedding_spec(),
