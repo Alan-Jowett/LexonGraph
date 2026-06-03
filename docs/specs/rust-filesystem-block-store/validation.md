@@ -73,7 +73,8 @@ Pre-populate the published file path for a block ID with bytes that differ from
 the canonical bytes of the block supplied to `put`.
 
 **Pass condition:** `put` fails explicitly and leaves the conflicting published
-bytes in place.
+bytes in place while reporting a backend failure that describes corruption or
+integrity conflict.
 
 **Traces to:** REQ-FS-STORE-007
 
@@ -125,5 +126,76 @@ crate.
 validation surface and reuse the parent crate's conformance helpers where they
 cover the same contract.
 
-**Traces to:** REQ-FS-STORE-009
+**Traces to:** REQ-FS-STORE-009, REQ-FS-STORE-012
 
+### VAL-FS-STORE-012
+
+Attempt to construct the filesystem-backed store with roots that cannot satisfy
+the constructor boundary, including a non-directory path and controlled
+create/canonicalize/stat failure cases.
+
+**Pass condition:** construction fails explicitly as a backend failure and does
+not return an initialized store.
+
+**Traces to:** REQ-FS-STORE-003, REQ-FS-STORE-012
+
+### VAL-FS-STORE-013
+
+Populate the published file path for a requested block ID with valid bytes, then
+make the file unreadable before calling `get`.
+
+**Pass condition:** `get` fails explicitly as a backend failure and does not
+report absence.
+
+**Traces to:** REQ-FS-STORE-006, REQ-FS-STORE-012
+
+### VAL-FS-STORE-014
+
+Force parent-directory creation, staging-file creation, staged write, and
+staged flush failures during `put`.
+
+**Pass condition:** each case fails explicitly as a backend failure, and no
+published target file becomes visible for the block ID.
+
+**Traces to:** REQ-FS-STORE-005, REQ-FS-STORE-010, REQ-FS-STORE-012
+
+### VAL-FS-STORE-015
+
+Force atomic publication to fail after staging succeeds, while arranging for the
+target path to contain byte-identical canonical content.
+
+**Pass condition:** `put` reports success for the block ID and leaves matching
+published bytes in place.
+
+**Traces to:** REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-011,
+REQ-FS-STORE-012
+
+### VAL-FS-STORE-016
+
+Force atomic publication to fail after staging succeeds, while arranging for the
+target path to contain bytes that differ from the canonical block bytes.
+
+**Pass condition:** `put` fails explicitly with a backend failure that
+describes integrity conflict and leaves the differing published bytes in place.
+
+**Traces to:** REQ-FS-STORE-007, REQ-FS-STORE-011, REQ-FS-STORE-012
+
+### VAL-FS-STORE-017
+
+Force atomic publication to fail after staging succeeds, then observe that no
+published target file is present at the deterministic path.
+
+**Pass condition:** `put` fails explicitly as a backend failure rather than
+reporting success or silent absence.
+
+**Traces to:** REQ-FS-STORE-011, REQ-FS-STORE-012
+
+### VAL-FS-STORE-018
+
+Force atomic publication to fail after staging succeeds, then make the target
+path unreadable or otherwise uninspectable before recovery inspection.
+
+**Pass condition:** `put` fails explicitly as a backend failure rather than
+reporting success or silent absence.
+
+**Traces to:** REQ-FS-STORE-011, REQ-FS-STORE-012
