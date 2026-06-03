@@ -10,7 +10,8 @@ use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
-    CandidateScorer, EmbeddingCompatibility, SearchError, SearchResult, Searcher,
+    CandidateScorer, DefaultCandidateScorer, DefaultEmbeddingCompatibility, DefaultPolicyError,
+    EmbeddingCompatibility, EncodedTargetEmbedding, SearchError, SearchResult, Searcher,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -783,6 +784,151 @@ fn val_search_021_zero_parameter_semantics_are_explicit() {
 }
 
 #[test]
+fn val_search_022_default_runtime_surface_exposes_default_policy_types() {
+    fn uses_default_contract(
+        searcher: &Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
+        root_id: &BlockHash,
+        target: &EncodedTargetEmbedding,
+        store: &dyn BlockStore,
+    ) -> Result<SearchResult, SearchError> {
+        searcher.search(root_id, target, 1, 1, store)
+    }
+
+    fn uses_custom_contract(
+        searcher: &Searcher<AcceptAllCompatibility, FirstByteScorer>,
+        root_id: &BlockHash,
+        store: &dyn BlockStore,
+    ) -> Result<SearchResult, SearchError> {
+        searcher.search(root_id, &(), 1, 1, store)
+    }
+
+    let store = MemoryBlockStore::default();
+    let root_id = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "default",
+        ))
+        .unwrap();
+
+    let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+    let default_searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+    let default_result =
+        uses_default_contract(&default_searcher, &root_id, &target, &store).unwrap();
+    assert_eq!(
+        default_result.leaves[0].entry.content.body,
+        b"default".to_vec()
+    );
+
+    let custom_root_id = store
+        .put(&leaf_block(i8_embedding([9, 0]), "custom"))
+        .unwrap();
+    let custom_searcher = Searcher::new(AcceptAllCompatibility, FirstByteScorer);
+    let custom_result = uses_custom_contract(&custom_searcher, &custom_root_id, &store).unwrap();
+    assert_eq!(
+        custom_result.leaves[0].entry.content.body,
+        b"custom".to_vec()
+    );
+}
+
+#[test]
+fn val_search_023_default_embedding_compatibility_accepts_matching_specs_only() {
+    let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+    let compatibility = DefaultEmbeddingCompatibility;
+
+    compatibility
+        .ensure_compatible(&target, &embedding_spec_f32())
+        .unwrap();
+
+    let encoding_error = compatibility
+        .ensure_compatible(&target, &embedding_spec_f64())
+        .unwrap_err();
+    assert!(matches!(
+        encoding_error,
+        DefaultPolicyError::IncompatibleEmbeddingSpec { .. }
+    ));
+
+    let dims_error = compatibility
+        .ensure_compatible(
+            &target,
+            &EmbeddingSpec {
+                dims: 3,
+                encoding: "f32le".into(),
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        dims_error,
+        DefaultPolicyError::IncompatibleEmbeddingSpec { .. }
+    ));
+}
+
+#[test]
+fn val_search_024_default_candidate_scorer_is_cosine_ranked_and_fails_explicitly() {
+    let scorer = DefaultCandidateScorer;
+    let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+
+    let aligned = scorer
+        .score(&target, &f32_embedding([1.0, 0.0]), &embedding_spec_f32())
+        .unwrap();
+    let repeated = scorer
+        .score(&target, &f32_embedding([1.0, 0.0]), &embedding_spec_f32())
+        .unwrap();
+    let orthogonal = scorer
+        .score(&target, &f32_embedding([0.0, 1.0]), &embedding_spec_f32())
+        .unwrap();
+    let opposite = scorer
+        .score(&target, &f32_embedding([-1.0, 0.0]), &embedding_spec_f32())
+        .unwrap();
+    assert_eq!(aligned, repeated);
+    assert!(aligned > orthogonal);
+    assert!(orthogonal > opposite);
+
+    let f64_target = EncodedTargetEmbedding::new(f64_embedding([1.0, 0.0]), embedding_spec_f64());
+    let f64_score = scorer
+        .score(
+            &f64_target,
+            &f64_embedding([1.0, 0.0]),
+            &embedding_spec_f64(),
+        )
+        .unwrap();
+    assert_eq!(
+        f64_score,
+        scorer
+            .score(
+                &f64_target,
+                &f64_embedding([1.0, 0.0]),
+                &embedding_spec_f64()
+            )
+            .unwrap()
+    );
+
+    let unsupported_target = EncodedTargetEmbedding::new(i8_embedding([1, 0]), embedding_spec_i8());
+    let unsupported_error = scorer
+        .score(
+            &unsupported_target,
+            &i8_embedding([1, 0]),
+            &embedding_spec_i8(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        unsupported_error,
+        DefaultPolicyError::UnsupportedEncoding { .. }
+    ));
+
+    let length_error = scorer
+        .score(&target, &[0_u8; 4], &embedding_spec_f32())
+        .unwrap_err();
+    assert!(matches!(
+        length_error,
+        DefaultPolicyError::InvalidByteLength {
+            role: "candidate",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn val_search_017_workspace_contains_the_search_crate() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let crate_manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
@@ -829,6 +975,34 @@ fn embedding_spec_i8() -> EmbeddingSpec {
 
 fn i8_embedding(bytes: [u8; 2]) -> Vec<u8> {
     bytes.to_vec()
+}
+
+fn embedding_spec_f32() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f32le".into(),
+    }
+}
+
+fn f32_embedding(values: [f32; 2]) -> Vec<u8> {
+    values
+        .into_iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn embedding_spec_f64() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f64le".into(),
+    }
+}
+
+fn f64_embedding(values: [f64; 2]) -> Vec<u8> {
+    values
+        .into_iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
 }
 
 fn branch_entry(embedding: [u8; 2], child: BlockHash) -> BranchEntry {
