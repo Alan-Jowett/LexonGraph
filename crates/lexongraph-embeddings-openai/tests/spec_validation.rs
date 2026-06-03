@@ -86,6 +86,46 @@ async fn val_embed_oai_003_azure_configuration_targets_azure_style_endpoint() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn val_embed_oai_003_openai_compatible_request_identity_is_forwarded() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/embeddings")
+            .header("authorization", "Bearer test-key")
+            .header("openai-organization", "test-org")
+            .header("openai-project", "test-project")
+            .body_includes("\"model\":\"test-model\"")
+            .body_includes("\"input\":\"hello identity\"");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(success_body(&[0.25_f32, 0.75_f32]));
+    });
+
+    let provider = OpenAiEmbeddingProvider::from_openai_compatible(OpenAiCompatibleConfig {
+        api_base: format!("{}/v1", server.base_url()),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        org_id: Some("test-org".into()),
+        project_id: Some("test-project".into()),
+    });
+
+    let embedding = provider
+        .embed(
+            &text_input("text/plain", "hello identity"),
+            &embedding_spec(2, "f32le"),
+        )
+        .await
+        .unwrap();
+
+    mock.assert();
+    assert_eq!(mock.calls(), 1);
+    assert_eq!(
+        embedding,
+        [0.25_f32.to_le_bytes(), 0.75_f32.to_le_bytes()].concat()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_embed_oai_004_non_text_and_invalid_utf8_content_fail_explicitly() {
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
@@ -176,6 +216,77 @@ async fn val_embed_oai_005_incompatible_embedding_spec_fails_explicitly() {
     assert_eq!(mock.calls(), 1);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn val_embed_oai_007_single_input_response_cardinality_mismatch_fails_explicitly() {
+    let empty_server = MockServer::start();
+    let empty_mock = empty_server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/embeddings")
+            .header("authorization", "Bearer test-key")
+            .body_includes("\"model\":\"test-model\"")
+            .body_includes("\"input\":\"empty response\"");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body(&[]));
+    });
+
+    let empty_provider = OpenAiEmbeddingProvider::from_openai_compatible(OpenAiCompatibleConfig {
+        api_base: format!("{}/v1", empty_server.base_url()),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        org_id: None,
+        project_id: None,
+    });
+
+    let empty_error = empty_provider
+        .embed(
+            &text_input("text/plain", "empty response"),
+            &embedding_spec(2, "f32le"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        empty_error,
+        OpenAiEmbeddingProviderError::UnexpectedEmbeddingCount(0)
+    ));
+    empty_mock.assert();
+    assert_eq!(empty_mock.calls(), 1);
+
+    let multi_server = MockServer::start();
+    let multi_mock = multi_server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/embeddings")
+            .header("authorization", "Bearer test-key")
+            .body_includes("\"model\":\"test-model\"")
+            .body_includes("\"input\":\"multi response\"");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body(&[&[1.0_f32, 2.0_f32], &[3.0_f32, 4.0_f32]]));
+    });
+
+    let multi_provider = OpenAiEmbeddingProvider::from_openai_compatible(OpenAiCompatibleConfig {
+        api_base: format!("{}/v1", multi_server.base_url()),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        org_id: None,
+        project_id: None,
+    });
+
+    let multi_error = multi_provider
+        .embed(
+            &text_input("text/plain", "multi response"),
+            &embedding_spec(2, "f32le"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        multi_error,
+        OpenAiEmbeddingProviderError::UnexpectedEmbeddingCount(2)
+    ));
+    multi_mock.assert();
+    assert_eq!(multi_mock.calls(), 1);
+}
+
 fn embedding_spec(dims: u64, encoding: &str) -> EmbeddingSpec {
     EmbeddingSpec {
         dims,
@@ -191,12 +302,24 @@ fn text_input(media_type: &str, body: &str) -> EmbeddingInput {
 }
 
 fn success_body(embedding: &[f32]) -> String {
-    let values = embedding
+    response_body(&[embedding])
+}
+
+fn response_body(embeddings: &[&[f32]]) -> String {
+    let data = embeddings
         .iter()
-        .map(|value| value.to_string())
+        .enumerate()
+        .map(|(index, embedding)| {
+            let values = embedding
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(r#"{{"object":"embedding","index":{index},"embedding":[{values}]}}"#)
+        })
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        r#"{{"object":"list","data":[{{"object":"embedding","index":0,"embedding":[{values}]}}],"model":"test-model","usage":{{"prompt_tokens":1,"total_tokens":1}}}}"#
+        r#"{{"object":"list","data":[{data}],"model":"test-model","usage":{{"prompt_tokens":1,"total_tokens":1}}}}"#
     )
 }

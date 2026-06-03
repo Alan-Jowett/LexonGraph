@@ -39,7 +39,8 @@ embedding-provider contract it realizes.
 The crate shall be configurable for standard OpenAI-style embeddings endpoints,
 including:
 
-- OpenAI-compatible base URLs
+- OpenAI-compatible base URLs plus model selection and optional request-identity
+  fields `org_id` and `project_id`
 - Azure OpenAI deployments
 - local services that expose a compatible embeddings API
 
@@ -68,9 +69,16 @@ different embedding backend are not forced to depend on OpenAI-specific code.
 ### REQ-EMBED-OAI-008
 
 The repository shall include automated verification artifacts covering
-successful request execution, OpenAI-compatible request construction,
-Azure-style configuration, explicit failure behavior, and `EmbeddingSpec`
-compatibility handling.
+successful request execution, OpenAI-compatible request construction with
+optional request-identity fields, Azure-style configuration, explicit failure
+behavior including malformed single-input response cardinality, and
+`EmbeddingSpec` compatibility handling.
+
+### REQ-EMBED-OAI-009
+
+For the single-input request path in this revision, the crate shall fail
+explicitly when the endpoint response contains anything other than exactly one
+embedding rather than selecting, truncating, or synthesizing a result.
 
 ## Out of Scope
 
@@ -90,4 +98,3 @@ concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.
-
