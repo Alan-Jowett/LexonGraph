@@ -281,15 +281,17 @@ mismatched encoding or dimensionality is rejected explicitly.
 Run the crate-provided default scorer with compatible embeddings, then with one
 or more unsupported encodings, target or candidate byte sequences whose lengths
 are inconsistent with the applicable embedding specification, zero-magnitude
-embeddings, non-finite encoded floating-point values, or embedding
-specifications whose dimensionality is too large to validate safely.
+embeddings, non-finite encoded floating-point values, inputs whose cosine
+computation yields a non-finite result, or embedding specifications whose
+dimensionality is too large to validate safely.
 
 **Pass condition:** compatible inputs produce a deterministic cosine-based score
 with a total ordering compatible with search ranking, and unsupported encodings
 or inconsistent byte lengths fail explicitly rather than producing arbitrary
 scores. Zero-magnitude embeddings, non-finite encoded values, and dimension
 overflow also fail explicitly across the supported `f32le` and `f64le`
-decoding paths.
+decoding paths. If cosine computation over otherwise-supported inputs becomes
+non-finite, the scorer fails explicitly instead of returning a rankable score.
 
 **Traces to:** REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021
 

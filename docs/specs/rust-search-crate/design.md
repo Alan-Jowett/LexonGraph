@@ -173,6 +173,10 @@ floating-point values, and embedding specifications whose dimensionality is too
 large to validate safely are also surfaced as explicit failures rather than
 producing arbitrary scores.
 
+If cosine computation over otherwise-supported inputs yields a non-finite
+result, the default scorer also surfaces that outcome as an explicit scoring
+failure rather than converting it into an ordered score.
+
 For the supported default-scorer encodings, those checks apply consistently
 across each decoding path, including `f32le` and `f64le`.
 

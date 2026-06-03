@@ -222,6 +222,9 @@ embeddings have zero magnitude, when encoded floating-point values are
 non-finite, or when an embedding specification's dimensionality is too large to
 validate safely.
 
+The crate-provided default scorer shall also fail explicitly when cosine
+computation over otherwise-supported inputs yields a non-finite result.
+
 For the crate's supported default-scorer floating-point encodings, those
 guardrails shall apply consistently across each supported decoding path.
 
