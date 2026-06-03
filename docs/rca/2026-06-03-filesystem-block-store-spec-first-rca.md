@@ -9,7 +9,7 @@ behavior of `crates/lexongraph-block-store-fs`.
 
 ## Summary
 
-Coverage analysis of `crates/lexongraph-block-store-fs\src\lib.rs` showed that
+Coverage analysis of `crates/lexongraph-block-store-fs/src/lib.rs` showed that
 the low coverage is concentrated in negative-path logic rather than in
 feature-gated code or formatting-only branches.
 
