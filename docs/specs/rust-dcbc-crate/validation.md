@@ -12,6 +12,12 @@ deterministic capacity-constrained balanced clustering protocol.
 These validation entries define the expected conformance surface for a crate
 that implements the requirements and design in this spec package.
 
+These validation entries define the deterministic conformance surface for the
+public crate behavior claimed by this specification package. Additional tests
+may exist for experimental or accelerator-backed execution paths, but those
+paths are outside conformance unless they preserve the same externally visible
+result required at the conformant crate boundary.
+
 Protocol-level DCBC semantics remain normatively defined by
 `docs/protocol/dcbc.md`.
 
@@ -176,4 +182,3 @@ Inspect repository verification artifacts for the crate.
 defined in this specification package.
 
 **Traces to:** REQ-DCBC-015
-

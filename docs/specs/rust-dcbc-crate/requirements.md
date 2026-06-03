@@ -119,8 +119,13 @@ protocol-level rounding.
 
 ### REQ-DCBC-014
 
-Given identical ordered inputs and parameters, the crate shall return
-identical outputs or the same explicit failure.
+Given identical ordered inputs and parameters, the crate's conformant
+execution boundary -- the public crate behavior claimed by this specification
+package -- shall return identical outputs or the same explicit failure.
+
+Optional execution paths or alternate backends that do not preserve the same
+externally visible result are outside this specification package's conformance
+claim and shall not be represented as satisfying it.
 
 ### REQ-DCBC-015
 
@@ -145,4 +150,3 @@ This document is subordinate to `docs/protocol/dcbc.md`.
 
 If this document appears to conflict with the protocol document, the protocol
 document is authoritative.
-

@@ -172,8 +172,12 @@ the final assignment and the normalized centroids required by the protocol.
 
 ### DSG-DCBC-017 `Determinism boundary`
 
-Physical parallelism is conforming only if it preserves the same externally
-visible result as the protocol's single-threaded logical model.
+The conformant execution boundary is the public crate behavior claimed by this
+specification package. Physical parallelism or optional backend substitution is
+conforming only if it preserves the same externally visible result as the
+protocol's single-threaded logical model. Optional execution paths that do not
+preserve that result are outside the conformance boundary and must not be
+represented as satisfying this specification package.
 
 ### DSG-DCBC-018 `Implementation realization`
 
@@ -204,3 +208,6 @@ entry mapped to one or more executable tests.
 | DSG-DCBC-017 | REQ-DCBC-006, REQ-DCBC-014 |
 | DSG-DCBC-018..019 | REQ-DCBC-015 |
 
+Note: The DSG-DCBC-017 -> REQ-DCBC-014 trace applies only to the conformant
+execution boundary defined in those sections, not to optional non-conformant
+backends.
