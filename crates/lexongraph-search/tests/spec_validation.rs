@@ -935,6 +935,17 @@ fn val_search_024_default_candidate_scorer_is_cosine_ranked_and_fails_explicitly
         }
     ));
 
+    let overflowing_f64_target =
+        EncodedTargetEmbedding::new(f64_embedding([1.0e308, 1.0e308]), embedding_spec_f64());
+    let non_finite_score_error = scorer
+        .score(
+            &overflowing_f64_target,
+            &f64_embedding([1.0e308, 1.0e308]),
+            &embedding_spec_f64(),
+        )
+        .unwrap_err();
+    assert_eq!(non_finite_score_error, DefaultPolicyError::NonFiniteScore);
+
     let unsupported_target = EncodedTargetEmbedding::new(i8_embedding([1, 0]), embedding_spec_i8());
     let unsupported_error = scorer
         .score(
