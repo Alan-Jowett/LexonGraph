@@ -187,8 +187,11 @@ each trait's contract.
 
 **Pass condition:** the shared helpers accept contract-satisfying
 implementations, reject contract-violating implementations at the appropriate
-trait boundary, and rely on the existing block and block-store conformance
-surfaces rather than redefining them.
+trait boundary, detect nondeterministic implementations, verify repeated-input
+stability for conforming implementations, verify preferred candidates outrank
+lower-ranked alternate candidates for candidate scorers, and rely on the
+existing block and block-store conformance surfaces rather than redefining
+them.
 
 **Traces to:** REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-015,
 REQ-SEARCH-016, REQ-SEARCH-017
@@ -275,12 +278,49 @@ mismatched encoding or dimensionality is rejected explicitly.
 ### VAL-SEARCH-024
 
 Run the crate-provided default scorer with compatible embeddings, then with one
-or more unsupported encodings or target or candidate byte sequences whose
-lengths are inconsistent with the applicable embedding specification.
+or more unsupported encodings, target or candidate byte sequences whose lengths
+are inconsistent with the applicable embedding specification, zero-magnitude
+embeddings, non-finite encoded floating-point values, or embedding
+specifications whose dimensionality is too large to validate safely.
 
 **Pass condition:** compatible inputs produce a deterministic cosine-based score
 with a total ordering compatible with search ranking, and unsupported encodings
 or inconsistent byte lengths fail explicitly rather than producing arbitrary
-scores.
+scores. Zero-magnitude embeddings, non-finite encoded values, and dimension
+overflow also fail explicitly.
 
 **Traces to:** REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021
+
+### VAL-SEARCH-025
+
+Invoke search with a scorer that rejects one or more candidates in a visited
+block.
+
+**Pass condition:** search fails explicitly with a scoring failure rather than
+silently skipping those candidates or reporting partial success.
+
+**Traces to:** REQ-SEARCH-006
+
+### VAL-SEARCH-026
+
+Run search over a multi-round graph where a later-expanded block contains a
+branch candidate that points to a child block that was already expanded in an
+earlier round.
+
+**Pass condition:** the already-expanded child block is not selected for
+expansion again within the same invocation, even if its later branch candidate
+outranks other available branches in that round.
+
+**Traces to:** REQ-SEARCH-009, REQ-SEARCH-022
+
+### VAL-SEARCH-027
+
+Run search over a graph where one round expands a child block that is
+represented by multiple branch candidates in the current frontier, then
+continues into a later round.
+
+**Pass condition:** all branch candidates targeting any child block already
+expanded in the invocation are removed before the next ranking round so stale
+branch entries do not affect termination or later expansion choices.
+
+**Traces to:** REQ-SEARCH-009, REQ-SEARCH-023

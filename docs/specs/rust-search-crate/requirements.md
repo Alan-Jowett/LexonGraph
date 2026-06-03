@@ -81,8 +81,9 @@ operation.
 
 The crate shall surface explicit failure when the root block cannot be loaded,
 when a selected child block cannot be loaded, when a visited block is malformed,
-when a visited block is incompatible with the target embedding, or when the
-search cannot produce `n` reachable leaf candidates.
+when a visited block is incompatible with the target embedding, when candidate
+scoring fails for a visited block, or when the search cannot produce `n`
+reachable leaf candidates.
 
 ### REQ-SEARCH-007
 
@@ -151,6 +152,15 @@ minimum:
 - embedding compatibility checks
 - candidate scoring
 
+At minimum, those reusable harnesses shall verify repeated-input stability for
+contract-satisfying implementations, explicit rejection or failure for
+contract-violating fixtures, and detection of nondeterministic
+implementations.
+
+Candidate-scoring harnesses shall also verify that a preferred candidate can
+outrank a lower-ranked alternate candidate within the same compatible scoring
+context.
+
 If implementation requires additional search-owned policy traits, the crate may
 also provide reusable conformance-test harnesses for those traits.
 
@@ -203,7 +213,22 @@ score candidate embeddings.
 
 The crate-provided default policies shall fail explicitly when given unsupported
 encodings or target or candidate byte sequences whose lengths are inconsistent
-with the applicable embedding specification.
+with the applicable embedding specification, when target or candidate
+embeddings have zero magnitude, when encoded floating-point values are
+non-finite, or when an embedding specification's dimensionality is too large to
+validate safely.
+
+### REQ-SEARCH-022
+
+Within one search invocation, once a child block ID has been selected for
+expansion and loaded, later references to that same child block ID shall not
+cause that child to be selected for expansion again.
+
+### REQ-SEARCH-023
+
+After a round expands one or more child block IDs, the crate shall remove from
+the frontier all branch candidates that target child block IDs already expanded
+in the invocation before the next ranking round.
 
 ## Out of Scope
 

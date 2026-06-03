@@ -926,6 +926,164 @@ fn val_search_024_default_candidate_scorer_is_cosine_ranked_and_fails_explicitly
             ..
         }
     ));
+
+    let zero_target = EncodedTargetEmbedding::new(f32_embedding([0.0, 0.0]), embedding_spec_f32());
+    let zero_target_error = scorer
+        .score(
+            &zero_target,
+            &f32_embedding([1.0, 0.0]),
+            &embedding_spec_f32(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        zero_target_error,
+        DefaultPolicyError::ZeroMagnitude { role: "target" }
+    );
+
+    let zero_candidate_error = scorer
+        .score(&target, &f32_embedding([0.0, 0.0]), &embedding_spec_f32())
+        .unwrap_err();
+    assert_eq!(
+        zero_candidate_error,
+        DefaultPolicyError::ZeroMagnitude { role: "candidate" }
+    );
+
+    let non_finite_target =
+        EncodedTargetEmbedding::new(f32_embedding([f32::NAN, 0.0]), embedding_spec_f32());
+    let non_finite_target_error = scorer
+        .score(
+            &non_finite_target,
+            &f32_embedding([1.0, 0.0]),
+            &embedding_spec_f32(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        non_finite_target_error,
+        DefaultPolicyError::NonFiniteValue {
+            role: "target",
+            index: 0
+        }
+    ));
+
+    let non_finite_candidate_error = scorer
+        .score(
+            &target,
+            &f32_embedding([f32::INFINITY, 0.0]),
+            &embedding_spec_f32(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        non_finite_candidate_error,
+        DefaultPolicyError::NonFiniteValue {
+            role: "candidate",
+            index: 0
+        }
+    ));
+
+    let overflow_spec = EmbeddingSpec {
+        dims: u64::MAX,
+        encoding: "f32le".into(),
+    };
+    let overflow_target = EncodedTargetEmbedding::new(Vec::new(), overflow_spec.clone());
+    let overflow_error = scorer
+        .score(&overflow_target, &[], &overflow_spec)
+        .unwrap_err();
+    assert_eq!(
+        overflow_error,
+        DefaultPolicyError::DimensionOverflow {
+            encoding: "f32le".into(),
+            dims: u64::MAX,
+        }
+    );
+}
+
+#[test]
+fn val_search_025_scoring_failures_fail_explicitly() {
+    let store = MemoryBlockStore::default();
+    let root_id = store
+        .put(&leaf_block(i8_embedding([4, 0]), "root"))
+        .unwrap();
+
+    let error = Searcher::new(AcceptAllCompatibility, FailingScorer)
+        .search(&root_id, &(), 1, 1, &store)
+        .unwrap_err();
+
+    assert!(matches!(error, SearchError::ScoringFailure { .. }));
+}
+
+#[test]
+fn val_search_026_expanded_children_are_not_reexpanded_in_later_rounds() {
+    let store = MemoryBlockStore::default();
+    let shared = store
+        .put(&leaf_block(i8_embedding([9, 0]), "shared"))
+        .unwrap();
+    let fresh = store
+        .put(&leaf_block(i8_embedding([8, 0]), "fresh"))
+        .unwrap();
+    let intermediate = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([9, 0], shared), branch_entry([8, 0], fresh)],
+        ))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![
+                branch_entry([10, 0], shared),
+                branch_entry([7, 0], intermediate),
+            ],
+        ))
+        .unwrap();
+
+    let result = Searcher::new(AcceptAllCompatibility, FirstByteScorer)
+        .search(&root_id, &(), 1, 2, &store)
+        .unwrap();
+
+    assert_eq!(result.leaves.len(), 2);
+    assert_eq!(result.leaves[0].entry.content.body, b"shared".to_vec());
+    assert_eq!(result.leaves[1].entry.content.body, b"fresh".to_vec());
+    assert_eq!(store.get_count(&shared), 1);
+    assert_eq!(store.get_count(&intermediate), 1);
+    assert_eq!(store.get_count(&fresh), 1);
+}
+
+#[test]
+fn val_search_027_expanded_child_branches_are_removed_from_later_frontiers() {
+    let store = MemoryBlockStore::default();
+    let duplicated = store
+        .put(&leaf_block(i8_embedding([9, 0]), "duplicated"))
+        .unwrap();
+    let trailing = store
+        .put(&leaf_block(i8_embedding([7, 0]), "trailing"))
+        .unwrap();
+    let intermediate = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([7, 0], trailing)],
+        ))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![
+                branch_entry([10, 0], duplicated),
+                branch_entry([9, 0], duplicated),
+                branch_entry([8, 0], intermediate),
+            ],
+        ))
+        .unwrap();
+
+    let result = Searcher::new(AcceptAllCompatibility, FirstByteScorer)
+        .search(&root_id, &(), 1, 2, &store)
+        .unwrap();
+
+    assert_eq!(result.leaves.len(), 2);
+    assert_eq!(result.leaves[0].entry.content.body, b"duplicated".to_vec());
+    assert_eq!(result.leaves[1].entry.content.body, b"trailing".to_vec());
+    assert_eq!(store.get_count(&duplicated), 1);
+    assert_eq!(store.get_count(&intermediate), 1);
+    assert_eq!(store.get_count(&trailing), 1);
 }
 
 #[test]

@@ -342,6 +342,12 @@ impl<EC, CS> Searcher<EC, CS> {
         let mut expanded_children = HashSet::new();
 
         loop {
+            frontier.retain(|candidate| {
+                !matches!(
+                    candidate,
+                    SearchCandidate::Branch { child, .. } if expanded_children.contains(child)
+                )
+            });
             frontier.sort_by(compare_candidates::<CS::Score>);
 
             if frontier.len() >= n && frontier.iter().take(n).all(SearchCandidate::is_leaf) {
