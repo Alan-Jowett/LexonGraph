@@ -53,7 +53,7 @@ This means:
 ### Coverage
 
 Coverage was gathered with `cargo llvm-cov` for
-`crates/lexongraph-block-store-fs\src\lib.rs`.
+`crates/lexongraph-block-store-fs/src/lib.rs`.
 
 - default features: `75 / 117 = 64.10%`
 - all features: `75 / 117 = 64.10%`
@@ -65,11 +65,11 @@ caused by feature-gated surfaces.
 
 The main uncovered regions were:
 
-- `src\lib.rs:21-48` — constructor negative paths
-- `src\lib.rs:65-91` — publish failure recovery and re-inspection
-- `src\lib.rs:102-132` — directory creation, temp-file creation, write, and
+- `src/lib.rs:21-48` — constructor negative paths
+- `src/lib.rs:65-91` — publish failure recovery and re-inspection
+- `src/lib.rs:102-132` — directory creation, temp-file creation, write, and
   flush failures during `put`
-- `src\lib.rs:147-155` — present-but-unreadable file handling during `get`
+- `src/lib.rs:147-155` — present-but-unreadable file handling during `get`
 
 These are not incidental branches. They determine whether the backend returns:
 
@@ -177,7 +177,7 @@ The spec should define the required outcome when:
 
 - the store root cannot be created
 - the store root cannot be canonicalized
-- the store root cannot be statted
+- the store root cannot be stat'ed
 - the resolved path is not a directory
 
 ### `get` behavior
