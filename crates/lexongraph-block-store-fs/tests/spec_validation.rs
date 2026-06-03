@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+#[cfg(feature = "inject")]
+use std::io;
+#[cfg(feature = "inject")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +18,10 @@ use lexongraph_block_store::conformance::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_fs::FilesystemBlockStore;
+#[cfg(feature = "inject")]
+use lexongraph_block_store_fs::inject::{FsOps, StagedFile};
+#[cfg(feature = "inject")]
+use tempfile::NamedTempFile;
 use tempfile::TempDir;
 
 #[test]
@@ -83,7 +91,7 @@ fn val_fs_store_004_and_005_get_reports_integrity_and_malformed_content_explicit
 }
 
 #[test]
-fn val_fs_store_006_conflicting_existing_bytes_fail_without_overwrite() {
+fn val_fs_store_006_and_016_conflicting_existing_bytes_fail_without_overwrite() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
     let block = sample_leaf_block("conflict");
@@ -98,6 +106,21 @@ fn val_fs_store_006_conflicting_existing_bytes_fail_without_overwrite() {
 
     assert!(matches!(error, BlockStoreError::BackendFailure(_)));
     assert_eq!(std::fs::read(&published_path).unwrap(), conflicting_bytes);
+}
+
+#[test]
+fn val_fs_store_015_publish_failure_with_matching_bytes_reports_success() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let block = sample_leaf_block("matching-publish-recovery");
+    let serialized = serialize_block(&block).unwrap();
+    let published_path = expected_block_path(temp_dir.path(), &serialized.hash);
+
+    std::fs::create_dir_all(published_path.parent().unwrap()).unwrap();
+    std::fs::write(&published_path, &serialized.bytes).unwrap();
+
+    assert_eq!(store.put(&block).unwrap(), serialized.hash);
+    assert_eq!(std::fs::read(&published_path).unwrap(), serialized.bytes);
 }
 
 #[test]
@@ -198,6 +221,123 @@ fn val_fs_store_011_repository_includes_filesystem_store_verification_artifacts(
     );
 }
 
+#[cfg(feature = "inject")]
+#[test]
+fn val_fs_store_012_constructor_failures_are_explicit_backend_failures() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let create_error = FilesystemBlockStore::new_with_ops(
+        temp_dir.path().join("create"),
+        Arc::new(ScriptedFsOps::with_create_dir_all_failure(
+            1,
+            error_spec("create root"),
+        )),
+    )
+    .unwrap_err();
+    expect_backend_failure_contains(create_error, "failed to create store root");
+
+    let canonicalize_error = FilesystemBlockStore::new_with_ops(
+        temp_dir.path().join("canonicalize"),
+        Arc::new(ScriptedFsOps::with_canonicalize_failure(error_spec(
+            "canonicalize root",
+        ))),
+    )
+    .unwrap_err();
+    expect_backend_failure_contains(canonicalize_error, "failed to canonicalize store root");
+
+    let stat_error = FilesystemBlockStore::new_with_ops(
+        temp_dir.path().join("stat"),
+        Arc::new(ScriptedFsOps::with_is_dir_result(IsDirResult::Error(
+            error_spec("stat root"),
+        ))),
+    )
+    .unwrap_err();
+    expect_backend_failure_contains(stat_error, "failed to stat store root");
+
+    let non_directory_error = FilesystemBlockStore::new_with_ops(
+        temp_dir.path().join("not-a-directory"),
+        Arc::new(ScriptedFsOps::with_is_dir_result(IsDirResult::Value(false))),
+    )
+    .unwrap_err();
+    expect_backend_failure_contains(non_directory_error, "is not a directory");
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn val_fs_store_013_present_but_unreadable_files_during_get_fail_explicitly() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ops = ScriptedFsOps::with_read_failure(1, error_spec("get unreadable"));
+    let store = FilesystemBlockStore::new_with_ops(temp_dir.path(), Arc::new(ops)).unwrap();
+    let serialized = serialize_block(&sample_leaf_block("get-unreadable")).unwrap();
+    let published_path = expected_block_path(temp_dir.path(), &serialized.hash);
+
+    std::fs::create_dir_all(published_path.parent().unwrap()).unwrap();
+    std::fs::write(&published_path, &serialized.bytes).unwrap();
+
+    let error = store.get(&serialized.hash).unwrap_err();
+    expect_backend_failure_contains(error, "failed to read block");
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn val_fs_store_014_pre_publication_failures_leave_no_published_target() {
+    assert_put_pre_publication_failure(
+        ScriptedFsOps::with_create_dir_all_failure(2, error_spec("create shard dir")),
+        "failed to create block directory",
+    );
+    assert_put_pre_publication_failure(
+        ScriptedFsOps::with_create_staged_file_failure(error_spec("create staging")),
+        "failed to create staging file",
+    );
+    assert_put_pre_publication_failure(
+        ScriptedFsOps::with_write_failure(error_spec("write staged bytes")),
+        "failed to stage block",
+    );
+    assert_put_pre_publication_failure(
+        ScriptedFsOps::with_flush_failure(error_spec("flush staged bytes")),
+        "failed to flush staged block",
+    );
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn val_fs_store_017_publish_failure_followed_by_missing_target_is_backend_failure() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let block = sample_leaf_block("publish-missing");
+    let serialized = serialize_block(&block).unwrap();
+    let published_path = expected_block_path(temp_dir.path(), &serialized.hash);
+    let ops = ScriptedFsOps::with_persist_failure(error_spec("persist missing target"));
+    let store = FilesystemBlockStore::new_with_ops(temp_dir.path(), Arc::new(ops)).unwrap();
+
+    let error = store.put(&block).unwrap_err();
+
+    expect_backend_failure_contains(error, "failed to publish block");
+    assert!(!published_path.exists());
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn val_fs_store_018_publish_failure_followed_by_uninspectable_target_is_backend_failure() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let block = sample_leaf_block("publish-uninspectable");
+    let serialized = serialize_block(&block).unwrap();
+    let published_path = expected_block_path(temp_dir.path(), &serialized.hash);
+    let ops = ScriptedFsOps::with_persist_and_read_failures(
+        error_spec("persist unreadable target"),
+        1,
+        error_spec("inspect unreadable target"),
+    );
+    let store = FilesystemBlockStore::new_with_ops(temp_dir.path(), Arc::new(ops)).unwrap();
+
+    std::fs::create_dir_all(published_path.parent().unwrap()).unwrap();
+    std::fs::write(&published_path, &serialized.bytes).unwrap();
+
+    let error = store.put(&block).unwrap_err();
+
+    expect_backend_failure_contains(error, "failed to inspect published block");
+    assert_eq!(std::fs::read(&published_path).unwrap(), serialized.bytes);
+}
+
 fn sample_leaf_block(body: &str) -> Block {
     Block::Leaf(
         build_leaf_block(
@@ -236,6 +376,254 @@ fn shard_filenames(path: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+#[cfg(feature = "inject")]
+fn assert_put_pre_publication_failure(ops: ScriptedFsOps, expected_message: &str) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_with_ops(temp_dir.path(), Arc::new(ops)).unwrap();
+    let block = sample_leaf_block(expected_message);
+    let serialized = serialize_block(&block).unwrap();
+    let published_path = expected_block_path(temp_dir.path(), &serialized.hash);
+
+    let error = store.put(&block).unwrap_err();
+
+    expect_backend_failure_contains(error, expected_message);
+    assert!(!published_path.exists());
+}
+
+#[cfg(feature = "inject")]
+fn expect_backend_failure_contains(error: BlockStoreError, expected_fragment: &str) {
+    match error {
+        BlockStoreError::BackendFailure(message) => {
+            assert!(
+                message.contains(expected_fragment),
+                "expected backend failure containing {expected_fragment:?}, got {message:?}"
+            );
+        }
+        other => panic!("expected backend failure, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "inject")]
+fn error_spec(message: &'static str) -> ErrorSpec {
+    ErrorSpec {
+        kind: io::ErrorKind::PermissionDenied,
+        message,
+    }
+}
+
+#[cfg(feature = "inject")]
+#[derive(Clone)]
+struct ErrorSpec {
+    kind: io::ErrorKind,
+    message: &'static str,
+}
+
+#[cfg(feature = "inject")]
+impl ErrorSpec {
+    fn to_io_error(&self) -> io::Error {
+        io::Error::new(self.kind, self.message)
+    }
+}
+
+#[cfg(feature = "inject")]
+enum IsDirResult {
+    Value(bool),
+    Error(ErrorSpec),
+}
+
+#[cfg(feature = "inject")]
+#[derive(Clone, Default)]
+struct ScriptedFsOps {
+    state: Arc<Mutex<ScriptState>>,
+}
+
+#[cfg(feature = "inject")]
+#[derive(Default)]
+struct ScriptState {
+    create_dir_all_calls: usize,
+    create_dir_all_failure: Option<IndexedFailure>,
+    canonicalize_failure: Option<ErrorSpec>,
+    is_dir_result: Option<IsDirResult>,
+    read_calls: usize,
+    read_failure: Option<IndexedFailure>,
+    create_staged_file_failure: Option<ErrorSpec>,
+    write_failure: Option<ErrorSpec>,
+    flush_failure: Option<ErrorSpec>,
+    persist_failure: Option<ErrorSpec>,
+}
+
+#[cfg(feature = "inject")]
+struct IndexedFailure {
+    call: usize,
+    error: ErrorSpec,
+}
+
+#[cfg(feature = "inject")]
+impl ScriptedFsOps {
+    fn with_create_dir_all_failure(call: usize, error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().create_dir_all_failure = Some(IndexedFailure { call, error });
+        ops
+    }
+
+    fn with_canonicalize_failure(error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().canonicalize_failure = Some(error);
+        ops
+    }
+
+    fn with_is_dir_result(result: IsDirResult) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().is_dir_result = Some(result);
+        ops
+    }
+
+    fn with_read_failure(call: usize, error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().read_failure = Some(IndexedFailure { call, error });
+        ops
+    }
+
+    fn with_create_staged_file_failure(error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().create_staged_file_failure = Some(error);
+        ops
+    }
+
+    fn with_write_failure(error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().write_failure = Some(error);
+        ops
+    }
+
+    fn with_flush_failure(error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().flush_failure = Some(error);
+        ops
+    }
+
+    fn with_persist_failure(error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().persist_failure = Some(error);
+        ops
+    }
+
+    fn with_persist_and_read_failures(
+        persist_error: ErrorSpec,
+        read_call: usize,
+        read_error: ErrorSpec,
+    ) -> Self {
+        let ops = Self::with_persist_failure(persist_error);
+        ops.state.lock().unwrap().read_failure = Some(IndexedFailure {
+            call: read_call,
+            error: read_error,
+        });
+        ops
+    }
+}
+
+#[cfg(feature = "inject")]
+impl FsOps for ScriptedFsOps {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.create_dir_all_calls += 1;
+        if let Some(failure) = state.create_dir_all_failure.as_ref()
+            && failure.call == state.create_dir_all_calls
+        {
+            return Err(failure.error.to_io_error());
+        }
+        drop(state);
+        std::fs::create_dir_all(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        let state = self.state.lock().unwrap();
+        if let Some(error) = state.canonicalize_failure.as_ref() {
+            return Err(error.to_io_error());
+        }
+        drop(state);
+        path.canonicalize()
+    }
+
+    fn is_dir(&self, path: &Path) -> io::Result<bool> {
+        let state = self.state.lock().unwrap();
+        match state.is_dir_result.as_ref() {
+            Some(IsDirResult::Value(value)) => Ok(*value),
+            Some(IsDirResult::Error(error)) => Err(error.to_io_error()),
+            None => {
+                drop(state);
+                std::fs::metadata(path).map(|metadata| metadata.is_dir())
+            }
+        }
+    }
+
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        let mut state = self.state.lock().unwrap();
+        state.read_calls += 1;
+        if let Some(failure) = state.read_failure.as_ref()
+            && failure.call == state.read_calls
+        {
+            return Err(failure.error.to_io_error());
+        }
+        drop(state);
+        std::fs::read(path)
+    }
+
+    fn create_staged_file(&self, dir: &Path) -> io::Result<Box<dyn StagedFile>> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.create_staged_file_failure.take() {
+            return Err(error.to_io_error());
+        }
+        drop(state);
+        Ok(Box::new(ScriptedStagedFile {
+            file: tempfile::Builder::new()
+                .prefix(".tmp-")
+                .suffix(".part")
+                .tempfile_in(dir)?,
+            state: Arc::clone(&self.state),
+        }))
+    }
+}
+
+#[cfg(feature = "inject")]
+struct ScriptedStagedFile {
+    file: NamedTempFile,
+    state: Arc<Mutex<ScriptState>>,
+}
+
+#[cfg(feature = "inject")]
+impl StagedFile for ScriptedStagedFile {
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.write_failure.take() {
+            return Err(error.to_io_error());
+        }
+        drop(state);
+        self.file.write_all(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.flush_failure.take() {
+            return Err(error.to_io_error());
+        }
+        drop(state);
+        self.file.flush()
+    }
+
+    fn persist_noclobber(self: Box<Self>, target: &Path) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.persist_failure.take() {
+            return Err(error.to_io_error());
+        }
+        drop(state);
+        self.file
+            .persist_noclobber(target)
+            .map(|_| ())
+            .map_err(|error| error.error)
+    }
 }
 
 #[derive(Default)]

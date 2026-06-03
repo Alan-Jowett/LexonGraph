@@ -62,6 +62,10 @@ root and returns an initialized store instance or an explicit error.
 Initialization may create required directories below the root, but those
 implementation details remain outside the parent trait boundary.
 
+Successful construction stores a canonicalized directory path as the root.
+Failures to create the root, canonicalize it, stat it, or confirm that the
+resolved path is a directory map to explicit backend failures.
+
 ## On-Disk Mapping
 
 ### DSG-FS-STORE-004 `Deterministic block path`
@@ -107,10 +111,15 @@ replacement semantics available from the local filesystem.
 3. ensures the containing directories exist
 4. writes the canonical bytes to a temporary sibling file
 5. attempts atomic publication into the published file path
-6. if publication detects an already-published file, reads the existing bytes
-   and:
+6. fails explicitly as a backend failure without publishing the target block
+   file if directory creation, staging-file creation, staged write, or staged
+   flush fails
+7. if atomic publication fails, re-reads the published path and:
    - treats byte-identical content as idempotent success
-   - treats differing bytes as an explicit integrity-conflict failure
+   - treats differing bytes as an explicit backend failure describing integrity
+     conflict
+   - treats a still-missing target as an explicit backend failure
+   - treats post-failure inspection errors as explicit backend failures
 
 ### DSG-FS-STORE-007 `get`
 
@@ -120,10 +129,12 @@ replacement semantics available from the local filesystem.
 2. returns `Ok(None)` when the file is absent
 3. reads the stored bytes when the file is present
 4. validates those bytes against the requested block ID through the block crate
-5. returns `Ok(Some(validated_block))` only for present, valid, matching content
+5. returns `Ok(Some(validated_block))` only for present, valid, matching
+   content
 
-Malformed bytes, unreadable files, or block-ID mismatch remain explicit
-failures and are not downgraded to absence.
+Malformed bytes map to malformed-content failures, block-ID mismatch maps to an
+integrity-mismatch failure, and unreadable files map to backend failures. None
+of those states are downgraded to absence.
 
 ### DSG-FS-STORE-008 `Concurrent publication`
 
@@ -138,7 +149,8 @@ If concurrent publishers race on the same block ID, the losing publisher
 re-checks the published file:
 
 - if the published bytes equal the canonical bytes, `put` reports success
-- if the published bytes differ, `put` reports an integrity-conflict failure
+- if the published bytes differ, `put` reports an explicit backend failure
+  describing integrity conflict
 
 ### DSG-FS-STORE-009 `Durability scope`
 
@@ -157,6 +169,10 @@ describe corruption or integrity conflict at the published block path.
 Block decoding failures and block-ID mismatches continue to map to the parent
 crate's malformed-content and integrity-mismatch errors.
 
+This mapping applies both to constructor-time filesystem failures and to
+runtime negative paths during `put` and `get`, including publication-failure
+recovery.
+
 ## Verification Strategy
 
 ### DSG-FS-STORE-011 `Conformance reuse`
@@ -168,8 +184,16 @@ backend-neutral `put` and `get` contract.
 
 The crate adds backend-specific tests for:
 
+- constructor success and explicit constructor failure cases
 - deterministic path mapping under the store root
+- explicit backend failure for unreadable published files during `get`
 - atomic publish behavior via staged sibling files
+- explicit backend failure for pre-publication staging failures
+- publication-failure recovery to matching bytes as idempotent success
+- explicit failure for publication-failure recovery to differing bytes
+- explicit backend failure when publication fails and the target remains missing
+- explicit backend failure when publication fails and the target cannot be
+  re-inspected
 - explicit failure on conflicting pre-existing bytes
 - successful convergence for concurrent publication of the same block
 
@@ -180,10 +204,9 @@ The crate adds backend-specific tests for:
 | DSG-FS-STORE-001 | REQ-FS-STORE-001, REQ-FS-STORE-002 |
 | DSG-FS-STORE-002..003 | REQ-FS-STORE-002, REQ-FS-STORE-003 |
 | DSG-FS-STORE-004 | REQ-FS-STORE-003, REQ-FS-STORE-004 |
-| DSG-FS-STORE-005..006 | REQ-FS-STORE-004, REQ-FS-STORE-005, REQ-FS-STORE-007 |
+| DSG-FS-STORE-005..006 | REQ-FS-STORE-004, REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011 |
 | DSG-FS-STORE-007 | REQ-FS-STORE-006 |
 | DSG-FS-STORE-008 | REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-008 |
 | DSG-FS-STORE-009 | REQ-FS-STORE-005 |
-| DSG-FS-STORE-010 | REQ-FS-STORE-001, REQ-FS-STORE-006, REQ-FS-STORE-007 |
-| DSG-FS-STORE-011..012 | REQ-FS-STORE-009 |
-
+| DSG-FS-STORE-010 | REQ-FS-STORE-001, REQ-FS-STORE-003, REQ-FS-STORE-006, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011 |
+| DSG-FS-STORE-011..012 | REQ-FS-STORE-009, REQ-FS-STORE-012 |

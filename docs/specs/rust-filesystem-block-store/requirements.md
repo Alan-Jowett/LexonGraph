@@ -54,6 +54,10 @@ path supplied outside the `BlockStore` trait boundary.
 The consumer-facing runtime contract shall not require callers to know the
 implementation's internal path layout below that root.
 
+Construction shall either return an initialized store rooted at a canonical
+directory path or fail explicitly as a backend failure when the requested root
+cannot be created, canonicalized, stat'ed, or resolved to a non-directory.
+
 ### REQ-FS-STORE-004
 
 `put` shall derive the canonical block bytes and block ID through the block
@@ -76,11 +80,22 @@ guarantees for file contents or directory metadata.
 When a mapped block file is present, `get` shall validate the retrieved bytes
 against the requested block ID before reporting success.
 
+`get` shall be total over the mapped file state:
+
+- present readable valid content for the requested block ID shall return
+  `Ok(Some(validated_block))`
+- present readable malformed or protocol-invalid content shall fail explicitly
+  as malformed content
+- present readable content whose verified identity differs from the requested
+  block ID shall fail explicitly as an integrity-mismatch condition
+- present unreadable content shall fail explicitly as a backend failure
+
 ### REQ-FS-STORE-007
 
-If `put` encounters pre-existing bytes at the target block location that do not
-match the canonical bytes for the block being stored, it shall fail explicitly
-as a corruption or integrity-conflict condition and shall not overwrite those
+If `put` encounters published bytes at the target block location that do not
+match the canonical bytes for the block being stored, whether before or after a
+publication race is re-inspected, it shall fail explicitly as a backend failure
+describing corruption or integrity conflict and shall not overwrite those
 bytes.
 
 ### REQ-FS-STORE-008
@@ -95,6 +110,40 @@ The repository shall include automated verification artifacts that realize the
 validation surface defined in `docs/specs/rust-filesystem-block-store/`,
 including reuse of the parent trait crate's conformance helpers where
 applicable.
+
+### REQ-FS-STORE-010
+
+`put` shall fail explicitly as a backend failure without publishing a target
+block file when parent-directory creation, staging-file creation, staged write,
+or staged flush fails before atomic publication completes.
+
+### REQ-FS-STORE-011
+
+If atomic publication of staged canonical bytes fails, the implementation shall
+inspect the deterministic target path and:
+
+- return success when the published bytes already match the canonical bytes for
+  the block
+- fail explicitly as a backend failure describing integrity conflict, without
+  overwrite, when the published bytes differ
+- fail explicitly as a backend failure when no published file is present after
+  the failed publication attempt
+- fail explicitly as a backend failure when post-failure inspection cannot
+  complete
+
+### REQ-FS-STORE-012
+
+The repository shall include automated verification artifacts that exercise the
+filesystem-specific negative-path semantics for:
+
+- constructor root failures
+- present-but-unreadable files during `get`
+- pre-publication staging failures during `put`
+- publication failure followed by matching published bytes
+- publication failure followed by differing published bytes
+- publication failure followed by a missing target
+- publication failure followed by an unreadable or otherwise uninspectable
+  target
 
 ## Out of Scope
 
@@ -117,4 +166,3 @@ respective concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.
-
