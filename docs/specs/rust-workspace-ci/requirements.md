@@ -54,8 +54,8 @@ The workflow shall execute the Rust workspace test suite.
 ### REQ-CI-006
 
 The repository quality gates shall remain limited to repository verification and
-shall not implement crate publishing, release creation, or release artifact
-distribution in this pass.
+shall not implement crate publishing, release creation, release artifact
+distribution, or minimum coverage threshold enforcement in this pass.
 
 ### REQ-CI-007
 
@@ -104,6 +104,23 @@ The GitHub Actions workflow shall verify that governed tracked files contain
 the required SPDX headers and shall fail when any governed file is missing or
 has an incomplete required header.
 
+### REQ-CI-015
+
+The GitHub Actions workflow shall include a dedicated coverage job that runs
+the Rust workspace test suite under coverage instrumentation and emits an LCOV
+coverage report.
+
+### REQ-CI-016
+
+The coverage job shall publish the generated LCOV report to Coveralls from
+GitHub Actions.
+
+### REQ-CI-017
+
+The repository README shall display badges for the current repository quality
+and status surfaces by linking to the main-branch CI workflow status, the
+main-branch Coveralls coverage status, and the repository MIT license.
+
 ## Out of Scope
 
 This change does not define or own:
@@ -111,6 +128,6 @@ This change does not define or own:
 - crate publishing
 - GitHub release automation
 - binary artifact packaging
-- coverage reporting
+- minimum coverage threshold enforcement
 - fuzzing automation
 - multi-platform expansion beyond the minimal hosted CI surface

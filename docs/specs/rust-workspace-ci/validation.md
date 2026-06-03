@@ -106,6 +106,39 @@ front-matter delimiter.
 Inspect the workflow definition.
 
 **Pass condition:** it uses stable Rust, least-privilege permissions, Rust-aware
-caching, an SPDX verification job, and no release or publish automation.
+caching, an SPDX verification job, no release or publish automation, and no
+minimum coverage threshold enforcement.
 
 **Traces to:** REQ-CI-006, REQ-CI-007, REQ-CI-008, REQ-CI-014
+
+### VAL-CI-012
+
+Inspect the workflow definition for the coverage job.
+
+**Pass condition:** the workflow defines a dedicated coverage job that uses the
+stable Rust toolchain with `llvm-tools`, installs `cargo-llvm-cov`, generates
+an `lcov.info` report for the workspace test suite, and uploads that report to
+Coveralls.
+
+**Traces to:** REQ-CI-007, REQ-CI-015, REQ-CI-016
+
+### VAL-CI-013
+
+Observe a successful CI run for a branch or pull request where the coverage job
+is authorized to upload coverage results.
+
+**Pass condition:** the coverage job succeeds and Coveralls records the uploaded
+coverage report for the associated commit or pull request.
+
+**Traces to:** REQ-CI-015, REQ-CI-016
+
+### VAL-CI-014
+
+Inspect the top section of `README.md`.
+
+**Pass condition:** the README displays badges linking to the repository's
+main-branch CI workflow status, main-branch Coveralls coverage status, and MIT
+license, and does not advertise badges for workflows that are not present in
+this repository.
+
+**Traces to:** REQ-CI-017
