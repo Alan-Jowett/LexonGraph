@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
