@@ -42,7 +42,11 @@ embedding behavior, `embedding_spec`, and block size target.
 ### REQ-INDEXER-001
 
 The crate shall define the Rust API boundary for a LexonGraph indexer that
-implements `docs/protocol/indexing.md`.
+implements `docs/protocol/indexing.md`, including both:
+
+- a monolithic indexing API
+- staged block-construction APIs for incremental leaf construction and
+  parent-layer construction
 
 ### REQ-INDEXER-002
 
@@ -91,10 +95,19 @@ The crate shall surface explicit failure when the input item set is empty or
 when content resolution fails, is inaccessible, or returns content unusable for
 indexing.
 
+The crate shall also surface explicit failure for invalid staged invocations,
+including empty staged batches, invalid child-block inputs, incompatible staged
+input combinations, and staged construction attempts that cannot yield
+protocol-conforming parent blocks.
+
 ### REQ-INDEXER-011
 
 The crate shall keep protocol-required orchestration separate from
 implementation-defined policy concerns through trait-based extension points.
+
+Those extension points shall remain authoritative across the monolithic and
+staged APIs, and the staged APIs shall not introduce hidden persistence or
+hidden cross-call orchestration state.
 
 ### REQ-INDEXER-012
 
@@ -108,12 +121,19 @@ embeddings-trait crate rather than defined by the indexer crate itself.
 The node-packing boundary shall remain overridable by downstream consumers even
 when the crate provides a built-in default implementation.
 
+The staged APIs shall not require caller-supplied intermediate descriptors
+beyond the constructed blocks themselves.
+
 ### REQ-INDEXER-013
 
 The core indexer shall own the protocol-required orchestration, layering,
 normalization, block construction, and block persistence flow, including the
 default-construction path that wires in the crate's built-in
 canonical-embedding and node-packing implementations.
+
+The monolithic API shall continue to realize that full flow, while the staged
+APIs shall expose semantically equivalent decomposed portions of the same
+protocol-conforming construction behavior.
 
 ### REQ-INDEXER-014
 
@@ -125,6 +145,10 @@ the same root block ID and the same persisted block set.
 When embedding generation is delegated to a provider supplied through the shared
 embeddings-trait crate, determinism is defined over the provider behavior and
 configuration that affect the produced embedding output.
+
+This determinism requirement also applies to staged invocations: repeating the
+same staged call with the same logical inputs shall produce the same block
+content and block identifiers without relying on cross-call duplicate tracking.
 
 ### REQ-INDEXER-015
 
@@ -223,6 +247,47 @@ mean in deterministic entry order using `f64`, re-encode the result for
 supported arithmetic encodings (`i8`, `f16le`, `f32le`), and fail explicitly
 for empty entry sets, unsupported encodings, non-finite values, or results that
 cannot be represented under the block `embedding_spec`.
+
+### REQ-INDEXER-030
+
+The crate shall provide a staged API that accepts a non-empty batch of indexing
+items and incrementally constructs the corresponding leaf blocks from source
+material, including content resolution and embedding generation, without
+persisting those blocks as part of the staged API contract.
+
+### REQ-INDEXER-031
+
+Given the same logical item set and indexing context, partitioning items across
+multiple staged leaf-construction calls shall produce the same leaf-block set
+that the monolithic indexing flow would have produced for those items.
+
+### REQ-INDEXER-032
+
+The crate shall provide a staged API that accepts a collection of already
+constructed child blocks and produces the next parent layer without requiring
+store lookups or caller-supplied intermediate descriptors.
+
+The parent-construction API shall derive the required child-link and embedding
+inputs from the supplied blocks themselves.
+
+### REQ-INDEXER-033
+
+The staged parent-construction API shall accept any protocol-valid current-layer
+child set, including mixes of leaf and branch blocks, provided the inputs are
+otherwise compatible within one indexing context.
+
+### REQ-INDEXER-034
+
+The staged APIs shall be resumable through explicit artifact passing alone: a
+caller may persist or reload produced blocks outside the crate and later resume
+construction by supplying those blocks to the next staged API without relying on
+hidden in-memory state from earlier calls.
+
+### REQ-INDEXER-035
+
+Repeated application of the staged APIs over the same logical indexing context
+shall be observationally equivalent to the monolithic API, producing the same
+protocol-conforming block contents, root block ID, and complete block set.
 
 ## Out of Scope
 
