@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-block-inspect"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ciborium = "0.2.2"
+clap = { version = "4.5.53", features = ["derive"] }
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-block-store-fs = { path = "../lexongraph-block-store-fs" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
