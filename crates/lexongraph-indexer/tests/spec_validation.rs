@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 use lexongraph_block::{
-    BlockHash, BranchBlock, BranchEntry, Content, EmbeddingSpec, TypedEntries, VERSION_1,
-    build_branch_block, into_entries,
+    BlockError, BlockHash, BranchBlock, BranchEntry, Content, EmbeddingSpec, SerializedBlock,
+    TypedEntries, VERSION_1, build_branch_block, deserialize_block, into_entries, serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
@@ -428,6 +428,33 @@ async fn val_indexer_004_and_011_repeated_runs_with_same_logical_content_are_det
 
     assert_eq!(alias_first.root_id, alias_second.root_id);
     assert_eq!(alias_first.block_ids, alias_second.block_ids);
+
+    let staged_first = indexer
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+    let staged_second = indexer
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(staged_first.block_ids, staged_second.block_ids);
+
+    let staged_parent_first = indexer
+        .build_parent_blocks(&staged_first.blocks, embedding_spec(), 256)
+        .unwrap();
+    let staged_parent_second = indexer
+        .build_parent_blocks(&staged_second.blocks, embedding_spec(), 256)
+        .unwrap();
+    assert_eq!(
+        staged_parent_first.block_ids,
+        staged_parent_second.block_ids
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -598,6 +625,39 @@ async fn val_indexer_010_different_policy_implementations_share_the_same_api_bou
                 &MemoryBlockStore::default(),
             )
             .await
+            .is_ok()
+    );
+
+    let staged_leaves = first
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        first
+            .build_parent_blocks(&staged_leaves.blocks, embedding_spec(), 256)
+            .is_ok()
+    );
+
+    let staged_override_leaves = second
+        .build_leaf_blocks(
+            &[
+                item("alpha"),
+                item("bravo"),
+                item("charlie"),
+                item("delta"),
+                item("echo"),
+                item("foxtrot"),
+            ],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        second
+            .build_parent_blocks(&staged_override_leaves.blocks, embedding_spec(), 256)
             .is_ok()
     );
 }
@@ -873,6 +933,232 @@ async fn val_indexer_012_resolved_content_is_stored_inline() {
         }
         TypedEntries::Branch(_, _) => panic!("expected leaf root"),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_025_incremental_leaf_batch_construction() {
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
+    let first_batch = indexer
+        .build_leaf_blocks(&[item("alpha"), item("bravo")], embedding_spec())
+        .await
+        .unwrap();
+    let second_batch = indexer
+        .build_leaf_blocks(&[item("charlie"), item("delta")], embedding_spec())
+        .await
+        .unwrap();
+    let one_shot = indexer
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+
+    let mut incremental_ids = first_batch
+        .block_ids
+        .iter()
+        .chain(second_batch.block_ids.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    incremental_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+
+    assert_eq!(incremental_ids, sorted_hashes(&one_shot.block_ids));
+    for block in first_batch.blocks.iter().chain(second_batch.blocks.iter()) {
+        match into_entries(deserialize_block(&block.bytes, &block.hash).unwrap()) {
+            TypedEntries::Leaf(_, entries) => assert_eq!(entries.len(), 1),
+            TypedEntries::Branch(_, _) => {
+                panic!("expected staged leaf construction to emit leaves")
+            }
+        }
+    }
+}
+
+#[test]
+fn val_indexer_026_parent_construction_from_child_blocks() {
+    let indexer = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+        PairPackingPolicy,
+    );
+    let leaves = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            indexer
+                .build_leaf_blocks(
+                    &[item("alpha"), item("bravo"), item("charlie")],
+                    embedding_spec(),
+                )
+                .await
+                .unwrap()
+        });
+
+    let parents = indexer
+        .build_parent_blocks(&leaves.blocks, embedding_spec(), 256)
+        .unwrap();
+
+    assert_eq!(parents.blocks.len(), 1);
+    match into_entries(
+        deserialize_block(&parents.blocks[0].bytes, &parents.blocks[0].hash).unwrap(),
+    ) {
+        TypedEntries::Branch(_, entries) => {
+            assert_eq!(entries.len(), 3);
+            for pair in entries.windows(2) {
+                assert!(pair[0].embedding <= pair[1].embedding);
+                assert_ne!(pair[0].child, pair[1].child);
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected parent construction to emit branch blocks"),
+    }
+    assert!(parents.blocks[0].bytes.len() <= 256);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_027_resumable_staged_execution() {
+    let indexer = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+        PairPackingPolicy,
+    );
+    let leaves = indexer
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+
+    let reloaded_leaves = round_trip_serialized_blocks(&leaves.blocks);
+    let parents = indexer
+        .build_parent_blocks(&reloaded_leaves, embedding_spec(), 256)
+        .unwrap();
+    let reloaded_parents = round_trip_serialized_blocks(&parents.blocks);
+    let root = indexer
+        .build_parent_blocks(&reloaded_parents, embedding_spec(), 256)
+        .unwrap();
+
+    assert_eq!(root.blocks.len(), 1);
+    assert!(matches!(
+        into_entries(deserialize_block(&root.blocks[0].bytes, &root.blocks[0].hash).unwrap()),
+        TypedEntries::Branch(_, _)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_028_monolithic_and_staged_paths_are_equivalent() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
+    let monolithic = indexer
+        .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+        .await
+        .unwrap();
+    let (staged_root, staged_ids) = staged_index(&indexer, &items, embedding_spec(), 160)
+        .await
+        .unwrap();
+
+    assert_eq!(staged_root, monolithic.root_id);
+    assert_eq!(staged_ids, monolithic.block_ids);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_029_mixed_leaf_and_branch_parent_inputs() {
+    let indexer = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ReverseCanonicalPolicy,
+        PairPackingPolicy,
+    );
+    let leaves = indexer
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+    let nested_branch = indexer
+        .build_parent_blocks(&leaves.blocks[..2], embedding_spec(), 256)
+        .unwrap();
+
+    let mixed_inputs = vec![
+        nested_branch.blocks[0].clone(),
+        leaves.blocks[2].clone(),
+        leaves.blocks[3].clone(),
+    ];
+    let parent = indexer
+        .build_parent_blocks(&mixed_inputs, embedding_spec(), 256)
+        .unwrap();
+    let nested_validated = deserialize_block(
+        &nested_branch.blocks[0].bytes,
+        &nested_branch.blocks[0].hash,
+    )
+    .unwrap();
+    let expected_branch_embedding = match into_entries(nested_validated) {
+        TypedEntries::Branch(_, entries) => entries.last().unwrap().embedding.clone(),
+        TypedEntries::Leaf(_, _) => panic!("expected nested branch"),
+    };
+
+    match into_entries(deserialize_block(&parent.blocks[0].bytes, &parent.blocks[0].hash).unwrap())
+    {
+        TypedEntries::Branch(_, entries) => {
+            let nested_entry = entries
+                .iter()
+                .find(|entry| entry.child == nested_branch.blocks[0].hash)
+                .unwrap();
+            assert_eq!(nested_entry.embedding, expected_branch_embedding);
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected mixed parent construction to emit a branch"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_030_staged_inputs_fail_explicitly() {
+    let indexer = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider);
+
+    assert_eq!(
+        indexer
+            .build_leaf_blocks::<&'static str>(&[], embedding_spec())
+            .await
+            .unwrap_err(),
+        IndexerError::EmptyInput
+    );
+
+    let empty_parent_error = indexer
+        .build_parent_blocks(&[], embedding_spec(), 256)
+        .unwrap_err();
+    assert!(matches!(
+        empty_parent_error,
+        IndexerError::InvalidStagedInput(_)
+    ));
+
+    let leaves = indexer
+        .build_leaf_blocks(&[item("alpha"), item("bravo")], embedding_spec())
+        .await
+        .unwrap();
+    let invalid_block = SerializedBlock {
+        bytes: leaves.blocks[0].bytes.clone(),
+        hash: synthetic_hash(99),
+    };
+    assert!(matches!(
+        indexer.build_parent_blocks(&[invalid_block], embedding_spec(), 256),
+        Err(IndexerError::InvalidInputBlock(
+            BlockError::HashMismatch { .. }
+        ))
+    ));
+
+    assert!(matches!(
+        indexer.build_parent_blocks(&leaves.blocks[..1], i8_three_dim_embedding_spec(), 256),
+        Err(IndexerError::InvalidStagedInput(_))
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1180,4 +1466,51 @@ fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {
         }
         other => BlockStoreError::MalformedContent(other),
     }
+}
+
+async fn staged_index<CR, EP, CEP, NPP, R>(
+    indexer: &Indexer<CR, EP, CEP, NPP>,
+    items: &[IndexItem<R>],
+    embedding_spec: EmbeddingSpec,
+    block_size_target: usize,
+) -> Result<(BlockHash, Vec<BlockHash>), IndexerError>
+where
+    CR: ContentResolver<R>,
+    EP: EmbeddingProvider,
+    CEP: CanonicalEmbeddingPolicy,
+    NPP: NodePackingPolicy,
+{
+    let mut layer = indexer
+        .build_leaf_blocks(items, embedding_spec.clone())
+        .await?;
+    let mut block_ids = layer.block_ids.clone();
+
+    while layer.blocks.len() > 1 {
+        layer = indexer.build_parent_blocks(
+            &layer.blocks,
+            embedding_spec.clone(),
+            block_size_target,
+        )?;
+        block_ids.extend(layer.block_ids.iter().copied());
+    }
+
+    block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    block_ids.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
+    Ok((layer.blocks[0].hash, block_ids))
+}
+
+fn round_trip_serialized_blocks(blocks: &[SerializedBlock]) -> Vec<SerializedBlock> {
+    blocks
+        .iter()
+        .map(|block| {
+            let validated = deserialize_block(&block.bytes, &block.hash).unwrap();
+            serialize_block(&validated.block).unwrap()
+        })
+        .collect()
+}
+
+fn sorted_hashes(hashes: &[BlockHash]) -> Vec<BlockHash> {
+    let mut hashes = hashes.to_vec();
+    hashes.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    hashes
 }

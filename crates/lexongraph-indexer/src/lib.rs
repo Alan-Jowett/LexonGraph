@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::fmt;
 
 use half::f16;
-pub use lexongraph_block::{BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata};
+pub use lexongraph_block::{
+    BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata, SerializedBlock,
+};
 
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
@@ -37,6 +39,12 @@ pub struct IndexingResult {
     pub block_ids: Vec<BlockHash>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstructedBlocks {
+    pub block_ids: Vec<BlockHash>,
+    pub blocks: Vec<SerializedBlock>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexedChild {
     pub embedding: Vec<u8>,
@@ -46,6 +54,7 @@ pub struct IndexedChild {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IndexerError {
     EmptyInput,
+    InvalidStagedInput(String),
     ContentResolution(String),
     UnusableContent(String),
     EmbeddingFailure(String),
@@ -55,6 +64,7 @@ pub enum IndexerError {
         min_serialized_bytes: usize,
         size_target: usize,
     },
+    InvalidInputBlock(BlockError),
     BlockConstruction(BlockError),
     Storage(BlockStoreError),
 }
@@ -63,6 +73,7 @@ impl fmt::Display for IndexerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyInput => write!(f, "indexing requires at least one item"),
+            Self::InvalidStagedInput(message) => write!(f, "invalid staged input: {message}"),
             Self::ContentResolution(message) => {
                 write!(f, "content resolution failed: {message}")
             }
@@ -79,6 +90,7 @@ impl fmt::Display for IndexerError {
                 f,
                 "smallest intermediate node needs {min_serialized_bytes} bytes, exceeding block size target {size_target}"
             ),
+            Self::InvalidInputBlock(error) => write!(f, "invalid staged input block: {error}"),
             Self::BlockConstruction(error) => write!(f, "block construction failed: {error}"),
             Self::Storage(error) => write!(f, "block storage failed: {error}"),
         }
@@ -88,9 +100,11 @@ impl fmt::Display for IndexerError {
 impl std::error::Error for IndexerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::InvalidInputBlock(error) => Some(error),
             Self::BlockConstruction(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::EmptyInput
+            | Self::InvalidStagedInput(_)
             | Self::ContentResolution(_)
             | Self::UnusableContent(_)
             | Self::EmbeddingFailure(_)
@@ -275,6 +289,29 @@ where
     CEP: CanonicalEmbeddingPolicy,
     NPP: NodePackingPolicy,
 {
+    pub async fn build_leaf_blocks<R>(
+        &self,
+        items: &[IndexItem<R>],
+        embedding_spec: EmbeddingSpec,
+    ) -> Result<ConstructedBlocks, IndexerError>
+    where
+        CR: ContentResolver<R>,
+    {
+        let layer = self.build_leaf_layer(items, &embedding_spec).await?;
+        Ok(ConstructedBlocks::from_serialized_blocks(layer.blocks))
+    }
+
+    pub fn build_parent_blocks(
+        &self,
+        child_blocks: &[SerializedBlock],
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Result<ConstructedBlocks, IndexerError> {
+        let layer =
+            self.build_parent_layer_from_blocks(child_blocks, &embedding_spec, block_size_target)?;
+        Ok(ConstructedBlocks::from_serialized_blocks(layer.blocks))
+    }
+
     pub async fn index<R>(
         &self,
         items: &[IndexItem<R>],
@@ -285,11 +322,62 @@ where
     where
         CR: ContentResolver<R>,
     {
+        let mut persisted_block_ids = Vec::with_capacity(items.len());
+        let mut current_layer = self.build_leaf_layer(items, &embedding_spec).await?;
+        persisted_block_ids.extend(self.persist_serialized_blocks(&current_layer.blocks, store)?);
+
+        while current_layer.children.len() > 1 {
+            current_layer = self.build_parent_layer_from_children(
+                &current_layer.children,
+                &embedding_spec,
+                block_size_target,
+            )?;
+            persisted_block_ids
+                .extend(self.persist_serialized_blocks(&current_layer.blocks, store)?);
+        }
+
+        persisted_block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        persisted_block_ids.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
+
+        Ok(IndexingResult {
+            root_id: current_layer.children[0].child,
+            block_ids: persisted_block_ids,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IndexedLayer {
+    blocks: Vec<SerializedBlock>,
+    children: Vec<IndexedChild>,
+}
+
+impl ConstructedBlocks {
+    fn from_serialized_blocks(blocks: Vec<SerializedBlock>) -> Self {
+        let block_ids = blocks.iter().map(|block| block.hash).collect();
+        Self { block_ids, blocks }
+    }
+}
+
+impl<CR, EP, CEP, NPP> Indexer<CR, EP, CEP, NPP>
+where
+    EP: EmbeddingProvider,
+    CEP: CanonicalEmbeddingPolicy,
+    NPP: NodePackingPolicy,
+{
+    async fn build_leaf_layer<R>(
+        &self,
+        items: &[IndexItem<R>],
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<IndexedLayer, IndexerError>
+    where
+        CR: ContentResolver<R>,
+    {
         if items.is_empty() {
             return Err(IndexerError::EmptyInput);
         }
 
-        let mut persisted_block_ids = Vec::with_capacity(items.len());
+        let mut blocks = Vec::with_capacity(items.len());
         let mut current_layer = Vec::with_capacity(items.len());
 
         for item in items {
@@ -310,11 +398,11 @@ where
                         media_type: content.media_type.clone(),
                         body: content.body.clone(),
                     },
-                    &embedding_spec,
+                    embedding_spec,
                 )
                 .await
                 .map_err(|error| IndexerError::EmbeddingFailure(error.to_string()))?;
-            validate_embedding_bytes(&embedding, &embedding_spec, "item")
+            validate_embedding_bytes(&embedding, embedding_spec, "item")
                 .map_err(IndexerError::EmbeddingFailure)?;
 
             let leaf = build_leaf_block(
@@ -329,91 +417,195 @@ where
             )
             .map_err(IndexerError::BlockConstruction)?;
             let leaf_block = Block::Leaf(leaf);
-            let block_id = store.put(&leaf_block).map_err(IndexerError::Storage)?;
+            let serialized =
+                serialize_block(&leaf_block).map_err(IndexerError::BlockConstruction)?;
 
-            persisted_block_ids.push(block_id);
             current_layer.push(IndexedChild {
                 embedding,
-                child: block_id,
+                child: serialized.hash,
             });
+            blocks.push(serialized);
         }
 
-        current_layer.sort_by(compare_indexed_children);
-        current_layer = deduplicate_layer_by_child(current_layer);
-
-        while current_layer.len() > 1 {
-            let groups = self
-                .node_packing_policy
-                .pack(&current_layer, &embedding_spec, block_size_target)
-                .map_err(|error| IndexerError::NodePackingFailure(error.to_string()))?;
-            validate_group_partition(&groups, &current_layer)
-                .map_err(IndexerError::NodePackingFailure)?;
-
-            let mut next_layer = Vec::with_capacity(groups.len());
-            for group in groups {
-                let entries = normalize_branch_entries(
-                    group
-                        .into_iter()
-                        .map(|index| BranchEntry {
-                            embedding: current_layer[index].embedding.clone(),
-                            child: current_layer[index].child,
-                        })
-                        .collect(),
-                );
-                if entries.len() < 2 {
-                    return Err(IndexerError::NodePackingFailure(
-                        "node packing candidate normalized to fewer than two unique children"
-                            .into(),
-                    ));
-                }
-
-                let branch = build_branch_block(VERSION_1, embedding_spec.clone(), entries, None)
-                    .map_err(IndexerError::BlockConstruction)?;
-                let branch_block = Block::Branch(branch.clone());
-                let serialized =
-                    serialize_block(&branch_block).map_err(IndexerError::BlockConstruction)?;
-                if serialized.bytes.len() > block_size_target {
-                    if branch.entries.len() == 2 {
-                        return Err(IndexerError::IntermediateNodeTooLarge {
-                            min_serialized_bytes: serialized.bytes.len(),
-                            size_target: block_size_target,
-                        });
-                    }
-                    return Err(IndexerError::NodePackingFailure(format!(
-                        "candidate branch block serialized to {} bytes, exceeding block size target {}",
-                        serialized.bytes.len(),
-                        block_size_target
-                    )));
-                }
-
-                let canonical_embedding = self
-                    .canonical_embedding_policy
-                    .canonical_embedding(&branch)
-                    .map_err(|error| IndexerError::CanonicalEmbeddingFailure(error.to_string()))?;
-                validate_embedding_bytes(&canonical_embedding, &embedding_spec, "canonical")
-                    .map_err(IndexerError::CanonicalEmbeddingFailure)?;
-
-                let block_id = store.put(&branch_block).map_err(IndexerError::Storage)?;
-                persisted_block_ids.push(block_id);
-
-                next_layer.push(IndexedChild {
-                    embedding: canonical_embedding,
-                    child: block_id,
-                });
-            }
-
-            next_layer.sort_by(compare_indexed_children);
-            current_layer = deduplicate_layer_by_child(next_layer);
-        }
-
-        persisted_block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-        persisted_block_ids.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
-
-        Ok(IndexingResult {
-            root_id: current_layer[0].child,
-            block_ids: persisted_block_ids,
+        Ok(IndexedLayer {
+            blocks,
+            children: normalize_current_layer(current_layer),
         })
     }
+
+    fn build_parent_layer_from_blocks(
+        &self,
+        child_blocks: &[SerializedBlock],
+        embedding_spec: &EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Result<IndexedLayer, IndexerError> {
+        if child_blocks.is_empty() {
+            return Err(IndexerError::InvalidStagedInput(
+                "parent construction requires at least one child block".into(),
+            ));
+        }
+
+        let current_layer = child_blocks
+            .iter()
+            .map(|block| self.indexed_child_from_serialized_block(block, embedding_spec))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.build_parent_layer_from_children(&current_layer, embedding_spec, block_size_target)
+    }
+
+    fn indexed_child_from_serialized_block(
+        &self,
+        serialized: &SerializedBlock,
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<IndexedChild, IndexerError> {
+        let validated = lexongraph_block::deserialize_block(&serialized.bytes, &serialized.hash)
+            .map_err(IndexerError::InvalidInputBlock)?;
+        let child = validated.hash;
+        match validated.block {
+            Block::Leaf(block) => {
+                ensure_matching_embedding_spec(
+                    "leaf child block",
+                    &block.embedding_spec,
+                    embedding_spec,
+                )?;
+                let Some(entry) = block.entries.into_iter().next() else {
+                    return Err(IndexerError::InvalidInputBlock(BlockError::NonConforming(
+                        "leaf blocks must contain exactly one entry",
+                    )));
+                };
+                validate_embedding_bytes(&entry.embedding, embedding_spec, "child")
+                    .map_err(IndexerError::InvalidStagedInput)?;
+                Ok(IndexedChild {
+                    embedding: entry.embedding,
+                    child,
+                })
+            }
+            Block::Branch(block) => {
+                ensure_matching_embedding_spec(
+                    "branch child block",
+                    &block.embedding_spec,
+                    embedding_spec,
+                )?;
+                let embedding = self
+                    .canonical_embedding_policy
+                    .canonical_embedding(&block)
+                    .map_err(|error| IndexerError::CanonicalEmbeddingFailure(error.to_string()))?;
+                validate_embedding_bytes(&embedding, embedding_spec, "canonical")
+                    .map_err(IndexerError::CanonicalEmbeddingFailure)?;
+                Ok(IndexedChild { embedding, child })
+            }
+        }
+    }
+
+    fn build_parent_layer_from_children(
+        &self,
+        current_layer: &[IndexedChild],
+        embedding_spec: &EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Result<IndexedLayer, IndexerError> {
+        let current_layer = normalize_current_layer(current_layer.to_vec());
+        if current_layer.len() < 2 {
+            return Err(IndexerError::InvalidStagedInput(
+                "parent construction requires at least two unique child blocks".into(),
+            ));
+        }
+
+        let groups = self
+            .node_packing_policy
+            .pack(&current_layer, embedding_spec, block_size_target)
+            .map_err(|error| IndexerError::NodePackingFailure(error.to_string()))?;
+        validate_group_partition(&groups, &current_layer)
+            .map_err(IndexerError::NodePackingFailure)?;
+
+        let mut blocks = Vec::with_capacity(groups.len());
+        let mut next_layer = Vec::with_capacity(groups.len());
+        for group in groups {
+            let entries = normalize_branch_entries(
+                group
+                    .into_iter()
+                    .map(|index| BranchEntry {
+                        embedding: current_layer[index].embedding.clone(),
+                        child: current_layer[index].child,
+                    })
+                    .collect(),
+            );
+            if entries.len() < 2 {
+                return Err(IndexerError::NodePackingFailure(
+                    "node packing candidate normalized to fewer than two unique children".into(),
+                ));
+            }
+
+            let branch = build_branch_block(VERSION_1, embedding_spec.clone(), entries, None)
+                .map_err(IndexerError::BlockConstruction)?;
+            let branch_block = Block::Branch(branch.clone());
+            let serialized =
+                serialize_block(&branch_block).map_err(IndexerError::BlockConstruction)?;
+            if serialized.bytes.len() > block_size_target {
+                if branch.entries.len() == 2 {
+                    return Err(IndexerError::IntermediateNodeTooLarge {
+                        min_serialized_bytes: serialized.bytes.len(),
+                        size_target: block_size_target,
+                    });
+                }
+                return Err(IndexerError::NodePackingFailure(format!(
+                    "candidate branch block serialized to {} bytes, exceeding block size target {}",
+                    serialized.bytes.len(),
+                    block_size_target
+                )));
+            }
+
+            let canonical_embedding = self
+                .canonical_embedding_policy
+                .canonical_embedding(&branch)
+                .map_err(|error| IndexerError::CanonicalEmbeddingFailure(error.to_string()))?;
+            validate_embedding_bytes(&canonical_embedding, embedding_spec, "canonical")
+                .map_err(IndexerError::CanonicalEmbeddingFailure)?;
+
+            next_layer.push(IndexedChild {
+                embedding: canonical_embedding,
+                child: serialized.hash,
+            });
+            blocks.push(serialized);
+        }
+
+        Ok(IndexedLayer {
+            blocks,
+            children: normalize_current_layer(next_layer),
+        })
+    }
+
+    fn persist_serialized_blocks(
+        &self,
+        blocks: &[SerializedBlock],
+        store: &dyn BlockStore,
+    ) -> Result<Vec<BlockHash>, IndexerError> {
+        let mut persisted_block_ids = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            let validated = lexongraph_block::deserialize_block(&block.bytes, &block.hash)
+                .map_err(IndexerError::InvalidInputBlock)?;
+            let block_id = store.put(&validated.block).map_err(IndexerError::Storage)?;
+            persisted_block_ids.push(block_id);
+        }
+        Ok(persisted_block_ids)
+    }
+}
+
+fn normalize_current_layer(mut layer: Vec<IndexedChild>) -> Vec<IndexedChild> {
+    layer.sort_by(compare_indexed_children);
+    deduplicate_layer_by_child(layer)
+}
+
+fn ensure_matching_embedding_spec(
+    context: &str,
+    actual: &EmbeddingSpec,
+    expected: &EmbeddingSpec,
+) -> Result<(), IndexerError> {
+    if actual != expected {
+        return Err(IndexerError::InvalidStagedInput(format!(
+            "{context} uses embedding spec {} dims under {}, expected {} dims under {}",
+            actual.dims, actual.encoding, expected.dims, expected.encoding
+        )));
+    }
+    Ok(())
 }
 
 fn validate_group_partition(

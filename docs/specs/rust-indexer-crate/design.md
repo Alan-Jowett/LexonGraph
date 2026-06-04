@@ -79,6 +79,9 @@ A successful indexing result containing at least:
 - the produced block set, or the produced block IDs sufficient to identify that
   set
 
+Staged APIs return constructed block artifacts grouped by stage output rather
+than persistence side effects.
+
 ### DSG-INDEXER-005 `IndexerError`
 
 An explicit error taxonomy covering at least:
@@ -168,6 +171,11 @@ The public API includes both:
 - an explicit override path that accepts caller-supplied
   `CanonicalEmbeddingPolicy` and `NodePackingPolicy`
 
+The public API also includes staged operations for:
+
+- incremental leaf-block construction from `IndexItem` batches
+- parent-layer construction from already-constructed child blocks
+
 ## Orchestration Flow
 
 ### DSG-INDEXER-011 `Core indexing pipeline`
@@ -198,6 +206,16 @@ The fixed orchestration flow is:
 The core indexer owns this flow even when implementation-defined policy traits
 participate in individual steps.
 
+The staged APIs decompose this flow into:
+
+1. a leaf-construction stage that resolves content references, generates
+   embeddings, and constructs one leaf block per input item
+2. a parent-construction stage that accepts a current-layer child set, derives
+   child-link inputs from the supplied blocks, normalizes candidate entries, and
+   constructs the next branch layer
+3. a monolithic composition path that repeatedly applies those stages until one
+   root block remains
+
 ### DSG-INDEXER-012 `Determinism boundary`
 
 Conformance requires deterministic behavior from the resolver, embedding
@@ -206,6 +224,10 @@ provider, and policy traits within a given indexing context.
 If those trait implementations are deterministic and the logical inputs are the
 same, the indexer produces the same root block ID and the same persisted block
 set.
+
+This determinism boundary also applies to each staged operation: the same staged
+inputs under the same deterministic indexing context produce the same block
+bytes and block identifiers.
 
 For remotely backed embedding providers, the relevant indexing context includes
 provider configuration that can affect the embedding output, but the ownership
@@ -324,6 +346,57 @@ The built-in arithmetic-mean canonical policy:
    non-finite decoded or reduced values, and means that overflow the target
    encoding
 
+### DSG-INDEXER-024 `Staged leaf construction API`
+
+The crate exposes a public staged API that accepts:
+
+- a non-empty batch of `IndexItem` values
+- an `EmbeddingSpec`
+- the configured content resolver and embedding-provider dependencies
+
+and returns the constructed leaf blocks for that batch without persisting them
+through the block-store contract as part of the staged operation itself.
+
+### DSG-INDEXER-025 `Staged parent construction API`
+
+The crate exposes a public staged API that accepts:
+
+- a non-empty collection of already-constructed child blocks representing one
+  current layer
+- an `EmbeddingSpec`
+- a block size target
+- the configured canonical-embedding and node-packing policies
+
+and returns the constructed next-layer branch blocks.
+
+### DSG-INDEXER-026 `Block-derived parent inputs`
+
+The staged parent-construction API derives each child entry from the supplied
+blocks themselves:
+
+- child block ID from the canonical serialized block bytes
+- child structural validity from block-protocol validation of those bytes
+- child embedding from the block content, using the leaf entry embedding for
+  leaf blocks and the configured canonical-embedding policy for branch blocks
+
+The staged API does not require caller-supplied intermediate descriptors beyond
+the child blocks.
+
+### DSG-INDEXER-027 `Resumable artifact-driven composition`
+
+The staged APIs are resumable through explicit artifact passing: callers may
+persist or reload constructed blocks outside the crate and later supply those
+blocks back into later stages.
+
+The crate maintains no hidden cross-call orchestration state.
+
+### DSG-INDEXER-028 `Mixed child-set admissibility`
+
+The staged parent-construction API accepts any protocol-valid current-layer
+child set, including mixes of leaf and branch blocks, provided all inputs are
+compatible within one indexing context, including a compatible `embedding_spec`
+and deterministic policy behavior.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -348,3 +421,8 @@ The built-in arithmetic-mean canonical policy:
 | DSG-INDEXER-021 | REQ-INDEXER-025 |
 | DSG-INDEXER-022 | REQ-INDEXER-013, REQ-INDEXER-024, REQ-INDEXER-028 |
 | DSG-INDEXER-023 | REQ-INDEXER-028, REQ-INDEXER-029 |
+| DSG-INDEXER-024 | REQ-INDEXER-030, REQ-INDEXER-031 |
+| DSG-INDEXER-025 | REQ-INDEXER-032, REQ-INDEXER-033, REQ-INDEXER-035 |
+| DSG-INDEXER-026 | REQ-INDEXER-032, REQ-INDEXER-034 |
+| DSG-INDEXER-027 | REQ-INDEXER-011, REQ-INDEXER-034 |
+| DSG-INDEXER-028 | REQ-INDEXER-033 |

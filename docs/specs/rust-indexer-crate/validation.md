@@ -62,6 +62,9 @@ target, and deterministic trait implementations.
 **Pass condition:** both runs produce the same root block ID and the same
 persisted block set.
 
+Repeating the same staged leaf-construction or parent-construction call with the
+same logical inputs produces the same constructed block bytes and block IDs.
+
 **Traces to:** REQ-INDEXER-014
 
 ### VAL-INDEXER-005
@@ -79,6 +82,9 @@ Index multiple items that require one or more intermediate layers.
 
 **Pass condition:** the indexer produces exactly one leaf block per item and
 repeats node construction until exactly one root block remains.
+
+The same logical job can also be realized by repeated staged leaf and
+parent-construction calls with the same final root block ID and block set.
 
 **Traces to:** REQ-INDEXER-006, REQ-INDEXER-013, REQ-INDEXER-014
 
@@ -120,7 +126,7 @@ embeddings-trait contract, together with different node-packing policy
 implementations satisfying the indexer-owned trait contracts.
 
 **Pass condition:** the indexer remains conforming without changing its public
-API boundary.
+API boundary across the monolithic API and the staged parent-construction API.
 
 **Traces to:** REQ-INDEXER-011, REQ-INDEXER-012, REQ-INDEXER-020
 
@@ -289,3 +295,67 @@ canonical-policy boundary; the indexer does not silently substitute a different
 vector or continue as though canonical embedding succeeded.
 
 **Traces to:** REQ-INDEXER-029
+
+### VAL-INDEXER-025
+
+Invoke the staged leaf-construction API on multiple item batches representing
+one logical indexing job.
+
+**Pass condition:** each item yields exactly one constructed leaf block, and
+partitioning across batches does not alter the leaf-block set produced for the
+same logical items.
+
+**Traces to:** REQ-INDEXER-030, REQ-INDEXER-031
+
+### VAL-INDEXER-026
+
+Supply a valid collection of child blocks to the staged parent-construction API.
+
+**Pass condition:** the API constructs protocol-conforming parent blocks whose
+entries reference those children, remain normalized, and satisfy the size and
+minimum-child-count invariants.
+
+**Traces to:** REQ-INDEXER-032, REQ-INDEXER-033
+
+### VAL-INDEXER-027
+
+Construct leaf blocks in one staged call, persist or reload those blocks outside
+the crate, and invoke a later staged parent-construction call on the reloaded
+artifacts.
+
+**Pass condition:** later stages succeed without any hidden in-memory state from
+the earlier call.
+
+**Traces to:** REQ-INDEXER-034
+
+### VAL-INDEXER-028
+
+Run one logical indexing job through the monolithic `index(...)` API and the
+same job through staged leaf construction followed by repeated staged
+parent-layer construction.
+
+**Pass condition:** both paths produce the same root block ID and complete block
+set.
+
+**Traces to:** REQ-INDEXER-014, REQ-INDEXER-035
+
+### VAL-INDEXER-029
+
+Invoke the staged parent-construction API with a valid mixed current layer that
+contains both leaf and branch blocks.
+
+**Pass condition:** parent construction succeeds and produces conforming parent
+blocks whose child-entry embeddings are derived according to the configured
+canonical-embedding policy for the supplied branch children.
+
+**Traces to:** REQ-INDEXER-033
+
+### VAL-INDEXER-030
+
+Invoke the staged APIs with empty batches, invalid child blocks, incompatible
+inputs, or inputs that cannot produce a conforming parent layer.
+
+**Pass condition:** failures are explicit; the crate does not silently skip,
+partially succeed, or synthesize hidden recovery behavior.
+
+**Traces to:** REQ-INDEXER-010, REQ-INDEXER-030, REQ-INDEXER-032, REQ-INDEXER-034
