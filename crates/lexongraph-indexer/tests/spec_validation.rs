@@ -49,6 +49,29 @@ impl BlockStore for MemoryBlockStore {
     }
 }
 
+#[derive(Default)]
+struct WrongHashBlockStore {
+    next: RefCell<u8>,
+}
+
+impl BlockStore for WrongHashBlockStore {
+    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
+        let _ =
+            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+        let mut next = self.next.borrow_mut();
+        let hash = synthetic_hash(*next);
+        *next = next.wrapping_add(1);
+        Ok(hash)
+    }
+
+    fn get(
+        &self,
+        _: &BlockHash,
+    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        Ok(None)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct MapResolver;
 
@@ -1169,6 +1192,20 @@ async fn val_indexer_030_staged_inputs_fail_explicitly() {
     assert!(matches!(
         indexer.build_parent_blocks(&leaves.blocks[..1], i8_three_dim_embedding_spec(), 256),
         Err(IndexerError::InvalidStagedInput(_))
+    ));
+
+    let integrity_error = indexer
+        .index(
+            &[item("alpha"), item("bravo")],
+            embedding_spec(),
+            256,
+            &WrongHashBlockStore::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        integrity_error,
+        IndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
     ));
 }
 

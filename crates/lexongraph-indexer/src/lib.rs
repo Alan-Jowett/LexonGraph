@@ -322,9 +322,13 @@ where
     where
         CR: ContentResolver<R>,
     {
-        let mut persisted_block_ids = Vec::with_capacity(items.len());
-        let mut current_layer = self.build_leaf_layer(items, &embedding_spec).await?;
-        persisted_block_ids.extend(self.persist_constructed_blocks(&current_layer.blocks, store)?);
+        let (mut persisted_block_ids, current_children) = self
+            .build_leaf_layer_and_persist(items, &embedding_spec, store)
+            .await?;
+        let mut current_layer = IndexedLayer {
+            blocks: Vec::new(),
+            children: current_children,
+        };
 
         while current_layer.children.len() > 1 {
             current_layer = self.build_parent_layer_from_children(
@@ -441,6 +445,71 @@ where
             blocks,
             children: normalize_current_layer(current_layer),
         })
+    }
+
+    async fn build_leaf_layer_and_persist<R>(
+        &self,
+        items: &[IndexItem<R>],
+        embedding_spec: &EmbeddingSpec,
+        store: &dyn BlockStore,
+    ) -> Result<(Vec<BlockHash>, Vec<IndexedChild>), IndexerError>
+    where
+        CR: ContentResolver<R>,
+    {
+        if items.is_empty() {
+            return Err(IndexerError::EmptyInput);
+        }
+
+        let mut persisted_block_ids = Vec::with_capacity(items.len());
+        let mut current_layer = Vec::with_capacity(items.len());
+
+        for item in items {
+            let content = self
+                .resolver
+                .resolve(&item.content_ref)
+                .map_err(|error| IndexerError::ContentResolution(error.to_string()))?;
+            if content.media_type.is_empty() {
+                return Err(IndexerError::UnusableContent(
+                    "resolved content must include a media type".into(),
+                ));
+            }
+
+            let embedding = self
+                .embedding_provider
+                .embed(
+                    &EmbeddingInput {
+                        media_type: content.media_type.clone(),
+                        body: content.body.clone(),
+                    },
+                    embedding_spec,
+                )
+                .await
+                .map_err(|error| IndexerError::EmbeddingFailure(error.to_string()))?;
+            validate_embedding_bytes(&embedding, embedding_spec, "item")
+                .map_err(IndexerError::EmbeddingFailure)?;
+
+            let leaf = build_leaf_block(
+                VERSION_1,
+                embedding_spec.clone(),
+                vec![LeafEntry {
+                    embedding: embedding.clone(),
+                    metadata: item.metadata.clone(),
+                    content,
+                }],
+                None,
+            )
+            .map_err(IndexerError::BlockConstruction)?;
+            let leaf_block = Block::Leaf(leaf);
+            let block_id = store.put(&leaf_block).map_err(IndexerError::Storage)?;
+
+            persisted_block_ids.push(block_id);
+            current_layer.push(IndexedChild {
+                embedding,
+                child: block_id,
+            });
+        }
+
+        Ok((persisted_block_ids, normalize_current_layer(current_layer)))
     }
 
     fn build_parent_layer_from_blocks(
@@ -594,7 +663,12 @@ where
         let mut persisted_block_ids = Vec::with_capacity(blocks.len());
         for block in blocks {
             let block_id = store.put(&block.block).map_err(IndexerError::Storage)?;
-            debug_assert_eq!(block_id, block.serialized.hash);
+            if block_id != block.serialized.hash {
+                return Err(IndexerError::Storage(BlockStoreError::IntegrityMismatch {
+                    expected: block.serialized.hash,
+                    actual: block_id,
+                }));
+            }
             persisted_block_ids.push(block_id);
         }
         Ok(persisted_block_ids)
