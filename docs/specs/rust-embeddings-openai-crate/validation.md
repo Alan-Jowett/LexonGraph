@@ -28,11 +28,11 @@ without depending on the indexer crate or search crate.
 ### VAL-EMBED-OAI-002
 
 Use the provider with a controlled OpenAI-compatible endpoint fixture that
-returns a successful embedding response for one UTF-8 text input.
+returns a successful embedding response for multiple UTF-8 text inputs.
 
-**Pass condition:** the provider issues one-input request semantics, receives
-one embedding vector, and returns bytes compatible with the requested
-`EmbeddingSpec`.
+**Pass condition:** the provider issues multi-input request semantics, receives
+one embedding vector per supplied input, and returns ordered bytes compatible
+with the requested `EmbeddingSpec`.
 
 **Traces to:** REQ-EMBED-OAI-005, REQ-EMBED-OAI-006, REQ-EMBED-OAI-008
 
@@ -52,10 +52,11 @@ when present.
 ### VAL-EMBED-OAI-004
 
 Provide embedding input whose media type is non-text or whose bytes are not
-valid UTF-8.
+valid UTF-8, including in a logical batch containing otherwise valid textual
+inputs.
 
 **Pass condition:** the provider fails explicitly before reporting success and
-before silently coercing the input.
+before silently coercing the input or partially submitting a batch request.
 
 **Traces to:** REQ-EMBED-OAI-004
 
@@ -82,10 +83,21 @@ realize the validation surface in this specification package.
 ### VAL-EMBED-OAI-007
 
 Use the provider with a controlled OpenAI-compatible endpoint fixture that
-returns zero embeddings or multiple embeddings for a single UTF-8 text input.
+returns too few or too many embeddings for a batch request.
 
 **Pass condition:** the provider fails explicitly rather than returning bytes,
 silently selecting one embedding, or masking the response-cardinality
 mismatch.
 
 **Traces to:** REQ-EMBED-OAI-005, REQ-EMBED-OAI-008, REQ-EMBED-OAI-009
+
+### VAL-EMBED-OAI-008
+
+Use the provider with a controlled OpenAI-compatible endpoint fixture that
+returns embedding objects out of order relative to the supplied input batch but
+with correct response indices.
+
+**Pass condition:** the provider preserves the caller's logical input order in
+the returned translated embeddings.
+
+**Traces to:** REQ-EMBED-OAI-010

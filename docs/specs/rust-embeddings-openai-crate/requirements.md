@@ -50,10 +50,15 @@ In this revision, the crate shall accept embedding input only when the input
 represents UTF-8 textual content and shall fail explicitly for non-text or
 non-UTF-8 payloads.
 
+For batch embedding, that policy applies to every input in the logical batch.
+
 ### REQ-EMBED-OAI-005
 
-In this revision, the crate shall use one embedding input per request path used
-by LexonGraph consumers. General multi-item batching is out of scope.
+In this revision, the crate shall support logical multi-input batch embedding
+for the request paths used by LexonGraph consumers.
+
+The provider may choose its own internal request grouping or chunking strategy,
+which is not part of the public contract in this revision.
 
 ### REQ-EMBED-OAI-006
 
@@ -76,9 +81,16 @@ behavior including malformed single-input response cardinality, and
 
 ### REQ-EMBED-OAI-009
 
-For the single-input request path in this revision, the crate shall fail
+For each provider-issued request in this revision, the crate shall fail
 explicitly when the endpoint response contains anything other than exactly one
-embedding rather than selecting, truncating, or synthesizing a result.
+embedding per supplied request input rather than selecting, truncating, or
+synthesizing a result.
+
+### REQ-EMBED-OAI-010
+
+The provider shall preserve caller input order in the returned logical batch of
+translated embeddings, including when the endpoint response ordering differs
+from the request ordering or when the provider uses internal chunking.
 
 ## Out of Scope
 
@@ -88,7 +100,7 @@ This crate does not define or own:
 - indexing orchestration
 - search traversal behavior
 - any single required OpenAI-compatible deployment for all consumers
-- general multi-item embedding batching in this revision
+- caller-managed batching controls in this revision
 
 ## Relationship to Other Specifications
 

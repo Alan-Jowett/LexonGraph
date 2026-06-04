@@ -52,11 +52,18 @@ The crate shall define an asynchronous embedding-provider trait that accepts an
 embedding input plus an `EmbeddingSpec` and returns embedding bytes compatible
 with that specification or explicit failure.
 
+The shared contract shall also expose an additive ordered batch-embedding
+operation over multiple embedding inputs plus one `EmbeddingSpec`.
+
 ### REQ-EMBED-TRAIT-005
 
 The crate shall permit provider implementations to fail explicitly for
 unsupported input, provider-side failures, or output incompatible with the
 requested `EmbeddingSpec`.
+
+For batch embedding, the crate shall also permit explicit failure when the
+provider cannot return exactly one compatible embedding per input in input
+order.
 
 ### REQ-EMBED-TRAIT-006
 
@@ -92,7 +99,10 @@ contracts.
 
 The conformance harness shall require the conforming provider fixture to return
 embedding bytes that are both compatible with the requested `EmbeddingSpec` and
-exactly equal to the harness-provided `expected_embedding`.
+exactly equal to the harness-provided expected bytes.
+
+For batch conformance, that requirement applies to every returned embedding in
+the harness-provided ordered result set.
 
 ### REQ-EMBED-TRAIT-012
 
@@ -101,6 +111,10 @@ The conformance helper shall reject a downstream harness when:
 - the supposed failing provider fixture succeeds
 - the supposed invalid-output provider fixture returns embedding bytes that
   satisfy the requested `EmbeddingSpec`
+- the supposed conforming provider fixture returns the wrong number of
+  embeddings
+- the supposed conforming provider fixture returns embeddings in the wrong
+  order
 
 ### REQ-EMBED-TRAIT-013
 
@@ -115,6 +129,18 @@ The public conformance-helper contract shall define `ConformanceError`
 categories and category-level rejection behavior for provider failures and
 expectation failures, while leaving exact display wording as non-normative
 diagnostic detail.
+
+### REQ-EMBED-TRAIT-015
+
+The shared batch-embedding contract shall preserve one-to-one cardinality
+between the ordered input collection and the returned ordered embedding
+collection.
+
+### REQ-EMBED-TRAIT-016
+
+The shared trait surface shall preserve a single-input compatibility path so
+existing callers and implementers are not forced onto a batch-first API shape
+in this revision.
 
 ## Out of Scope
 

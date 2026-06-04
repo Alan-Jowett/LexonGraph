@@ -376,6 +376,58 @@ where
     CEP: CanonicalEmbeddingPolicy,
     NPP: NodePackingPolicy,
 {
+    async fn resolve_and_embed_items<R>(
+        &self,
+        items: &[IndexItem<R>],
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<(Vec<Content>, Vec<Vec<u8>>), IndexerError>
+    where
+        CR: ContentResolver<R>,
+    {
+        if items.is_empty() {
+            return Err(IndexerError::EmptyInput);
+        }
+
+        let mut contents = Vec::with_capacity(items.len());
+        let mut inputs = Vec::with_capacity(items.len());
+        for item in items {
+            let content = self
+                .resolver
+                .resolve(&item.content_ref)
+                .map_err(|error| IndexerError::ContentResolution(error.to_string()))?;
+            if content.media_type.is_empty() {
+                return Err(IndexerError::UnusableContent(
+                    "resolved content must include a media type".into(),
+                ));
+            }
+
+            inputs.push(EmbeddingInput {
+                media_type: content.media_type.clone(),
+                body: content.body.clone(),
+            });
+            contents.push(content);
+        }
+
+        let embeddings = self
+            .embedding_provider
+            .embed_batch(&inputs, embedding_spec)
+            .await
+            .map_err(|error| IndexerError::EmbeddingFailure(error.to_string()))?;
+        if embeddings.len() != items.len() {
+            return Err(IndexerError::EmbeddingFailure(format!(
+                "embedding provider returned {} embeddings for {} inputs",
+                embeddings.len(),
+                items.len()
+            )));
+        }
+        for embedding in &embeddings {
+            validate_embedding_bytes(embedding, embedding_spec, "item")
+                .map_err(IndexerError::EmbeddingFailure)?;
+        }
+
+        Ok((contents, embeddings))
+    }
+
     async fn build_leaf_layer<R>(
         &self,
         items: &[IndexItem<R>],
@@ -388,34 +440,15 @@ where
             return Err(IndexerError::EmptyInput);
         }
 
+        let (contents, embeddings) = self.resolve_and_embed_items(items, embedding_spec).await?;
         let mut blocks = Vec::with_capacity(items.len());
         let mut current_layer = Vec::with_capacity(items.len());
 
-        for item in items {
-            let content = self
-                .resolver
-                .resolve(&item.content_ref)
-                .map_err(|error| IndexerError::ContentResolution(error.to_string()))?;
-            if content.media_type.is_empty() {
-                return Err(IndexerError::UnusableContent(
-                    "resolved content must include a media type".into(),
-                ));
-            }
-
-            let embedding = self
-                .embedding_provider
-                .embed(
-                    &EmbeddingInput {
-                        media_type: content.media_type.clone(),
-                        body: content.body.clone(),
-                    },
-                    embedding_spec,
-                )
-                .await
-                .map_err(|error| IndexerError::EmbeddingFailure(error.to_string()))?;
-            validate_embedding_bytes(&embedding, embedding_spec, "item")
-                .map_err(IndexerError::EmbeddingFailure)?;
-
+        for ((item, content), embedding) in items
+            .iter()
+            .zip(contents.into_iter())
+            .zip(embeddings.into_iter())
+        {
             let leaf = build_leaf_block(
                 VERSION_1,
                 embedding_spec.clone(),
@@ -460,34 +493,15 @@ where
             return Err(IndexerError::EmptyInput);
         }
 
+        let (contents, embeddings) = self.resolve_and_embed_items(items, embedding_spec).await?;
         let mut persisted_block_ids = Vec::with_capacity(items.len());
         let mut current_layer = Vec::with_capacity(items.len());
 
-        for item in items {
-            let content = self
-                .resolver
-                .resolve(&item.content_ref)
-                .map_err(|error| IndexerError::ContentResolution(error.to_string()))?;
-            if content.media_type.is_empty() {
-                return Err(IndexerError::UnusableContent(
-                    "resolved content must include a media type".into(),
-                ));
-            }
-
-            let embedding = self
-                .embedding_provider
-                .embed(
-                    &EmbeddingInput {
-                        media_type: content.media_type.clone(),
-                        body: content.body.clone(),
-                    },
-                    embedding_spec,
-                )
-                .await
-                .map_err(|error| IndexerError::EmbeddingFailure(error.to_string()))?;
-            validate_embedding_bytes(&embedding, embedding_spec, "item")
-                .map_err(IndexerError::EmbeddingFailure)?;
-
+        for ((item, content), embedding) in items
+            .iter()
+            .zip(contents.into_iter())
+            .zip(embeddings.into_iter())
+        {
             let leaf = build_leaf_block(
                 VERSION_1,
                 embedding_spec.clone(),

@@ -116,7 +116,8 @@ boundaries for content resolution, embedding generation, canonical-embedding
 selection, and intermediate-node grouping or packing behavior.
 
 The embedding-generation boundary shall be consumed from the shared
-embeddings-trait crate rather than defined by the indexer crate itself.
+embeddings-trait crate rather than defined by the indexer crate itself,
+including the shared trait crate's ordered batch-embedding semantics.
 
 The node-packing boundary shall remain overridable by downstream consumers even
 when the crate provides a built-in default implementation.
@@ -135,6 +136,10 @@ The monolithic API shall continue to realize that full flow, while the staged
 APIs shall expose semantically equivalent decomposed portions of the same
 protocol-conforming construction behavior.
 
+When multiple indexing items are provided, the core indexer may realize
+embedding generation through internal batching while preserving one leaf block
+per input item and the same externally observable semantics.
+
 ### REQ-INDEXER-014
 
 Given the same logical item set, metadata, content references resolving to the
@@ -145,6 +150,9 @@ the same root block ID and the same persisted block set.
 When embedding generation is delegated to a provider supplied through the shared
 embeddings-trait crate, determinism is defined over the provider behavior and
 configuration that affect the produced embedding output.
+
+That determinism boundary also includes any indexer or provider batching
+behavior that affects the produced embedding output.
 
 This determinism requirement also applies to staged invocations: repeating the
 same staged call with the same logical inputs shall produce the same block
@@ -255,6 +263,9 @@ items and incrementally constructs the corresponding leaf blocks from source
 material, including content resolution and embedding generation, without
 persisting those blocks as part of the staged API contract.
 
+The staged API does not require caller-managed embedding sub-batches in this
+revision.
+
 ### REQ-INDEXER-031
 
 Given the same logical item set and indexing context, partitioning items across
@@ -288,6 +299,13 @@ hidden in-memory state from earlier calls.
 Repeated application of the staged APIs over the same logical indexing context
 shall be observationally equivalent to the monolithic API, producing the same
 protocol-conforming block contents, root block ID, and complete block set.
+
+### REQ-INDEXER-036
+
+The consumer-facing indexing API surface shall remain collection-based in this
+revision: callers pass collections of items to index, while any embedding batch
+size or chunking decisions remain internal to the indexer and embedding
+provider.
 
 ## Out of Scope
 

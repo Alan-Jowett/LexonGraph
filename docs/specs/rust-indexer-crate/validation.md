@@ -204,7 +204,7 @@ indexing behavior and the opt-in trait-conformance helper surface.
 
 Invoke the indexer with an embedding-provider implementation supplied through
 the shared embeddings-trait contract that performs asynchronous work before
-returning a valid embedding.
+returning one or more valid ordered embeddings.
 
 **Pass condition:** the indexing operation awaits the provider successfully and
 produces the same protocol-conforming result shape as with an in-memory
@@ -359,3 +359,15 @@ inputs, or inputs that cannot produce a conforming parent layer.
 partially succeed, or synthesize hidden recovery behavior.
 
 **Traces to:** REQ-INDEXER-010, REQ-INDEXER-030, REQ-INDEXER-032, REQ-INDEXER-034
+
+### VAL-INDEXER-031
+
+Invoke the collection-based indexing API with multiple items and an
+embedding-provider implementation that only realizes the shared ordered batch
+embedding path rather than a single-item embedding path.
+
+**Pass condition:** collection indexing succeeds without caller-managed
+sub-batches, proving the indexer can realize multi-item embedding through the
+shared batch contract while preserving the existing collection-based API shape.
+
+**Traces to:** REQ-INDEXER-012, REQ-INDEXER-030, REQ-INDEXER-036

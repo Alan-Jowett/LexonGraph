@@ -12,8 +12,10 @@ use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider, EmbeddingSp
 enum ProviderMode {
     Good,
     WrongBytesSameLength,
+    WrongOrder,
     Fail,
     WrongLength,
+    WrongCount,
 }
 
 #[derive(Clone)]
@@ -28,10 +30,37 @@ impl EmbeddingProvider for ProviderFixture {
         _: &EmbeddingSpec,
     ) -> Result<Vec<u8>, Self::Error> {
         match self.0 {
-            ProviderMode::Good => Ok(vec![input.body[0], 0x20]),
+            ProviderMode::Good | ProviderMode::WrongOrder | ProviderMode::WrongCount => {
+                Ok(expected_embedding_for_input(input))
+            }
             ProviderMode::WrongBytesSameLength => Ok(vec![0x01, 0x02]),
             ProviderMode::Fail => Err(FixtureError("embed failure".into())),
             ProviderMode::WrongLength => Ok(vec![0x01]),
+        }
+    }
+
+    async fn embed_batch(
+        &self,
+        inputs: &[EmbeddingInput],
+        _: &EmbeddingSpec,
+    ) -> Result<Vec<Vec<u8>>, Self::Error> {
+        match self.0 {
+            ProviderMode::Good => Ok(inputs.iter().map(expected_embedding_for_input).collect()),
+            ProviderMode::WrongBytesSameLength => {
+                Ok(inputs.iter().map(|_| vec![0x01, 0x02]).collect())
+            }
+            ProviderMode::WrongOrder => Ok(inputs
+                .iter()
+                .rev()
+                .map(expected_embedding_for_input)
+                .collect()),
+            ProviderMode::Fail => Err(FixtureError("embed failure".into())),
+            ProviderMode::WrongLength => Ok(inputs.iter().map(|_| vec![0x01]).collect()),
+            ProviderMode::WrongCount => Ok(inputs
+                .first()
+                .map(expected_embedding_for_input)
+                .into_iter()
+                .collect()),
         }
     }
 }
@@ -71,8 +100,28 @@ impl EmbeddingProviderConformanceHarness for EmbeddingHarness {
         self.spec.clone()
     }
 
+    fn sample_inputs(&self) -> Vec<EmbeddingInput> {
+        vec![
+            EmbeddingInput {
+                media_type: "text/plain".into(),
+                body: b"fixture".to_vec(),
+            },
+            EmbeddingInput {
+                media_type: "text/plain".into(),
+                body: b"batch".to_vec(),
+            },
+        ]
+    }
+
     fn expected_embedding(&self) -> Vec<u8> {
         vec![b'f', 0x20]
+    }
+
+    fn expected_embeddings(&self) -> Vec<Vec<u8>> {
+        self.sample_inputs()
+            .iter()
+            .map(expected_embedding_for_input)
+            .collect()
     }
 
     fn conforming_provider(&self) -> Self::Provider {
@@ -150,4 +199,24 @@ fn val_embed_trait_011_provider_failures_surface_through_provider_category() {
         }
         Ok(()) => panic!("expected conformance suite to fail"),
     }
+}
+
+#[test]
+fn val_embed_trait_012_rejects_conforming_provider_that_returns_wrong_count() {
+    assert_expectation_failure(EmbeddingHarness {
+        conforming: ProviderMode::WrongCount,
+        ..EmbeddingHarness::happy_path()
+    });
+}
+
+#[test]
+fn val_embed_trait_013_rejects_conforming_provider_that_returns_wrong_order() {
+    assert_expectation_failure(EmbeddingHarness {
+        conforming: ProviderMode::WrongOrder,
+        ..EmbeddingHarness::happy_path()
+    });
+}
+
+fn expected_embedding_for_input(input: &EmbeddingInput) -> Vec<u8> {
+    vec![input.body[0], 0x20]
 }

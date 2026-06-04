@@ -60,6 +60,9 @@ LexonGraph-adjacent callers without introducing a dependency on those crates.
 A trait that accepts an `EmbeddingInput` plus an `EmbeddingSpec` and
 asynchronously returns embedding bytes compatible with that specification.
 
+The shared trait surface also provides an additive ordered batch-embedding
+operation over multiple `EmbeddingInput` values plus one `EmbeddingSpec`.
+
 The trait owns the shared contract shape only. It does not define any required
 model, endpoint, or runtime.
 
@@ -70,6 +73,8 @@ The shared contract requires explicit failure propagation when:
 - the provider does not support the supplied input
 - provider execution fails
 - the provider cannot satisfy the requested `EmbeddingSpec`
+- the provider cannot return exactly one embedding per supplied batch input
+- the provider cannot preserve input-to-output ordering for batch results
 
 The trait may express those failures through an implementation-defined error
 type, but it shall not require silent fallback or undocumented coercion.
@@ -92,8 +97,10 @@ The conformance-test helper surface provides reusable checks for the shared
 The helper surface may define test-only harness contracts that supply:
 
 - a sample input
+- a sample input batch
 - a compatible embedding specification
 - an exact expected embedding byte vector for the conforming fixture
+- an exact ordered embedding byte-vector set for the conforming batch fixture
 - a conforming provider fixture
 - a provider fixture that fails explicitly
 - a provider fixture that returns output incompatible with the requested
@@ -114,6 +121,9 @@ two stages:
 
 Length compatibility alone is insufficient for the conforming fixture path.
 
+For batch conformance, both stages apply to every embedding in the returned
+ordered result set.
+
 ### DSG-EMBED-TRAIT-008 `Misconfigured fixture rejection`
 
 The reusable conformance suite shall reject a downstream harness with an
@@ -124,6 +134,10 @@ expectation-category conformance failure when:
   requested `EmbeddingSpec`
 - the supposed conforming provider fixture returns bytes that are compatible
   with the requested `EmbeddingSpec` but do not equal `expected_embedding`
+- the supposed conforming provider fixture returns the wrong number of
+  embeddings
+- the supposed conforming provider fixture returns embeddings in the wrong
+  order
 
 ### DSG-EMBED-TRAIT-009 `Encoding validation boundary`
 
@@ -154,6 +168,15 @@ repository, and downstream crates such as the indexer crate and provider
 implementations shall consume this shared contract rather than defining
 independent embedding-provider traits.
 
+### DSG-EMBED-TRAIT-012 `Ordered batch semantics`
+
+The ordered batch-embedding operation is contract-relevant behavior at the
+shared trait boundary.
+
+Provider-specific crates may choose their own batching or chunking strategy, but
+the observable result seen by callers shall remain one compatible embedding per
+input in input order.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -168,3 +191,4 @@ independent embedding-provider traits.
 | DSG-EMBED-TRAIT-009 | REQ-EMBED-TRAIT-013 |
 | DSG-EMBED-TRAIT-010 | REQ-EMBED-TRAIT-014 |
 | DSG-EMBED-TRAIT-011 | REQ-EMBED-TRAIT-001, REQ-EMBED-TRAIT-009, REQ-EMBED-TRAIT-010 |
+| DSG-EMBED-TRAIT-012 | REQ-EMBED-TRAIT-004, REQ-EMBED-TRAIT-005, REQ-EMBED-TRAIT-015, REQ-EMBED-TRAIT-016 |
