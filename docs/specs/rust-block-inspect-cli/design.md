@@ -78,6 +78,9 @@ not fit ordinary JSON without loss:
 - text, booleans, and null-like values render as ordinary JSON values
 - CBOR integers that may exceed ordinary JSON-number safety render as
   `{ "$type": "integer", "value": "<base-10-string>" }`
+- CBOR floats render as `{ "$type": "float", "value": "<debug-string>" }`
+- CBOR tags render as
+  `{ "$type": "tag", "tag": "<base-10-string>", "value": <debug-json> }`
 
 This mapping is a debug surface for inspection and is not promoted as a stable
 protocol interchange format.
