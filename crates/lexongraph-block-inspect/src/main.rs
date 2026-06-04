@@ -109,14 +109,14 @@ fn parse_block_hash(input: &str) -> Result<BlockHash, InspectError> {
     for (index, chunk) in input.as_bytes().chunks_exact(2).enumerate() {
         let high = decode_hex_nibble(chunk[0]).ok_or_else(|| {
             InspectError::InvalidBlockHash(format!(
-                "found non-hexadecimal character {:?} at byte {}",
+                "found non-hexadecimal character {:?} at character {}",
                 char::from(chunk[0]),
                 index * 2
             ))
         })?;
         let low = decode_hex_nibble(chunk[1]).ok_or_else(|| {
             InspectError::InvalidBlockHash(format!(
-                "found non-hexadecimal character {:?} at byte {}",
+                "found non-hexadecimal character {:?} at character {}",
                 char::from(chunk[1]),
                 index * 2 + 1
             ))
