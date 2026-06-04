@@ -76,8 +76,8 @@ not fit ordinary JSON without loss:
   `{ "$type": "map", "entries": [{ "key": <debug-json>, "value": <debug-json> }, ...] }`
 - arbitrary CBOR arrays render as JSON arrays of debug-mapped values
 - text, booleans, and null-like values render as ordinary JSON values
-- CBOR integers that may exceed ordinary JSON-number safety render as
-  `{ "$type": "integer", "value": "<base-10-string>" }`
+- CBOR integers render as `{ "$type": "integer", "value": "<base-10-string>" }`
+  (including values that would fit safely in a JSON number)
 - CBOR floats render as `{ "$type": "float", "value": "<debug-string>" }`
 - CBOR tags render as
   `{ "$type": "tag", "tag": "<base-10-string>", "value": <debug-json> }`
