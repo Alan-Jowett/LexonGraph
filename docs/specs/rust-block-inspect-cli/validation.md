@@ -149,3 +149,13 @@ crate for verified block interpretation and retrieval semantics, and does not
 redefine those contracts or bypass them with backend-internal inspection logic.
 
 **Traces to:** REQ-INSPECT-002, REQ-INSPECT-005, REQ-INSPECT-006
+
+### VAL-INSPECT-014
+
+Populate the configured filesystem store so that the deterministic block path
+for the requested block hash cannot be read as block bytes.
+
+**Pass condition:** the CLI fails explicitly for backend retrieval failure and
+does not emit success-shaped JSON.
+
+**Traces to:** REQ-INSPECT-009, REQ-INSPECT-012

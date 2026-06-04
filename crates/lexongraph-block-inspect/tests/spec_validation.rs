@@ -211,15 +211,30 @@ fn val_inspect_009_invalid_hash_and_unsupported_backend_fail_explicitly() {
 #[test]
 fn val_inspect_010_store_construction_failures_are_explicit() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let missing_root = temp_dir.path().join("missing-store-root");
+    let non_directory_root = temp_dir.path().join("not-a-directory");
+    std::fs::write(&non_directory_root, b"not a directory").unwrap();
     let output = run_fs_inspect(
-        &missing_root,
+        &non_directory_root,
         &BlockHash::from_bytes([0x11; 32]).to_string(),
     );
 
     assert!(!output.status.success(), "{}", command_debug(&output));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("store construction failure"));
+}
+
+#[test]
+fn val_inspect_014_backend_retrieval_failures_are_explicit() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let unreadable_hash = BlockHash::from_bytes([0x77; 32]);
+    let block_path = expected_block_path(temp_dir.path(), &unreadable_hash);
+    std::fs::create_dir_all(&block_path).unwrap();
+
+    let output = run_fs_inspect(temp_dir.path(), &unreadable_hash.to_string());
+
+    assert!(!output.status.success(), "{}", command_debug(&output));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("backend retrieval failure"));
 }
 
 #[test]

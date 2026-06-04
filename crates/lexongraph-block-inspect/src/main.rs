@@ -137,19 +137,6 @@ fn decode_hex_nibble(byte: u8) -> Option<u8> {
 }
 
 fn open_filesystem_store(store_root: &Path) -> Result<FilesystemBlockStore, InspectError> {
-    if !store_root.exists() {
-        return Err(InspectError::StoreConstruction(format!(
-            "store root {} does not exist",
-            store_root.display()
-        )));
-    }
-    if !store_root.is_dir() {
-        return Err(InspectError::StoreConstruction(format!(
-            "store root {} is not a directory",
-            store_root.display()
-        )));
-    }
-
     FilesystemBlockStore::new(store_root).map_err(|error| match error {
         BlockStoreError::BackendFailure(message) => InspectError::StoreConstruction(message),
         BlockStoreError::MalformedContent(inner) => {
