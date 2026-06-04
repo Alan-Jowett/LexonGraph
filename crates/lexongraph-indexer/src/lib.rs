@@ -444,11 +444,7 @@ where
         let mut blocks = Vec::with_capacity(items.len());
         let mut current_layer = Vec::with_capacity(items.len());
 
-        for ((item, content), embedding) in items
-            .iter()
-            .zip(contents.into_iter())
-            .zip(embeddings.into_iter())
-        {
+        for ((item, content), embedding) in items.iter().zip(contents).zip(embeddings) {
             let leaf = build_leaf_block(
                 VERSION_1,
                 embedding_spec.clone(),
@@ -497,11 +493,7 @@ where
         let mut persisted_block_ids = Vec::with_capacity(items.len());
         let mut current_layer = Vec::with_capacity(items.len());
 
-        for ((item, content), embedding) in items
-            .iter()
-            .zip(contents.into_iter())
-            .zip(embeddings.into_iter())
-        {
+        for ((item, content), embedding) in items.iter().zip(contents).zip(embeddings) {
             let leaf = build_leaf_block(
                 VERSION_1,
                 embedding_spec.clone(),
