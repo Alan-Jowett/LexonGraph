@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Transport-Agnostic Semantic Compression with Adaptive Block Density
 ## A Geometry-Aligned Approach to Embedding Storage
 

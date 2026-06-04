@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph Embedding Block Compression Protocol (EBCP)
 
 ---
@@ -32,11 +34,15 @@ EBCP imposes **no fixed embedding count per block**.
 
 ## 3. Reconstruction Semantics (Normative)
 
+`G` denotes an optional global transform. If no global transform is used, `G`
+is the identity transform and `G⁻¹` is also identity.
+
 For each embedding j:
 
 x̂_j = G⁻¹(c + U z_j + r_j)
 
-Decoder MUST apply this reconstruction once z_j and r_j are decoded.
+Decoder MUST decode `c`, `U`, `z_j`, and `r_j`, form the local reconstruction
+`c + U z_j + r_j`, and then apply `G⁻¹` when a global transform is present.
 
 ---
 
@@ -114,9 +120,11 @@ struct BlockHeader {
     stream_count: u16
 }
 
-`block_id` is not an encoded header field. In content-addressed systems, it is
-derived from the canonical serialized block bytes rather than stored inside the
-block.
+`block_id` is not an encoded header field. EBCP defines a binary
+payload/container format only; it does not define or store a separate
+content-addressed identifier. If EBCP bytes are embedded inside a LexonGraph
+block, the enclosing LexonGraph block ID is derived from the canonical
+serialized block bytes rather than stored inside the EBCP payload.
 
 ---
 
@@ -145,6 +153,11 @@ struct StreamEntry {
 
 Each stream MUST declare numeric_format.
 
+Initial numeric format registry:
+
+0 = float32
+1 = int8
+
 Implementations MUST support at least:
 
 - float32
@@ -161,10 +174,10 @@ struct GlobalTransform {
     output_dim: u32
 
     encoding_format: u16
-    checksum: u256
+    checksum_sha256: byte[32]
 }
 
-Checksum MUST be computed over canonical serialization:
+`checksum_sha256` MUST be the SHA-256 digest of the canonical serialization:
 
 - row-major
 - fixed precision
@@ -223,7 +236,7 @@ N·Δgain ≤ Δcost
 
 ## 15. Block Invariants
 
-- EncodedSize ≤ B
+- EncodedSize ≤ block_size
 - embedding_count ≥ 1
 - k ≤ dimension
 - stream_count matches directory
