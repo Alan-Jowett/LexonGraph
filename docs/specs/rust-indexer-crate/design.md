@@ -118,6 +118,9 @@ The indexer crate does not define the embedding-provider trait itself and does
 not own provider-specific realization details such as OpenAI-compatible request
 construction.
 
+When handling multiple items, the indexer may consume the shared ordered batch
+embedding operation provided by that trait boundary.
+
 ### DSG-INDEXER-008 `CanonicalEmbeddingPolicy`
 
 A trait that derives the canonical embedding for a produced block when that
@@ -184,8 +187,8 @@ The fixed orchestration flow is:
 
 1. reject empty input explicitly
 2. for each indexing item, resolve its content reference
-3. await one item-level embedding compatible with `embedding_spec` from the
-   supplied embedding provider
+3. submit the resolved inputs through the supplied embedding provider and obtain
+   one ordered item-level embedding compatible with `embedding_spec` per input
 4. construct exactly one leaf block containing exactly one leaf entry derived
    from that item and storing the resolved content inline
 5. persist each produced leaf block through the block store
@@ -233,6 +236,9 @@ For remotely backed embedding providers, the relevant indexing context includes
 provider configuration that can affect the embedding output, but the ownership
 of that configuration contract remains with the embeddings-trait crate and any
 provider-specific crate layered above it.
+
+That boundary includes internal batching behavior when it can affect embedding
+output.
 
 ### DSG-INDEXER-013 `Implementation realization`
 
@@ -357,6 +363,9 @@ The crate exposes a public staged API that accepts:
 and returns the constructed leaf blocks for that batch without persisting them
 through the block-store contract as part of the staged operation itself.
 
+The staged leaf-construction API remains collection-based and does not expose
+provider-specific or caller-managed batching controls.
+
 ### DSG-INDEXER-025 `Staged parent construction API`
 
 The crate exposes a public staged API that accepts:
@@ -389,6 +398,15 @@ persist or reload constructed blocks outside the crate and later supply those
 blocks back into later stages.
 
 The crate maintains no hidden cross-call orchestration state.
+
+### DSG-INDEXER-029 `Collection-based batch indexing surface`
+
+Multi-item collection indexing is the consumer-facing batch indexing surface in
+this revision.
+
+The indexer may partition work internally when invoking the shared embedding
+provider, but callers continue to provide collections of `IndexItem` values
+through the existing collection-shaped APIs.
 
 ### DSG-INDEXER-028 `Mixed child-set admissibility`
 
@@ -426,3 +444,4 @@ and deterministic policy behavior.
 | DSG-INDEXER-026 | REQ-INDEXER-032, REQ-INDEXER-034 |
 | DSG-INDEXER-027 | REQ-INDEXER-011, REQ-INDEXER-034 |
 | DSG-INDEXER-028 | REQ-INDEXER-033 |
+| DSG-INDEXER-029 | REQ-INDEXER-013, REQ-INDEXER-030, REQ-INDEXER-035, REQ-INDEXER-036 |

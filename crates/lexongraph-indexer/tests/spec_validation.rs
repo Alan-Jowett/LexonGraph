@@ -177,6 +177,40 @@ impl EmbeddingProvider for ZeroEmbeddingProvider {
     }
 }
 
+#[derive(Clone)]
+struct BatchOnlyEmbeddingProvider;
+
+impl EmbeddingProvider for BatchOnlyEmbeddingProvider {
+    type Error = FixtureError;
+
+    async fn embed(&self, _: &EmbeddingInput, _: &EmbeddingSpec) -> Result<Vec<u8>, Self::Error> {
+        Err(FixtureError(
+            "single-item embedding path should not be used for batch indexing".into(),
+        ))
+    }
+
+    async fn embed_batch(
+        &self,
+        inputs: &[EmbeddingInput],
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<Vec<u8>>, Self::Error> {
+        if spec.encoding != "i8" || spec.dims != 2 {
+            return Err(FixtureError("unexpected embedding spec".into()));
+        }
+
+        inputs
+            .iter()
+            .map(|input| {
+                let first = *input
+                    .body
+                    .first()
+                    .ok_or_else(|| FixtureError("expected non-empty content".into()))?;
+                Ok(vec![first, input.body.len() as u8])
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy)]
 struct FirstChildCanonicalPolicy;
 
@@ -1005,6 +1039,26 @@ async fn val_indexer_025_incremental_leaf_batch_construction() {
             }
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_031_collection_indexing_realizes_batch_embeddings_without_caller_sub_batches()
+{
+    let store = MemoryBlockStore::default();
+    let indexer = Indexer::with_defaults(MapResolver, BatchOnlyEmbeddingProvider);
+
+    let result = indexer
+        .index::<&'static str>(
+            &[item("alpha"), item("bravo"), item("charlie")],
+            embedding_spec(),
+            160,
+            &store,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.block_ids.is_empty());
+    assert!(store.get(&result.root_id).unwrap().is_some());
 }
 
 #[test]

@@ -8,7 +8,9 @@ use async_openai::{
     Client,
     config::{AzureConfig, Config, OpenAIConfig},
     error::OpenAIError,
-    types::embeddings::CreateEmbeddingRequestArgs,
+    types::embeddings::{
+        CreateEmbeddingRequestArgs, Embedding, EmbeddingInput as OpenAiApiEmbeddingInput,
+    },
 };
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
@@ -79,6 +81,8 @@ pub enum OpenAiEmbeddingProviderError {
     InvalidDimensions(u64),
     DimensionalityMismatch { expected: usize, actual: usize },
     UnexpectedEmbeddingCount(usize),
+    UnexpectedEmbeddingIndex { index: u32, batch_len: usize },
+    DuplicateEmbeddingIndex(u32),
     Request(OpenAIError),
 }
 
@@ -100,11 +104,18 @@ impl fmt::Display for OpenAiEmbeddingProviderError {
                 f,
                 "embedding vector length {actual} does not match embedding_spec dims {expected}"
             ),
-            Self::UnexpectedEmbeddingCount(count) => {
+            Self::UnexpectedEmbeddingCount(actual) => {
                 write!(
                     f,
-                    "expected exactly one embedding in the provider response, got {count}"
+                    "unexpected embedding count in the provider response: got {actual}"
                 )
+            }
+            Self::UnexpectedEmbeddingIndex { index, batch_len } => write!(
+                f,
+                "embedding response index {index} is out of range for batch size {batch_len}"
+            ),
+            Self::DuplicateEmbeddingIndex(index) => {
+                write!(f, "embedding response contains duplicate index {index}")
             }
             Self::Request(error) => write!(f, "{error}"),
         }
@@ -120,7 +131,9 @@ impl std::error::Error for OpenAiEmbeddingProviderError {
             | Self::UnsupportedEncoding(_)
             | Self::InvalidDimensions(_)
             | Self::DimensionalityMismatch { .. }
-            | Self::UnexpectedEmbeddingCount(_) => None,
+            | Self::UnexpectedEmbeddingCount(_)
+            | Self::UnexpectedEmbeddingIndex { .. }
+            | Self::DuplicateEmbeddingIndex(_) => None,
         }
     }
 }
@@ -139,11 +152,22 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
         input: &EmbeddingInput,
         spec: &EmbeddingSpec,
     ) -> Result<Vec<u8>, Self::Error> {
-        if !is_textual_media_type(&input.media_type) {
-            return Err(OpenAiEmbeddingProviderError::UnsupportedContent(format!(
-                "resolved media type {:?} is not supported by the OpenAI-style embedding provider",
-                input.media_type
-            )));
+        let mut embeddings = self.embed_batch(std::slice::from_ref(input), spec).await?;
+        match embeddings.pop() {
+            Some(embedding) if embeddings.is_empty() => Ok(embedding),
+            Some(_) | None => Err(OpenAiEmbeddingProviderError::UnexpectedEmbeddingCount(
+                embeddings.len() + 1,
+            )),
+        }
+    }
+
+    async fn embed_batch(
+        &self,
+        inputs: &[EmbeddingInput],
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<Vec<u8>>, Self::Error> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
         }
         if spec.encoding != "f32le" {
             return Err(OpenAiEmbeddingProviderError::UnsupportedEncoding(
@@ -153,28 +177,13 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
 
         let expected_dims = usize::try_from(spec.dims)
             .map_err(|_| OpenAiEmbeddingProviderError::InvalidDimensions(spec.dims))?;
-        let text =
-            str::from_utf8(&input.body).map_err(OpenAiEmbeddingProviderError::InvalidUtf8)?;
+        let texts = collect_text_inputs(inputs)?;
         let request = CreateEmbeddingRequestArgs::default()
             .model(&self.model)
-            .input(text)
+            .input(OpenAiApiEmbeddingInput::StringArray(texts))
             .build()?;
         let response = self.client.embeddings().create(request).await?;
-        if response.data.len() != 1 {
-            return Err(OpenAiEmbeddingProviderError::UnexpectedEmbeddingCount(
-                response.data.len(),
-            ));
-        }
-
-        let embedding = &response.data[0].embedding;
-        if embedding.len() != expected_dims {
-            return Err(OpenAiEmbeddingProviderError::DimensionalityMismatch {
-                expected: expected_dims,
-                actual: embedding.len(),
-            });
-        }
-
-        Ok(encode_f32le(embedding))
+        map_response_embeddings(response.data, expected_dims, inputs.len())
     }
 }
 
@@ -200,4 +209,75 @@ fn encode_f32le(embedding: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+fn collect_text_inputs(
+    inputs: &[EmbeddingInput],
+) -> Result<Vec<String>, OpenAiEmbeddingProviderError> {
+    let mut texts = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        if !is_textual_media_type(&input.media_type) {
+            return Err(OpenAiEmbeddingProviderError::UnsupportedContent(format!(
+                "resolved media type {:?} is not supported by the OpenAI-style embedding provider",
+                input.media_type
+            )));
+        }
+        texts.push(
+            str::from_utf8(&input.body)
+                .map_err(OpenAiEmbeddingProviderError::InvalidUtf8)?
+                .to_owned(),
+        );
+    }
+    Ok(texts)
+}
+
+fn map_response_embeddings(
+    response_embeddings: Vec<Embedding>,
+    expected_dims: usize,
+    batch_len: usize,
+) -> Result<Vec<Vec<u8>>, OpenAiEmbeddingProviderError> {
+    if response_embeddings.len() != batch_len {
+        return Err(OpenAiEmbeddingProviderError::UnexpectedEmbeddingCount(
+            response_embeddings.len(),
+        ));
+    }
+
+    let mut ordered_embeddings = vec![None; batch_len];
+    for response_embedding in response_embeddings {
+        let index = usize::try_from(response_embedding.index).map_err(|_| {
+            OpenAiEmbeddingProviderError::UnexpectedEmbeddingIndex {
+                index: response_embedding.index,
+                batch_len,
+            }
+        })?;
+        if index >= batch_len {
+            return Err(OpenAiEmbeddingProviderError::UnexpectedEmbeddingIndex {
+                index: response_embedding.index,
+                batch_len,
+            });
+        }
+        if ordered_embeddings[index].is_some() {
+            return Err(OpenAiEmbeddingProviderError::DuplicateEmbeddingIndex(
+                response_embedding.index,
+            ));
+        }
+        if response_embedding.embedding.len() != expected_dims {
+            return Err(OpenAiEmbeddingProviderError::DimensionalityMismatch {
+                expected: expected_dims,
+                actual: response_embedding.embedding.len(),
+            });
+        }
+        ordered_embeddings[index] = Some(encode_f32le(&response_embedding.embedding));
+    }
+
+    ordered_embeddings
+        .into_iter()
+        .enumerate()
+        .map(|(index, embedding)| {
+            embedding.ok_or(OpenAiEmbeddingProviderError::UnexpectedEmbeddingIndex {
+                index: index as u32,
+                batch_len,
+            })
+        })
+        .collect()
 }

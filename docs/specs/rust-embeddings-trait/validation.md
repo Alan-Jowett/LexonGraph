@@ -29,10 +29,12 @@ REQ-EMBED-TRAIT-010
 ### VAL-EMBED-TRAIT-002
 
 Implement the shared embedding-provider trait with a fixture that performs
-asynchronous work before returning valid embedding bytes.
+asynchronous work before returning valid embedding bytes for one or more
+ordered inputs.
 
 **Pass condition:** the shared contract supports asynchronous provider
-realization and returns bytes compatible with the requested `EmbeddingSpec`.
+realization and returns one ordered embedding per supplied input, with each
+embedding compatible with the requested `EmbeddingSpec`.
 
 **Traces to:** REQ-EMBED-TRAIT-002, REQ-EMBED-TRAIT-004
 
@@ -138,3 +140,25 @@ error category, harness expectation violations surface through the expectation
 error category, and the validation does not require exact display wording.
 
 **Traces to:** REQ-EMBED-TRAIT-014
+
+### VAL-EMBED-TRAIT-012
+
+Run the shared conformance harnesses with a downstream harness whose supposed
+conforming provider fixture returns the wrong number of embeddings for the
+supplied ordered input batch.
+
+**Pass condition:** the conformance suite rejects the harness with an
+expectation-category failure.
+
+**Traces to:** REQ-EMBED-TRAIT-012, REQ-EMBED-TRAIT-015, REQ-EMBED-TRAIT-014
+
+### VAL-EMBED-TRAIT-013
+
+Run the shared conformance harnesses with a downstream harness whose supposed
+conforming provider fixture returns the right number of embeddings but in the
+wrong order for the supplied ordered input batch.
+
+**Pass condition:** the conformance suite rejects the harness with an
+expectation-category failure.
+
+**Traces to:** REQ-EMBED-TRAIT-012, REQ-EMBED-TRAIT-015, REQ-EMBED-TRAIT-014

@@ -46,6 +46,31 @@ fn val_embed_trait_002_async_provider_realization_returns_compatible_bytes() {
     assert_eq!(embedding, vec![b'f', 7]);
 }
 
+#[test]
+fn val_embed_trait_002_default_batch_embedding_fallback_preserves_input_order() {
+    let provider = AsyncFixtureProvider;
+    let inputs = vec![
+        EmbeddingInput {
+            media_type: "text/plain".into(),
+            body: b"alpha".to_vec(),
+        },
+        EmbeddingInput {
+            media_type: "text/plain".into(),
+            body: b"bravo".to_vec(),
+        },
+    ];
+    let embeddings = pollster::block_on(provider.embed_batch(
+        &inputs,
+        &EmbeddingSpec {
+            dims: 2,
+            encoding: "i8".into(),
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(embeddings, vec![vec![b'a', 5], vec![b'b', 5]]);
+}
+
 #[derive(Clone, Debug)]
 struct FixtureError(String);
 

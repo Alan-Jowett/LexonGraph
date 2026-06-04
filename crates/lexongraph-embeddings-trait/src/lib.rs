@@ -31,6 +31,18 @@ pub trait EmbeddingProvider {
         input: &EmbeddingInput,
         spec: &EmbeddingSpec,
     ) -> Result<Vec<u8>, Self::Error>;
+
+    async fn embed_batch(
+        &self,
+        inputs: &[EmbeddingInput],
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<Vec<u8>>, Self::Error> {
+        let mut embeddings = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            embeddings.push(self.embed(input, spec).await?);
+        }
+        Ok(embeddings)
+    }
 }
 
 #[cfg(feature = "conformance")]
@@ -62,8 +74,14 @@ mod conformance_support {
         type Provider: EmbeddingProvider;
 
         fn sample_input(&self) -> EmbeddingInput;
+        fn sample_inputs(&self) -> Vec<EmbeddingInput> {
+            vec![self.sample_input()]
+        }
         fn compatible_spec(&self) -> EmbeddingSpec;
         fn expected_embedding(&self) -> Vec<u8>;
+        fn expected_embeddings(&self) -> Vec<Vec<u8>> {
+            vec![self.expected_embedding()]
+        }
         fn conforming_provider(&self) -> Self::Provider;
         fn failing_provider(&self) -> Self::Provider;
         fn invalid_output_provider(&self) -> Self::Provider;
@@ -74,20 +92,19 @@ mod conformance_support {
         H: EmbeddingProviderConformanceHarness,
     {
         pollster::block_on(async {
-            let input = harness.sample_input();
             let spec = harness.compatible_spec();
-
+            let input = harness.sample_input();
+            let expected_embedding = harness.expected_embedding();
             let embedding = harness
                 .conforming_provider()
                 .embed(&input, &spec)
                 .await
                 .map_err(|error| ConformanceError::Provider(error.to_string()))?;
             validate_embedding_bytes(&embedding, &spec).map_err(ConformanceError::Expectation)?;
-            if embedding != harness.expected_embedding() {
+            if embedding != expected_embedding {
                 return Err(ConformanceError::Expectation(format!(
                     "expected embedding {:?}, got {:?}",
-                    harness.expected_embedding(),
-                    embedding
+                    expected_embedding, embedding
                 )));
             }
 
@@ -108,8 +125,74 @@ mod conformance_support {
                     "expected invalid-output provider to violate embedding_spec length".into(),
                 )),
                 Err(_) => Ok(()),
+            }?;
+            let inputs = harness.sample_inputs();
+            let expected_embeddings = harness.expected_embeddings();
+
+            if expected_embeddings.len() != inputs.len() {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected {} embeddings for {} inputs",
+                    expected_embeddings.len(),
+                    inputs.len()
+                )));
+            }
+
+            let embeddings = harness
+                .conforming_provider()
+                .embed_batch(&inputs, &spec)
+                .await
+                .map_err(|error| ConformanceError::Provider(error.to_string()))?;
+            validate_embedding_batch(&embeddings, &spec, inputs.len())
+                .map_err(ConformanceError::Expectation)?;
+            for (index, (embedding, expected_embedding)) in embeddings
+                .iter()
+                .zip(expected_embeddings.iter())
+                .enumerate()
+            {
+                if embedding != expected_embedding {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected embedding {index} to equal {:?}, got {:?}",
+                        expected_embedding, embedding
+                    )));
+                }
+            }
+
+            let failure = harness.failing_provider().embed_batch(&inputs, &spec).await;
+            if let Ok(embeddings) = failure {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected provider failure, got successful embeddings {embeddings:?}"
+                )));
+            }
+
+            let invalid_output = harness
+                .invalid_output_provider()
+                .embed_batch(&inputs, &spec)
+                .await
+                .map_err(|error| ConformanceError::Provider(error.to_string()))?;
+            match validate_embedding_batch(&invalid_output, &spec, inputs.len()) {
+                Ok(()) => Err(ConformanceError::Expectation(
+                    "expected invalid-output provider to violate embedding_spec compatibility or batch cardinality".into(),
+                )),
+                Err(_) => Ok(()),
             }
         })
+    }
+
+    fn validate_embedding_batch(
+        embeddings: &[Vec<u8>],
+        spec: &EmbeddingSpec,
+        expected_count: usize,
+    ) -> Result<(), String> {
+        if embeddings.len() != expected_count {
+            return Err(format!(
+                "embedding count {} does not match expected count {expected_count}",
+                embeddings.len()
+            ));
+        }
+        for embedding in embeddings {
+            validate_embedding_bytes(embedding, spec)?;
+        }
+        Ok(())
     }
 
     fn validate_embedding_bytes(embedding: &[u8], spec: &EmbeddingSpec) -> Result<(), String> {
