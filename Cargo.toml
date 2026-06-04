@@ -3,6 +3,7 @@
 [workspace]
 members = [
     "crates/lexongraph-block",
+    "crates/lexongraph-block-inspect",
     "crates/lexongraph-block-store",
     "crates/lexongraph-block-store-fs",
     "crates/lexongraph-dcbc",
@@ -12,4 +13,3 @@ members = [
     "crates/lexongraph-search",
 ]
 resolver = "2"
-
