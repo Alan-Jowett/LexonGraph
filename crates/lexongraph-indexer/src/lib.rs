@@ -298,7 +298,7 @@ where
         CR: ContentResolver<R>,
     {
         let layer = self.build_leaf_layer(items, &embedding_spec).await?;
-        Ok(ConstructedBlocks::from_serialized_blocks(layer.blocks))
+        Ok(ConstructedBlocks::from_constructed_blocks(layer.blocks))
     }
 
     pub fn build_parent_blocks(
@@ -309,7 +309,7 @@ where
     ) -> Result<ConstructedBlocks, IndexerError> {
         let layer =
             self.build_parent_layer_from_blocks(child_blocks, &embedding_spec, block_size_target)?;
-        Ok(ConstructedBlocks::from_serialized_blocks(layer.blocks))
+        Ok(ConstructedBlocks::from_constructed_blocks(layer.blocks))
     }
 
     pub async fn index<R>(
@@ -324,7 +324,7 @@ where
     {
         let mut persisted_block_ids = Vec::with_capacity(items.len());
         let mut current_layer = self.build_leaf_layer(items, &embedding_spec).await?;
-        persisted_block_ids.extend(self.persist_serialized_blocks(&current_layer.blocks, store)?);
+        persisted_block_ids.extend(self.persist_constructed_blocks(&current_layer.blocks, store)?);
 
         while current_layer.children.len() > 1 {
             current_layer = self.build_parent_layer_from_children(
@@ -333,7 +333,7 @@ where
                 block_size_target,
             )?;
             persisted_block_ids
-                .extend(self.persist_serialized_blocks(&current_layer.blocks, store)?);
+                .extend(self.persist_constructed_blocks(&current_layer.blocks, store)?);
         }
 
         persisted_block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
@@ -348,15 +348,22 @@ where
 
 #[derive(Clone, Debug)]
 struct IndexedLayer {
-    blocks: Vec<SerializedBlock>,
+    blocks: Vec<ConstructedBlock>,
     children: Vec<IndexedChild>,
 }
 
 impl ConstructedBlocks {
-    fn from_serialized_blocks(blocks: Vec<SerializedBlock>) -> Self {
-        let block_ids = blocks.iter().map(|block| block.hash).collect();
+    fn from_constructed_blocks(blocks: Vec<ConstructedBlock>) -> Self {
+        let block_ids = blocks.iter().map(|block| block.serialized.hash).collect();
+        let blocks = blocks.into_iter().map(|block| block.serialized).collect();
         Self { block_ids, blocks }
     }
+}
+
+#[derive(Clone, Debug)]
+struct ConstructedBlock {
+    block: Block,
+    serialized: SerializedBlock,
 }
 
 impl<CR, EP, CEP, NPP> Indexer<CR, EP, CEP, NPP>
@@ -424,7 +431,10 @@ where
                 embedding,
                 child: serialized.hash,
             });
-            blocks.push(serialized);
+            blocks.push(ConstructedBlock {
+                block: leaf_block,
+                serialized,
+            });
         }
 
         Ok(IndexedLayer {
@@ -564,7 +574,10 @@ where
                 embedding: canonical_embedding,
                 child: serialized.hash,
             });
-            blocks.push(serialized);
+            blocks.push(ConstructedBlock {
+                block: branch_block,
+                serialized,
+            });
         }
 
         Ok(IndexedLayer {
@@ -573,16 +586,15 @@ where
         })
     }
 
-    fn persist_serialized_blocks(
+    fn persist_constructed_blocks(
         &self,
-        blocks: &[SerializedBlock],
+        blocks: &[ConstructedBlock],
         store: &dyn BlockStore,
     ) -> Result<Vec<BlockHash>, IndexerError> {
         let mut persisted_block_ids = Vec::with_capacity(blocks.len());
         for block in blocks {
-            let validated = lexongraph_block::deserialize_block(&block.bytes, &block.hash)
-                .map_err(IndexerError::InvalidInputBlock)?;
-            let block_id = store.put(&validated.block).map_err(IndexerError::Storage)?;
+            let block_id = store.put(&block.block).map_err(IndexerError::Storage)?;
+            debug_assert_eq!(block_id, block.serialized.hash);
             persisted_block_ids.push(block_id);
         }
         Ok(persisted_block_ids)

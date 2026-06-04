@@ -322,6 +322,17 @@ async fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
             panic!("expected duplicate leaf layer to collapse to a leaf root")
         }
     }
+
+    let (staged_root, staged_ids) = staged_index(
+        &indexer,
+        &[item("alpha"), item("alpha")],
+        embedding_spec(),
+        256,
+    )
+    .await
+    .unwrap();
+    assert_eq!(staged_root, result.root_id);
+    assert_eq!(staged_ids, result.block_ids);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1485,9 +1496,9 @@ where
         .await?;
     let mut block_ids = layer.block_ids.clone();
 
-    while layer.blocks.len() > 1 {
+    while unique_serialized_blocks_by_hash(&layer.blocks).len() > 1 {
         layer = indexer.build_parent_blocks(
-            &layer.blocks,
+            &unique_serialized_blocks_by_hash(&layer.blocks),
             embedding_spec.clone(),
             block_size_target,
         )?;
@@ -1496,7 +1507,8 @@ where
 
     block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     block_ids.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
-    Ok((layer.blocks[0].hash, block_ids))
+    let final_blocks = unique_serialized_blocks_by_hash(&layer.blocks);
+    Ok((final_blocks[0].hash, block_ids))
 }
 
 fn round_trip_serialized_blocks(blocks: &[SerializedBlock]) -> Vec<SerializedBlock> {
@@ -1513,4 +1525,11 @@ fn sorted_hashes(hashes: &[BlockHash]) -> Vec<BlockHash> {
     let mut hashes = hashes.to_vec();
     hashes.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     hashes
+}
+
+fn unique_serialized_blocks_by_hash(blocks: &[SerializedBlock]) -> Vec<SerializedBlock> {
+    let mut blocks = blocks.to_vec();
+    blocks.sort_by(|left, right| left.hash.as_bytes().cmp(right.hash.as_bytes()));
+    blocks.dedup_by(|left, right| left.hash == right.hash);
+    blocks
 }
