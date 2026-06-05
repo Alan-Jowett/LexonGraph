@@ -10,6 +10,9 @@ mod torch_backend;
 
 use std::fmt;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 use solver::solve_lexicographic_assignment;
 
 #[cfg(feature = "tch")]
@@ -174,14 +177,34 @@ impl NumericBackend for PureRustBackend {
             ));
         }
 
-        let mut distances =
-            Vec::with_capacity(normalized_points.len() * normalized_centroids.len());
-        for point in normalized_points {
-            for centroid in normalized_centroids {
-                distances.push(cosine_distance_from_normalized(point, centroid)?);
-            }
+        #[cfg(feature = "parallel")]
+        {
+            let centroid_count = normalized_centroids.len();
+            let mut distances = vec![0.0; normalized_points.len() * centroid_count];
+            distances
+                .par_chunks_mut(centroid_count)
+                .enumerate()
+                .try_for_each(|(point_index, row)| {
+                    let point = normalized_points[point_index];
+                    for (centroid_index, centroid) in normalized_centroids.iter().enumerate() {
+                        row[centroid_index] = cosine_distance_from_normalized(point, centroid)?;
+                    }
+                    Ok::<(), DcbcError>(())
+                })?;
+            Ok(distances)
         }
-        Ok(distances)
+
+        #[cfg(not(feature = "parallel"))]
+        {
+            let mut distances =
+                Vec::with_capacity(normalized_points.len() * normalized_centroids.len());
+            for point in normalized_points {
+                for centroid in normalized_centroids {
+                    distances.push(cosine_distance_from_normalized(point, centroid)?);
+                }
+            }
+            Ok(distances)
+        }
     }
 }
 

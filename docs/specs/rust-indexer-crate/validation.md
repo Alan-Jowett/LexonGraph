@@ -371,3 +371,55 @@ sub-batches, proving the indexer can realize multi-item embedding through the
 shared batch contract while preserving the existing collection-based API shape.
 
 **Traces to:** REQ-INDEXER-012, REQ-INDEXER-030, REQ-INDEXER-036
+
+### VAL-INDEXER-032
+
+Invoke monolithic indexing with a caller-supplied status observer on an item
+set that requires one or more parent layers.
+
+**Pass condition:** the observer receives structured status updates covering
+clustering start and clustering completion without requiring any
+repository-specific logging sink.
+
+**Traces to:** REQ-INDEXER-037, REQ-INDEXER-039
+
+### VAL-INDEXER-033
+
+Use a fixture whose node-packing work remains active long enough to appear
+non-trivial.
+
+**Pass condition:** at least one in-progress clustering status update is emitted
+before clustering completion, demonstrating that the crate does not report only
+terminal state for long-running clustering work.
+
+**Traces to:** REQ-INDEXER-038
+
+### VAL-INDEXER-034
+
+Run the same logical indexing job twice on a fixture that exercises the
+internally parallel clustering path.
+
+**Pass condition:** both runs produce the same root block ID and complete block
+set, and failures remain explicit if the fixture is made non-conforming.
+
+**Traces to:** REQ-INDEXER-014, REQ-INDEXER-027, REQ-INDEXER-040
+
+### VAL-INDEXER-035
+
+Connect the status observer to a caller-owned in-memory collection or similar
+sink.
+
+**Pass condition:** status delivery works without the crate owning console
+output, tracing integration, or external telemetry storage.
+
+**Traces to:** REQ-INDEXER-039
+
+### VAL-INDEXER-036
+
+Invoke the staged parent-construction API with a caller-supplied observer on a
+valid child layer.
+
+**Pass condition:** the staged parent-construction path emits the same status
+model for clustering-related work as the monolithic indexing path.
+
+**Traces to:** REQ-INDEXER-013, REQ-INDEXER-037, REQ-INDEXER-038

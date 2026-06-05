@@ -9,6 +9,7 @@ edition = "2024"
 # Intended for use from downstream test code via `[dev-dependencies]`.
 # Enabling this in `[dependencies]` broadens the crate's public API surface.
 conformance = ["dep:pollster"]
+parallel = ["lexongraph-dcbc/parallel"]
 
 [dependencies]
 half = "2.7.1"

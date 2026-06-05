@@ -132,6 +132,10 @@ normalization, block construction, and block persistence flow, including the
 default-construction path that wires in the crate's built-in
 canonical-embedding and node-packing implementations.
 
+The core indexer shall also own caller-visible status emission points for
+long-running parent-layer construction work, including clustering performed
+through the selected node-packing policy.
+
 The monolithic API shall continue to realize that full flow, while the staged
 APIs shall expose semantically equivalent decomposed portions of the same
 protocol-conforming construction behavior.
@@ -157,6 +161,11 @@ behavior that affects the produced embedding output.
 This determinism requirement also applies to staged invocations: repeating the
 same staged call with the same logical inputs shall produce the same block
 content and block identifiers without relying on cross-call duplicate tracking.
+
+That determinism guarantee shall hold even when the implementation uses
+internal parallelism; scheduling differences shall not change grouping results,
+block content, explicit failure behavior, the root block ID, or the complete
+persisted block set.
 
 ### REQ-INDEXER-015
 
@@ -212,6 +221,9 @@ The crate shall provide a built-in default `NodePackingPolicy` implementation
 that uses `lexongraph-dcbc` to derive deterministic candidate child groups for
 intermediate-node construction from current-layer child embeddings.
 
+The built-in default implementation may realize behavior-preserving internal
+parallelism while deriving those candidate groups.
+
 ### REQ-INDEXER-024
 
 The crate shall provide a primary default-instantiation path for the indexer
@@ -239,6 +251,37 @@ Given the same ordered current-layer children, embedding bytes, block size
 target, and deterministic DCBC dependency behavior, the built-in default
 node-packing implementation shall produce the same candidate grouping result or
 the same explicit failure.
+
+This guarantee explicitly includes executions that use behavior-preserving
+internal parallelism.
+
+### REQ-INDEXER-037
+
+The crate shall provide an optional caller-supplied status observer contract
+for indexing progress.
+
+The observer contract shall be reusable across the monolithic indexing API and
+the staged parent-construction API.
+
+### REQ-INDEXER-038
+
+When parent-layer construction performs clustering work whose runtime is
+non-trivial, the crate shall emit periodic in-progress status updates while
+that clustering work remains active rather than only reporting terminal state.
+
+### REQ-INDEXER-039
+
+Status updates shall be emitted as structured data suitable for arbitrary
+caller-owned handling.
+
+The crate shall not require any particular sink such as stdout, a tracing
+framework, Azure storage, or another repository-specific telemetry backend.
+
+### REQ-INDEXER-040
+
+Internal parallelism for clustering-related work shall be limited to
+decompositions that preserve protocol conformance, normalization invariants,
+explicit failure semantics, and reproducibility requirements.
 
 ### REQ-INDEXER-028
 

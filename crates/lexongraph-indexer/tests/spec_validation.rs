@@ -8,11 +8,15 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, CanonicalEmbeddingPolicy, ContentResolver,
-    DcbcNodePackingPolicy, IndexItem, IndexedChild, Indexer, IndexerError, NodePackingPolicy,
+    DcbcNodePackingPolicy, IndexItem, IndexedChild, Indexer, IndexerError, IndexingPhase,
+    IndexingStatus, IndexingStatusObserver, IndexingStatusState, NodePackingPolicy,
 };
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Default)]
 struct MemoryBlockStore {
@@ -1061,6 +1065,148 @@ async fn val_indexer_031_collection_indexing_realizes_batch_embeddings_without_c
     assert!(store.get(&result.root_id).unwrap().is_some());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_032_and_035_monolithic_observer_receives_structured_statuses_via_caller_sink()
+{
+    let store = MemoryBlockStore::default();
+    let indexer = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+        SlowPairPackingPolicy::new(Duration::from_millis(250)),
+    );
+    let (observer, statuses) = status_observer();
+
+    let result = indexer
+        .index_with_observer(
+            &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+            embedding_spec(),
+            256,
+            &store,
+            Some(observer),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.block_ids.is_empty());
+
+    let statuses = recorded_statuses(&statuses);
+    assert!(statuses.iter().any(|status| {
+        status.phase == IndexingPhase::ParentLayerClustering
+            && status.state == IndexingStatusState::Started
+    }));
+    assert!(statuses.iter().any(|status| {
+        status.phase == IndexingPhase::ParentLayerClustering
+            && status.state == IndexingStatusState::Completed
+    }));
+    assert!(statuses.iter().any(|status| {
+        status.phase == IndexingPhase::ParentLayerMaterialization
+            && status.state == IndexingStatusState::Completed
+    }));
+    assert!(statuses.iter().all(|status| status.child_count >= 2));
+    assert!(
+        statuses
+            .iter()
+            .all(|status| matches!(status.layer_index, 0 | 1))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_033_and_036_staged_parent_observer_emits_periodic_status_updates() {
+    let indexer = Indexer::with_node_packing_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        FirstChildCanonicalPolicy,
+        SlowPairPackingPolicy::new(Duration::from_millis(250)),
+    );
+    let leaves = indexer
+        .build_leaf_blocks(
+            &[item("alpha"), item("bravo"), item("charlie")],
+            embedding_spec(),
+        )
+        .await
+        .unwrap();
+    let (observer, statuses) = status_observer();
+    let layer_index = 2;
+
+    let parents = indexer
+        .build_parent_blocks_with_observer(
+            &leaves.blocks,
+            embedding_spec(),
+            256,
+            layer_index,
+            Some(observer),
+        )
+        .unwrap();
+
+    assert_eq!(parents.blocks.len(), 1);
+
+    let statuses = recorded_statuses(&statuses);
+    let start_index = statuses
+        .iter()
+        .position(|status| {
+            status.phase == IndexingPhase::ParentLayerClustering
+                && status.state == IndexingStatusState::Started
+        })
+        .unwrap();
+    let progress_index = statuses
+        .iter()
+        .position(|status| {
+            status.phase == IndexingPhase::ParentLayerClustering
+                && status.state == IndexingStatusState::InProgress
+        })
+        .unwrap();
+    let complete_index = statuses
+        .iter()
+        .position(|status| {
+            status.phase == IndexingPhase::ParentLayerClustering
+                && status.state == IndexingStatusState::Completed
+        })
+        .unwrap();
+    let materialized_index = statuses
+        .iter()
+        .position(|status| {
+            status.phase == IndexingPhase::ParentLayerMaterialization
+                && status.state == IndexingStatusState::Completed
+        })
+        .unwrap();
+
+    assert!(start_index < progress_index);
+    assert!(progress_index < complete_index);
+    assert!(complete_index < materialized_index);
+    assert!(
+        statuses
+            .iter()
+            .all(|status| status.layer_index == layer_index)
+    );
+}
+
+#[cfg(feature = "parallel")]
+#[tokio::test(flavor = "current_thread")]
+async fn val_indexer_034_parallel_clustering_preserves_deterministic_outputs() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+        item("golf"),
+        item("hotel"),
+    ];
+    let first = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider)
+        .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+        .await
+        .unwrap();
+    let second = Indexer::with_defaults(MapResolver, AsciiEmbeddingProvider)
+        .index(&items, embedding_spec(), 160, &MemoryBlockStore::default())
+        .await
+        .unwrap();
+
+    assert_eq!(first.root_id, second.root_id);
+    assert_eq!(first.block_ids, second.block_ids);
+}
+
 #[test]
 fn val_indexer_026_parent_construction_from_child_blocks() {
     let indexer = Indexer::with_node_packing_policy(
@@ -1400,6 +1546,31 @@ impl NodePackingPolicy for TriplePackingPolicy {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SlowPairPackingPolicy {
+    delay: Duration,
+}
+
+impl SlowPairPackingPolicy {
+    const fn new(delay: Duration) -> Self {
+        Self { delay }
+    }
+}
+
+impl NodePackingPolicy for SlowPairPackingPolicy {
+    type Error = FixtureError;
+
+    fn pack(
+        &self,
+        children: &[IndexedChild],
+        _: &EmbeddingSpec,
+        _: usize,
+    ) -> Result<Vec<Vec<usize>>, Self::Error> {
+        thread::sleep(self.delay);
+        PairPackingPolicy.pack(children, &embedding_spec(), 0)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct FixtureError(String);
 
@@ -1623,4 +1794,17 @@ fn unique_serialized_blocks_by_hash(blocks: &[SerializedBlock]) -> Vec<Serialize
     blocks.sort_by(|left, right| left.hash.as_bytes().cmp(right.hash.as_bytes()));
     blocks.dedup_by(|left, right| left.hash == right.hash);
     blocks
+}
+
+fn status_observer() -> (IndexingStatusObserver, Arc<Mutex<Vec<IndexingStatus>>>) {
+    let statuses = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&statuses);
+    let observer: IndexingStatusObserver = Arc::new(move |status| {
+        sink.lock().unwrap().push(status);
+    });
+    (observer, statuses)
+}
+
+fn recorded_statuses(statuses: &Arc<Mutex<Vec<IndexingStatus>>>) -> Vec<IndexingStatus> {
+    statuses.lock().unwrap().clone()
 }
