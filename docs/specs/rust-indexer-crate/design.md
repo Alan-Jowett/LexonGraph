@@ -179,6 +179,14 @@ The public API also includes staged operations for:
 - incremental leaf-block construction from `IndexItem` batches
 - parent-layer construction from already-constructed child blocks
 
+The monolithic indexing API and the staged parent-construction API also expose
+observer-capable variants that accept an optional caller-supplied status
+observer for parent-layer progress reporting.
+
+Because staged parent construction is resumable through explicit artifact
+passing rather than hidden orchestration state, the observer-capable staged API
+also accepts a caller-supplied parent-layer ordinal for status reporting.
+
 ## Orchestration Flow
 
 ### DSG-INDEXER-011 `Core indexing pipeline`
@@ -196,6 +204,11 @@ The fixed orchestration flow is:
 7. otherwise, repeatedly invoke the selected node-packing policy, whether the
    built-in default or a caller-supplied override, to obtain candidate child
    groups for the current layer
+   - emit clustering-start status for the current parent layer before invoking
+    node packing
+   - emit periodic in-progress status while clustering remains active
+   - emit clustering-complete or clustering-failed status when node packing
+    finishes
 8. normalize candidate node entries by sorting by raw embedding bytes and
    deduplicating by child block ID
 9. construct each intermediate parent block at `child_level + 1` from those
@@ -205,6 +218,7 @@ The fixed orchestration flow is:
    canonical-embedding policy applied to that finalized branch block
 11. construct and persist intermediate node blocks under the protocol-defined
    size limit
+   - emit parent-layer completion status after branch blocks are materialized
 12. repeat until exactly one root block remains
 
 The core indexer owns this flow even when implementation-defined policy traits
@@ -294,6 +308,11 @@ deterministically from the ordered child layer and block size target, invokes
 the DCBC crate through its public API, and maps the DCBC assignment result back
 into child-index groups without changing the core indexer's ownership of
 protocol normalization or block-validity checks.
+
+The realization may use internal parallel execution only for clustering-related
+substeps whose decomposition preserves the same externally visible candidate
+groups, tie-breaking behavior, and explicit failure outcomes as the
+single-threaded logical model.
 
 ### DSG-INDEXER-019 `Primary default constructor path`
 
@@ -410,6 +429,49 @@ The indexer may partition work internally when invoking the shared embedding
 provider, but callers continue to provide collections of `IndexItem` values
 through the existing collection-shaped APIs.
 
+### DSG-INDEXER-030 `Indexing status model`
+
+The crate exposes a structured status payload for caller-visible indexing
+progress during parent-layer construction.
+
+That payload includes at minimum:
+
+- a phase kind covering clustering and parent-layer materialization
+- a state describing whether the phase has started, is in progress, completed,
+  or failed
+- the current parent-layer ordinal
+- current-layer work context such as child count and block size target
+- elapsed time suitable for caller reporting
+- output counts or error text when applicable to terminal events
+
+### DSG-INDEXER-031 `Observer contract`
+
+The status observer contract is caller-owned and infallible at the indexer
+boundary.
+
+The crate invokes that observer with structured status values and does not
+prescribe any specific side-effect sink such as console logging, tracing, or
+external telemetry storage.
+
+### DSG-INDEXER-032 `Periodic heartbeat semantics`
+
+For clustering work that remains active longer than one heartbeat interval, the
+indexer emits repeated in-progress status updates before terminal status.
+
+If clustering finishes before the first heartbeat would naturally occur, the
+indexer may emit only the start and terminal statuses for that phase.
+
+### DSG-INDEXER-033 `Behavior-preserving parallelism boundary`
+
+Internal parallelism is limited to clustering-related pure computation and
+independent per-group realization steps whose decomposition cannot change:
+
+- candidate partition membership
+- branch-entry normalization inputs or ordering
+- canonical-embedding derivation inputs
+- explicit error outcomes
+- final block IDs or the complete block set
+
 ### DSG-INDEXER-028 `Mixed child-set admissibility`
 
 The staged parent-construction API accepts any protocol-valid current-layer
@@ -448,3 +510,7 @@ child level plus one.
 | DSG-INDEXER-027 | REQ-INDEXER-011, REQ-INDEXER-034 |
 | DSG-INDEXER-028 | REQ-INDEXER-033 |
 | DSG-INDEXER-029 | REQ-INDEXER-013, REQ-INDEXER-030, REQ-INDEXER-035, REQ-INDEXER-036 |
+| DSG-INDEXER-030 | REQ-INDEXER-037, REQ-INDEXER-039 |
+| DSG-INDEXER-031 | REQ-INDEXER-037, REQ-INDEXER-039 |
+| DSG-INDEXER-032 | REQ-INDEXER-038 |
+| DSG-INDEXER-033 | REQ-INDEXER-014, REQ-INDEXER-023, REQ-INDEXER-027, REQ-INDEXER-040 |
