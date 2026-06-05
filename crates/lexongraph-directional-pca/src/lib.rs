@@ -167,7 +167,7 @@ impl fmt::Display for DirectionalPcaError {
             Self::InvalidMinimumInputCount { min_input_count } => {
                 write!(
                     f,
-                    "min_input_count must be at least 1, got {min_input_count}"
+                    "min_input_count must be at least 2, got {min_input_count}"
                 )
             }
             Self::InvalidMinimumEffectiveRank {
@@ -229,12 +229,11 @@ pub fn run_directional_pca_layer(
 ) -> Result<DirectionalPcaLayerOutcome, DirectionalPcaError> {
     validate_base_params(&input.params)?;
 
-    let minimum_input_count = input.params.min_input_count.max(2);
-    if input.block_ids.len() < minimum_input_count {
+    if input.block_ids.len() < input.params.min_input_count {
         return Ok(DirectionalPcaLayerOutcome::Ineligible(
             DirectionalPcaEligibility::InsufficientInputCount {
                 actual: input.block_ids.len(),
-                minimum: minimum_input_count,
+                minimum: input.params.min_input_count,
             },
         ));
     }
@@ -328,7 +327,7 @@ fn validate_base_params(params: &DirectionalPcaLayerParams) -> Result<(), Direct
             temperature: params.temperature,
         });
     }
-    if params.min_input_count == 0 {
+    if params.min_input_count < 2 {
         return Err(DirectionalPcaError::InvalidMinimumInputCount {
             min_input_count: params.min_input_count,
         });

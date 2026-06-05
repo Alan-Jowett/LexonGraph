@@ -106,7 +106,7 @@ fn val_dpca_001_public_surface_exposes_the_single_layer_api_boundary() {
     let block_id = store.insert_block(&leaf_block_f32([1.0, 0.0]));
     let input = DirectionalPcaLayerInput {
         block_ids: vec![block_id, block_id],
-        params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+        params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
     };
 
     let outcome = run_directional_pca_layer(&input, &store).unwrap();
@@ -127,7 +127,7 @@ fn val_dpca_002_repeated_runs_are_deterministic() {
     ];
     let input = DirectionalPcaLayerInput {
         block_ids,
-        params: params(1, 2, 1.0, 1.0, 1, 1, 0.0),
+        params: params(1, 2, 1.0, 1.0, 2, 1, 0.0),
     };
 
     let first = run_directional_pca_layer(&input, &store).unwrap();
@@ -147,11 +147,11 @@ fn val_dpca_003_input_order_is_semantically_significant() {
 
     let ordered = DirectionalPcaLayerInput {
         block_ids: ids.clone(),
-        params: params(1, 2, 1.0, 1.0, 1, 1, 0.0),
+        params: params(1, 2, 1.0, 1.0, 2, 1, 0.0),
     };
     let reordered = DirectionalPcaLayerInput {
         block_ids: vec![ids[1], ids[0], ids[3], ids[2]],
-        params: params(1, 2, 1.0, 1.0, 1, 1, 0.0),
+        params: params(1, 2, 1.0, 1.0, 2, 1, 0.0),
     };
 
     let first = run_directional_pca_layer(&ordered, &store).unwrap();
@@ -166,7 +166,7 @@ fn val_dpca_004_representative_embeddings_follow_branch_centroid_and_leaf_entry_
     let leaf_id = store.insert_block(&leaf_block_f32([0.0, 4.0]));
     let input = DirectionalPcaLayerInput {
         block_ids: vec![branch_id, leaf_id],
-        params: params(1, 2, 1.0, 1.0, 1, 1, 0.0),
+        params: params(1, 2, 1.0, 1.0, 2, 1, 0.0),
     };
 
     let outcome = run_directional_pca_layer(&input, &store).unwrap();
@@ -197,7 +197,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![missing, missing],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &missing_store
         ),
@@ -209,7 +209,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![any_id, any_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &BackendFailingStore
         ),
@@ -222,7 +222,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![any_id, any_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &MalformedGetStore
         ),
@@ -238,7 +238,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![empty_branch_id, leaf_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &store
         ),
@@ -252,7 +252,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![f32_id, i8_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &incompatible_store
         ),
@@ -272,7 +272,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![invalid_length_id, valid_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &invalid_length_store
         ),
@@ -296,7 +296,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![unsupported_id, supported_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &unsupported_store
         ),
@@ -316,7 +316,7 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![nan_id, finite_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &non_finite_store
         ),
@@ -333,7 +333,7 @@ fn val_dpca_006_invalid_parameter_bounds_fail_explicitly() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![block_id, block_id],
-                params: params(0, 1, 1.0, 1.0, 1, 1, 0.0),
+                params: params(0, 1, 1.0, 1.0, 2, 1, 0.0),
             },
             &store
         ),
@@ -343,7 +343,7 @@ fn val_dpca_006_invalid_parameter_bounds_fail_explicitly() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![block_id, block_id],
-                params: params(1, 0, 1.0, 1.0, 1, 1, 0.0),
+                params: params(1, 0, 1.0, 1.0, 2, 1, 0.0),
             },
             &store
         ),
@@ -356,7 +356,7 @@ fn val_dpca_006_invalid_parameter_bounds_fail_explicitly() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![block_id, block_id],
-                params: params(1, 1, 1.0, 0.0, 1, 1, 0.0),
+                params: params(1, 1, 1.0, 0.0, 2, 1, 0.0),
             },
             &store
         ),
@@ -376,7 +376,7 @@ fn val_dpca_006_invalid_parameter_bounds_fail_explicitly() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![block_id, block_id],
-                params: params(1, 1, 1.0, 1.0, 1, 2, 0.0),
+                params: params(1, 1, 1.0, 1.0, 2, 2, 0.0),
             },
             &store
         ),
@@ -386,7 +386,7 @@ fn val_dpca_006_invalid_parameter_bounds_fail_explicitly() {
         run_directional_pca_layer(
             &DirectionalPcaLayerInput {
                 block_ids: vec![block_id, block_id],
-                params: params(1, 1, 1.0, 1.0, 1, 1, 1.5),
+                params: params(1, 1, 1.0, 1.0, 2, 1, 1.5),
             },
             &store
         ),
@@ -407,7 +407,7 @@ fn val_dpca_007_layer_local_pca_realization_matches_manual_pca_projection() {
         .iter()
         .map(|vector| store.insert_block(&leaf_block_f32([vector[0], vector[1]])))
         .collect::<Vec<_>>();
-    let params = params(2, 3, 1.0, 1.0, 1, 1, 0.0);
+    let params = params(2, 3, 1.0, 1.0, 2, 1, 0.0);
 
     let actual = run_directional_pca_layer(
         &DirectionalPcaLayerInput {
@@ -437,8 +437,8 @@ fn val_dpca_008_directional_scoring_reflects_gamma_weighting() {
         .map(|vector| store.insert_block(&leaf_block_f32([vector[0], vector[1]])))
         .collect::<Vec<_>>();
 
-    let flat = params(2, 4, 0.0, 1.0, 1, 1, 0.0);
-    let weighted = params(2, 4, 1.0, 1.0, 1, 1, 0.0);
+    let flat = params(2, 4, 0.0, 1.0, 2, 1, 0.0);
+    let weighted = params(2, 4, 1.0, 1.0, 2, 1, 0.0);
     let flat_actual = run_directional_pca_layer(
         &DirectionalPcaLayerInput {
             block_ids: block_ids.clone(),
@@ -479,7 +479,7 @@ fn val_dpca_009_axis_allocation_matches_manual_temperature_controlled_budgeting(
         .iter()
         .map(|vector| store.insert_block(&leaf_block_f32([vector[0], vector[1]])))
         .collect::<Vec<_>>();
-    let params = params(2, 5, 1.0, 0.5, 1, 1, 0.0);
+    let params = params(2, 5, 1.0, 0.5, 2, 1, 0.0);
 
     let actual = run_directional_pca_layer(
         &DirectionalPcaLayerInput {
@@ -507,7 +507,7 @@ fn val_dpca_010_default_assignment_uses_quantile_bins() {
         .iter()
         .map(|vector| store.insert_block(&leaf_block_f32([vector[0], vector[1]])))
         .collect::<Vec<_>>();
-    let params = params(1, 3, 1.0, 1.0, 1, 1, 0.0);
+    let params = params(1, 3, 1.0, 1.0, 2, 1, 0.0);
 
     let outcome =
         run_directional_pca_layer(&DirectionalPcaLayerInput { block_ids, params }, &store).unwrap();
@@ -534,7 +534,7 @@ fn val_dpca_011_groups_materialize_only_populated_cells_with_centroids_and_membe
     let outcome = run_directional_pca_layer(
         &DirectionalPcaLayerInput {
             block_ids: vec![left_a, left_b, right_a, right_b],
-            params: params(1, 2, 1.0, 1.0, 1, 1, 0.0),
+            params: params(1, 2, 1.0, 1.0, 2, 1, 0.0),
         },
         &store,
     )
@@ -589,7 +589,7 @@ fn val_dpca_012_eligibility_outcomes_are_explicit() {
     let low_rank = run_directional_pca_layer(
         &DirectionalPcaLayerInput {
             block_ids: block_ids.clone(),
-            params: params(1, 1, 1.0, 1.0, 1, 1, 0.1),
+            params: params(1, 1, 1.0, 1.0, 2, 1, 0.1),
         },
         &identical_store,
     )
@@ -613,7 +613,7 @@ fn val_dpca_012_eligibility_outcomes_are_explicit() {
     let insufficient_variance = run_directional_pca_layer(
         &DirectionalPcaLayerInput {
             block_ids: variance_ids,
-            params: params(1, 1, 1.0, 1.0, 1, 1, 0.9),
+            params: params(1, 1, 1.0, 1.0, 2, 1, 0.9),
         },
         &variance_store,
     )

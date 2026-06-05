@@ -152,8 +152,8 @@ The crate does not silently coerce between encodings or dimensionalities.
 ### DSG-DPCA-012 `Parameter validation`
 
 Before PCA execution, the crate validates parameter bounds, including retained
-dimension controls, positive axis budget, valid temperature, and non-negative
-eligibility thresholds.
+dimension controls, positive axis budget, valid temperature, minimum input count
+of at least two samples, and non-negative eligibility thresholds.
 
 ### DSG-DPCA-013 `Eligibility evaluation`
 

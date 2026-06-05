@@ -85,6 +85,7 @@ minimum:
 - invalid retained-dimension controls
 - non-positive axis-resolution budgets
 - non-positive temperature values
+- minimum input-count thresholds below two samples
 - invalid eligibility thresholds
 
 ### REQ-DPCA-007
