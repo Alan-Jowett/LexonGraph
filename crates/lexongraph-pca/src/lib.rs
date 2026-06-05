@@ -653,7 +653,15 @@ impl PcaTransform {
         }
         let input_dim = read_usize(bytes, &mut offset, "input_dim")?;
         let output_dim = read_usize(bytes, &mut offset, "output_dim")?;
-        let has_variance = read_u8(bytes, &mut offset)? != 0;
+        let has_variance = match read_u8(bytes, &mut offset)? {
+            0 => false,
+            1 => true,
+            value => {
+                return Err(PcaError::InvalidSerializedFormat(format!(
+                    "invalid explained-variance presence flag {value}; expected 0 or 1"
+                )));
+            }
+        };
         let mean = read_f32_vec(bytes, &mut offset, input_dim)?;
         let basis = read_f32_vec(
             bytes,
@@ -756,6 +764,22 @@ impl PcaTransform {
     }
 
     fn ensure_runtime_shape(&self, context: &'static str) -> Result<(), PcaError> {
+        if self.input_dim == 0 {
+            return Err(PcaError::ValidationFailure(format!(
+                "{context} requires input_dim greater than zero"
+            )));
+        }
+        if self.output_dim == 0 {
+            return Err(PcaError::ValidationFailure(format!(
+                "{context} requires output_dim greater than zero"
+            )));
+        }
+        if self.output_dim > self.input_dim {
+            return Err(PcaError::ValidationFailure(format!(
+                "{context} requires output_dim <= input_dim, got {} > {}",
+                self.output_dim, self.input_dim
+            )));
+        }
         ensure_dim(context, self.input_dim, self.mean.len())?;
         ensure_dim(context, self.input_dim * self.output_dim, self.basis.len())?;
         ensure_finite_slice(context, &self.mean)?;

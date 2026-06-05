@@ -356,6 +356,47 @@ fn serialization_version_mismatches_report_invalid_serialized_format() {
 }
 
 #[test]
+fn malformed_presence_flags_and_structural_dimensions_fail_explicitly() {
+    let transform = fit(&fixture_vectors()).unwrap();
+    let mut bytes = transform.serialize().unwrap();
+    bytes[24] = 2;
+    assert!(matches!(
+        PcaTransform::deserialize(&bytes),
+        Err(PcaError::InvalidSerializedFormat(_))
+    ));
+
+    let zero_output_dim = PcaTransform {
+        output_dim: 0,
+        basis: Vec::new(),
+        explained_variance: Some(Vec::new()),
+        ..identity_pca([0.0, 0.0])
+    };
+    assert!(matches!(
+        zero_output_dim.apply(&[1.0, 2.0]),
+        Err(PcaError::ValidationFailure(_))
+    ));
+    assert!(matches!(
+        zero_output_dim.to_affine(),
+        Err(PcaError::ValidationFailure(_))
+    ));
+
+    let oversized_output_dim = PcaTransform {
+        output_dim: 3,
+        basis: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        explained_variance: Some(vec![3.0, 2.0, 1.0]),
+        ..identity_pca([0.0, 0.0])
+    };
+    assert!(matches!(
+        oversized_output_dim.reconstruct(&[1.0, 2.0, 3.0]),
+        Err(PcaError::ValidationFailure(_))
+    ));
+    assert!(matches!(
+        compose(&oversized_output_dim, &identity_pca([0.0, 0.0])),
+        Err(PcaError::ValidationFailure(_))
+    ));
+}
+
+#[test]
 fn val_pca_016_diagnostics_expose_consistent_metadata() {
     let transform = fit_truncated(&fixture_vectors(), 1).unwrap();
     let diagnostics = transform.diagnostics();
