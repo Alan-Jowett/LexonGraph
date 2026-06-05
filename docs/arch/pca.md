@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 📦 pca — A Deterministic, Streaming, Composable PCA Library for Rust
  
 The pca crate provides a deterministic, audit‑friendly implementation of Principal Component Analysis designed for large‑scale, streaming, block‑local, and hierarchical vector indexing systems.
