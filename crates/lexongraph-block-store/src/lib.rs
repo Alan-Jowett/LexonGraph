@@ -704,16 +704,10 @@ mod tests {
     fn val_store_014_callers_can_classify_enumerated_ids_via_get() {
         let store = MemoryBlockStore::default();
         let leaf_id = store.put(&sample_leaf_block("leaf")).unwrap();
-        let branch = build_branch_block(
-            VERSION_1,
-            embedding_spec("f16le"),
-            vec![
-                branch_entry(vec![0x02], BlockHash::from_bytes([0x22; 32]).into_bytes()),
-                branch_entry(vec![0x01], leaf_id.into_bytes()),
-            ],
-            None,
-        )
-        .unwrap();
+        let branch = match sample_branch_block([0x22; 32], leaf_id.into_bytes(), false) {
+            Block::Branch(branch) => branch,
+            Block::Leaf(_) => unreachable!("sample_branch_block must return a branch block"),
+        };
         let branch_id = store.put(&Block::Branch(branch)).unwrap();
 
         let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
