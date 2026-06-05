@@ -1515,6 +1515,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-directional-pca"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "lexongraph-block",
+ "lexongraph-block-store",
+ "lexongraph-pca",
+]
+
+[[package]]
 name = "lexongraph-embeddings-openai"
 version = "0.1.0"
 dependencies = [
