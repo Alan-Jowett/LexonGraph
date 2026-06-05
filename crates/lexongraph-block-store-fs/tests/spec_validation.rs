@@ -642,7 +642,7 @@ impl FsOps for ScriptedFsOps {
             Some(IsDirResult::Error(error)) => Err(error.to_io_error()),
             None => {
                 drop(state);
-                std::fs::metadata(path).map(|metadata| metadata.is_dir())
+                std::fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
             }
         }
     }

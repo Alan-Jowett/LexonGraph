@@ -54,7 +54,7 @@ impl inject::FsOps for RealFsOps {
     }
 
     fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        fs::metadata(path).map(|metadata| metadata.is_dir())
+        fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -294,7 +294,7 @@ impl FilesystemBlockStore {
 
     #[cfg(not(feature = "inject"))]
     fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        fs::metadata(path).map(|metadata| metadata.is_dir())
+        fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
     }
 
     #[cfg(feature = "inject")]
