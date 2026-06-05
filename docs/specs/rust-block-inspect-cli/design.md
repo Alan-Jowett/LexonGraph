@@ -61,7 +61,7 @@ A successful inspection is rendered as one top-level JSON object containing at
 least:
 
 - `hash`: the verified lowercase hexadecimal block hash
-- `kind`: the decoded block kind, `branch` or `leaf`
+- `level`: the decoded numeric block level
 - `block`: the decoded block content rendered through the debug JSON mapping
 
 ### DSG-INSPECT-004 `Debug JSON value mapping`
@@ -162,13 +162,13 @@ non-zero exit status.
 ### DSG-INSPECT-011 `Typed block rendering`
 
 The `block` field renders the typed block content in a shape that preserves the
-distinction between branch and leaf blocks while keeping common block metadata
-visible for debugging.
+distinction between child-bearing and leaf blocks while keeping common block
+metadata visible for debugging.
 
 At minimum:
 
-- both block kinds expose `version`, `embedding_spec`, and `ext`
-- branch blocks expose ordered `entries` containing `embedding` and `child`
+- both block shapes expose `version`, `embedding_spec`, and `ext`
+- child-bearing blocks expose ordered `entries` containing `embedding` and `child`
 - leaf blocks expose ordered `entries` containing `embedding`, `metadata`, and
   `content`
 - `content` exposes `media_type` and `body`

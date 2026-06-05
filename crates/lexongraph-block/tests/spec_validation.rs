@@ -17,14 +17,16 @@ fn val_001_branch_serialization_is_deterministic() {
     let first = Block::Branch(
         build_branch_block(
             VERSION_1,
+            1,
             spec.clone(),
             vec![entry_b.clone(), entry_a.clone()],
             None,
         )
         .unwrap(),
     );
-    let second =
-        Block::Branch(build_branch_block(VERSION_1, spec, vec![entry_a, entry_b], None).unwrap());
+    let second = Block::Branch(
+        build_branch_block(VERSION_1, 1, spec, vec![entry_a, entry_b], None).unwrap(),
+    );
 
     let first_serialized = serialize_block(&first).unwrap();
     let second_serialized = serialize_block(&second).unwrap();
@@ -155,7 +157,7 @@ fn val_007_leaf_blocks_with_multiple_entries_are_rejected() {
 fn val_008_missing_required_kind_specific_fields_are_rejected() {
     let bytes = encode_value(Value::Map(vec![
         (int_value(0), int_value(VERSION_1)),
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (
             int_value(2),
             Value::Map(vec![
@@ -182,7 +184,7 @@ fn val_008_missing_required_kind_specific_fields_are_rejected() {
 fn val_009_unknown_top_level_fields_outside_ext_are_rejected() {
     let bytes = encode_value(Value::Map(vec![
         (int_value(0), int_value(VERSION_1)),
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (
             int_value(2),
             Value::Map(vec![
@@ -205,6 +207,7 @@ fn val_010_unknown_fields_inside_ext_are_accepted() {
     let block = Block::Branch(
         build_branch_block(
             VERSION_1,
+            1,
             embedding_spec("f16le"),
             vec![branch_entry(vec![0x01], [0x11; 32])],
             Some(vec![(
@@ -225,7 +228,7 @@ fn val_010_unknown_fields_inside_ext_are_accepted() {
 fn val_011_textual_field_names_are_rejected() {
     let bytes = encode_value(Value::Map(vec![
         (Value::Text("version".into()), int_value(VERSION_1)),
-        (Value::Text("kind".into()), Value::Text("branch".into())),
+        (Value::Text("level".into()), int_value(1)),
         (
             Value::Text("embedding_spec".into()),
             Value::Map(vec![
@@ -258,6 +261,7 @@ fn val_013_distinct_embedding_encodings_change_bytes_and_hash() {
     let first = Block::Branch(
         build_branch_block(
             VERSION_1,
+            1,
             embedding_spec("f16le"),
             vec![branch_entry(vec![0x01], [0x11; 32])],
             None,
@@ -267,6 +271,7 @@ fn val_013_distinct_embedding_encodings_change_bytes_and_hash() {
     let second = Block::Branch(
         build_branch_block(
             VERSION_1,
+            1,
             embedding_spec("i8"),
             vec![branch_entry(vec![0x01], [0x11; 32])],
             None,
@@ -285,6 +290,7 @@ fn val_013_distinct_embedding_encodings_change_bytes_and_hash() {
 fn unknown_embedding_encodings_are_rejected() {
     let error = build_branch_block(
         VERSION_1,
+        1,
         embedding_spec("unknown"),
         vec![branch_entry(vec![0x01], [0x11; 32])],
         None,
@@ -302,6 +308,7 @@ fn val_014_validated_branch_blocks_decompose_to_typed_entries() {
     match into_entries(validated) {
         TypedEntries::Branch(metadata, entries) => {
             assert_eq!(metadata.version, VERSION_1);
+            assert_eq!(metadata.level, 1);
             assert_eq!(metadata.embedding_spec.encoding, "f16le");
             assert_eq!(entries.len(), 2);
         }
@@ -313,6 +320,7 @@ fn val_014_validated_branch_blocks_decompose_to_typed_entries() {
 fn val_015_indexing_consumers_can_construct_protocol_conforming_blocks() {
     let branch = build_branch_block(
         VERSION_1,
+        1,
         embedding_spec("f16le"),
         vec![
             branch_entry(vec![0x03], [0x33; 32]),
@@ -332,7 +340,7 @@ fn val_015_indexing_consumers_can_construct_protocol_conforming_blocks() {
 fn val_016_unsupported_versions_and_invalid_version_types_are_rejected() {
     let future_version = encode_value(Value::Map(vec![
         (int_value(0), int_value(2)),
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (
             int_value(2),
             Value::Map(vec![
@@ -348,7 +356,7 @@ fn val_016_unsupported_versions_and_invalid_version_types_are_rejected() {
 
     let future_version_with_new_field = encode_value(Value::Map(vec![
         (int_value(0), int_value(2)),
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (
             int_value(2),
             Value::Map(vec![
@@ -369,7 +377,7 @@ fn val_016_unsupported_versions_and_invalid_version_types_are_rejected() {
 
     let wrong_typed_version = encode_value(Value::Map(vec![
         (int_value(0), Value::Text("1".into())),
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (
             int_value(2),
             Value::Map(vec![
@@ -387,7 +395,7 @@ fn val_016_unsupported_versions_and_invalid_version_types_are_rejected() {
 #[test]
 fn val_017_noncanonical_but_logically_valid_blocks_are_rejected() {
     let bytes = encode_value(Value::Map(vec![
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (int_value(0), int_value(VERSION_1)),
         (
             int_value(2),
@@ -408,10 +416,73 @@ fn val_017_noncanonical_but_logically_valid_blocks_are_rejected() {
     assert!(matches!(error, BlockError::NonConforming(_)));
 }
 
+#[test]
+fn val_018_higher_level_branch_round_trip_preserves_level() {
+    let block = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            3,
+            embedding_spec("f16le"),
+            vec![branch_entry(vec![0x01, 0x02], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&block).unwrap();
+
+    match into_entries(deserialize_block(&serialized.bytes, &serialized.hash).unwrap()) {
+        TypedEntries::Branch(metadata, _) => assert_eq!(metadata.level, 3),
+        TypedEntries::Leaf(_, _) => panic!("expected a branch block"),
+    }
+}
+
+#[test]
+fn val_019_invalid_level_encodings_and_level_shape_mismatches_are_rejected() {
+    let text_level = encode_value(Value::Map(vec![
+        (int_value(0), int_value(VERSION_1)),
+        (int_value(1), Value::Text("branch".into())),
+        (
+            int_value(2),
+            Value::Map(vec![
+                (int_value(0), int_value(2)),
+                (int_value(1), Value::Text("f16le".into())),
+            ]),
+        ),
+        (int_value(3), Value::Array(vec![])),
+    ]));
+    let text_level_hash = compute_block_hash(&text_level);
+    let text_level_error = deserialize_block(&text_level, &text_level_hash).unwrap_err();
+    assert!(matches!(text_level_error, BlockError::InvalidEntryShape(_)));
+
+    let zero_level_error = build_branch_block(
+        VERSION_1,
+        0,
+        embedding_spec("f16le"),
+        vec![branch_entry(vec![0x01], [0x11; 32])],
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(zero_level_error, BlockError::InvalidBlockLevel(0)));
+
+    let invalid_leaf = Block::Leaf(lexongraph_block::LeafBlock {
+        version: VERSION_1,
+        level: 1,
+        embedding_spec: embedding_spec("f16le"),
+        entries: vec![leaf_entry(vec![0xaa, 0xbb], vec![])],
+        ext: None,
+    });
+    let invalid_leaf_error = serialize_block(&invalid_leaf).unwrap_err();
+    assert!(matches!(
+        invalid_leaf_error,
+        BlockError::InvalidBlockLevel(1)
+    ));
+}
+
 fn sample_branch_block() -> Block {
     Block::Branch(
         build_branch_block(
             VERSION_1,
+            1,
             embedding_spec("f16le"),
             vec![
                 branch_entry(vec![0x02, 0x02], [0x22; 32]),
@@ -472,7 +543,7 @@ fn leaf_entry(embedding: Vec<u8>, metadata: Vec<(Value, Value)>) -> LeafEntry {
 fn raw_branch_bytes(entries: Vec<Value>) -> Vec<u8> {
     encode_value(Value::Map(vec![
         (int_value(0), int_value(VERSION_1)),
-        (int_value(1), Value::Text("branch".into())),
+        (int_value(1), int_value(1)),
         (
             int_value(2),
             Value::Map(vec![
@@ -487,7 +558,7 @@ fn raw_branch_bytes(entries: Vec<Value>) -> Vec<u8> {
 fn raw_leaf_bytes(entries: Vec<Value>) -> Vec<u8> {
     encode_value(Value::Map(vec![
         (int_value(0), int_value(VERSION_1)),
-        (int_value(1), Value::Text("leaf".into())),
+        (int_value(1), int_value(0)),
         (
             int_value(2),
             Value::Map(vec![

@@ -670,6 +670,47 @@ fn val_search_019_canonical_tie_breaks_follow_protocol_order() {
     assert_eq!(store.get_count(&children[0]), 1);
     assert_eq!(store.get_count(&children[1]), 1);
     assert_eq!(store.get_count(&children[2]), 0);
+
+    let low_level_leaf = store
+        .put(&leaf_block(i8_embedding([7, 0]), "low-level"))
+        .unwrap();
+    let deferred_leaf = store
+        .put(&leaf_block(i8_embedding([6, 0]), "deferred-level"))
+        .unwrap();
+    let low_level_branch = store
+        .put(&branch_block_at_level(
+            1,
+            embedding_spec_i8(),
+            vec![branch_entry([7, 0], low_level_leaf)],
+        ))
+        .unwrap();
+    let deferred_level_branch = store
+        .put(&branch_block_at_level(
+            1,
+            embedding_spec_i8(),
+            vec![branch_entry([6, 0], deferred_leaf)],
+        ))
+        .unwrap();
+    let multi_level_root = store
+        .put(&branch_block_at_level(
+            2,
+            embedding_spec_i8(),
+            vec![
+                branch_entry([8, 0], low_level_branch),
+                branch_entry([7, 0], deferred_level_branch),
+            ],
+        ))
+        .unwrap();
+
+    let multi_level_result = searcher
+        .search(&multi_level_root, &(), 1, 1, &store)
+        .unwrap();
+
+    assert_eq!(
+        multi_level_result.leaves[0].entry.content.body,
+        b"low-level".to_vec()
+    );
+    assert_eq!(store.get_count(&deferred_level_branch), 0);
 }
 
 #[test]
@@ -1228,7 +1269,11 @@ fn branch_entry(embedding: [u8; 2], child: BlockHash) -> BranchEntry {
 }
 
 fn branch_block(spec: EmbeddingSpec, entries: Vec<BranchEntry>) -> Block {
-    Block::Branch(build_branch_block(VERSION_1, spec, entries, None).unwrap())
+    branch_block_at_level(1, spec, entries)
+}
+
+fn branch_block_at_level(level: u64, spec: EmbeddingSpec, entries: Vec<BranchEntry>) -> Block {
+    Block::Branch(build_branch_block(VERSION_1, level, spec, entries, None).unwrap())
 }
 
 fn leaf_block(embedding: Vec<u8>, body: &str) -> Block {

@@ -284,8 +284,9 @@ inputs from the supplied blocks themselves.
 ### REQ-INDEXER-033
 
 The staged parent-construction API shall accept any protocol-valid current-layer
-child set, including mixes of leaf and branch blocks, provided the inputs are
-otherwise compatible within one indexing context.
+child set whose inputs all share one decoded child level and are otherwise
+compatible within one indexing context. The constructed parent level shall be
+that shared child level plus one.
 
 ### REQ-INDEXER-034
 

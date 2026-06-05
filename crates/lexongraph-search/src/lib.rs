@@ -350,7 +350,7 @@ impl<EC, CS> Searcher<EC, CS> {
             });
             frontier.sort_by(compare_candidates::<CS::Score>);
 
-            if frontier.len() >= n && frontier.iter().take(n).all(SearchCandidate::is_leaf) {
+            if frontier.len() >= n && frontier.iter().take(n).all(SearchCandidate::is_terminal) {
                 let leaves = frontier
                     .into_iter()
                     .take(n)
@@ -377,7 +377,7 @@ impl<EC, CS> Searcher<EC, CS> {
                     requested: n,
                     reachable_leaves: frontier
                         .iter()
-                        .filter(|candidate| candidate.is_leaf())
+                        .filter(|candidate| candidate.is_terminal())
                         .count(),
                 });
             }
@@ -444,6 +444,7 @@ impl<EC, CS> Searcher<EC, CS> {
                         .score(target, &entry.embedding, &metadata.embedding_spec)
                         .map(|score| SearchCandidate::Branch {
                             child: entry.child,
+                            level: metadata.level,
                             score,
                         })
                         .map_err(|error| SearchError::ScoringFailure {
@@ -459,6 +460,7 @@ impl<EC, CS> Searcher<EC, CS> {
                         .score(target, &entry.embedding, &metadata.embedding_spec)
                         .map(|score| SearchCandidate::Leaf {
                             block_id: *block_id,
+                            level: metadata.level,
                             entry,
                             score,
                         })
@@ -480,18 +482,20 @@ enum LoadedEntries {
 enum SearchCandidate<Score> {
     Branch {
         child: BlockHash,
+        level: u64,
         score: Score,
     },
     Leaf {
         block_id: BlockHash,
+        level: u64,
         entry: LeafEntry,
         score: Score,
     },
 }
 
 impl<Score> SearchCandidate<Score> {
-    fn is_leaf(&self) -> bool {
-        matches!(self, Self::Leaf { .. })
+    fn is_terminal(&self) -> bool {
+        candidate_level(self) == 0
     }
 }
 
@@ -515,17 +519,19 @@ fn compare_candidates<Score: Ord>(
 ) -> Ordering {
     candidate_score(right)
         .cmp(candidate_score(left))
-        .then_with(|| match (left, right) {
-            (SearchCandidate::Leaf { .. }, SearchCandidate::Branch { .. }) => Ordering::Less,
-            (SearchCandidate::Branch { .. }, SearchCandidate::Leaf { .. }) => Ordering::Greater,
-            _ => Ordering::Equal,
-        })
+        .then_with(|| candidate_level(left).cmp(&candidate_level(right)))
         .then_with(|| candidate_identity(left).cmp(candidate_identity(right)))
 }
 
 fn candidate_score<Score>(candidate: &SearchCandidate<Score>) -> &Score {
     match candidate {
         SearchCandidate::Branch { score, .. } | SearchCandidate::Leaf { score, .. } => score,
+    }
+}
+
+fn candidate_level<Score>(candidate: &SearchCandidate<Score>) -> u64 {
+    match candidate {
+        SearchCandidate::Branch { level, .. } | SearchCandidate::Leaf { level, .. } => *level,
     }
 }
 

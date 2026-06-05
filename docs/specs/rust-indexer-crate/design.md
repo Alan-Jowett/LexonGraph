@@ -189,7 +189,7 @@ The fixed orchestration flow is:
 2. for each indexing item, resolve its content reference
 3. submit the resolved inputs through the supplied embedding provider and obtain
    one ordered item-level embedding compatible with `embedding_spec` per input
-4. construct exactly one leaf block containing exactly one leaf entry derived
+4. construct exactly one level-0 leaf block containing exactly one leaf entry derived
    from that item and storing the resolved content inline
 5. persist each produced leaf block through the block store
 6. if one leaf block exists, return that leaf block as the root
@@ -198,7 +198,8 @@ The fixed orchestration flow is:
    groups for the current layer
 8. normalize candidate node entries by sorting by raw embedding bytes and
    deduplicating by child block ID
-9. construct each intermediate branch block from those finalized entries and
+9. construct each intermediate parent block at `child_level + 1` from those
+   finalized entries and
    validate it against the block protocol
 10. derive each child-bearing block's canonical embedding through the
    canonical-embedding policy applied to that finalized branch block
@@ -385,6 +386,7 @@ blocks themselves:
 
 - child block ID from the canonical serialized block bytes
 - child structural validity from block-protocol validation of those bytes
+- child level from the decoded block metadata
 - child embedding from the block content, using the leaf entry embedding for
   leaf blocks and the configured canonical-embedding policy for branch blocks
 
@@ -411,9 +413,10 @@ through the existing collection-shaped APIs.
 ### DSG-INDEXER-028 `Mixed child-set admissibility`
 
 The staged parent-construction API accepts any protocol-valid current-layer
-child set, including mixes of leaf and branch blocks, provided all inputs are
-compatible within one indexing context, including a compatible `embedding_spec`
-and deterministic policy behavior.
+child set provided all inputs share one decoded child level and are compatible
+within one indexing context, including a compatible `embedding_spec` and
+deterministic policy behavior. The constructed parent level is that shared
+child level plus one.
 
 ## Traceability
 

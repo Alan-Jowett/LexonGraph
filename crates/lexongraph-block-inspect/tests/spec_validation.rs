@@ -62,6 +62,7 @@ fn val_inspect_003_and_011_branch_inspection_is_single_block_and_non_recursive()
     let child = BlockHash::from_bytes([0x55; 32]);
     let branch = build_branch_block(
         VERSION_1,
+        1,
         EmbeddingSpec {
             dims: 4,
             encoding: "f32le".to_owned(),
@@ -81,7 +82,7 @@ fn val_inspect_003_and_011_branch_inspection_is_single_block_and_non_recursive()
     let json = successful_json(output);
 
     assert_eq!(json["hash"], branch_hash.to_string());
-    assert_eq!(json["kind"], "branch");
+    assert_eq!(json["level"], 1);
     assert_eq!(json["block"]["entries"][0]["child"], child.to_string());
     assert_eq!(json["block"]["entries"][0]["embedding"]["$type"], "bytes");
 }
@@ -97,7 +98,7 @@ fn val_inspect_004_and_005_leaf_inspection_emits_debug_json_for_opaque_values() 
     let json = successful_json(output);
 
     assert_eq!(json["hash"], leaf_hash.to_string());
-    assert_eq!(json["kind"], "leaf");
+    assert_eq!(json["level"], 0);
     assert_eq!(json["block"]["entries"][0]["embedding"]["$type"], "bytes");
     assert_eq!(
         json["block"]["entries"][0]["content"]["body"]["$type"],
@@ -134,6 +135,34 @@ fn val_inspect_004_and_005_leaf_inspection_emits_debug_json_for_opaque_values() 
             && entry["value"]["$type"] == "map"
             && entry["value"]["entries"].is_array()
     }));
+}
+
+#[test]
+fn val_inspect_015_higher_level_branch_preserves_numeric_level() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let child = BlockHash::from_bytes([0x66; 32]);
+    let branch = build_branch_block(
+        VERSION_1,
+        3,
+        EmbeddingSpec {
+            dims: 4,
+            encoding: "f32le".to_owned(),
+        },
+        vec![BranchEntry {
+            embedding: vec![0x10, 0x20, 0x30, 0x40],
+            child,
+        }],
+        None,
+    )
+    .unwrap();
+    let branch_hash = store.put(&lexongraph_block::Block::Branch(branch)).unwrap();
+
+    let output = run_fs_inspect(temp_dir.path(), &branch_hash.to_string());
+    let json = successful_json(output);
+
+    assert_eq!(json["hash"], branch_hash.to_string());
+    assert_eq!(json["level"], 3);
 }
 
 #[test]

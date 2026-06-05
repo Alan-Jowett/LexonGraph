@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 pub const VERSION_1: u64 = 1;
 const TOP_LEVEL_VERSION_KEY: u64 = 0;
-const TOP_LEVEL_KIND_KEY: u64 = 1;
+const TOP_LEVEL_LEVEL_KEY: u64 = 1;
 const TOP_LEVEL_EMBEDDING_SPEC_KEY: u64 = 2;
 const TOP_LEVEL_ENTRIES_KEY: u64 = 3;
 const TOP_LEVEL_EXT_KEY: u64 = 15;
@@ -24,8 +24,6 @@ const LEAF_ENTRY_METADATA_KEY: u64 = 1;
 const LEAF_ENTRY_CONTENT_KEY: u64 = 2;
 const CONTENT_MEDIA_TYPE_KEY: u64 = 0;
 const CONTENT_BODY_KEY: u64 = 1;
-const KIND_BRANCH: &str = "branch";
-const KIND_LEAF: &str = "leaf";
 
 pub type Metadata = Vec<(Value, Value)>;
 pub type ExtensionMap = Vec<(Value, Value)>;
@@ -109,6 +107,7 @@ pub struct LeafEntry {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BranchBlock {
     pub version: u64,
+    pub level: u64,
     pub embedding_spec: EmbeddingSpec,
     pub entries: Vec<BranchEntry>,
     pub ext: Option<ExtensionMap>,
@@ -117,6 +116,7 @@ pub struct BranchBlock {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeafBlock {
     pub version: u64,
+    pub level: u64,
     pub embedding_spec: EmbeddingSpec,
     pub entries: Vec<LeafEntry>,
     pub ext: Option<ExtensionMap>,
@@ -143,6 +143,7 @@ pub struct ValidatedBlock {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockMetadata {
     pub version: u64,
+    pub level: u64,
     pub embedding_spec: EmbeddingSpec,
     pub ext: Option<ExtensionMap>,
 }
@@ -168,7 +169,7 @@ pub enum BlockError {
         context: &'static str,
         key: u64,
     },
-    InvalidBlockKind(String),
+    InvalidBlockLevel(u64),
     InvalidEntryShape(&'static str),
     NonConforming(&'static str),
     UnsupportedValue(&'static str),
@@ -188,7 +189,7 @@ impl fmt::Display for BlockError {
             Self::MissingField { context, key } => {
                 write!(f, "missing required field {key} in {context}")
             }
-            Self::InvalidBlockKind(kind) => write!(f, "invalid block kind {kind:?}"),
+            Self::InvalidBlockLevel(level) => write!(f, "invalid block level {level}"),
             Self::InvalidEntryShape(message) => write!(f, "{message}"),
             Self::NonConforming(message) => write!(f, "{message}"),
             Self::UnsupportedValue(message) => write!(f, "{message}"),
@@ -200,12 +201,14 @@ impl std::error::Error for BlockError {}
 
 pub fn build_branch_block(
     version: u64,
+    level: u64,
     embedding_spec: EmbeddingSpec,
     entries: Vec<BranchEntry>,
     ext: Option<ExtensionMap>,
 ) -> Result<BranchBlock, BlockError> {
     match normalize_block(Block::Branch(BranchBlock {
         version,
+        level,
         embedding_spec,
         entries,
         ext,
@@ -223,6 +226,7 @@ pub fn build_leaf_block(
 ) -> Result<LeafBlock, BlockError> {
     match normalize_block(Block::Leaf(LeafBlock {
         version,
+        level: 0,
         embedding_spec,
         entries,
         ext,
@@ -281,6 +285,7 @@ pub fn into_entries(validated: ValidatedBlock) -> TypedEntries {
         Block::Branch(block) => TypedEntries::Branch(
             BlockMetadata {
                 version: block.version,
+                level: block.level,
                 embedding_spec: block.embedding_spec,
                 ext: block.ext,
             },
@@ -289,6 +294,7 @@ pub fn into_entries(validated: ValidatedBlock) -> TypedEntries {
         Block::Leaf(block) => TypedEntries::Leaf(
             BlockMetadata {
                 version: block.version,
+                level: block.level,
                 embedding_spec: block.embedding_spec,
                 ext: block.ext,
             },
@@ -301,6 +307,9 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
     match block {
         Block::Branch(mut block) => {
             validate_version(block.version)?;
+            if block.level == 0 {
+                return Err(BlockError::InvalidBlockLevel(block.level));
+            }
             validate_embedding_spec(&block.embedding_spec)?;
             block.ext = normalize_optional_map(block.ext)?;
             block.entries.sort_by(compare_branch_entries);
@@ -315,6 +324,9 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
         }
         Block::Leaf(mut block) => {
             validate_version(block.version)?;
+            if block.level != 0 {
+                return Err(BlockError::InvalidBlockLevel(block.level));
+            }
             validate_embedding_spec(&block.embedding_spec)?;
             block.ext = normalize_optional_map(block.ext)?;
             if block.entries.len() != 1 {
@@ -423,10 +435,7 @@ fn block_to_value(block: &Block) -> Result<Value, BlockError> {
     let mut fields = match block {
         Block::Branch(block) => vec![
             (int_value(TOP_LEVEL_VERSION_KEY), int_value(block.version)),
-            (
-                int_value(TOP_LEVEL_KIND_KEY),
-                Value::Text(KIND_BRANCH.to_string()),
-            ),
+            (int_value(TOP_LEVEL_LEVEL_KEY), int_value(block.level)),
             (
                 int_value(TOP_LEVEL_EMBEDDING_SPEC_KEY),
                 embedding_spec_to_value(&block.embedding_spec),
@@ -444,10 +453,7 @@ fn block_to_value(block: &Block) -> Result<Value, BlockError> {
         ],
         Block::Leaf(block) => vec![
             (int_value(TOP_LEVEL_VERSION_KEY), int_value(block.version)),
-            (
-                int_value(TOP_LEVEL_KIND_KEY),
-                Value::Text(KIND_LEAF.to_string()),
-            ),
+            (int_value(TOP_LEVEL_LEVEL_KEY), int_value(block.level)),
             (
                 int_value(TOP_LEVEL_EMBEDDING_SPEC_KEY),
                 embedding_spec_to_value(&block.embedding_spec),
@@ -537,14 +543,14 @@ fn parse_block(value: Value) -> Result<Block, BlockError> {
     reject_unknown_keys(
         &fields,
         &[
-            TOP_LEVEL_KIND_KEY,
+            TOP_LEVEL_LEVEL_KEY,
             TOP_LEVEL_EMBEDDING_SPEC_KEY,
             TOP_LEVEL_ENTRIES_KEY,
             TOP_LEVEL_EXT_KEY,
         ],
         "block",
     )?;
-    let kind = required_text_field(&mut fields, TOP_LEVEL_KIND_KEY, "block")?;
+    let level = required_u64_field(&mut fields, TOP_LEVEL_LEVEL_KEY, "block")?;
     let embedding_spec = parse_embedding_spec(required_field(
         &mut fields,
         TOP_LEVEL_EMBEDDING_SPEC_KEY,
@@ -556,15 +562,16 @@ fn parse_block(value: Value) -> Result<Block, BlockError> {
         .transpose()?;
     let entries = required_field(&mut fields, TOP_LEVEL_ENTRIES_KEY, "block")?;
 
-    match kind.as_str() {
-        KIND_BRANCH => parse_branch_block(version, embedding_spec, entries, ext),
-        KIND_LEAF => parse_leaf_block(version, embedding_spec, entries, ext),
-        _ => Err(BlockError::InvalidBlockKind(kind)),
+    if level == 0 {
+        parse_leaf_block(version, level, embedding_spec, entries, ext)
+    } else {
+        parse_branch_block(version, level, embedding_spec, entries, ext)
     }
 }
 
 fn parse_branch_block(
     version: u64,
+    level: u64,
     embedding_spec: EmbeddingSpec,
     entries: Value,
     ext: Option<ExtensionMap>,
@@ -573,12 +580,13 @@ fn parse_branch_block(
         .into_iter()
         .map(parse_branch_entry)
         .collect::<Result<Vec<_>, _>>()?;
-    let block = build_branch_block(version, embedding_spec, entries, ext)?;
+    let block = build_branch_block(version, level, embedding_spec, entries, ext)?;
     Ok(Block::Branch(block))
 }
 
 fn parse_leaf_block(
     version: u64,
+    level: u64,
     embedding_spec: EmbeddingSpec,
     entries: Value,
     ext: Option<ExtensionMap>,
@@ -587,6 +595,9 @@ fn parse_leaf_block(
         .into_iter()
         .map(parse_leaf_entry)
         .collect::<Result<Vec<_>, _>>()?;
+    if level != 0 {
+        return Err(BlockError::InvalidBlockLevel(level));
+    }
     let block = build_leaf_block(version, embedding_spec, entries, ext)?;
     Ok(Block::Leaf(block))
 }

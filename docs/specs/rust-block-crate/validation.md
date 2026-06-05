@@ -82,7 +82,7 @@ Attempt to accept a leaf block with zero or multiple entries contrary to
 
 ### VAL-008
 
-Attempt to accept an entry whose required kind-specific fields are missing.
+Attempt to accept an entry whose required level-governed fields are missing.
 
 **Pass condition:** rejected as non-conforming.
 
@@ -180,3 +180,20 @@ validation entries `VAL-001` through `VAL-017`.
 
 **Traces to:** REQ-BLOCK-CRATE-010
 
+### VAL-019
+
+Round-trip a child-bearing block whose decoded `level` is greater than one.
+
+**Pass condition:** decode succeeds and preserves the higher numeric `level`.
+
+**Traces to:** REQ-BLOCK-CRATE-003, REQ-BLOCK-CRATE-014
+
+### VAL-020
+
+Attempt to accept a block whose top-level `level` field uses the legacy textual
+`kind` encoding or otherwise fails the unsigned-integer requirement.
+
+**Pass condition:** rejected explicitly.
+
+**Traces to:** REQ-BLOCK-CRATE-004, REQ-BLOCK-CRATE-005, REQ-BLOCK-CRATE-008,
+REQ-BLOCK-CRATE-014

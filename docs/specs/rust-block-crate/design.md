@@ -49,8 +49,9 @@ A sum type over `BranchBlock` and `LeafBlock`.
 
 ### DSG-002 `BranchBlock` and `LeafBlock`
 
-Distinct typed block structs with shared block metadata and kind-specific entry
-collections.
+Distinct typed block structs with shared block metadata and level-governed entry
+collections. `LeafBlock` is fixed at `level = 0`; `BranchBlock` carries an
+arbitrary `level > 0`.
 
 ### DSG-003 `EmbeddingSpec`
 
@@ -87,20 +88,20 @@ An explicit error taxonomy covering at least:
 - malformed CBOR
 - unsupported version
 - invalid field-key usage
-- invalid block kind or entry shape
+- invalid block level or entry shape
 - non-conforming block structure under the protocol rules
 
 ## API Surface
 
 ### DSG-010 `build_branch_block(...) -> Result<BranchBlock, BlockError>`
 
-Constructs a branch block from required metadata and a typed branch-entry
-collection, then validates protocol conformance.
+Constructs a child-bearing block from required metadata, explicit `level > 0`,
+and a typed branch-entry collection, then validates protocol conformance.
 
 ### DSG-011 `build_leaf_block(...) -> Result<LeafBlock, BlockError>`
 
-Constructs a leaf block from required metadata and a typed leaf-entry payload,
-then validates protocol conformance.
+Constructs a leaf block at `level = 0` from required metadata and a typed
+leaf-entry payload, then validates protocol conformance.
 
 ### DSG-012 `serialize_block(&Block) -> Result<SerializedBlock, BlockError>`
 
@@ -119,8 +120,9 @@ hashes independently of decode.
 
 ### DSG-015 `into_entries(ValidatedBlock) -> TypedEntries`
 
-Decomposes a validated block into block metadata and a typed entry collection
-without embedding search- or indexing-specific behavior.
+Decomposes a validated block into block metadata, including decoded `level`, and
+a typed entry collection without embedding search- or indexing-specific
+behavior.
 
 ### DSG-016 `Implementation realization`
 
@@ -184,4 +186,3 @@ Both consumers use the same typed model and protocol-conformance logic.
 | DSG-014 | REQ-BLOCK-CRATE-004, 011, 012 |
 | DSG-015 | REQ-BLOCK-CRATE-003, 006 |
 | DSG-016..017 | REQ-BLOCK-CRATE-010 |
-

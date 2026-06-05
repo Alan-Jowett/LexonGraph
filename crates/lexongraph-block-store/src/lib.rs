@@ -282,7 +282,7 @@ mod conformance_support {
         }
 
         Block::Branch(
-            build_branch_block(VERSION_1, embedding_spec("f16le"), entries, None).unwrap(),
+            build_branch_block(VERSION_1, 1, embedding_spec("f16le"), entries, None).unwrap(),
         )
     }
 
@@ -514,6 +514,7 @@ mod tests {
 
         let branch = build_branch_block(
             VERSION_1,
+            1,
             embedding_spec("f16le"),
             vec![
                 branch_entry(vec![0x02], child_ids[1].into_bytes()),
@@ -538,6 +539,7 @@ mod tests {
         let root = Block::Branch(
             build_branch_block(
                 VERSION_1,
+                1,
                 embedding_spec("f16le"),
                 vec![
                     branch_entry(vec![0x02], second_id.into_bytes()),
@@ -598,6 +600,7 @@ mod tests {
         let store = MemoryBlockStore::default();
         let invalid = Block::Leaf(lexongraph_block::LeafBlock {
             version: VERSION_1,
+            level: 0,
             embedding_spec: embedding_spec("f32le"),
             entries: vec![],
             ext: None,

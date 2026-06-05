@@ -83,7 +83,7 @@ The crate shall surface explicit failure when the root block cannot be loaded,
 when a selected child block cannot be loaded, when a visited block is malformed,
 when a visited block is incompatible with the target embedding, when candidate
 scoring fails for candidates loaded from a visited block regardless of candidate
-kind, or when the search cannot produce `n` reachable leaf candidates.
+level, or when the search cannot produce `n` reachable leaf candidates.
 
 ### REQ-SEARCH-007
 
@@ -115,7 +115,7 @@ expansion, visited-child tracking, and termination decisions.
 ### REQ-SEARCH-010
 
 The crate shall preserve the protocol's candidate-identity rules so that equal
-embeddings do not collapse distinct branch or leaf candidates before the
+embeddings do not collapse distinct child-bearing or leaf candidates before the
 protocol-defined deduplication points.
 
 ### REQ-SEARCH-011
@@ -237,7 +237,7 @@ cause that child to be selected for expansion again.
 ### REQ-SEARCH-023
 
 After a round expands one or more child block IDs, the crate shall remove from
-the frontier all branch candidates that target child block IDs already expanded
+the frontier all expandable candidates that target child block IDs already expanded
 in the invocation before the next ranking round.
 
 ## Out of Scope
