@@ -60,7 +60,7 @@ Unless a future revision says otherwise:
 
 ### Logical Names vs Wire Keys
 
-Logical names such as `version`, `kind`, `embedding_spec`, `entries`,
+Logical names such as `version`, `level`, `embedding_spec`, `entries`,
 `embedding`, `child`, `metadata`, and `content` are documentation labels only.
 
 Canonical on-wire CBOR uses integer field keys. A decoder must interpret those
@@ -71,7 +71,7 @@ keys according to the versioned field registry below, not by textual names.
 Top-level block map:
 
 - `0` -> `version`
-- `1` -> `kind`
+- `1` -> `level`
 - `2` -> `embedding_spec`
 - `3` -> `entries`
 - `15` -> `ext`
@@ -133,14 +133,14 @@ Known `encoding` values in this revision:
 
 Future revisions may define additional encodings.
 
-### BranchBlock
+### NonLeafBlock
 
-A branch block has the following logical shape:
+A non-leaf block has the following logical shape:
 
 ```text
-BranchBlock {
+NonLeafBlock {
   version: uint,
-  kind: "branch",
+  level: uint (> 0),
   embedding_spec: EmbeddingSpec,
   entries: [BranchEntry],
   ext?: map
@@ -150,12 +150,12 @@ BranchBlock {
 Field requirements:
 
 - `version` is required and identifies the protocol version
-- `kind` is required and is `"branch"` for branch blocks
+- `level` is required and is greater than zero for non-leaf blocks
 - `embedding_spec` is required and applies to every entry in the block
 - `entries` is required and contains child references keyed by embedding bytes
 - `ext` is optional and reserved for forward-compatible extensions
 
-Normatively, a branch block defines the mapping:
+Normatively, a non-leaf block defines the mapping:
 
 `embedding_bytes -> child_block_id`
 
@@ -184,7 +184,7 @@ A leaf block has the following logical shape:
 ```text
 LeafBlock {
   version: uint,
-  kind: "leaf",
+  level: 0,
   embedding_spec: EmbeddingSpec,
   entries: [LeafEntry],
   ext?: map
@@ -192,6 +192,8 @@ LeafBlock {
 ```
 
 In version 1, `entries` for a leaf block must contain exactly one `LeafEntry`.
+The numeric `level` is semantic depth from leaves, so `level = 0` is terminal
+and any `level > 0` clusters children from the immediately lower level.
 
 ### LeafEntry
 
@@ -230,7 +232,7 @@ future additive fields on blocks and entries.
 Entries are sorted deterministically under the enclosing block's
 `embedding_spec`.
 
-For branch blocks, entries are ordered by the tuple:
+For non-leaf blocks, entries are ordered by the tuple:
 
 `(embedding_bytes, child_block_id)`
 
@@ -240,18 +242,18 @@ encoded inside the canonical array form shown above.
 
 The following are invalid:
 
-- duplicate branch entries with the same `(embedding_bytes, child_block_id)` pair
+- duplicate non-leaf entries with the same `(embedding_bytes, child_block_id)` pair
 - unsorted entries
-- branch entries missing `child`
+- non-leaf entries missing `child`
 - leaf entries missing `metadata` or `content`
 - leaf blocks whose `entries` array does not contain exactly one `LeafEntry`
 
 ## Merkle Tree Semantics
 
-At the protocol layer, branch and leaf blocks form a Merkle tree:
+At the protocol layer, levelled blocks form a Merkle tree:
 
-- branch entries point to child blocks by `child`
-- leaf entries terminate traversal with inline payloads
+- non-leaf entries point to child blocks by `child`
+- leaf entries at `level = 0` terminate traversal with inline payloads
 - changing a child block changes its `block_id`
 - updating a parent to reference that new child produces a new parent
   `block_id`
@@ -268,9 +270,10 @@ Version 1 evolution rules:
 3. Readers may ignore unknown fields inside `ext`.
 4. New required top-level fields require a new `version`.
 5. New optional capabilities should prefer additive fields or `ext`.
-6. New block kinds require a new specification revision.
-7. Assigned integer field keys may not be reused for different meanings within
-   the same version.
+6. Introducing new entry shapes or changing the meaning of existing field keys
+   requires a new published specification revision.
+7. Within this published revision of version 1, assigned integer field keys may
+   not be reused again for different meanings.
 
 These rules preserve deterministic hashing while allowing controlled protocol
 growth.
@@ -282,7 +285,7 @@ The following illustrates the logical structure, not literal encoded bytes:
 ```text
 {
   version: 1,
-  kind: "branch",
+  level: 1,
   embedding_spec: { dims: 1536, encoding: "f16le" },
   entries: [
     {
@@ -302,7 +305,7 @@ The corresponding canonical on-wire shape uses the field-key registry:
 ```text
 {
   0: 1,
-  1: "branch",
+  1: 1,
   2: { 0: 1536, 1: "f16le" },
   3: [
     { 0: <embedding-a>, 1: <child-a> },
@@ -314,7 +317,7 @@ The corresponding canonical on-wire shape uses the field-key registry:
 ```text
 {
   version: 1,
-  kind: "leaf",
+  level: 0,
   embedding_spec: { dims: 1536, encoding: "f16le" },
   entries: [
     {
@@ -329,7 +332,7 @@ The corresponding canonical on-wire shape uses the field-key registry:
 ```text
 {
   0: 1,
-  1: "leaf",
+  1: 0,
   2: { 0: 1536, 1: "f16le" },
   3: [
     {
@@ -348,7 +351,7 @@ revision:
 
 1. Logically identical blocks serialize to identical canonical bytes.
 2. A block identifier equals `sha256(canonical_bytes)`.
-3. Branch blocks contain only `{ embedding, child }` entries.
+3. Non-leaf blocks contain only `{ embedding, child }` entries.
 4. Leaf blocks contain only `{ embedding, metadata, content }` entries.
 5. Unknown extension fields under `ext` do not invalidate parsing for known
    versions.
@@ -358,8 +361,8 @@ revision:
 8. Updating a descendant changes the identifiers of all rewritten ancestors.
 9. Distinct embedding encodings remain distinguishable in canonical bytes.
 10. Canonical on-wire encoding uses the versioned integer field-key registry.
-11. Reusing an assigned field key for a different meaning within the same
-    version is invalid.
+11. Legacy version-1 encodings that still use textual `kind` are invalid under
+    this published revision.
 
 ## Relationship to Higher-Level Indexing
 
@@ -377,7 +380,6 @@ The compactness strategy for version 1 is:
 1. canonical CBOR maps for future flexibility
 2. compact integer map keys on wire to avoid repeated text-key overhead
 3. block-scoped `embedding_spec` to avoid repeated per-entry descriptors
-4. specialized branch and leaf block kinds to avoid mixed per-entry unions
+4. specialized child-bearing and leaf block shapes to avoid mixed per-entry unions
 5. raw bytes for embeddings and child block IDs
 6. minimal nested wrappers in hot-path structures
-

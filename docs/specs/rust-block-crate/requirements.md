@@ -30,13 +30,14 @@ LexonGraph blocks, consumable by both indexing and search components.
 
 ### REQ-BLOCK-CRATE-002
 
-The crate shall support constructing a valid branch block or leaf block from an
-input collection of entries plus required block metadata.
+The crate shall support constructing a valid level-0 leaf block or a valid
+level-`k > 0` child-bearing block from an input collection of entries plus
+required block metadata.
 
 ### REQ-BLOCK-CRATE-003
 
-The crate shall support decomposing a validated block into block metadata and a
-typed entry collection.
+The crate shall support decomposing a validated block into block metadata,
+including decoded `level`, and a typed entry collection.
 
 ### REQ-BLOCK-CRATE-004
 
@@ -57,8 +58,8 @@ search traversal logic, storage backends, or similarity functions.
 
 ### REQ-BLOCK-CRATE-007
 
-The crate shall expose branch-block and leaf-block transformations as distinct
-typed operations.
+The crate shall expose child-bearing (`level > 0`) and leaf (`level = 0`)
+transformations as distinct typed operations.
 
 ### REQ-BLOCK-CRATE-008
 
@@ -92,6 +93,11 @@ both the bytes and the derived block hash.
 The crate shall fail explicitly on hash mismatch and shall not deserialize
 mismatched content as valid.
 
+### REQ-BLOCK-CRATE-014
+
+The crate shall preserve and expose arbitrary nonnegative block levels in
+version-1 serialization, deserialization, and typed validated output.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -109,4 +115,3 @@ This document is subordinate to `docs/protocol/blocks.md`.
 If this document appears to conflict with the protocol document, the protocol
 document is authoritative for wire format, canonicalization, and validity
 rules.
-

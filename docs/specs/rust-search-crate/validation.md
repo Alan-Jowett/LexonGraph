@@ -222,12 +222,13 @@ representative direct checks of helper-owned expectation failures.
 
 Construct ranked ties between:
 
-- leaf and branch candidates with equal scores
-- branch candidates with equal scores and different child block IDs
+- candidates from different numeric levels with equal scores
+- expandable candidates with equal scores and different child block IDs
 - leaf candidates with equal scores and different containing block IDs
 
 **Pass condition:** search uses the canonical protocol ordering for those ties:
-leaf before branch, then ascending block ID within candidate kind.
+lower level before higher level, then ascending block ID within the candidate
+shape at that level.
 
 **Traces to:** REQ-SEARCH-002, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-011
 
@@ -300,8 +301,8 @@ non-finite, the scorer fails explicitly instead of returning a rankable score.
 Invoke search with a scorer that rejects one or more candidates in a visited
 leaf block and in a visited branch block.
 
-**Pass condition:** search fails explicitly with a scoring failure for both
-candidate kinds rather than silently skipping those candidates or reporting
+**Pass condition:** search fails explicitly with a scoring failure for candidates
+from both terminal and expandable levels rather than silently skipping those candidates or reporting
 partial success.
 
 **Traces to:** REQ-SEARCH-006
@@ -324,7 +325,7 @@ Run search over a graph where one round expands a child block that is
 represented by multiple branch candidates in the current frontier, then
 continues into a later round.
 
-**Pass condition:** all branch candidates targeting any child block already
+**Pass condition:** all expandable candidates targeting any child block already
 expanded in the invocation are removed before the next ranking round so stale
 branch entries do not affect termination or later expansion choices.
 

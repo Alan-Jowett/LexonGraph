@@ -174,14 +174,14 @@ fn inspect_store(store: &impl BlockStore, block_hash: &BlockHash) -> Result<Valu
 
 fn render_inspection_document(validated_block: ValidatedBlock) -> Result<Value, InspectError> {
     let hash = validated_block.hash.to_string();
-    let (kind, block) = match validated_block.block {
-        Block::Branch(block) => ("branch", render_branch_block(block)?),
-        Block::Leaf(block) => ("leaf", render_leaf_block(block)?),
+    let (level, block) = match validated_block.block {
+        Block::Branch(block) => (block.level, render_branch_block(block)?),
+        Block::Leaf(block) => (block.level, render_leaf_block(block)?),
     };
 
     Ok(object([
         ("hash", Value::String(hash)),
-        ("kind", Value::String(kind.to_owned())),
+        ("level", Value::Number(Number::from(level))),
         ("block", block),
     ]))
 }

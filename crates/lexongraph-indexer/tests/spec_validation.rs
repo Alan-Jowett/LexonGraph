@@ -354,7 +354,8 @@ async fn val_indexer_002_and_005_single_item_produces_leaf_root() {
 
     let root = store.get(&result.root_id).unwrap().unwrap();
     match into_entries(root) {
-        TypedEntries::Leaf(_, entries) => {
+        TypedEntries::Leaf(metadata, entries) => {
+            assert_eq!(metadata.level, 0);
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].content.body, b"alpha".to_vec());
         }
@@ -380,7 +381,10 @@ async fn duplicate_leaf_blocks_collapse_to_a_single_root_before_packing() {
     assert_eq!(result.block_ids.len(), 1);
     let root = store.get(&result.root_id).unwrap().unwrap();
     match into_entries(root) {
-        TypedEntries::Leaf(_, entries) => assert_eq!(entries[0].content.body, b"alpha".to_vec()),
+        TypedEntries::Leaf(metadata, entries) => {
+            assert_eq!(metadata.level, 0);
+            assert_eq!(entries[0].content.body, b"alpha".to_vec());
+        }
         TypedEntries::Branch(_, _) => {
             panic!("expected duplicate leaf layer to collapse to a leaf root")
         }
@@ -554,7 +558,10 @@ async fn val_indexer_006_multiple_items_build_intermediate_layers_until_one_root
     assert_eq!(store.len(), 7);
     let root = store.get(&result.root_id).unwrap().unwrap();
     match into_entries(root) {
-        TypedEntries::Branch(_, entries) => assert_eq!(entries.len(), 2),
+        TypedEntries::Branch(metadata, entries) => {
+            assert_eq!(metadata.level, 2);
+            assert_eq!(entries.len(), 2);
+        }
         TypedEntries::Leaf(_, _) => panic!("expected branch root"),
     }
 }
@@ -912,6 +919,7 @@ fn val_indexer_024_builtin_canonical_policy_fails_explicitly() {
     let empty_error = ArithmeticMeanCanonicalEmbeddingPolicy
         .canonical_embedding(&BranchBlock {
             version: VERSION_1,
+            level: 1,
             embedding_spec: embedding_spec(),
             entries: vec![],
             ext: None,
@@ -1275,7 +1283,8 @@ fn val_indexer_026_parent_construction_from_child_blocks() {
     match into_entries(
         deserialize_block(&parents.blocks[0].bytes, &parents.blocks[0].hash).unwrap(),
     ) {
-        TypedEntries::Branch(_, entries) => {
+        TypedEntries::Branch(metadata, entries) => {
+            assert_eq!(metadata.level, 1);
             assert_eq!(entries.len(), 3);
             for pair in entries.windows(2) {
                 assert!(pair[0].embedding <= pair[1].embedding);
@@ -1313,10 +1322,10 @@ async fn val_indexer_027_resumable_staged_execution() {
         .unwrap();
 
     assert_eq!(root.blocks.len(), 1);
-    assert!(matches!(
-        into_entries(deserialize_block(&root.blocks[0].bytes, &root.blocks[0].hash).unwrap()),
-        TypedEntries::Branch(_, _)
-    ));
+    match into_entries(deserialize_block(&root.blocks[0].bytes, &root.blocks[0].hash).unwrap()) {
+        TypedEntries::Branch(metadata, _) => assert_eq!(metadata.level, 2),
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1366,30 +1375,11 @@ async fn val_indexer_029_mixed_leaf_and_branch_parent_inputs() {
         leaves.blocks[2].clone(),
         leaves.blocks[3].clone(),
     ];
-    let parent = indexer
+    let error = indexer
         .build_parent_blocks(&mixed_inputs, embedding_spec(), 256)
-        .unwrap();
-    let nested_validated = deserialize_block(
-        &nested_branch.blocks[0].bytes,
-        &nested_branch.blocks[0].hash,
-    )
-    .unwrap();
-    let expected_branch_embedding = match into_entries(nested_validated) {
-        TypedEntries::Branch(_, entries) => entries.last().unwrap().embedding.clone(),
-        TypedEntries::Leaf(_, _) => panic!("expected nested branch"),
-    };
-
-    match into_entries(deserialize_block(&parent.blocks[0].bytes, &parent.blocks[0].hash).unwrap())
-    {
-        TypedEntries::Branch(_, entries) => {
-            let nested_entry = entries
-                .iter()
-                .find(|entry| entry.child == nested_branch.blocks[0].hash)
-                .unwrap();
-            assert_eq!(nested_entry.embedding, expected_branch_embedding);
-        }
-        TypedEntries::Leaf(_, _) => panic!("expected mixed parent construction to emit a branch"),
-    }
+        .unwrap_err();
+    assert!(matches!(error, IndexerError::InvalidStagedInput(_)));
+    assert!(error.to_string().contains("shared level"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1678,6 +1668,7 @@ fn pq4_children() -> Vec<IndexedChild> {
         .map(|index| IndexedChild {
             embedding: vec![0x12],
             child: synthetic_hash(index),
+            level: 0,
         })
         .collect()
 }
@@ -1707,6 +1698,7 @@ fn f16le_children() -> Vec<IndexedChild> {
 fn synthetic_branch_block(spec: EmbeddingSpec, embeddings: Vec<Vec<u8>>) -> BranchBlock {
     build_branch_block(
         VERSION_1,
+        1,
         spec,
         embeddings
             .into_iter()
@@ -1741,6 +1733,7 @@ fn indexed_child(index: u8, embedding: [u8; 2]) -> IndexedChild {
     IndexedChild {
         embedding: embedding.to_vec(),
         child: synthetic_hash(index),
+        level: 0,
     }
 }
 
@@ -1751,6 +1744,7 @@ fn float_indexed_child(index: u8, first: [u8; 4], second: [u8; 4]) -> IndexedChi
     IndexedChild {
         embedding,
         child: synthetic_hash(index),
+        level: 0,
     }
 }
 
@@ -1761,6 +1755,7 @@ fn half_indexed_child(index: u8, first: f32, second: f32) -> IndexedChild {
     IndexedChild {
         embedding,
         child: synthetic_hash(index),
+        level: 0,
     }
 }
 

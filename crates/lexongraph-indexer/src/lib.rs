@@ -53,6 +53,7 @@ pub struct ConstructedBlocks {
 pub struct IndexedChild {
     pub embedding: Vec<u8>,
     pub child: BlockHash,
+    pub level: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -537,6 +538,7 @@ where
             current_layer.push(IndexedChild {
                 embedding,
                 child: serialized.hash,
+                level: 0,
             });
             blocks.push(ConstructedBlock {
                 block: leaf_block,
@@ -586,6 +588,7 @@ where
             current_layer.push(IndexedChild {
                 embedding,
                 child: block_id,
+                level: 0,
             });
         }
 
@@ -644,6 +647,7 @@ where
                 Ok(IndexedChild {
                     embedding: entry.embedding,
                     child,
+                    level: block.level,
                 })
             }
             Block::Branch(block) => {
@@ -658,7 +662,11 @@ where
                     .map_err(|error| IndexerError::CanonicalEmbeddingFailure(error.to_string()))?;
                 validate_embedding_bytes(&embedding, embedding_spec, "canonical")
                     .map_err(IndexerError::CanonicalEmbeddingFailure)?;
-                Ok(IndexedChild { embedding, child })
+                Ok(IndexedChild {
+                    embedding,
+                    child,
+                    level: block.level,
+                })
             }
         }
     }
@@ -677,6 +685,12 @@ where
                 "parent construction requires at least two unique child blocks".into(),
             ));
         }
+        let child_level = shared_child_level(&current_layer)?;
+        let parent_level = child_level.checked_add(1).ok_or_else(|| {
+            IndexerError::InvalidStagedInput(format!(
+                "child level {child_level} is too large to derive a parent level"
+            ))
+        })?;
 
         let groups = observe_clustering(
             &self.node_packing_policy,
@@ -707,8 +721,14 @@ where
                     ));
                 }
 
-                let branch = build_branch_block(VERSION_1, embedding_spec.clone(), entries, None)
-                    .map_err(IndexerError::BlockConstruction)?;
+                let branch = build_branch_block(
+                    VERSION_1,
+                    parent_level,
+                    embedding_spec.clone(),
+                    entries,
+                    None,
+                )
+                .map_err(IndexerError::BlockConstruction)?;
                 let branch_block = Block::Branch(branch.clone());
                 let serialized =
                     serialize_block(&branch_block).map_err(IndexerError::BlockConstruction)?;
@@ -736,6 +756,7 @@ where
                 next_layer.push(IndexedChild {
                     embedding: canonical_embedding,
                     child: serialized.hash,
+                    level: parent_level,
                 });
                 blocks.push(ConstructedBlock {
                     block: branch_block,
@@ -920,6 +941,26 @@ fn ensure_matching_embedding_spec(
         )));
     }
     Ok(())
+}
+
+fn shared_child_level(children: &[IndexedChild]) -> Result<u64, IndexerError> {
+    let Some(first) = children.first() else {
+        return Err(IndexerError::InvalidStagedInput(
+            "parent construction requires at least one child".into(),
+        ));
+    };
+    if children.iter().all(|child| child.level == first.level) {
+        Ok(first.level)
+    } else {
+        let levels = children
+            .iter()
+            .map(|child| child.level.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(IndexerError::InvalidStagedInput(format!(
+            "parent construction requires children from one shared level, got levels [{levels}]"
+        )))
+    }
 }
 
 fn validate_group_partition(
@@ -1312,7 +1353,7 @@ fn serialized_branch_size(spec: &EmbeddingSpec, entry_count: usize) -> Result<us
             child: synthetic_block_hash(index),
         })
         .collect();
-    let branch = build_branch_block(VERSION_1, spec.clone(), entries, None)
+    let branch = build_branch_block(VERSION_1, 1, spec.clone(), entries, None)
         .map_err(|error| format!("failed to build synthetic branch block: {error}"))?;
     let block = Block::Branch(branch);
     serialize_block(&block)

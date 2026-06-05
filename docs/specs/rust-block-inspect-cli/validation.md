@@ -43,7 +43,7 @@ exposes the filesystem backend's store-root input in this revision.
 Run the CLI against a filesystem-backed store containing a valid branch block.
 
 **Pass condition:** the CLI succeeds and emits one JSON document containing the
-verified block hash, `kind = "branch"`, and the decoded block content.
+verified block hash, `level = 1`, and the decoded block content.
 
 **Traces to:** REQ-INSPECT-004, REQ-INSPECT-005, REQ-INSPECT-006,
 REQ-INSPECT-007
@@ -53,7 +53,7 @@ REQ-INSPECT-007
 Run the CLI against a filesystem-backed store containing a valid leaf block.
 
 **Pass condition:** the CLI succeeds and emits one JSON document containing the
-verified block hash, `kind = "leaf"`, and the decoded block content.
+verified block hash, `level = 0`, and the decoded block content.
 
 **Traces to:** REQ-INSPECT-004, REQ-INSPECT-005, REQ-INSPECT-006,
 REQ-INSPECT-007
@@ -159,3 +159,14 @@ for the requested block hash cannot be read as block bytes.
 does not emit success-shaped JSON.
 
 **Traces to:** REQ-INSPECT-009, REQ-INSPECT-012
+
+### VAL-INSPECT-015
+
+Run the CLI against a filesystem-backed store containing a valid higher-level
+child-bearing block.
+
+**Pass condition:** the CLI succeeds and emits the preserved numeric `level`
+value for that block.
+
+**Traces to:** REQ-INSPECT-004, REQ-INSPECT-005, REQ-INSPECT-006,
+REQ-INSPECT-007

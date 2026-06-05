@@ -90,7 +90,7 @@ frontier.
 
 This representation preserves:
 
-- candidate kind, distinguishing branch from leaf entries
+- candidate level, distinguishing lower-level from higher-level entries
 - candidate identity, using child block ID for branches and containing block ID
   for leaves
 - the original entry payload needed for later return or expansion
@@ -214,18 +214,20 @@ The fixed orchestration flow is:
    scoring trait
 6. rank the full candidate set using descending primary score plus the
    protocol-defined deterministic tie-break order
-7. terminate successfully when the top `n` ranked candidates are all leaves
-8. select ranked branch candidates whose child block IDs have not already been
+7. terminate successfully when the top `n` ranked candidates are all level-0
+   leaves
+8. select ranked candidates from blocks whose level is greater than zero and
+   whose child block IDs have not already been
    expanded in the invocation
-9. de-duplicate those branch candidates by child block ID, keeping the
+9. de-duplicate those expandable candidates by child block ID, keeping the
    highest-ranked occurrence as the effective rank for that child
-10. select the top `w` unique child block IDs from that de-duplicated branch set
+10. select the top `w` unique child block IDs from that de-duplicated expandable set
 11. load the selected child blocks and mark their block IDs as expanded
-12. remove from the current candidate set the branch candidates whose child
+12. remove from the current candidate set the expandable candidates whose child
     blocks were expanded
 13. retain all remaining candidates and add the entries from the newly loaded
     child blocks to form the next candidate set
-14. fail explicitly if no expandable branch candidates remain before successful
+14. fail explicitly if no expandable candidates remain before successful
     termination
 
 The core search engine owns this flow even when policy traits participate in
@@ -235,7 +237,7 @@ Within one invocation, a child block ID becomes permanently ineligible for
 later expansion once step 11 loads it.
 
 Step 12, together with the per-invocation expanded-child tracking, removes
-branch candidates that target child block IDs already expanded in the
+expandable candidates that target child block IDs already expanded in the
 invocation so stale branch entries do not survive into later frontier rankings.
 
 ### DSG-SEARCH-010 `Deterministic ordering boundary`

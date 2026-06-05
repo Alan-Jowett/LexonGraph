@@ -78,7 +78,7 @@ hash has been verified.
 On successful inspection, the CLI shall emit JSON containing at least:
 
 - the verified block hash
-- the decoded block kind
+- the decoded numeric block level
 - the decoded block content
 
 ### REQ-INSPECT-008

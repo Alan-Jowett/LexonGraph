@@ -90,10 +90,11 @@ tie-break so that ranking is total.
 A conforming ranking order is:
 
 1. descending similarity
-2. candidate kind, with leaf candidates ordered before branch candidates
+2. candidate level, with lower numeric levels ordered before higher numeric
+   levels
 3. candidate identity:
-   - branch candidates by `child` block ID in ascending bytewise order
-   - leaf candidates by containing block ID in ascending bytewise order
+   - non-terminal candidates by `child` block ID in ascending bytewise order
+   - terminal candidates by containing block ID in ascending bytewise order
 
 This ordering is canonical for this revision.
 
@@ -105,26 +106,26 @@ The client performs the following steps:
 2. Load the block's entries into the current candidate set.
 3. Score each candidate embedding against the target embedding.
 4. Rank the full candidate set using the deterministic ordering rules above.
-5. If the top `N` ranked candidates are all leaf candidates, return those `N`
-   leaf candidates and stop.
-6. Select the ranked branch candidates from the current set whose target `child`
-   block IDs have not already been expanded in this search.
-7. De-duplicate those branch candidates by target `child` block ID, keeping the
+5. If the top `N` ranked candidates are all level-0 leaf candidates, return
+   those `N` leaf candidates and stop.
+6. Select the ranked candidates from blocks whose level is greater than zero and
+   whose target `child` block IDs have not already been expanded in this search.
+7. De-duplicate those expandable candidates by target `child` block ID, keeping the
    highest-ranked occurrence of each child block as that block's effective rank.
-8. Select the top `W` unique child blocks from that de-duplicated branch set.
+8. Select the top `W` unique child blocks from that de-duplicated expandable set.
 9. Load the selected child blocks and mark their block IDs as expanded.
-10. Remove from the current candidate set the branch candidates whose target
+10. Remove from the current candidate set the expandable candidates whose target
     child blocks were expanded in step 9.
 11. Retain all remaining candidates and add the entries from the newly loaded
     child blocks to form the next candidate set.
 12. Go to step 3.
 
-If step 6 yields no expandable branch candidates and step 5 did not terminate
+If step 6 yields no expandable candidates and step 5 did not terminate
 the search, the client must fail because the search cannot produce `N`
 reachable leaf candidates.
 
-`W` is applied after branch-candidate deduplication. If one occurrence of a
-child block ranks within raw top `W` branch candidates and another occurrence of
+`W` is applied after expandable-candidate deduplication. If one occurrence of a
+child block ranks within raw top `W` expandable candidates and another occurrence of
 the same child block ranks outside it, that child block is still treated as
 within `W` because selection uses its best-ranked occurrence.
 
@@ -132,7 +133,7 @@ within `W` because selection uses its best-ranked occurrence.
 
 Repeated embeddings are legal.
 
-If more than `W` branch candidates with identical embedding values survive to
+If more than `W` expandable candidates with identical embedding values survive to
 the expansion cutoff, the client includes only the top `W` unique child blocks
 according to the full deterministic ranking order after child-block
 deduplication.
@@ -192,4 +193,3 @@ revision:
 10. Incompatible `embedding_spec`, missing blocks, and malformed blocks produce
     explicit failure.
 11. Equal embeddings in different leaf blocks remain distinct leaf candidates.
-
