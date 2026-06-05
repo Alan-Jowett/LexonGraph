@@ -244,7 +244,7 @@ fn val_pca_013_serialization_roundtrip_preserves_pca_and_affine_transforms() {
 }
 
 #[test]
-fn val_pca_014_quantization_is_deterministic_and_excludes_negative_128_for_i8() {
+fn val_pca_014_quantization_is_deterministic_across_i8_and_i16_surfaces() {
     let transform = fit(&fixture_vectors()).unwrap();
     let i8_config = QuantizationConfig {
         bits: QuantizationBits::I8,
