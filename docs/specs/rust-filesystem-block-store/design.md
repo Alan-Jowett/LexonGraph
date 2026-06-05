@@ -24,6 +24,7 @@ The crate owns:
 - filesystem-specific realization of `BlockStore`
 - store-root configuration and path derivation
 - atomic publication mechanics for block files
+- filesystem traversal needed to enumerate published block IDs
 - filesystem-specific error mapping
 
 The crate does not own:
@@ -32,7 +33,7 @@ The crate does not own:
 - block validation rules beyond invoking the block crate
 - any consumer-facing API wider than the parent `BlockStore` contract plus
   store construction
-- enumeration, deletion, or compaction behavior
+- deletion or compaction behavior
 
 ## External Dependencies
 
@@ -136,7 +137,26 @@ Malformed bytes map to malformed-content failures, block-ID mismatch maps to an
 integrity-mismatch failure, and unreadable files map to backend failures. None
 of those states are downgraded to absence.
 
-### DSG-FS-STORE-008 `Concurrent publication`
+### DSG-FS-STORE-008 `iter_block_ids`
+
+`iter_block_ids` walks the configured store root and streams block identifiers
+for published block files that match the deterministic on-disk block layout.
+
+The enumeration realization:
+
+1. traverses the store root without exposing traversal paths at the trait
+   boundary
+2. recognizes published block files by the deterministic sharded layout and file
+   naming convention owned by this crate
+3. decodes each recognized published file path back into its block ID
+4. yields only decoded block IDs to callers
+5. ignores directories and transient staging artifacts that are not published
+   block files
+
+Traversal or path-decoding failures map to explicit backend failures through the
+parent error taxonomy.
+
+### DSG-FS-STORE-009 `Concurrent publication`
 
 Two or more store instances targeting the same store root may attempt to
 publish the same block concurrently.
@@ -152,13 +172,13 @@ re-checks the published file:
 - if the published bytes differ, `put` reports an explicit backend failure
   describing integrity conflict
 
-### DSG-FS-STORE-009 `Durability scope`
+### DSG-FS-STORE-010 `Durability scope`
 
 This revision guarantees atomic visibility of published block files within the
 store root but does not guarantee crash persistence through explicit syncing of
 file contents or directory metadata.
 
-### DSG-FS-STORE-010 `Error mapping`
+### DSG-FS-STORE-011 `Error mapping`
 
 Filesystem access failures are surfaced as explicit backend failures through the
 parent error taxonomy.
@@ -173,14 +193,18 @@ This mapping applies both to constructor-time filesystem failures and to
 runtime negative paths during `put` and `get`, including publication-failure
 recovery.
 
+Enumeration-time directory traversal failures, metadata failures, or published
+path-decoding failures also map to explicit backend failures through the parent
+error taxonomy.
+
 ## Verification Strategy
 
-### DSG-FS-STORE-011 `Conformance reuse`
+### DSG-FS-STORE-012 `Conformance reuse`
 
 The crate reuses the parent block-store conformance helpers to verify the
-backend-neutral `put` and `get` contract.
+backend-neutral `put`, `get`, and block-ID enumeration contract.
 
-### DSG-FS-STORE-012 `Filesystem-specific verification`
+### DSG-FS-STORE-013 `Filesystem-specific verification`
 
 The crate adds backend-specific tests for:
 
@@ -196,6 +220,10 @@ The crate adds backend-specific tests for:
   re-inspected
 - explicit failure on conflicting pre-existing bytes
 - successful convergence for concurrent publication of the same block
+- enumeration of published block IDs rooted under the configured store
+- exclusion of staging files and other non-published artifacts from enumeration
+- explicit failure for directory traversal or path-decoding errors during
+  enumeration
 
 ## Traceability
 
@@ -206,7 +234,8 @@ The crate adds backend-specific tests for:
 | DSG-FS-STORE-004 | REQ-FS-STORE-003, REQ-FS-STORE-004 |
 | DSG-FS-STORE-005..006 | REQ-FS-STORE-004, REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011 |
 | DSG-FS-STORE-007 | REQ-FS-STORE-006 |
-| DSG-FS-STORE-008 | REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-008 |
-| DSG-FS-STORE-009 | REQ-FS-STORE-005 |
-| DSG-FS-STORE-010 | REQ-FS-STORE-001, REQ-FS-STORE-003, REQ-FS-STORE-006, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011 |
-| DSG-FS-STORE-011..012 | REQ-FS-STORE-009, REQ-FS-STORE-012 |
+| DSG-FS-STORE-008 | REQ-FS-STORE-013, REQ-FS-STORE-014, REQ-FS-STORE-015, REQ-FS-STORE-016 |
+| DSG-FS-STORE-009 | REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-008 |
+| DSG-FS-STORE-010 | REQ-FS-STORE-005 |
+| DSG-FS-STORE-011 | REQ-FS-STORE-001, REQ-FS-STORE-003, REQ-FS-STORE-006, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011, REQ-FS-STORE-016 |
+| DSG-FS-STORE-012..013 | REQ-FS-STORE-009, REQ-FS-STORE-012, REQ-FS-STORE-013, REQ-FS-STORE-015, REQ-FS-STORE-016 |

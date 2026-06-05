@@ -145,12 +145,38 @@ filesystem-specific negative-path semantics for:
 - publication failure followed by an unreadable or otherwise uninspectable
   target
 
+### REQ-FS-STORE-013
+
+The filesystem block-store crate shall implement the parent trait's streaming
+block-ID enumeration for published block files rooted under the configured store
+root.
+
+### REQ-FS-STORE-014
+
+Filesystem enumeration shall expose only block identifiers at the parent trait
+boundary and shall not expose the implementation's internal path layout below
+the store root.
+
+### REQ-FS-STORE-015
+
+Filesystem enumeration shall report only published block files that conform to
+the implementation's deterministic block-file layout.
+
+It shall not report staging files, temporary files, directories, or other
+non-published filesystem artifacts as stored block IDs.
+
+### REQ-FS-STORE-016
+
+Filesystem enumeration shall surface explicit backend failure when traversal of
+the store root or decoding of a published block-file location into a block ID
+cannot be completed.
+
 ## Out of Scope
 
 This crate does not define or own:
 
 - block canonicalization, block validity, or block-ID derivation rules
-- backend enumeration, listing, deletion, or query APIs
+- backend deletion or query APIs beyond the parent trait's block-ID enumeration
 - any public compatibility promise for the internal path layout below the store
   root
 - explicit `fsync`-based crash-durability guarantees

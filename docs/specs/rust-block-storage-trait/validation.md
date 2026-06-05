@@ -126,7 +126,8 @@ Use the crate's opt-in conformance-test helper surface from a downstream crate
 that implements `BlockStore`.
 
 **Pass condition:** the downstream crate can depend on the helper surface in
-tests and run the shared conformance checks without changing the default
+tests and run the shared conformance checks, including identifier enumeration,
+without changing the default
 production-facing API of the trait crate.
 
 **Traces to:** REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013
@@ -137,9 +138,52 @@ Run the downstream conformance harness against a backend under test while
 supplying test-only hooks for corruption scenarios.
 
 **Pass condition:** the shared harness can verify round-trip, idempotence,
-absence, integrity-mismatch, and malformed-content behavior without requiring
-backend-specific methods on the production `BlockStore` trait.
+absence, integrity-mismatch, malformed-content, and identifier-enumeration
+behavior without requiring backend-specific methods on the production
+`BlockStore` trait.
 
 **Traces to:** REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008,
 REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013
 
+### VAL-STORE-013
+
+Store multiple valid blocks, then consume the enumeration surface to stream the
+stored block identifiers.
+
+**Pass condition:** enumeration yields the stored block IDs without requiring
+the caller to materialize the full ID set before streaming begins.
+
+**Traces to:** REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-014
+
+### VAL-STORE-014
+
+Consume the enumeration surface from a caller that classifies the observed IDs
+through separate `get` calls.
+
+**Pass condition:** the storage trait yields identifiers only, and the caller
+can determine leaf or branch structure without any classification behavior built
+into the enumeration API itself.
+
+**Traces to:** REQ-BLOCK-STORE-004, REQ-BLOCK-STORE-015,
+REQ-BLOCK-STORE-018
+
+### VAL-STORE-015
+
+Evaluate the enumeration surface against distinct backend classes such as
+filesystem, sqlite, Azure Blob, S3, or similar content-addressed stores.
+
+**Pass condition:** the same streaming identifier-enumeration contract remains
+applicable without exposing backend-specific listing details in the
+consumer-facing API.
+
+**Traces to:** REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-007,
+REQ-BLOCK-STORE-016
+
+### VAL-STORE-016
+
+Cause enumeration startup or mid-stream progress to encounter a backend failure.
+
+**Pass condition:** enumeration fails explicitly rather than silently omitting
+the affected stored state as though enumeration had completed successfully.
+
+**Traces to:** REQ-BLOCK-STORE-017

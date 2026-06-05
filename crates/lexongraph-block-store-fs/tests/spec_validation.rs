@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+use std::collections::HashSet;
 #[cfg(feature = "inject")]
 use std::io;
 #[cfg(feature = "inject")]
@@ -204,6 +205,80 @@ fn val_fs_store_010_parent_conformance_requirements_are_realized_by_tests() {
 }
 
 #[test]
+fn val_fs_store_019_enumeration_yields_published_block_ids() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block("first");
+    let second = sample_leaf_block("second");
+
+    let expected = HashSet::from([store.put(&first).unwrap(), store.put(&second).unwrap()]);
+    let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
+
+    assert_eq!(enumerated, expected);
+}
+
+#[test]
+fn val_fs_store_020_enumeration_excludes_staging_and_other_non_published_artifacts() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let block = sample_leaf_block("published");
+    let block_id = store.put(&block).unwrap();
+    let published_path = expected_block_path(temp_dir.path(), &block_id);
+    let published_dir = published_path.parent().unwrap();
+
+    std::fs::write(temp_dir.path().join("root-note.txt"), b"ignore me").unwrap();
+    std::fs::write(published_dir.join(".tmp-junk.part"), b"transient").unwrap();
+    std::fs::create_dir_all(published_dir.join("nested-dir")).unwrap();
+
+    let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
+
+    assert_eq!(enumerated, HashSet::from([block_id]));
+}
+
+#[test]
+fn val_fs_store_021_path_decoding_failures_are_explicit_during_enumeration() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let malformed_path = temp_dir
+        .path()
+        .join("aa")
+        .join("bb")
+        .join("not-a-block-id.cbor");
+
+    std::fs::create_dir_all(malformed_path.parent().unwrap()).unwrap();
+    std::fs::write(&malformed_path, b"malformed candidate").unwrap();
+
+    let error = store
+        .iter_block_ids()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_err();
+
+    expect_backend_failure_contains(error, "failed to decode block ID from enumerated path");
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn val_fs_store_021_directory_traversal_failures_are_explicit_during_enumeration() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_with_ops(
+        temp_dir.path(),
+        Arc::new(ScriptedFsOps::with_read_dir_failure(
+            1,
+            error_spec("enumerate root"),
+        )),
+    )
+    .unwrap();
+
+    let error = match store.iter_block_ids() {
+        Ok(_) => panic!("expected root enumeration to fail explicitly"),
+        Err(error) => error,
+    };
+
+    expect_backend_failure_contains(error, "failed to enumerate block store root");
+}
+
+#[test]
 fn val_fs_store_011_repository_includes_filesystem_store_verification_artifacts() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
@@ -378,6 +453,12 @@ fn shard_filenames(path: &Path) -> Vec<String> {
     names
 }
 
+fn collect_block_ids(
+    iter: lexongraph_block_store::BlockIdIterator<'_>,
+) -> Result<HashSet<BlockHash>, BlockStoreError> {
+    iter.collect::<Result<HashSet<_>, _>>()
+}
+
 #[cfg(feature = "inject")]
 fn assert_put_pre_publication_failure(ops: ScriptedFsOps, expected_message: &str) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -445,6 +526,8 @@ struct ScriptState {
     create_dir_all_failure: Option<IndexedFailure>,
     canonicalize_failure: Option<ErrorSpec>,
     is_dir_result: Option<IsDirResult>,
+    read_dir_calls: usize,
+    read_dir_failure: Option<IndexedFailure>,
     read_calls: usize,
     read_failure: Option<IndexedFailure>,
     create_staged_file_failure: Option<ErrorSpec>,
@@ -482,6 +565,12 @@ impl ScriptedFsOps {
     fn with_read_failure(call: usize, error: ErrorSpec) -> Self {
         let ops = Self::default();
         ops.state.lock().unwrap().read_failure = Some(IndexedFailure { call, error });
+        ops
+    }
+
+    fn with_read_dir_failure(call: usize, error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().read_dir_failure = Some(IndexedFailure { call, error });
         ops
     }
 
@@ -556,6 +645,20 @@ impl FsOps for ScriptedFsOps {
                 std::fs::metadata(path).map(|metadata| metadata.is_dir())
             }
         }
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        let mut state = self.state.lock().unwrap();
+        state.read_dir_calls += 1;
+        if let Some(failure) = state.read_dir_failure.as_ref()
+            && failure.call == state.read_dir_calls
+        {
+            return Err(failure.error.to_io_error());
+        }
+        drop(state);
+        std::fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect()
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -646,6 +749,12 @@ impl BlockStore for HarnessStore {
         block_id: &BlockHash,
     ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
         self.inner.get(block_id)
+    }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        self.inner.iter_block_ids()
     }
 }
 

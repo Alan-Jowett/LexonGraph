@@ -34,7 +34,8 @@ S3, or similar systems.
 ### REQ-BLOCK-STORE-001
 
 The crate shall define the backend-agnostic contract between LexonGraph
-consumers and block-storage backends.
+consumers and block-storage backends, including immutable block persistence,
+retrieval, and streaming enumeration of stored block identifiers.
 
 ### REQ-BLOCK-STORE-002
 
@@ -91,13 +92,44 @@ canonicalization policy, wire-format policy, or protocol evolution rules.
 
 The crate shall provide a reusable conformance-test harness that downstream
 `BlockStore` implementers can invoke from their own test suites to verify the
-required `put`/`get` contract semantics.
+required `put`/`get`/enumeration contract semantics.
 
 ### REQ-BLOCK-STORE-013
 
 The reusable conformance-test harness shall be exposed through an opt-in,
 non-default test-oriented surface so downstream implementers can use it in
 tests without broadening the crate's default production-facing API.
+
+### REQ-BLOCK-STORE-014
+
+The crate shall expose a backend-neutral streaming enumeration surface that
+permits callers to observe stored block identifiers without first materializing
+the full identifier set in memory.
+
+### REQ-BLOCK-STORE-015
+
+The enumeration surface shall yield block identifiers only.
+
+It shall not require the storage trait to classify identifiers as leaf blocks,
+branch blocks, roots, levels, clusters, or reachable subgraphs.
+
+### REQ-BLOCK-STORE-016
+
+The enumeration surface shall preserve a backend-neutral contract that does not
+expose filesystem paths, SQL schemas, blob prefixes, bucket layout, or similar
+backend-specific listing details to consumers.
+
+### REQ-BLOCK-STORE-017
+
+Enumeration shall surface explicit backend failures encountered before or during
+streaming and shall not silently skip unreadable or otherwise unlistable stored
+state as though enumeration were complete.
+
+### REQ-BLOCK-STORE-018
+
+This revision shall not require enumeration ordering, snapshot isolation,
+reachability filtering, root detection, leaf or branch classification, or
+traversal semantics.
 
 ## Out of Scope
 
@@ -107,7 +139,7 @@ This crate does not define or own:
 - block-ID derivation rules
 - indexing tree construction strategy
 - search traversal or ranking behavior
-- backend enumeration, listing, deletion, or query APIs
+- backend deletion or query APIs
 - production filesystem, sqlite, Azure Blob, S3, or other concrete backend
   implementations
 
@@ -121,4 +153,3 @@ specification package for typed block modeling and block verification behavior.
 
 If this document appears to conflict with either of those authorities, they are
 authoritative for their respective concerns.
-
