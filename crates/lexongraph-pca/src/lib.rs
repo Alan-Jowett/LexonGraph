@@ -194,11 +194,14 @@ pub struct PcaAccumulator {
 
 impl PcaAccumulator {
     pub fn new(dim: usize) -> Self {
+        let scatter_len = dim
+            .checked_mul(dim)
+            .expect("PcaAccumulator scatter allocation overflow");
         Self {
             input_dim: dim,
             sample_count: 0,
             mean: vec![0.0; dim],
-            scatter: vec![0.0; dim * dim],
+            scatter: vec![0.0; scatter_len],
         }
     }
 
@@ -637,10 +640,9 @@ impl PcaTransform {
         expect_magic(bytes, &mut offset, PCA_MAGIC)?;
         let serialization_version = read_u32(bytes, &mut offset)?;
         if serialization_version != SERIALIZATION_VERSION {
-            return Err(PcaError::SchemaVersionMismatch {
-                expected: SERIALIZATION_VERSION,
-                actual: serialization_version,
-            });
+            return Err(PcaError::InvalidSerializedFormat(format!(
+                "unsupported PCA serialization version {serialization_version}; expected {SERIALIZATION_VERSION}"
+            )));
         }
         let schema_version = read_u32(bytes, &mut offset)?;
         if schema_version != CURRENT_SCHEMA_VERSION {
@@ -709,7 +711,8 @@ impl PcaTransform {
         })
     }
 
-    pub fn to_affine(&self) -> AffineTransform {
+    pub fn to_affine(&self) -> Result<AffineTransform, PcaError> {
+        self.ensure_runtime_shape("PCA to_affine")?;
         let mut matrix = vec![0.0; self.output_dim * self.input_dim];
         let mut bias = vec![0.0; self.output_dim];
 
@@ -721,16 +724,17 @@ impl PcaTransform {
             }
         }
 
-        AffineTransform {
+        Ok(AffineTransform {
             input_dim: self.input_dim,
             output_dim: self.output_dim,
             matrix,
             bias,
             schema_version: self.schema_version,
-        }
+        })
     }
 
-    fn inverse_affine(&self) -> AffineTransform {
+    fn inverse_affine(&self) -> Result<AffineTransform, PcaError> {
+        self.ensure_runtime_shape("PCA inverse_affine")?;
         let mut matrix = vec![0.0; self.input_dim * self.output_dim];
         for column in 0..self.output_dim {
             for row in 0..self.input_dim {
@@ -738,13 +742,13 @@ impl PcaTransform {
                     self.basis[matrix_index(self.input_dim, row, column)];
             }
         }
-        AffineTransform {
+        Ok(AffineTransform {
             input_dim: self.output_dim,
             output_dim: self.input_dim,
             matrix,
             bias: self.mean.clone(),
             schema_version: self.schema_version,
-        }
+        })
     }
 
     fn ensure_finite_input(&self, context: &'static str, values: &[f32]) -> Result<(), PcaError> {
@@ -851,10 +855,9 @@ impl AffineTransform {
         expect_magic(bytes, &mut offset, AFFINE_MAGIC)?;
         let serialization_version = read_u32(bytes, &mut offset)?;
         if serialization_version != SERIALIZATION_VERSION {
-            return Err(PcaError::SchemaVersionMismatch {
-                expected: SERIALIZATION_VERSION,
-                actual: serialization_version,
-            });
+            return Err(PcaError::InvalidSerializedFormat(format!(
+                "unsupported affine serialization version {serialization_version}; expected {SERIALIZATION_VERSION}"
+            )));
         }
         let schema_version = read_u32(bytes, &mut offset)?;
         if schema_version != CURRENT_SCHEMA_VERSION {
@@ -943,7 +946,9 @@ pub fn apply_in_place(batch: &mut [Vec<f32>], transform: &PcaTransform) -> Resul
 }
 
 pub fn compose(a: &PcaTransform, b: &PcaTransform) -> Result<AffineTransform, PcaError> {
-    AffineTransform::compose(&a.to_affine(), &b.to_affine())
+    let first = a.to_affine()?;
+    let second = b.to_affine()?;
+    AffineTransform::compose(&first, &second)
 }
 
 pub fn delta_exact(from: &PcaTransform, to: &PcaTransform) -> Result<DeltaTransform, PcaError> {
@@ -964,8 +969,8 @@ pub fn delta_reconstructing(
     to: &PcaTransform,
 ) -> Result<DeltaTransform, PcaError> {
     ensure_dim("delta transform", from.input_dim, to.input_dim)?;
-    let inverse = from.inverse_affine();
-    let target = to.to_affine();
+    let inverse = from.inverse_affine()?;
+    let target = to.to_affine()?;
     let affine = AffineTransform::compose(&inverse, &target)?;
     Ok(DeltaTransform {
         affine,

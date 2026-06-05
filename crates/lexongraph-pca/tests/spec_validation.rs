@@ -233,7 +233,7 @@ fn val_pca_013_serialization_roundtrip_preserves_pca_and_affine_transforms() {
     let roundtrip = PcaTransform::deserialize(&transform.serialize().unwrap()).unwrap();
     assert_eq!(transform, roundtrip);
 
-    let affine = transform.to_affine();
+    let affine = transform.to_affine().unwrap();
     let affine_roundtrip = AffineTransform::deserialize(&affine.serialize().unwrap()).unwrap();
     assert_eq!(affine, affine_roundtrip);
 }
@@ -310,6 +310,14 @@ fn malformed_public_transform_values_fail_with_typed_errors_instead_of_panicking
         malformed.reconstruct(&[1.0, 2.0]),
         Err(PcaError::DimensionMismatch { .. })
     ));
+    assert!(matches!(
+        compose(&malformed, &identity_pca([0.0, 0.0])),
+        Err(PcaError::DimensionMismatch { .. })
+    ));
+    assert!(matches!(
+        delta_reconstructing(&malformed, &identity_pca([0.0, 0.0])),
+        Err(PcaError::DimensionMismatch { .. })
+    ));
 
     let malformed_affine = AffineTransform {
         input_dim: 2,
@@ -325,6 +333,25 @@ fn malformed_public_transform_values_fail_with_typed_errors_instead_of_panicking
     assert!(matches!(
         AffineTransform::compose(&malformed_affine, &malformed_affine),
         Err(PcaError::DimensionMismatch { .. })
+    ));
+}
+
+#[test]
+fn serialization_version_mismatches_report_invalid_serialized_format() {
+    let transform = fit(&fixture_vectors()).unwrap();
+    let mut pca_bytes = transform.serialize().unwrap();
+    pca_bytes[4..8].copy_from_slice(&999u32.to_le_bytes());
+    assert!(matches!(
+        PcaTransform::deserialize(&pca_bytes),
+        Err(PcaError::InvalidSerializedFormat(_))
+    ));
+
+    let affine = transform.to_affine().unwrap();
+    let mut affine_bytes = affine.serialize().unwrap();
+    affine_bytes[4..8].copy_from_slice(&999u32.to_le_bytes());
+    assert!(matches!(
+        AffineTransform::deserialize(&affine_bytes),
+        Err(PcaError::InvalidSerializedFormat(_))
     ));
 }
 
