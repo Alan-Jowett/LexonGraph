@@ -448,10 +448,7 @@ fn decode_embedding(
     block_id: BlockHash,
     entry_index: usize,
 ) -> Result<Vec<f32>, DirectionalPcaError> {
-    let expected =
-        expected_embedding_len(spec).ok_or_else(|| DirectionalPcaError::UnsupportedEncoding {
-            encoding: spec.encoding.clone(),
-        })?;
+    let expected = expected_embedding_len(spec)?;
     if embedding.len() != expected {
         return Err(DirectionalPcaError::InvalidEmbeddingLength {
             encoding: spec.encoding.clone(),
@@ -508,13 +505,30 @@ fn decode_embedding(
     }
 }
 
-fn expected_embedding_len(spec: &EmbeddingSpec) -> Option<usize> {
-    let dims = usize::try_from(spec.dims).ok()?;
+fn expected_embedding_len(spec: &EmbeddingSpec) -> Result<usize, DirectionalPcaError> {
+    let dims = usize::try_from(spec.dims).map_err(|_| {
+        DirectionalPcaError::InvalidNumericState(format!(
+            "embedding dims {} do not fit in usize",
+            spec.dims
+        ))
+    })?;
     match spec.encoding.as_str() {
-        "f32le" => dims.checked_mul(4),
-        "f16le" => dims.checked_mul(2),
-        "i8" => Some(dims),
-        _ => None,
+        "f32le" => dims.checked_mul(4).ok_or_else(|| {
+            DirectionalPcaError::InvalidNumericState(format!(
+                "embedding byte length overflowed for {} dims under f32le",
+                spec.dims
+            ))
+        }),
+        "f16le" => dims.checked_mul(2).ok_or_else(|| {
+            DirectionalPcaError::InvalidNumericState(format!(
+                "embedding byte length overflowed for {} dims under f16le",
+                spec.dims
+            ))
+        }),
+        "i8" => Ok(dims),
+        _ => Err(DirectionalPcaError::UnsupportedEncoding {
+            encoding: spec.encoding.clone(),
+        }),
     }
 }
 

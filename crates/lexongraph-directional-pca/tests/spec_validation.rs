@@ -303,6 +303,25 @@ fn val_dpca_005_representative_embedding_failures_are_explicit() {
         Err(DirectionalPcaError::UnsupportedEncoding { .. })
     ));
 
+    let overflow_store = MemoryBlockStore::default();
+    let overflow_spec = EmbeddingSpec {
+        dims: u64::MAX,
+        encoding: "f32le".into(),
+    };
+    let overflow_a =
+        overflow_store.insert_block(&leaf_block_raw(overflow_spec.clone(), Vec::new()));
+    let overflow_b = overflow_store.insert_block(&leaf_block_raw(overflow_spec, Vec::new()));
+    assert!(matches!(
+        run_directional_pca_layer(
+            &DirectionalPcaLayerInput {
+                block_ids: vec![overflow_a, overflow_b],
+                params: params(1, 1, 1.0, 1.0, 2, 1, 0.0),
+            },
+            &overflow_store
+        ),
+        Err(DirectionalPcaError::InvalidNumericState(_))
+    ));
+
     let non_finite_store = MemoryBlockStore::default();
     let nan_id = non_finite_store.insert_block(&leaf_block_raw(
         EmbeddingSpec {
