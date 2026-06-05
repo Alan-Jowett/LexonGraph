@@ -39,8 +39,10 @@ fn val_pca_001_streaming_and_fixed_tree_merges_are_deterministic() {
         1e-10,
     );
 
+    let sequential_bytes = sequential.finalize().unwrap().serialize().unwrap();
     let bytes_a = merged_a.finalize().unwrap().serialize().unwrap();
     let bytes_b = merged_b.finalize().unwrap().serialize().unwrap();
+    assert_eq!(sequential_bytes, bytes_a);
     assert_eq!(bytes_a, bytes_b);
 }
 
@@ -291,6 +293,38 @@ fn val_pca_015_validation_rejects_invalid_transforms() {
     assert!(matches!(
         non_orthonormal.validate_with_tolerances(&ValidationTolerances::default()),
         Err(PcaError::ValidationFailure(_))
+    ));
+}
+
+#[test]
+fn malformed_public_transform_values_fail_with_typed_errors_instead_of_panicking() {
+    let malformed = PcaTransform {
+        basis: vec![1.0, 0.0, 0.0],
+        ..identity_pca([0.0, 0.0])
+    };
+    assert!(matches!(
+        malformed.apply(&[1.0, 2.0]),
+        Err(PcaError::DimensionMismatch { .. })
+    ));
+    assert!(matches!(
+        malformed.reconstruct(&[1.0, 2.0]),
+        Err(PcaError::DimensionMismatch { .. })
+    ));
+
+    let malformed_affine = AffineTransform {
+        input_dim: 2,
+        output_dim: 2,
+        matrix: vec![1.0, 0.0, 0.0],
+        bias: vec![0.0, 0.0],
+        schema_version: CURRENT_SCHEMA_VERSION,
+    };
+    assert!(matches!(
+        malformed_affine.apply(&[1.0, 2.0]),
+        Err(PcaError::DimensionMismatch { .. })
+    ));
+    assert!(matches!(
+        AffineTransform::compose(&malformed_affine, &malformed_affine),
+        Err(PcaError::DimensionMismatch { .. })
     ));
 }
 

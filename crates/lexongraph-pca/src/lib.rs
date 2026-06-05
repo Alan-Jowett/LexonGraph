@@ -427,6 +427,7 @@ impl PcaTransform {
     pub fn apply(&self, vector: &[f32]) -> Result<Vec<f32>, PcaError> {
         ensure_dim("PCA apply", self.input_dim, vector.len())?;
         self.ensure_finite_input("PCA apply", vector)?;
+        self.ensure_runtime_shape("PCA apply")?;
 
         let mut output = vec![0.0; self.output_dim];
         for (column, output_value) in output.iter_mut().enumerate() {
@@ -447,6 +448,7 @@ impl PcaTransform {
     pub fn reconstruct(&self, coordinates: &[f32]) -> Result<Vec<f32>, PcaError> {
         ensure_dim("PCA reconstruct", self.output_dim, coordinates.len())?;
         self.ensure_finite_input("PCA reconstruct", coordinates)?;
+        self.ensure_runtime_shape("PCA reconstruct")?;
 
         let mut output = self.mean.clone();
         for (column, coordinate) in coordinates.iter().copied().enumerate() {
@@ -748,6 +750,13 @@ impl PcaTransform {
     fn ensure_finite_input(&self, context: &'static str, values: &[f32]) -> Result<(), PcaError> {
         ensure_finite_slice(context, values)
     }
+
+    fn ensure_runtime_shape(&self, context: &'static str) -> Result<(), PcaError> {
+        ensure_dim(context, self.input_dim, self.mean.len())?;
+        ensure_dim(context, self.input_dim * self.output_dim, self.basis.len())?;
+        ensure_finite_slice(context, &self.mean)?;
+        ensure_finite_slice(context, &self.basis)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -777,14 +786,7 @@ impl AffineTransform {
     pub fn apply(&self, vector: &[f32]) -> Result<Vec<f32>, PcaError> {
         ensure_dim("affine apply", self.input_dim, vector.len())?;
         ensure_finite_slice("affine apply", vector)?;
-        ensure_dim("affine bias", self.output_dim, self.bias.len())?;
-        ensure_dim(
-            "affine matrix",
-            self.input_dim * self.output_dim,
-            self.matrix.len(),
-        )?;
-        ensure_finite_slice("affine matrix", &self.matrix)?;
-        ensure_finite_slice("affine bias", &self.bias)?;
+        self.validate_operable("affine apply")?;
 
         let mut output = self.bias.clone();
         for (column, value) in vector.iter().copied().enumerate() {
@@ -796,6 +798,8 @@ impl AffineTransform {
     }
 
     pub fn compose(first: &AffineTransform, second: &AffineTransform) -> Result<Self, PcaError> {
+        first.validate_operable("affine composition")?;
+        second.validate_operable("affine composition")?;
         ensure_dim("affine composition", first.output_dim, second.input_dim)?;
 
         let mut matrix = vec![0.0; first.input_dim * second.output_dim];
@@ -829,14 +833,7 @@ impl AffineTransform {
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>, PcaError> {
-        ensure_dim("affine bias", self.output_dim, self.bias.len())?;
-        ensure_dim(
-            "affine matrix",
-            self.input_dim * self.output_dim,
-            self.matrix.len(),
-        )?;
-        ensure_finite_slice("affine matrix", &self.matrix)?;
-        ensure_finite_slice("affine bias", &self.bias)?;
+        self.validate_operable("affine serialize")?;
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(AFFINE_MAGIC);
@@ -881,13 +878,22 @@ impl AffineTransform {
                 "unexpected trailing bytes".into(),
             ));
         }
-        Ok(Self {
+        let transform = Self {
             input_dim,
             output_dim,
             matrix,
             bias,
             schema_version,
-        })
+        };
+        transform.validate_operable("affine deserialize")?;
+        Ok(transform)
+    }
+
+    fn validate_operable(&self, context: &'static str) -> Result<(), PcaError> {
+        ensure_dim(context, self.output_dim, self.bias.len())?;
+        ensure_dim(context, self.input_dim * self.output_dim, self.matrix.len())?;
+        ensure_finite_slice(context, &self.matrix)?;
+        ensure_finite_slice(context, &self.bias)
     }
 }
 
