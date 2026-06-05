@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -797,9 +798,13 @@ where
     }
 }
 
+fn invoke_observer(observer: &IndexingStatusObserver, status: IndexingStatus) {
+    let _ = catch_unwind(AssertUnwindSafe(|| observer(status)));
+}
+
 fn emit_status(observer: Option<&IndexingStatusObserver>, status: IndexingStatus) {
     if let Some(observer) = observer {
-        observer(status);
+        invoke_observer(observer, status);
     }
 }
 
@@ -838,16 +843,19 @@ where
                 stop_receiver.recv_timeout(CLUSTERING_STATUS_INTERVAL),
                 Err(mpsc::RecvTimeoutError::Timeout)
             ) {
-                observer(IndexingStatus {
-                    phase: IndexingPhase::ParentLayerClustering,
-                    state: IndexingStatusState::InProgress,
-                    layer_index,
-                    child_count,
-                    block_size_target,
-                    output_count: None,
-                    elapsed: started.elapsed(),
-                    error: None,
-                });
+                invoke_observer(
+                    &observer,
+                    IndexingStatus {
+                        phase: IndexingPhase::ParentLayerClustering,
+                        state: IndexingStatusState::InProgress,
+                        layer_index,
+                        child_count,
+                        block_size_target,
+                        output_count: None,
+                        elapsed: started.elapsed(),
+                        error: None,
+                    },
+                );
             }
         })
     });
@@ -863,9 +871,7 @@ where
 
     let _ = stop_sender.send(());
     if let Some(heartbeat_thread) = heartbeat_thread {
-        heartbeat_thread
-            .join()
-            .expect("clustering status thread panicked");
+        let _ = heartbeat_thread.join();
     }
 
     emit_status(

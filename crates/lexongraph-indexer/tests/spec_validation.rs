@@ -14,6 +14,8 @@ use lexongraph_indexer::{
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::panic;
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -1111,6 +1113,42 @@ async fn val_indexer_032_and_035_monolithic_observer_receives_structured_statuse
     );
 }
 
+#[test]
+fn observer_panics_do_not_abort_indexing() {
+    let _panic_guard = observer_panic_test_lock().lock().unwrap();
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let store = MemoryBlockStore::default();
+            let indexer = Indexer::with_node_packing_policy(
+                MapResolver,
+                AsciiEmbeddingProvider,
+                FirstChildCanonicalPolicy,
+                SlowPairPackingPolicy::new(Duration::from_millis(250)),
+            );
+            let observer: IndexingStatusObserver = Arc::new(|_| panic!("observer failure"));
+
+            indexer
+                .index_with_observer(
+                    &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
+                    embedding_spec(),
+                    256,
+                    &store,
+                    Some(observer),
+                )
+                .await
+        });
+
+    panic::set_hook(previous_hook);
+
+    assert!(result.is_ok());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn val_indexer_033_and_036_staged_parent_observer_emits_periodic_status_updates() {
     let indexer = Indexer::with_node_packing_policy(
@@ -1807,4 +1845,9 @@ fn status_observer() -> (IndexingStatusObserver, Arc<Mutex<Vec<IndexingStatus>>>
 
 fn recorded_statuses(statuses: &Arc<Mutex<Vec<IndexingStatus>>>) -> Vec<IndexingStatus> {
     statuses.lock().unwrap().clone()
+}
+
+fn observer_panic_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
