@@ -438,6 +438,29 @@ fn schema_and_length_overflow_validation_fail_explicitly() {
         ),
         Err(PcaError::ValidationFailure(_))
     ));
+
+    let wrong_affine_schema = AffineTransform {
+        input_dim: 2,
+        output_dim: 2,
+        matrix: vec![1.0, 0.0, 0.0, 1.0],
+        bias: vec![0.0, 0.0],
+        schema_version: CURRENT_SCHEMA_VERSION + 1,
+    };
+    assert!(matches!(
+        wrong_affine_schema.serialize(),
+        Err(PcaError::ValidationFailure(_))
+    ));
+    assert!(matches!(
+        wrong_affine_schema.apply(&[1.0, 2.0]),
+        Err(PcaError::ValidationFailure(_))
+    ));
+    assert!(matches!(
+        AffineTransform::compose(
+            &wrong_affine_schema,
+            &identity_pca([0.0, 0.0]).to_affine().unwrap()
+        ),
+        Err(PcaError::ValidationFailure(_))
+    ));
 }
 
 #[test]

@@ -83,7 +83,7 @@ impl fmt::Display for PcaError {
             }
             Self::InvalidNumericState(message) => write!(f, "invalid numeric state: {message}"),
             Self::InvalidSerializedFormat(message) => {
-                write!(f, "invalid serialized PCA artifact: {message}")
+                write!(f, "invalid serialized transform artifact: {message}")
             }
             Self::SchemaVersionMismatch { expected, actual } => write!(
                 f,
@@ -919,6 +919,17 @@ impl AffineTransform {
     }
 
     fn validate_operable(&self, context: &'static str) -> Result<(), PcaError> {
+        ensure_current_schema(context, self.schema_version)?;
+        if self.input_dim == 0 {
+            return Err(PcaError::ValidationFailure(format!(
+                "{context} requires input_dim greater than zero"
+            )));
+        }
+        if self.output_dim == 0 {
+            return Err(PcaError::ValidationFailure(format!(
+                "{context} requires output_dim greater than zero"
+            )));
+        }
         ensure_dim(context, self.output_dim, self.bias.len())?;
         let expected_matrix_len = checked_len_product(context, self.input_dim, self.output_dim)?;
         ensure_dim(context, expected_matrix_len, self.matrix.len())?;
