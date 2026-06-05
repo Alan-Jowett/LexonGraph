@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+#[cfg(feature = "parallel")]
+use lexongraph_dcbc::NumericBackend;
 use lexongraph_dcbc::{
     DcbcError, DcbcInput, DcbcRunResult, EPSILON, PureRustBackend, run_dcbc, run_dcbc_with_backend,
 };
@@ -89,6 +91,30 @@ fn val_dcbc_006_repeated_runs_are_deterministic() {
     let first = run_dcbc(&input).unwrap();
     let second = run_dcbc(&input).unwrap();
     assert_eq!(first, second);
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn parallel_backend_matches_the_sequential_logical_model() {
+    let input = fixture(
+        vec![
+            vec![1.0, 0.0],
+            vec![0.9, 0.1],
+            vec![0.0, 1.0],
+            vec![-0.9, 0.1],
+            vec![-1.0, 0.0],
+            vec![0.0, -1.0],
+        ],
+        3,
+        2,
+        2,
+        2,
+    );
+
+    let sequential = run_dcbc_with_backend(&input, &SequentialBackend).unwrap();
+    let parallel = run_dcbc_with_backend(&input, &PureRustBackend).unwrap();
+
+    assert_eq!(parallel, sequential);
 }
 
 #[test]
@@ -289,6 +315,32 @@ fn fixture(
         min_cluster_size,
         max_cluster_size,
         iteration_count,
+    }
+}
+
+#[cfg(feature = "parallel")]
+struct SequentialBackend;
+
+#[cfg(feature = "parallel")]
+impl NumericBackend for SequentialBackend {
+    fn pairwise_cosine_distances(
+        &self,
+        normalized_points: &[&[f64]],
+        normalized_centroids: &[&[f64]],
+    ) -> Result<Vec<f64>, DcbcError> {
+        let mut distances =
+            Vec::with_capacity(normalized_points.len() * normalized_centroids.len());
+        for point in normalized_points {
+            for centroid in normalized_centroids {
+                let dot = point
+                    .iter()
+                    .zip(centroid.iter())
+                    .map(|(left, right)| *left * *right)
+                    .sum::<f64>();
+                distances.push(1.0 - dot);
+            }
+        }
+        Ok(distances)
     }
 }
 

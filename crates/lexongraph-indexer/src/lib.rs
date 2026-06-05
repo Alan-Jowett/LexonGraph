@@ -13,6 +13,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use half::f16;
 pub use lexongraph_block::{
@@ -50,6 +54,34 @@ pub struct IndexedChild {
     pub embedding: Vec<u8>,
     pub child: BlockHash,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexingPhase {
+    ParentLayerClustering,
+    ParentLayerMaterialization,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexingStatusState {
+    Started,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexingStatus {
+    pub phase: IndexingPhase,
+    pub state: IndexingStatusState,
+    pub layer_index: usize,
+    pub child_count: usize,
+    pub block_size_target: usize,
+    pub output_count: Option<usize>,
+    pub elapsed: Duration,
+    pub error: Option<String>,
+}
+
+pub type IndexingStatusObserver = Arc<dyn Fn(IndexingStatus) + Send + Sync + 'static>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IndexerError {
@@ -161,6 +193,7 @@ impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
 }
 
 const DCBC_DEFAULT_ITERATION_COUNT: usize = 1;
+const CLUSTERING_STATUS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DcbcNodePackingPolicy;
@@ -307,8 +340,30 @@ where
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Result<ConstructedBlocks, IndexerError> {
-        let layer =
-            self.build_parent_layer_from_blocks(child_blocks, &embedding_spec, block_size_target)?;
+        self.build_parent_blocks_with_observer(
+            child_blocks,
+            embedding_spec,
+            block_size_target,
+            0,
+            None,
+        )
+    }
+
+    pub fn build_parent_blocks_with_observer(
+        &self,
+        child_blocks: &[SerializedBlock],
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+        layer_index: usize,
+        observer: Option<IndexingStatusObserver>,
+    ) -> Result<ConstructedBlocks, IndexerError> {
+        let layer = self.build_parent_layer_from_blocks(
+            child_blocks,
+            &embedding_spec,
+            block_size_target,
+            layer_index,
+            observer.as_ref(),
+        )?;
         Ok(ConstructedBlocks::from_constructed_blocks(layer.blocks))
     }
 
@@ -322,6 +377,21 @@ where
     where
         CR: ContentResolver<R>,
     {
+        self.index_with_observer(items, embedding_spec, block_size_target, store, None)
+            .await
+    }
+
+    pub async fn index_with_observer<R>(
+        &self,
+        items: &[IndexItem<R>],
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+        store: &dyn BlockStore,
+        observer: Option<IndexingStatusObserver>,
+    ) -> Result<IndexingResult, IndexerError>
+    where
+        CR: ContentResolver<R>,
+    {
         let (mut persisted_block_ids, current_children) = self
             .build_leaf_layer_and_persist(items, &embedding_spec, store)
             .await?;
@@ -329,15 +399,19 @@ where
             blocks: Vec::new(),
             children: current_children,
         };
+        let mut layer_index = 0;
 
         while current_layer.children.len() > 1 {
             current_layer = self.build_parent_layer_from_children(
                 &current_layer.children,
                 &embedding_spec,
                 block_size_target,
+                layer_index,
+                observer.as_ref(),
             )?;
             persisted_block_ids
                 .extend(self.persist_constructed_blocks(&current_layer.blocks, store)?);
+            layer_index += 1;
         }
 
         persisted_block_ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
@@ -523,6 +597,8 @@ where
         child_blocks: &[SerializedBlock],
         embedding_spec: &EmbeddingSpec,
         block_size_target: usize,
+        layer_index: usize,
+        observer: Option<&IndexingStatusObserver>,
     ) -> Result<IndexedLayer, IndexerError> {
         if child_blocks.is_empty() {
             return Err(IndexerError::InvalidStagedInput(
@@ -534,7 +610,13 @@ where
             .iter()
             .map(|block| self.indexed_child_from_serialized_block(block, embedding_spec))
             .collect::<Result<Vec<_>, _>>()?;
-        self.build_parent_layer_from_children(&current_layer, embedding_spec, block_size_target)
+        self.build_parent_layer_from_children(
+            &current_layer,
+            embedding_spec,
+            block_size_target,
+            layer_index,
+            observer,
+        )
     }
 
     fn indexed_child_from_serialized_block(
@@ -586,6 +668,8 @@ where
         current_layer: &[IndexedChild],
         embedding_spec: &EmbeddingSpec,
         block_size_target: usize,
+        layer_index: usize,
+        observer: Option<&IndexingStatusObserver>,
     ) -> Result<IndexedLayer, IndexerError> {
         let current_layer = normalize_current_layer(current_layer.to_vec());
         if current_layer.len() < 2 {
@@ -594,71 +678,104 @@ where
             ));
         }
 
-        let groups = self
-            .node_packing_policy
-            .pack(&current_layer, embedding_spec, block_size_target)
-            .map_err(|error| IndexerError::NodePackingFailure(error.to_string()))?;
-        validate_group_partition(&groups, &current_layer)
-            .map_err(IndexerError::NodePackingFailure)?;
-
-        let mut blocks = Vec::with_capacity(groups.len());
-        let mut next_layer = Vec::with_capacity(groups.len());
-        for group in groups {
-            let entries = normalize_branch_entries(
-                group
-                    .into_iter()
-                    .map(|index| BranchEntry {
-                        embedding: current_layer[index].embedding.clone(),
-                        child: current_layer[index].child,
-                    })
-                    .collect(),
-            );
-            if entries.len() < 2 {
-                return Err(IndexerError::NodePackingFailure(
-                    "node packing candidate normalized to fewer than two unique children".into(),
-                ));
-            }
-
-            let branch = build_branch_block(VERSION_1, embedding_spec.clone(), entries, None)
-                .map_err(IndexerError::BlockConstruction)?;
-            let branch_block = Block::Branch(branch.clone());
-            let serialized =
-                serialize_block(&branch_block).map_err(IndexerError::BlockConstruction)?;
-            if serialized.bytes.len() > block_size_target {
-                if branch.entries.len() == 2 {
-                    return Err(IndexerError::IntermediateNodeTooLarge {
-                        min_serialized_bytes: serialized.bytes.len(),
-                        size_target: block_size_target,
-                    });
+        let groups = observe_clustering(
+            &self.node_packing_policy,
+            &current_layer,
+            embedding_spec,
+            block_size_target,
+            layer_index,
+            observer,
+        )?;
+        let materialization_started = Instant::now();
+        let result = (|| {
+            let mut blocks = Vec::with_capacity(groups.len());
+            let mut next_layer = Vec::with_capacity(groups.len());
+            for group in groups {
+                let entries = normalize_branch_entries(
+                    group
+                        .into_iter()
+                        .map(|index| BranchEntry {
+                            embedding: current_layer[index].embedding.clone(),
+                            child: current_layer[index].child,
+                        })
+                        .collect(),
+                );
+                if entries.len() < 2 {
+                    return Err(IndexerError::NodePackingFailure(
+                        "node packing candidate normalized to fewer than two unique children"
+                            .into(),
+                    ));
                 }
-                return Err(IndexerError::NodePackingFailure(format!(
-                    "candidate branch block serialized to {} bytes, exceeding block size target {}",
-                    serialized.bytes.len(),
-                    block_size_target
-                )));
+
+                let branch = build_branch_block(VERSION_1, embedding_spec.clone(), entries, None)
+                    .map_err(IndexerError::BlockConstruction)?;
+                let branch_block = Block::Branch(branch.clone());
+                let serialized =
+                    serialize_block(&branch_block).map_err(IndexerError::BlockConstruction)?;
+                if serialized.bytes.len() > block_size_target {
+                    if branch.entries.len() == 2 {
+                        return Err(IndexerError::IntermediateNodeTooLarge {
+                            min_serialized_bytes: serialized.bytes.len(),
+                            size_target: block_size_target,
+                        });
+                    }
+                    return Err(IndexerError::NodePackingFailure(format!(
+                        "candidate branch block serialized to {} bytes, exceeding block size target {}",
+                        serialized.bytes.len(),
+                        block_size_target
+                    )));
+                }
+
+                let canonical_embedding = self
+                    .canonical_embedding_policy
+                    .canonical_embedding(&branch)
+                    .map_err(|error| IndexerError::CanonicalEmbeddingFailure(error.to_string()))?;
+                validate_embedding_bytes(&canonical_embedding, embedding_spec, "canonical")
+                    .map_err(IndexerError::CanonicalEmbeddingFailure)?;
+
+                next_layer.push(IndexedChild {
+                    embedding: canonical_embedding,
+                    child: serialized.hash,
+                });
+                blocks.push(ConstructedBlock {
+                    block: branch_block,
+                    serialized,
+                });
             }
 
-            let canonical_embedding = self
-                .canonical_embedding_policy
-                .canonical_embedding(&branch)
-                .map_err(|error| IndexerError::CanonicalEmbeddingFailure(error.to_string()))?;
-            validate_embedding_bytes(&canonical_embedding, embedding_spec, "canonical")
-                .map_err(IndexerError::CanonicalEmbeddingFailure)?;
+            Ok(IndexedLayer {
+                blocks,
+                children: normalize_current_layer(next_layer),
+            })
+        })();
 
-            next_layer.push(IndexedChild {
-                embedding: canonical_embedding,
-                child: serialized.hash,
-            });
-            blocks.push(ConstructedBlock {
-                block: branch_block,
-                serialized,
-            });
-        }
+        emit_status(
+            observer,
+            match &result {
+                Ok(layer) => IndexingStatus {
+                    phase: IndexingPhase::ParentLayerMaterialization,
+                    state: IndexingStatusState::Completed,
+                    layer_index,
+                    child_count: current_layer.len(),
+                    block_size_target,
+                    output_count: Some(layer.blocks.len()),
+                    elapsed: materialization_started.elapsed(),
+                    error: None,
+                },
+                Err(error) => IndexingStatus {
+                    phase: IndexingPhase::ParentLayerMaterialization,
+                    state: IndexingStatusState::Failed,
+                    layer_index,
+                    child_count: current_layer.len(),
+                    block_size_target,
+                    output_count: None,
+                    elapsed: materialization_started.elapsed(),
+                    error: Some(error.to_string()),
+                },
+            },
+        );
 
-        Ok(IndexedLayer {
-            blocks,
-            children: normalize_current_layer(next_layer),
-        })
+        result
     }
 
     fn persist_constructed_blocks(
@@ -679,6 +796,111 @@ where
         }
         Ok(persisted_block_ids)
     }
+}
+
+fn invoke_observer(observer: &IndexingStatusObserver, status: IndexingStatus) {
+    let _ = catch_unwind(AssertUnwindSafe(|| observer(status)));
+}
+
+fn emit_status(observer: Option<&IndexingStatusObserver>, status: IndexingStatus) {
+    if let Some(observer) = observer {
+        invoke_observer(observer, status);
+    }
+}
+
+fn observe_clustering<NPP>(
+    node_packing_policy: &NPP,
+    current_layer: &[IndexedChild],
+    embedding_spec: &EmbeddingSpec,
+    block_size_target: usize,
+    layer_index: usize,
+    observer: Option<&IndexingStatusObserver>,
+) -> Result<Vec<Vec<usize>>, IndexerError>
+where
+    NPP: NodePackingPolicy,
+{
+    let started = Instant::now();
+    emit_status(
+        observer,
+        IndexingStatus {
+            phase: IndexingPhase::ParentLayerClustering,
+            state: IndexingStatusState::Started,
+            layer_index,
+            child_count: current_layer.len(),
+            block_size_target,
+            output_count: None,
+            elapsed: Duration::ZERO,
+            error: None,
+        },
+    );
+
+    let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+    let heartbeat_thread = observer.map(|observer| {
+        let observer = Arc::clone(observer);
+        let child_count = current_layer.len();
+        thread::spawn(move || {
+            while matches!(
+                stop_receiver.recv_timeout(CLUSTERING_STATUS_INTERVAL),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                invoke_observer(
+                    &observer,
+                    IndexingStatus {
+                        phase: IndexingPhase::ParentLayerClustering,
+                        state: IndexingStatusState::InProgress,
+                        layer_index,
+                        child_count,
+                        block_size_target,
+                        output_count: None,
+                        elapsed: started.elapsed(),
+                        error: None,
+                    },
+                );
+            }
+        })
+    });
+
+    let result = node_packing_policy
+        .pack(current_layer, embedding_spec, block_size_target)
+        .map_err(|error| IndexerError::NodePackingFailure(error.to_string()))
+        .and_then(|groups| {
+            validate_group_partition(&groups, current_layer)
+                .map_err(IndexerError::NodePackingFailure)?;
+            Ok(groups)
+        });
+
+    let _ = stop_sender.send(());
+    if let Some(heartbeat_thread) = heartbeat_thread {
+        let _ = heartbeat_thread.join();
+    }
+
+    emit_status(
+        observer,
+        match &result {
+            Ok(groups) => IndexingStatus {
+                phase: IndexingPhase::ParentLayerClustering,
+                state: IndexingStatusState::Completed,
+                layer_index,
+                child_count: current_layer.len(),
+                block_size_target,
+                output_count: Some(groups.len()),
+                elapsed: started.elapsed(),
+                error: None,
+            },
+            Err(error) => IndexingStatus {
+                phase: IndexingPhase::ParentLayerClustering,
+                state: IndexingStatusState::Failed,
+                layer_index,
+                child_count: current_layer.len(),
+                block_size_target,
+                output_count: None,
+                elapsed: started.elapsed(),
+                error: Some(error.to_string()),
+            },
+        },
+    );
+
+    result
 }
 
 fn normalize_current_layer(mut layer: Vec<IndexedChild>) -> Vec<IndexedChild> {
