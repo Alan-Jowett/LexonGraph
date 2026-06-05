@@ -10,6 +10,7 @@ members = [
     "crates/lexongraph-embeddings-openai",
     "crates/lexongraph-embeddings-trait",
     "crates/lexongraph-indexer",
+    "crates/lexongraph-pca",
     "crates/lexongraph-search",
 ]
 resolver = "2"
