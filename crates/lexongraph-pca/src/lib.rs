@@ -511,6 +511,7 @@ impl PcaTransform {
         &self,
         tolerances: &ValidationTolerances,
     ) -> Result<(), PcaError> {
+        ensure_current_schema("PCA validate", self.schema_version)?;
         if self.input_dim == 0 {
             return Err(PcaError::ValidationFailure(
                 "input_dim must be greater than zero".into(),
@@ -527,12 +528,9 @@ impl PcaTransform {
                 self.output_dim, self.input_dim
             )));
         }
+        let expected_basis_len = checked_len_product("PCA basis", self.input_dim, self.output_dim)?;
         ensure_dim("PCA mean", self.input_dim, self.mean.len())?;
-        ensure_dim(
-            "PCA basis",
-            self.input_dim * self.output_dim,
-            self.basis.len(),
-        )?;
+        ensure_dim("PCA basis", expected_basis_len, self.basis.len())?;
         ensure_finite_slice("PCA mean", &self.mean)?;
         ensure_finite_slice("PCA basis", &self.basis)?;
 
@@ -764,6 +762,7 @@ impl PcaTransform {
     }
 
     fn ensure_runtime_shape(&self, context: &'static str) -> Result<(), PcaError> {
+        ensure_current_schema(context, self.schema_version)?;
         if self.input_dim == 0 {
             return Err(PcaError::ValidationFailure(format!(
                 "{context} requires input_dim greater than zero"
@@ -780,8 +779,9 @@ impl PcaTransform {
                 self.output_dim, self.input_dim
             )));
         }
+        let expected_basis_len = checked_len_product(context, self.input_dim, self.output_dim)?;
         ensure_dim(context, self.input_dim, self.mean.len())?;
-        ensure_dim(context, self.input_dim * self.output_dim, self.basis.len())?;
+        ensure_dim(context, expected_basis_len, self.basis.len())?;
         ensure_finite_slice(context, &self.mean)?;
         ensure_finite_slice(context, &self.basis)
     }
@@ -830,7 +830,9 @@ impl AffineTransform {
         second.validate_operable("affine composition")?;
         ensure_dim("affine composition", first.output_dim, second.input_dim)?;
 
-        let mut matrix = vec![0.0; first.input_dim * second.output_dim];
+        let matrix_len =
+            checked_len_product("affine composition", first.input_dim, second.output_dim)?;
+        let mut matrix = vec![0.0; matrix_len];
         for input_column in 0..first.input_dim {
             for output_row in 0..second.output_dim {
                 let mut value = 0.0;
@@ -918,7 +920,8 @@ impl AffineTransform {
 
     fn validate_operable(&self, context: &'static str) -> Result<(), PcaError> {
         ensure_dim(context, self.output_dim, self.bias.len())?;
-        ensure_dim(context, self.input_dim * self.output_dim, self.matrix.len())?;
+        let expected_matrix_len = checked_len_product(context, self.input_dim, self.output_dim)?;
+        ensure_dim(context, expected_matrix_len, self.matrix.len())?;
         ensure_finite_slice(context, &self.matrix)?;
         ensure_finite_slice(context, &self.bias)
     }
@@ -1183,6 +1186,27 @@ fn ensure_dim(context: &'static str, expected: usize, actual: usize) -> Result<(
         });
     }
     Ok(())
+}
+
+fn ensure_current_schema(context: &'static str, schema_version: u32) -> Result<(), PcaError> {
+    if schema_version != CURRENT_SCHEMA_VERSION {
+        return Err(PcaError::ValidationFailure(format!(
+            "{context} requires schema_version {CURRENT_SCHEMA_VERSION}, got {schema_version}"
+        )));
+    }
+    Ok(())
+}
+
+fn checked_len_product(
+    context: &'static str,
+    left: usize,
+    right: usize,
+) -> Result<usize, PcaError> {
+    left.checked_mul(right).ok_or_else(|| {
+        PcaError::ValidationFailure(format!(
+            "{context} length computation overflowed for {left} * {right}"
+        ))
+    })
 }
 
 fn ensure_finite_slice(context: &'static str, values: &[f32]) -> Result<(), PcaError> {

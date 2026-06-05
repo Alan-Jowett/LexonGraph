@@ -397,6 +397,50 @@ fn malformed_presence_flags_and_structural_dimensions_fail_explicitly() {
 }
 
 #[test]
+fn schema_and_length_overflow_validation_fail_explicitly() {
+    let wrong_schema = PcaTransform {
+        schema_version: CURRENT_SCHEMA_VERSION + 1,
+        ..identity_pca([0.0, 0.0])
+    };
+    assert!(matches!(
+        wrong_schema.validate(),
+        Err(PcaError::ValidationFailure(_))
+    ));
+
+    let overflow_pca = PcaTransform {
+        input_dim: usize::MAX,
+        output_dim: 2,
+        mean: Vec::new(),
+        basis: Vec::new(),
+        explained_variance: Some(vec![2.0, 1.0]),
+        schema_version: CURRENT_SCHEMA_VERSION,
+    };
+    assert!(matches!(
+        overflow_pca.validate(),
+        Err(PcaError::ValidationFailure(_))
+    ));
+    assert!(matches!(
+        overflow_pca.to_affine(),
+        Err(PcaError::ValidationFailure(_))
+    ));
+
+    let overflow_affine = AffineTransform {
+        input_dim: usize::MAX,
+        output_dim: 2,
+        matrix: Vec::new(),
+        bias: vec![0.0, 0.0],
+        schema_version: CURRENT_SCHEMA_VERSION,
+    };
+    assert!(matches!(
+        AffineTransform::compose(
+            &overflow_affine,
+            &identity_pca([0.0, 0.0]).to_affine().unwrap()
+        ),
+        Err(PcaError::ValidationFailure(_))
+    ));
+}
+
+#[test]
 fn val_pca_016_diagnostics_expose_consistent_metadata() {
     let transform = fit_truncated(&fixture_vectors(), 1).unwrap();
     let diagnostics = transform.diagnostics();
