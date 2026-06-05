@@ -232,9 +232,7 @@ impl FilesystemBlockStore {
     ) -> Result<Option<BlockHash>, BlockStoreError> {
         let relative = path.strip_prefix(&self.store_root).map_err(|error| {
             backend_failure(format!(
-                "failed to make enumerated path {} relative to store root {}: {error}",
-                path.display(),
-                self.store_root.display()
+                "failed to normalize an enumerated block-store entry relative to the store root: {error}"
             ))
         })?;
         let mut components = relative.components();
@@ -252,41 +250,28 @@ impl FilesystemBlockStore {
         }
 
         let first_level = first_level.as_os_str().to_str().ok_or_else(|| {
-            backend_failure(format!(
-                "failed to decode shard directory in enumerated path {}",
-                path.display()
-            ))
+            backend_failure("failed to decode an enumerated shard directory name".into())
         })?;
         let second_level = second_level.as_os_str().to_str().ok_or_else(|| {
-            backend_failure(format!(
-                "failed to decode shard directory in enumerated path {}",
-                path.display()
-            ))
+            backend_failure("failed to decode an enumerated shard directory name".into())
         })?;
         if !is_lower_hex_prefix(first_level) || !is_lower_hex_prefix(second_level) {
             return Ok(None);
         }
 
         let file_name = file_name.as_os_str().to_str().ok_or_else(|| {
-            backend_failure(format!(
-                "failed to decode block file name in enumerated path {}",
-                path.display()
-            ))
+            backend_failure("failed to decode an enumerated block file name".into())
         })?;
         let Some(hex) = file_name.strip_suffix(".cbor") else {
             return Ok(None);
         };
         let bytes = decode_block_hash_hex(hex).ok_or_else(|| {
-            backend_failure(format!(
-                "failed to decode block ID from enumerated path {}",
-                path.display()
-            ))
+            backend_failure("failed to decode an enumerated block ID candidate".into())
         })?;
         if &hex[..2] != first_level || &hex[2..4] != second_level {
-            return Err(backend_failure(format!(
-                "failed to decode block ID from enumerated path {}: shard prefix mismatch",
-                path.display()
-            )));
+            return Err(backend_failure(
+                "failed to decode an enumerated block ID candidate: shard prefix mismatch".into(),
+            ));
         }
 
         Ok(Some(BlockHash::from_bytes(bytes)))
@@ -461,10 +446,7 @@ struct FilesystemBlockIdIterator<'a> {
 impl<'a> FilesystemBlockIdIterator<'a> {
     fn new(store: &'a FilesystemBlockStore) -> Result<Self, BlockStoreError> {
         let root_entries = store.read_dir_paths(&store.store_root).map_err(|error| {
-            backend_failure(format!(
-                "failed to enumerate block store root {}: {error}",
-                store.store_root.display()
-            ))
+            backend_failure(format!("failed to enumerate the block store root: {error}"))
         })?;
         Ok(Self {
             store,
@@ -486,8 +468,7 @@ impl Iterator for FilesystemBlockIdIterator<'_> {
                 Ok(is_dir) => is_dir,
                 Err(error) => {
                     return Some(Err(backend_failure(format!(
-                        "failed to stat enumerated path {}: {error}",
-                        path.display()
+                        "failed to stat an enumerated block-store entry: {error}"
                     ))));
                 }
             };
@@ -504,8 +485,7 @@ impl Iterator for FilesystemBlockIdIterator<'_> {
                     }
                     Err(error) => {
                         return Some(Err(backend_failure(format!(
-                            "failed to enumerate block directory {}: {error}",
-                            path.display()
+                            "failed to enumerate an internal block-store directory: {error}"
                         ))));
                     }
                 }

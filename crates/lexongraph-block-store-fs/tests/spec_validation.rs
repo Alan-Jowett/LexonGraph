@@ -254,7 +254,7 @@ fn val_fs_store_021_path_decoding_failures_are_explicit_during_enumeration() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap_err();
 
-    expect_backend_failure_contains(error, "failed to decode block ID from enumerated path");
+    expect_backend_failure_contains(error, "failed to decode an enumerated block ID candidate");
 }
 
 #[cfg(feature = "inject")]
@@ -275,7 +275,7 @@ fn val_fs_store_021_directory_traversal_failures_are_explicit_during_enumeration
         Err(error) => error,
     };
 
-    expect_backend_failure_contains(error, "failed to enumerate block store root");
+    expect_backend_failure_contains(error, "failed to enumerate the block store root");
 }
 
 #[test]
