@@ -85,8 +85,9 @@ Truncate a full-rank transform.
 
 Finalize PCA on fixtures with tied or repeated eigenvalues.
 
-**Pass condition:** eigenvalue ordering and the canonical sign rule are
-deterministic and stable.
+**Pass condition:** eigenvalue ordering is deterministic, equal-magnitude pivot
+ties resolve with the documented lower-index rule, and the canonical sign rule
+forces the selected pivot entry non-negative.
 
 **Traces to:** REQ-PCA-017, REQ-PCA-018
 
@@ -114,46 +115,51 @@ Construct two full-rank PCA transforms over the same input dimensionality and
 compute an exact delta or rebase.
 
 **Pass condition:** the delta matches `to(from^{-1}(x))` for representative
-inputs.
+inputs, and the result is marked exact.
 
 **Traces to:** REQ-PCA-022, REQ-PCA-023
 
 ### VAL-PCA-012
 
-Construct a truncated source transform and compute a reconstructing delta or
-rebase.
+Construct a truncated source transform and attempt exact and reconstructing
+delta or rebase operations.
 
-**Pass condition:** the resulting delta is marked reconstructing and its result
-matches the explicit reconstruct-then-apply path within the documented
-tolerance.
+**Pass condition:** exact delta fails explicitly for the truncated source, and
+the reconstructing delta is marked reconstructing and matches the explicit
+reconstruct-then-apply path within the documented tolerance.
 
 **Traces to:** REQ-PCA-022, REQ-PCA-023
 
 ### VAL-PCA-013
 
-Serialize and deserialize both PCA and affine transforms.
+Serialize and deserialize both PCA and affine transforms, then corrupt explicit
+serialization metadata.
 
-**Pass condition:** roundtrip preserves the transform exactly.
+**Pass condition:** roundtrip preserves the transform exactly, and malformed
+version, schema, and optional-field metadata fail explicitly during
+deserialization.
 
 **Traces to:** REQ-PCA-024
 
 ### VAL-PCA-014
 
-Quantize and dequantize representative transforms, including half-integer
-rounding fixtures and clipping fixtures.
+Quantize and dequantize representative transforms across the supported 8-bit and
+16-bit surfaces, including half-integer rounding fixtures and clipping
+fixtures.
 
 **Pass condition:** quantization is deterministic, uses the documented rounding
-and clipping rules, excludes `-128` for 8-bit symmetric quantization, and
-dequantization produces a valid transform.
+and clipping rules for both bit widths, excludes `-128` for 8-bit symmetric
+quantization, and dequantization produces a valid transform.
 
 **Traces to:** REQ-PCA-025
 
 ### VAL-PCA-015
 
-Validate transforms with non-finite values, shape mismatches, invalid variance
-metadata, and non-orthonormal basis vectors.
+Validate accumulator inputs and transforms with non-finite values, shape
+mismatches, negative or inconsistent variance metadata, and non-orthonormal
+basis vectors.
 
-**Pass condition:** validation fails explicitly for each invalid case.
+**Pass condition:** each invalid accumulator or transform case fails explicitly.
 
 **Traces to:** REQ-PCA-029, REQ-PCA-032
 
@@ -174,4 +180,3 @@ Inspect the repository workspace and PCA crate verification artifacts.
 executable automated tests realizing this validation surface.
 
 **Traces to:** REQ-PCA-026, REQ-PCA-027, REQ-PCA-028
-
