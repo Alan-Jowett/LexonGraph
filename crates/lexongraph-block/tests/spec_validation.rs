@@ -154,7 +154,7 @@ fn val_007_leaf_blocks_with_multiple_entries_are_rejected() {
 }
 
 #[test]
-fn val_008_missing_required_kind_specific_fields_are_rejected() {
+fn val_008_missing_required_level_specific_fields_are_rejected() {
     let bytes = encode_value(Value::Map(vec![
         (int_value(0), int_value(VERSION_1)),
         (int_value(1), int_value(1)),
