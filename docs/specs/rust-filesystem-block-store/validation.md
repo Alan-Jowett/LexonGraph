@@ -199,3 +199,34 @@ path unreadable or otherwise uninspectable before recovery inspection.
 reporting success or silent absence.
 
 **Traces to:** REQ-FS-STORE-011, REQ-FS-STORE-012
+
+### VAL-FS-STORE-019
+
+Publish multiple valid blocks under one store root, then consume the parent
+trait's enumeration surface through the filesystem-backed implementation.
+
+**Pass condition:** enumeration yields the published block IDs rooted under that
+store without exposing filesystem paths at the trait boundary.
+
+**Traces to:** REQ-FS-STORE-013, REQ-FS-STORE-014
+
+### VAL-FS-STORE-020
+
+Observe the store root while staging or temporary files exist alongside
+published block files, then enumerate block IDs.
+
+**Pass condition:** enumeration reports only published block IDs and does not
+report staging files, temporary files, directories, or other non-published
+artifacts.
+
+**Traces to:** REQ-FS-STORE-015
+
+### VAL-FS-STORE-021
+
+Force store-root traversal or published-path decoding to fail during
+enumeration.
+
+**Pass condition:** enumeration fails explicitly as a backend failure rather
+than silently omitting the affected stored state.
+
+**Traces to:** REQ-FS-STORE-016

@@ -65,6 +65,13 @@ impl BlockStore for MemoryBlockStore {
             .map(Some)
             .map_err(map_get_error)
     }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        Ok(Box::new(block_ids.into_iter().map(Ok)))
+    }
 }
 
 #[derive(Default)]
@@ -107,6 +114,12 @@ impl BlockStore for FailingGetStore {
         }
 
         self.inner.get(block_id)
+    }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        self.inner.iter_block_ids()
     }
 }
 

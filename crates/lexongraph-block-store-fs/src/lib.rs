@@ -23,6 +23,7 @@ pub mod inject {
         fn create_dir_all(&self, path: &Path) -> io::Result<()>;
         fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
         fn is_dir(&self, path: &Path) -> io::Result<bool>;
+        fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
         fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
         fn create_staged_file(&self, dir: &Path) -> io::Result<Box<dyn StagedFile>>;
     }
@@ -53,11 +54,17 @@ impl inject::FsOps for RealFsOps {
     }
 
     fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        fs::metadata(path).map(|metadata| metadata.is_dir())
+        fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         fs::read(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect()
     }
 
     fn create_staged_file(&self, dir: &Path) -> io::Result<Box<dyn inject::StagedFile>> {
@@ -219,6 +226,57 @@ impl FilesystemBlockStore {
         }
     }
 
+    fn decode_enumerated_block_path(
+        &self,
+        path: &Path,
+    ) -> Result<Option<BlockHash>, BlockStoreError> {
+        let relative = path.strip_prefix(&self.store_root).map_err(|error| {
+            backend_failure(format!(
+                "failed to normalize an enumerated block-store entry relative to the store root: {error}"
+            ))
+        })?;
+        let mut components = relative.components();
+        let Some(first_level) = components.next() else {
+            return Ok(None);
+        };
+        let Some(second_level) = components.next() else {
+            return Ok(None);
+        };
+        let Some(file_name) = components.next() else {
+            return Ok(None);
+        };
+        if components.next().is_some() {
+            return Ok(None);
+        }
+
+        let first_level = first_level.as_os_str().to_str().ok_or_else(|| {
+            backend_failure("failed to decode an enumerated shard directory name".into())
+        })?;
+        let second_level = second_level.as_os_str().to_str().ok_or_else(|| {
+            backend_failure("failed to decode an enumerated shard directory name".into())
+        })?;
+        if !is_lower_hex_prefix(first_level) || !is_lower_hex_prefix(second_level) {
+            return Ok(None);
+        }
+
+        let file_name = file_name.as_os_str().to_str().ok_or_else(|| {
+            backend_failure("failed to decode an enumerated block file name".into())
+        })?;
+        let Some(hex) = file_name.strip_suffix(".cbor") else {
+            return Ok(None);
+        };
+        let bytes = decode_block_hash_hex(hex).ok_or_else(|| {
+            backend_failure("failed to decode an enumerated block ID candidate".into())
+        })?;
+        if &hex[..2] != first_level || &hex[2..4] != second_level {
+            return Err(backend_failure(
+                "failed to decode an enumerated block ID candidate: shard prefix mismatch".into(),
+            ));
+        }
+
+        Ok(Some(BlockHash::from_bytes(bytes)))
+    }
+
     #[cfg(feature = "inject")]
     fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>> {
         self.ops.read(path)
@@ -227,6 +285,28 @@ impl FilesystemBlockStore {
     #[cfg(not(feature = "inject"))]
     fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>> {
         fs::read(path)
+    }
+
+    #[cfg(feature = "inject")]
+    fn is_dir(&self, path: &Path) -> io::Result<bool> {
+        self.ops.is_dir(path)
+    }
+
+    #[cfg(not(feature = "inject"))]
+    fn is_dir(&self, path: &Path) -> io::Result<bool> {
+        fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
+    }
+
+    #[cfg(feature = "inject")]
+    fn read_dir_paths(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.ops.read_dir(path)
+    }
+
+    #[cfg(not(feature = "inject"))]
+    fn read_dir_paths(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect()
     }
 
     #[cfg(feature = "inject")]
@@ -314,6 +394,12 @@ impl BlockStore for FilesystemBlockStore {
             .map(Some)
             .map_err(map_get_error)
     }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        Ok(Box::new(FilesystemBlockIdIterator::new(self)?))
+    }
 }
 
 fn backend_failure(message: String) -> BlockStoreError {
@@ -350,4 +436,100 @@ fn map_get_error(error: BlockError) -> BlockStoreError {
         }
         other => BlockStoreError::MalformedContent(other),
     }
+}
+
+struct FilesystemBlockIdIterator<'a> {
+    store: &'a FilesystemBlockStore,
+    pending: Vec<(PathBuf, usize)>,
+}
+
+impl<'a> FilesystemBlockIdIterator<'a> {
+    fn new(store: &'a FilesystemBlockStore) -> Result<Self, BlockStoreError> {
+        let root_entries = store.read_dir_paths(&store.store_root).map_err(|error| {
+            backend_failure(format!("failed to enumerate the block store root: {error}"))
+        })?;
+        Ok(Self {
+            store,
+            pending: root_entries
+                .into_iter()
+                .rev()
+                .map(|path| (path, 0))
+                .collect(),
+        })
+    }
+}
+
+impl Iterator for FilesystemBlockIdIterator<'_> {
+    type Item = Result<BlockHash, BlockStoreError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((path, depth)) = self.pending.pop() {
+            let is_dir = match self.store.is_dir(&path) {
+                Ok(is_dir) => is_dir,
+                Err(error) => {
+                    return Some(Err(backend_failure(format!(
+                        "failed to stat an enumerated block-store entry: {error}"
+                    ))));
+                }
+            };
+
+            if is_dir {
+                if depth >= 2 {
+                    continue;
+                }
+                match self.store.read_dir_paths(&path) {
+                    Ok(children) => {
+                        for child in children.into_iter().rev() {
+                            self.pending.push((child, depth + 1));
+                        }
+                    }
+                    Err(error) => {
+                        return Some(Err(backend_failure(format!(
+                            "failed to enumerate an internal block-store directory: {error}"
+                        ))));
+                    }
+                }
+                continue;
+            }
+
+            if depth != 2 {
+                continue;
+            }
+
+            match self.store.decode_enumerated_block_path(&path) {
+                Ok(Some(block_id)) => return Some(Ok(block_id)),
+                Ok(None) => continue,
+                Err(error) => return Some(Err(error)),
+            }
+        }
+
+        None
+    }
+}
+
+fn decode_block_hash_hex(value: &str) -> Option<[u8; BlockHash::LEN]> {
+    if value.len() != BlockHash::LEN * 2 {
+        return None;
+    }
+
+    let mut bytes = [0_u8; BlockHash::LEN];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = decode_hex_nibble(chunk[0])?;
+        let low = decode_hex_nibble(chunk[1])?;
+        bytes[index] = (high << 4) | low;
+    }
+
+    Some(bytes)
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn is_lower_hex_prefix(value: &str) -> bool {
+    value.len() == 2 && value.bytes().all(|byte| decode_hex_nibble(byte).is_some())
 }

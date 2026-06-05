@@ -29,6 +29,8 @@ pub trait BlockStore {
     fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError>;
 
     fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError>;
+
+    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,8 +69,11 @@ impl std::error::Error for BlockStoreError {
     }
 }
 
+pub type BlockIdIterator<'a> = Box<dyn Iterator<Item = Result<BlockHash, BlockStoreError>> + 'a>;
+
 #[cfg(any(test, feature = "conformance"))]
 mod conformance_support {
+    use std::collections::HashSet;
     use std::fmt;
 
     use lexongraph_block::{
@@ -136,6 +141,7 @@ mod conformance_support {
         run_round_trip_case(&factory.fresh_store())?;
         run_idempotence_case(&factory.fresh_store())?;
         run_missing_block_case(&factory.fresh_store())?;
+        run_enumeration_case(&factory.fresh_store())?;
         Ok(())
     }
 
@@ -184,6 +190,15 @@ mod conformance_support {
             )
         })?;
 
+        let enumerated = collect_block_ids(store.iter_block_ids()?)?;
+        let expected = HashSet::from([first_id]);
+        if enumerated != expected {
+            return Err(ConformanceError::Expectation(format!(
+                "expected enumeration after idempotent puts to yield {:?}, got {:?}",
+                expected, enumerated
+            )));
+        }
+
         expect_loaded_block(&loaded, &first, &first_id)
     }
 
@@ -195,6 +210,25 @@ mod conformance_support {
                 "expected missing block {missing} to return Ok(None)"
             )));
         }
+        Ok(())
+    }
+
+    pub fn run_enumeration_case(store: &impl BlockStore) -> ConformanceResult {
+        let first = sample_leaf_block("first");
+        let second = sample_leaf_block("second");
+        let branch = sample_branch_block([0x11; 32], [0x22; 32], false);
+
+        let expected =
+            HashSet::from([store.put(&first)?, store.put(&second)?, store.put(&branch)?]);
+        let enumerated = collect_block_ids(store.iter_block_ids()?)?;
+
+        if enumerated != expected {
+            return Err(ConformanceError::Expectation(format!(
+                "expected enumeration to yield {:?}, got {:?}",
+                expected, enumerated
+            )));
+        }
+
         Ok(())
     }
 
@@ -266,6 +300,13 @@ mod conformance_support {
             ));
         }
         Ok(())
+    }
+
+    fn collect_block_ids(
+        iter: super::BlockIdIterator<'_>,
+    ) -> Result<HashSet<BlockHash>, ConformanceError> {
+        iter.collect::<Result<HashSet<_>, _>>()
+            .map_err(ConformanceError::from)
     }
 
     pub(super) fn sample_branch_block(
@@ -360,24 +401,25 @@ pub mod conformance {
 
     pub use super::conformance_support::{
         BlockStoreConformanceHarness, BlockStoreFactory, ConformanceError, ConformanceResult,
-        run_contract_suite, run_full_suite, run_idempotence_case, run_integrity_mismatch_case,
-        run_integrity_suite, run_malformed_content_case, run_missing_block_case,
-        run_round_trip_case,
+        run_contract_suite, run_enumeration_case, run_full_suite, run_idempotence_case,
+        run_integrity_mismatch_case, run_integrity_suite, run_malformed_content_case,
+        run_missing_block_case, run_round_trip_case,
     };
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use lexongraph_block::{Block, BlockHash, VERSION_1, build_branch_block};
 
     use super::conformance_support::{
         BlockStoreConformanceHarness, BlockStoreFactory, branch_entry, embedding_spec,
-        persist_leaf_blocks_for_indexing, resolve_blocks_for_search, run_full_suite,
-        run_idempotence_case, run_integrity_mismatch_case, run_malformed_content_case,
-        run_missing_block_case, run_round_trip_case, sample_leaf_block,
+        persist_leaf_blocks_for_indexing, resolve_blocks_for_search, run_enumeration_case,
+        run_full_suite, run_idempotence_case, run_integrity_mismatch_case,
+        run_malformed_content_case, run_missing_block_case, run_round_trip_case,
+        sample_branch_block, sample_leaf_block,
     };
     use super::{BlockStore, BlockStoreError};
 
@@ -417,6 +459,11 @@ mod tests {
             lexongraph_block::deserialize_block(&bytes, block_id)
                 .map(Some)
                 .map_err(map_get_error)
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
+            let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+            Ok(Box::new(block_ids.into_iter().map(Ok)))
         }
     }
 
@@ -468,6 +515,58 @@ mod tests {
             lexongraph_block::deserialize_block(&bytes, block_id)
                 .map(Some)
                 .map_err(map_get_error)
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
+            let block_ids = self
+                .blocks
+                .borrow()
+                .keys()
+                .map(|block_id| {
+                    let bytes = decode_block_hash_hex(block_id).ok_or_else(|| {
+                        BlockStoreError::BackendFailure(format!(
+                            "invalid hex block ID in memory store: {block_id}"
+                        ))
+                    })?;
+                    Ok(BlockHash::from_bytes(bytes))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Box::new(block_ids.into_iter().map(Ok)))
+        }
+    }
+
+    #[derive(Default)]
+    struct MidstreamFailingEnumerationStore {
+        inner: MemoryBlockStore,
+    }
+
+    impl BlockStore for MidstreamFailingEnumerationStore {
+        fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+            self.inner.put(block)
+        }
+
+        fn get(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+            self.inner.get(block_id)
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
+            let block_ids = self
+                .inner
+                .blocks
+                .borrow()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            let failure = BlockStoreError::BackendFailure("enumeration interrupted".into());
+            Ok(Box::new(
+                block_ids
+                    .into_iter()
+                    .map(Ok)
+                    .chain(std::iter::once(Err(failure))),
+            ))
         }
     }
 
@@ -585,6 +684,7 @@ mod tests {
         ) -> Result<(), BlockStoreError> {
             let _ = store.put(block)?;
             let _ = store.get(block_id)?;
+            let _ = store.iter_block_ids()?.collect::<Result<Vec<_>, _>>()?;
             Ok(())
         }
 
@@ -593,6 +693,76 @@ mod tests {
         let block_id = store.put(&block).unwrap();
 
         uses_only_public_contract(&store, &block, &block_id).unwrap();
+    }
+
+    #[test]
+    fn val_store_013_enumeration_streams_the_stored_block_ids() {
+        let store = MemoryBlockStore::default();
+
+        run_enumeration_case(&store).unwrap();
+    }
+
+    #[test]
+    fn val_store_014_callers_can_classify_enumerated_ids_via_get() {
+        let store = MemoryBlockStore::default();
+        let leaf_id = store.put(&sample_leaf_block("leaf")).unwrap();
+        let branch = match sample_branch_block([0x22; 32], leaf_id.into_bytes(), false) {
+            Block::Branch(branch) => branch,
+            Block::Leaf(_) => unreachable!("sample_branch_block must return a branch block"),
+        };
+        let branch_id = store.put(&Block::Branch(branch)).unwrap();
+
+        let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
+
+        assert_eq!(enumerated, HashSet::from([leaf_id, branch_id]));
+
+        let mut leaf_count = 0;
+        let mut branch_count = 0;
+        for block_id in enumerated {
+            match store.get(&block_id).unwrap().unwrap().block {
+                Block::Leaf(_) => leaf_count += 1,
+                Block::Branch(_) => branch_count += 1,
+            }
+        }
+
+        assert_eq!((leaf_count, branch_count), (1, 1));
+    }
+
+    #[test]
+    fn val_store_015_same_enumeration_contract_applies_to_multiple_backend_shapes() {
+        let hash_store = MemoryBlockStore::default();
+        let hex_store = HexKeyMemoryBlockStore::default();
+        let leaf = sample_leaf_block("shared contract");
+        let branch = sample_branch_block([0x33; 32], [0x44; 32], false);
+
+        let expected = HashSet::from([
+            hash_store.put(&leaf).unwrap(),
+            hash_store.put(&branch).unwrap(),
+        ]);
+        hex_store.put(&leaf).unwrap();
+        hex_store.put(&branch).unwrap();
+
+        assert_eq!(
+            collect_block_ids(hash_store.iter_block_ids().unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            collect_block_ids(hex_store.iter_block_ids().unwrap()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn val_store_016_enumeration_failures_are_explicit() {
+        let store = MidstreamFailingEnumerationStore::default();
+        let block_id = store.put(&sample_leaf_block("midstream")).unwrap();
+        let mut iter = store.iter_block_ids().unwrap();
+
+        assert_eq!(iter.next().unwrap().unwrap(), block_id);
+        assert_eq!(
+            iter.next().unwrap().unwrap_err(),
+            BlockStoreError::BackendFailure("enumeration interrupted".into())
+        );
     }
 
     #[test]
@@ -621,6 +791,35 @@ mod tests {
             .expect("stored block should be present");
         assert_eq!(loaded.block, *block);
         Ok(block_id)
+    }
+
+    fn collect_block_ids(
+        iter: super::BlockIdIterator<'_>,
+    ) -> Result<HashSet<BlockHash>, BlockStoreError> {
+        iter.collect::<Result<HashSet<_>, _>>()
+    }
+
+    fn decode_block_hash_hex(value: &str) -> Option<[u8; 32]> {
+        if value.len() != BlockHash::LEN * 2 {
+            return None;
+        }
+
+        let mut bytes = [0_u8; BlockHash::LEN];
+        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+            let high = decode_hex_nibble(chunk[0])?;
+            let low = decode_hex_nibble(chunk[1])?;
+            bytes[index] = (high << 4) | low;
+        }
+
+        Some(bytes)
+    }
+
+    fn decode_hex_nibble(value: u8) -> Option<u8> {
+        match value {
+            b'0'..=b'9' => Some(value - b'0'),
+            b'a'..=b'f' => Some(value - b'a' + 10),
+            _ => None,
+        }
     }
 
     fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {

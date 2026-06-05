@@ -33,6 +33,12 @@ impl BlockStore for HarnessStore {
     ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
         self.inner.get(block_id)
     }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        self.inner.iter_block_ids()
+    }
 }
 
 impl BlockStoreFactory for FilesystemHarness {
