@@ -8,6 +8,6 @@ edition = "2024"
 
 [dependencies]
 half = "2.7.1"
-lexongraph-block = { path = "..\\lexongraph-block" }
-lexongraph-block-store = { path = "..\\lexongraph-block-store" }
-lexongraph-pca = { path = "..\\lexongraph-pca" }
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-pca = { path = "../lexongraph-pca" }
