@@ -1330,7 +1330,10 @@ fn read_f32_vec(bytes: &[u8], offset: &mut usize, count: usize) -> Result<Vec<f3
 
 #[cfg(test)]
 mod tests {
-    use super::{QuantizationBits, QuantizationConfig, quantize_scalar_i8};
+    use super::{
+        QuantizationBits, QuantizationConfig, QuantizedValues, canonicalize_sign,
+        quantize_scalar_i8, quantize_scalar_i16, quantize_slice,
+    };
 
     #[test]
     fn ties_to_even_quantization_matches_expected_boundaries() {
@@ -1349,5 +1352,31 @@ mod tests {
         } else {
             panic!("expected i8 quantization");
         }
+    }
+
+    #[test]
+    fn i16_quantization_uses_ties_to_even_and_symmetric_clipping() {
+        let scale = 1.0;
+        assert_eq!(quantize_scalar_i16(2.5, scale), 2);
+        assert_eq!(quantize_scalar_i16(3.5, scale), 4);
+        assert_eq!(quantize_scalar_i16(-2.5, scale), -2);
+        assert_eq!(quantize_scalar_i16(-3.5, scale), -4);
+
+        let config = QuantizationConfig {
+            bits: QuantizationBits::I16,
+        };
+        let quantized = quantize_slice(&[-100_000.0, 100_000.0], config).unwrap();
+        if let QuantizedValues::I16(values) = quantized.values {
+            assert_eq!(values, vec![-32_767, 32_767]);
+        } else {
+            panic!("expected i16 quantization");
+        }
+    }
+
+    #[test]
+    fn canonical_sign_prefers_lower_index_ties_and_flips_negative_pivots() {
+        let mut values = vec![-3.0, 3.0, 1.0];
+        canonicalize_sign(&mut values);
+        assert_eq!(values, vec![3.0, -3.0, -1.0]);
     }
 }

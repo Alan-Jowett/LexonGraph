@@ -215,9 +215,14 @@ fn val_pca_011_exact_delta_matches_the_explicit_inverse_then_apply_path() {
 }
 
 #[test]
-fn val_pca_012_reconstructing_delta_is_explicit_for_truncated_sources() {
+fn val_pca_012_truncated_sources_reject_exact_deltas_and_mark_reconstructing_deltas() {
     let from = identity_pca([1.0, 2.0]).truncate(1).unwrap();
     let to = identity_pca([0.0, 0.0]);
+    assert!(matches!(
+        delta_exact(&from, &to),
+        Err(PcaError::ValidationFailure(_))
+    ));
+
     let delta = delta_reconstructing(&from, &to).unwrap();
 
     assert_eq!(delta.mode, DeltaMode::Reconstructing);
@@ -239,28 +244,55 @@ fn val_pca_013_serialization_roundtrip_preserves_pca_and_affine_transforms() {
 }
 
 #[test]
-fn val_pca_014_quantization_is_deterministic_and_excludes_negative_128_for_i8() {
+fn val_pca_014_quantization_is_deterministic_across_i8_and_i16_surfaces() {
     let transform = fit(&fixture_vectors()).unwrap();
-    let config = QuantizationConfig {
+    let i8_config = QuantizationConfig {
         bits: QuantizationBits::I8,
     };
-    let first = transform.quantize(config).unwrap();
-    let second = transform.quantize(config).unwrap();
-    assert_eq!(first, second);
+    let i8_first = transform.quantize(i8_config).unwrap();
+    let i8_second = transform.quantize(i8_config).unwrap();
+    assert_eq!(i8_first, i8_second);
 
-    for column in &first.basis_columns {
+    for column in &i8_first.basis_columns {
         match &column.values {
             QuantizedValues::I8(values) => assert!(values.iter().all(|value| *value >= -127)),
             QuantizedValues::I16(_) => panic!("expected i8 basis quantization"),
         }
     }
 
-    let dequantized = dequantize(&first).unwrap();
-    dequantized.validate().unwrap();
+    let i8_dequantized = dequantize(&i8_first).unwrap();
+    i8_dequantized.validate().unwrap();
+
+    let i16_config = QuantizationConfig {
+        bits: QuantizationBits::I16,
+    };
+    let i16_first = transform.quantize(i16_config).unwrap();
+    let i16_second = transform.quantize(i16_config).unwrap();
+    assert_eq!(i16_first, i16_second);
+    assert!(matches!(i16_first.mean.values, QuantizedValues::I16(_)));
+    assert!(matches!(
+        i16_first.explained_variance.as_ref().unwrap().values,
+        QuantizedValues::I16(_)
+    ));
+    for column in &i16_first.basis_columns {
+        match &column.values {
+            QuantizedValues::I16(values) => assert!(values.iter().all(|value| *value >= -32_767)),
+            QuantizedValues::I8(_) => panic!("expected i16 basis quantization"),
+        }
+    }
+
+    let i16_dequantized = dequantize(&i16_first).unwrap();
+    i16_dequantized.validate().unwrap();
 }
 
 #[test]
-fn val_pca_015_validation_rejects_invalid_transforms() {
+fn val_pca_015_validation_rejects_invalid_accumulator_inputs_and_transforms() {
+    let mut accumulator = PcaAccumulator::new(2);
+    assert!(matches!(
+        accumulator.update(&[f32::NAN, 0.0]),
+        Err(PcaError::NonFiniteInput { .. })
+    ));
+
     let mut nonfinite = identity_pca([0.0, 0.0]);
     nonfinite.mean[0] = f32::NAN;
     assert!(matches!(
@@ -283,6 +315,15 @@ fn val_pca_015_validation_rejects_invalid_transforms() {
     };
     assert!(matches!(
         invalid_variance.validate(),
+        Err(PcaError::ValidationFailure(_))
+    ));
+
+    let negative_variance = PcaTransform {
+        explained_variance: Some(vec![1.0, -1.0]),
+        ..identity_pca([0.0, 0.0])
+    };
+    assert!(matches!(
+        negative_variance.validate(),
         Err(PcaError::ValidationFailure(_))
     ));
 
@@ -359,9 +400,39 @@ fn serialization_version_mismatches_report_invalid_serialized_format() {
 fn malformed_presence_flags_and_structural_dimensions_fail_explicitly() {
     let transform = fit(&fixture_vectors()).unwrap();
     let mut bytes = transform.serialize().unwrap();
-    bytes[24] = 2;
+    let explained_variance_flag_offset = 4 + 4 + 4 + 8 + 8;
+    bytes[explained_variance_flag_offset] = 2;
     assert!(matches!(
         PcaTransform::deserialize(&bytes),
+        Err(PcaError::InvalidSerializedFormat(_))
+    ));
+
+    let mut trailing_bytes = transform.serialize().unwrap();
+    trailing_bytes.push(0);
+    assert!(matches!(
+        PcaTransform::deserialize(&trailing_bytes),
+        Err(PcaError::InvalidSerializedFormat(_))
+    ));
+
+    let mut wrong_pca_schema = transform.serialize().unwrap();
+    wrong_pca_schema[8..12].copy_from_slice(&999u32.to_le_bytes());
+    assert!(matches!(
+        PcaTransform::deserialize(&wrong_pca_schema),
+        Err(PcaError::SchemaVersionMismatch { .. })
+    ));
+
+    let affine = transform.to_affine().unwrap();
+    let mut wrong_affine_schema = affine.serialize().unwrap();
+    wrong_affine_schema[8..12].copy_from_slice(&999u32.to_le_bytes());
+    assert!(matches!(
+        AffineTransform::deserialize(&wrong_affine_schema),
+        Err(PcaError::SchemaVersionMismatch { .. })
+    ));
+
+    let mut trailing_affine_bytes = affine.serialize().unwrap();
+    trailing_affine_bytes.push(0);
+    assert!(matches!(
+        AffineTransform::deserialize(&trailing_affine_bytes),
         Err(PcaError::InvalidSerializedFormat(_))
     ));
 
