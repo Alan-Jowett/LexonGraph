@@ -68,6 +68,7 @@ Current packages cover:
 - `rust-embeddings-trait`
 - `rust-filesystem-block-store`
 - `rust-indexer-crate`
+- `rust-pca-crate`
 - `rust-search-crate`
 - `rust-workspace-ci`
 
@@ -84,6 +85,7 @@ The top-level Cargo workspace currently contains:
 | `lexongraph-embeddings-trait` | Shared async embedding-provider contract plus opt-in conformance helpers |
 | `lexongraph-embeddings-openai` | OpenAI-compatible and Azure OpenAI embedding-provider implementation |
 | `lexongraph-indexer` | Protocol-conforming indexing orchestration with embedding-provider and node-packing policy hooks |
+| `lexongraph-pca` | Deterministic, streaming-first PCA accumulation, affine transform algebra, and stable transform artifact encoding |
 | `lexongraph-search` | Protocol-conforming search orchestration with trait-based policy hooks |
 
 At the moment, the implemented storage backend in this repository is the local
