@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
 # Recursive PCA Quantization with Centroid-Biased Axis Resolution
 
 ## 1. Overall Goal
