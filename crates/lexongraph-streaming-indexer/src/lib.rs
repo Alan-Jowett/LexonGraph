@@ -29,7 +29,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ciborium::ser::into_writer;
+use ciborium::{Value, ser::into_writer};
 use half::f16;
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
@@ -1409,7 +1409,7 @@ fn hash_metadata(metadata: &Metadata) -> Result<BlockHash, String> {
     let canonical = canonicalize_metadata(metadata.clone())
         .map_err(|error| format!("failed to canonicalize metadata for replay hashing: {error}"))?;
     let mut encoded = Vec::new();
-    into_writer(&canonical, &mut encoded)
+    into_writer(&Value::Map(canonical), &mut encoded)
         .map_err(|error| format!("failed to encode metadata for replay hashing: {error}"))?;
     Ok(hash_bytes(&encoded))
 }
