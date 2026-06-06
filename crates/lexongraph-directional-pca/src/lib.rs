@@ -129,14 +129,15 @@ impl DirectionalPcaStreamingTrainer {
         }
 
         let model = fit_pass_model(&self.current_pass, &self.config, &self.params)?;
-        self.model = Some(model.clone());
+        let quality_metric = model.quality_metric;
+        self.model = Some(model);
         self.completed_passes += 1;
         self.current_pass.clear();
         self.state = TrainerState::PassComplete;
 
         Ok(PassReport {
             observed_count,
-            quality_metric: model.quality_metric,
+            quality_metric,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
@@ -620,11 +621,38 @@ fn compute_centroid_from_indexes(
     embeddings: &[Embedding],
     indexes: &[usize],
 ) -> Result<Embedding, StreamingClusteringError> {
-    let vectors = indexes
-        .iter()
-        .map(|index| embeddings[*index].clone())
-        .collect::<Vec<_>>();
-    compute_centroid(vectors.as_slice())
+    let Some(first_index) = indexes.first() else {
+        return Err(unsatisfiable_constraint(
+            "cannot compute a centroid for zero indexed embeddings",
+        ));
+    };
+    let dims = embeddings[*first_index].len();
+    let mut sums = vec![0.0_f64; dims];
+
+    for &index in indexes {
+        for (dimension, value) in embeddings[index].iter().copied().enumerate() {
+            sums[dimension] += f64::from(value);
+            if !sums[dimension].is_finite() {
+                return Err(unsatisfiable_constraint(format!(
+                    "centroid sum became non-finite at dimension {dimension}"
+                )));
+            }
+        }
+    }
+
+    let divisor = indexes.len() as f64;
+    sums.into_iter()
+        .enumerate()
+        .map(|(dimension, value)| {
+            let centroid = (value / divisor) as f32;
+            if !centroid.is_finite() {
+                return Err(unsatisfiable_constraint(format!(
+                    "centroid became non-finite at dimension {dimension}"
+                )));
+            }
+            Ok(centroid)
+        })
+        .collect()
 }
 
 fn squared_distance(left: &[f32], right: &[f32]) -> Result<f64, StreamingClusteringError> {
