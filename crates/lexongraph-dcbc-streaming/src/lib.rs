@@ -272,7 +272,7 @@ fn ensure_non_zero_norm(embedding: &[f32]) -> Result<(), StreamingClusteringErro
             value * value
         })
         .sum::<f64>();
-    if squared_norm.sqrt() < EPSILON {
+    if squared_norm == 0.0 {
         return Err(StreamingClusteringError::MalformedInput {
             message: "embeddings must have non-zero Euclidean norm".into(),
         });
@@ -336,8 +336,14 @@ fn derive_occupancy_bounds(
     {
         max_cluster_occupancy as usize
     } else {
+        let reserved_for_other_clusters = cluster_count
+            .checked_sub(1)
+            .and_then(|other_cluster_count| other_cluster_count.checked_mul(min))
+            .ok_or_else(|| {
+                constraint_error("cluster implicit upper-bound multiplication overflowed")
+            })?;
         observed_count
-            .checked_sub((cluster_count - 1) * min)
+            .checked_sub(reserved_for_other_clusters)
             .ok_or_else(|| constraint_error("observed_count underflow while deriving occupancy"))?
     };
 
@@ -476,7 +482,11 @@ fn distance_matrix(
         ));
     }
 
-    let mut distances = Vec::with_capacity(normalized_points.len() * normalized_centroids.len());
+    let expected_len = normalized_points
+        .len()
+        .checked_mul(normalized_centroids.len())
+        .ok_or_else(|| constraint_error("distance matrix size overflowed"))?;
+    let mut distances = Vec::with_capacity(expected_len);
     for point in normalized_points {
         for centroid in normalized_centroids {
             distances.push(cosine_distance_from_normalized(
@@ -573,13 +583,16 @@ fn compute_objective(
             centroid.as_slice(),
         )?;
     }
+    if !total.is_finite() {
+        return Err(constraint_error("objective value was non-finite"));
+    }
     Ok(total)
 }
 
 fn normalize_vector(vector: &[f64], norm: f64) -> Result<Vec<f64>, StreamingClusteringError> {
-    if norm < EPSILON {
+    if norm == 0.0 {
         return Err(constraint_error(
-            "cannot normalize a vector whose norm is below epsilon",
+            "cannot normalize a vector whose norm is zero",
         ));
     }
 
@@ -596,6 +609,13 @@ fn cosine_distance_from_normalized(
     left: &[f64],
     right: &[f64],
 ) -> Result<f64, StreamingClusteringError> {
+    if left.len() != right.len() {
+        return Err(constraint_error(format!(
+            "cosine distance requires matching dimensions, got {} and {}",
+            left.len(),
+            right.len()
+        )));
+    }
     let dot = left
         .iter()
         .zip(right.iter())
@@ -935,6 +955,22 @@ mod tests {
             derive_occupancy_bounds(&implicit_max_config, 8).unwrap(),
             OccupancyBounds { min: 2, max: 4 }
         );
+    }
+
+    #[test]
+    fn tiny_non_zero_embeddings_are_accepted() {
+        let prepared = prepare_pass(&[vec![1e-20, 0.0], vec![0.0, 1.0]], 2).unwrap();
+
+        assert_eq!(prepared.raw_points.len(), 2);
+        assert_eq!(prepared.normalized_points[0], vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn cosine_distance_requires_matching_dimensions() {
+        assert!(matches!(
+            cosine_distance_from_normalized(&[1.0, 0.0], &[1.0]),
+            Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
+        ));
     }
 
     fn recompute_objective(
