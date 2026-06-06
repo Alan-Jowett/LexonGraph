@@ -250,9 +250,10 @@ impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
 
 /// Default [`StreamingClusteringFactory`] backed by `lexongraph-dcbc-streaming`.
 ///
-/// `cluster_count` is used as-is when the child count is unknown (first layer,
-/// first pass).  For layers where the child count is known the factory derives
-/// an appropriate cluster count from the child count and `block_size_target`.
+/// `cluster_count` is the fallback only when `create_trainer` is invoked with
+/// an `estimated_child_count` of zero. When the child count is known, the
+/// factory derives an appropriate cluster count from that count and
+/// `block_size_target`.
 #[derive(Clone, Debug)]
 pub struct DcbcStreamingClusteringFactory {
     pub cluster_count: u32,
@@ -789,7 +790,7 @@ where
         I: IntoIterator<Item = B>,
         B: AsRef<[IndexItem<R>]>,
     {
-        let started = Instant::now();
+        let leaf_started = Instant::now();
 
         emit_status(
             &self.observer,
@@ -807,7 +808,7 @@ where
                 phase: StreamingIndexingPhase::LeafMaterialization,
                 state: StreamingIndexingStatusState::InProgress,
                 item_count: baseline.len(),
-                elapsed: started.elapsed(),
+                elapsed: leaf_started.elapsed(),
                 error: None,
             },
         );
@@ -903,9 +904,19 @@ where
                 .map_err(StreamingIndexerError::BlockConstruction)?;
 
                 let leaf_block = Block::Leaf(leaf);
+                let serialized = serialize_block(&leaf_block)
+                    .map_err(StreamingIndexerError::BlockConstruction)?;
                 let block_id = store
                     .put(&leaf_block)
                     .map_err(StreamingIndexerError::Storage)?;
+                if block_id != serialized.hash {
+                    return Err(StreamingIndexerError::Storage(
+                        BlockStoreError::IntegrityMismatch {
+                            expected: serialized.hash,
+                            actual: block_id,
+                        },
+                    ));
+                }
                 persisted_ids.push(block_id);
                 leaf_children.push(IndexedChild {
                     embedding: embedding.clone(),
@@ -931,7 +942,7 @@ where
                 phase: StreamingIndexingPhase::LeafMaterialization,
                 state: StreamingIndexingStatusState::Completed,
                 item_count: replay_count,
-                elapsed: started.elapsed(),
+                elapsed: leaf_started.elapsed(),
                 error: None,
             },
         );
@@ -954,13 +965,14 @@ where
 
         // ── First parent layer: use the trained classifier ────────
 
+        let first_layer_started = Instant::now();
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
                 phase: StreamingIndexingPhase::FirstLayerClustering,
                 state: StreamingIndexingStatusState::Started,
                 item_count: unique_leaves.len(),
-                elapsed: started.elapsed(),
+                elapsed: Duration::ZERO,
                 error: None,
             },
         );
@@ -970,7 +982,7 @@ where
                 phase: StreamingIndexingPhase::FirstLayerClustering,
                 state: StreamingIndexingStatusState::InProgress,
                 item_count: unique_leaves.len(),
-                elapsed: started.elapsed(),
+                elapsed: first_layer_started.elapsed(),
                 error: None,
             },
         );
@@ -978,7 +990,7 @@ where
             &self.observer,
             StreamingIndexingPhase::FirstLayerClustering,
             unique_leaves.len(),
-            started,
+            first_layer_started,
         );
 
         let leaf_f32: Vec<Vec<f32>> = unique_leaves
@@ -998,18 +1010,19 @@ where
                 phase: StreamingIndexingPhase::FirstLayerClustering,
                 state: StreamingIndexingStatusState::Completed,
                 item_count: unique_leaves.len(),
-                elapsed: started.elapsed(),
+                elapsed: first_layer_started.elapsed(),
                 error: None,
             },
         );
 
+        let layer_zero_started = Instant::now();
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
                 phase: StreamingIndexingPhase::LayerMaterialization { layer_index: 0 },
                 state: StreamingIndexingStatusState::Started,
                 item_count: groups.len(),
-                elapsed: started.elapsed(),
+                elapsed: Duration::ZERO,
                 error: None,
             },
         );
@@ -1023,7 +1036,7 @@ where
                 phase: StreamingIndexingPhase::LayerMaterialization { layer_index: 0 },
                 state: StreamingIndexingStatusState::Completed,
                 item_count: current_layer.len(),
-                elapsed: started.elapsed(),
+                elapsed: layer_zero_started.elapsed(),
                 error: None,
             },
         );
@@ -1042,13 +1055,14 @@ where
             } else {
                 let dims = self.embedding_spec.dims as usize;
 
+                let higher_layer_started = Instant::now();
                 emit_status(
                     &self.observer,
                     StreamingIndexingStatus {
                         phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
                         state: StreamingIndexingStatusState::Started,
                         item_count: child_count,
-                        elapsed: started.elapsed(),
+                        elapsed: Duration::ZERO,
                         error: None,
                     },
                 );
@@ -1058,7 +1072,7 @@ where
                         phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
                         state: StreamingIndexingStatusState::InProgress,
                         item_count: child_count,
-                        elapsed: started.elapsed(),
+                        elapsed: higher_layer_started.elapsed(),
                         error: None,
                     },
                 );
@@ -1066,7 +1080,7 @@ where
                     &self.observer,
                     StreamingIndexingPhase::HigherLayerClustering { layer_index },
                     child_count,
-                    started,
+                    higher_layer_started,
                 );
 
                 let f32_embs: Vec<Vec<f32>> = current_layer
@@ -1108,7 +1122,7 @@ where
                         phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
                         state: StreamingIndexingStatusState::Completed,
                         item_count: child_count,
-                        elapsed: started.elapsed(),
+                        elapsed: higher_layer_started.elapsed(),
                         error: None,
                     },
                 );
@@ -1118,13 +1132,14 @@ where
 
             let next_level = current_layer[0].level + 1;
 
+            let layer_started = Instant::now();
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
                     phase: StreamingIndexingPhase::LayerMaterialization { layer_index },
                     state: StreamingIndexingStatusState::Started,
                     item_count: groups.len(),
-                    elapsed: started.elapsed(),
+                    elapsed: Duration::ZERO,
                     error: None,
                 },
             );
@@ -1134,7 +1149,7 @@ where
                     phase: StreamingIndexingPhase::LayerMaterialization { layer_index },
                     state: StreamingIndexingStatusState::InProgress,
                     item_count: groups.len(),
-                    elapsed: started.elapsed(),
+                    elapsed: layer_started.elapsed(),
                     error: None,
                 },
             );
@@ -1153,7 +1168,7 @@ where
                     phase: StreamingIndexingPhase::LayerMaterialization { layer_index },
                     state: StreamingIndexingStatusState::Completed,
                     item_count: next_layer.len(),
-                    elapsed: started.elapsed(),
+                    elapsed: layer_started.elapsed(),
                     error: None,
                 },
             );
@@ -1227,6 +1242,14 @@ where
             let block_id = store
                 .put(&branch_block)
                 .map_err(StreamingIndexerError::Storage)?;
+            if block_id != serialized.hash {
+                return Err(StreamingIndexerError::Storage(
+                    BlockStoreError::IntegrityMismatch {
+                        expected: serialized.hash,
+                        actual: block_id,
+                    },
+                ));
+            }
             persisted_ids.push(block_id);
 
             let canonical = self

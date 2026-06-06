@@ -70,6 +70,78 @@ impl BlockStore for MemoryBlockStore {
     }
 }
 
+#[derive(Default)]
+struct FaultyIdStore {
+    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    corrupt_leaf_ids: bool,
+    corrupt_branch_ids: bool,
+}
+
+impl FaultyIdStore {
+    fn corrupt_leaf_ids() -> Self {
+        Self {
+            blocks: RefCell::default(),
+            corrupt_leaf_ids: true,
+            corrupt_branch_ids: false,
+        }
+    }
+
+    fn corrupt_branch_ids() -> Self {
+        Self {
+            blocks: RefCell::default(),
+            corrupt_leaf_ids: false,
+            corrupt_branch_ids: true,
+        }
+    }
+}
+
+impl BlockStore for FaultyIdStore {
+    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
+        let serialized =
+            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+        self.blocks
+            .borrow_mut()
+            .insert(serialized.hash, serialized.bytes);
+
+        let should_corrupt = match block {
+            lexongraph_block::Block::Leaf(_) => self.corrupt_leaf_ids,
+            lexongraph_block::Block::Branch(_) => self.corrupt_branch_ids,
+        };
+
+        if should_corrupt {
+            let mut bytes = serialized.hash.into_bytes();
+            bytes[0] ^= 0xFF;
+            Ok(BlockHash::from_bytes(bytes))
+        } else {
+            Ok(serialized.hash)
+        }
+    }
+
+    fn get(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
+            return Ok(None);
+        };
+        lexongraph_block::deserialize_block(&bytes, block_id)
+            .map(Some)
+            .map_err(|e| match e {
+                BlockError::HashMismatch { expected, actual } => {
+                    BlockStoreError::IntegrityMismatch { expected, actual }
+                }
+                other => BlockStoreError::MalformedContent(other),
+            })
+    }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        Ok(Box::new(ids.into_iter().map(Ok)))
+    }
+}
+
 // ─── Fixture types ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -839,13 +911,14 @@ async fn val_stream_indexer_019_intermediate_nodes_respect_size_target() {
     for id in &result.block_ids {
         let validated = store.get(id).unwrap().unwrap();
         let bytes = serialize_block(&validated.block).unwrap().bytes;
-        // Each stored block must fit within the target
-        assert!(
-            bytes.len() <= 256,
-            "block {} serializes to {} bytes, exceeds 256",
-            id,
-            bytes.len()
-        );
+        if matches!(validated.block, lexongraph_block::Block::Branch(_)) {
+            assert!(
+                bytes.len() <= 256,
+                "branch block {} serializes to {} bytes, exceeds 256",
+                id,
+                bytes.len()
+            );
+        }
     }
 
     // Tiny block size target → fail explicitly
@@ -1052,6 +1125,10 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
     let has_in_progress = captured
         .iter()
         .any(|s| s.state == StreamingIndexingStatusState::InProgress);
+    let all_started_are_zero = captured
+        .iter()
+        .filter(|s| s.state == StreamingIndexingStatusState::Started)
+        .all(|s| s.elapsed.is_zero());
 
     assert!(
         has_pass_complete,
@@ -1066,6 +1143,66 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
         "no LeafMaterialization Completed event recorded"
     );
     assert!(has_in_progress, "no InProgress event recorded");
+    assert!(
+        all_started_are_zero,
+        "Started events should report zero elapsed time"
+    );
+}
+
+#[tokio::test]
+async fn leaf_store_integrity_mismatch_is_explicit() {
+    let items = [item("alpha")];
+    let store = FaultyIdStore::corrupt_leaf_ids();
+    let mut run = StreamingIndexingRun::with_defaults(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+    let error = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+        ),
+        "expected explicit leaf integrity mismatch, got: {error}"
+    );
+}
+
+#[tokio::test]
+async fn branch_store_integrity_mismatch_is_explicit() {
+    let items = [item("alpha"), item("bravo"), item("charlie")];
+    let store = FaultyIdStore::corrupt_branch_ids();
+    let mut run = StreamingIndexingRun::with_defaults(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+    let error = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+        ),
+        "expected explicit branch integrity mismatch, got: {error}"
+    );
 }
 
 // ─── VAL-STREAM-INDEXER-024 ───────────────────────────────────────────────────
