@@ -1515,6 +1515,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-dcbc-streaming"
+version = "0.1.0"
+dependencies = [
+ "lexongraph-streaming-clustering",
+]
+
+[[package]]
 name = "lexongraph-directional-pca"
 version = "0.1.0"
 dependencies = [
