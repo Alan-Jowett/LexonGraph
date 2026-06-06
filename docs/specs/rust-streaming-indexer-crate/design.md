@@ -221,6 +221,7 @@ The crate defines an explicit error surface covering at least:
 
 - empty input or empty pass
 - replay mismatch
+- invalid metadata
 - content-resolution failure
 - unusable resolved content
 - embedding failure

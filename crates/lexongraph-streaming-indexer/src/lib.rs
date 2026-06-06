@@ -128,7 +128,7 @@ pub enum StreamingIndexerError {
     EmptyInput,
     EmptyPass(String),
     ReplayMismatch(String),
-    ReplayFingerprint(String),
+    InvalidMetadata(String),
     ContentResolution(String),
     UnusableContent(String),
     EmbeddingFailure(String),
@@ -149,7 +149,7 @@ impl fmt::Display for StreamingIndexerError {
             Self::EmptyInput => write!(f, "streaming indexing requires at least one item"),
             Self::EmptyPass(m) => write!(f, "pass is empty: {m}"),
             Self::ReplayMismatch(m) => write!(f, "replay mismatch: {m}"),
-            Self::ReplayFingerprint(m) => write!(f, "replay fingerprinting failed: {m}"),
+            Self::InvalidMetadata(m) => write!(f, "metadata is invalid: {m}"),
             Self::ContentResolution(m) => write!(f, "content resolution failed: {m}"),
             Self::UnusableContent(m) => write!(f, "resolved content is unusable: {m}"),
             Self::EmbeddingFailure(m) => write!(f, "embedding generation failed: {m}"),
@@ -562,7 +562,7 @@ where
         {
             let replay_item = BaselineItem {
                 metadata_hash: hash_metadata(&item.metadata)
-                    .map_err(StreamingIndexerError::ReplayFingerprint)?,
+                    .map_err(StreamingIndexerError::InvalidMetadata)?,
                 content_hash: hash_content(content),
                 embedding_hash: hash_bytes(embedding),
             };
@@ -910,7 +910,7 @@ where
                 let expected = &baseline[replay_count + offset];
                 let replay_item = BaselineItem {
                     metadata_hash: hash_metadata(&item.metadata)
-                        .map_err(StreamingIndexerError::ReplayFingerprint)?,
+                        .map_err(StreamingIndexerError::InvalidMetadata)?,
                     content_hash: hash_content(content),
                     embedding_hash: hash_bytes(embedding),
                 };

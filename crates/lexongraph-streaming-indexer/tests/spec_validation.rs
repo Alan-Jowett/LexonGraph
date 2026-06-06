@@ -1354,6 +1354,32 @@ async fn val_stream_indexer_022_unusable_content_failure_is_explicit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_022_invalid_metadata_failure_is_explicit() {
+    use ciborium::Value;
+
+    let mut run = StreamingIndexingRun::with_defaults(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        embedding_spec(),
+        256,
+    );
+    let err = run
+        .ingest_batch(&[IndexItem {
+            metadata: vec![
+                (Value::Text("dup".into()), Value::Integer(1.into())),
+                (Value::Text("dup".into()), Value::Integer(2.into())),
+            ],
+            content_ref: "alpha",
+        }])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, StreamingIndexerError::InvalidMetadata(_)),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_embedding_failure_is_explicit() {
     let mut run = StreamingIndexingRun::with_defaults(
         MapResolver,
