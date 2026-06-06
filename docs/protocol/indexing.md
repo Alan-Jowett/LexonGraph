@@ -31,6 +31,12 @@ invariants for a conforming indexing run.
 It does not define the internal heuristics used to pack, cluster, split, or
 re-organize intermediate nodes while satisfying those requirements.
 
+A conforming implementation may realize those steps through a single
+collection-oriented run, through staged construction, or through caller-visible
+multi-pass replay of the same logical item set before final materialization.
+This protocol constrains the final externally visible result, not whether an
+implementation uses a batch-only internal clustering API while arriving there.
+
 ## Inputs
 
 A conforming indexing invocation requires:
@@ -217,6 +223,8 @@ This protocol intentionally does not define:
 - how canonical embeddings are computed
 - how clusters are formed
 - how routing vectors are chosen
+- whether item delivery and construction planning are collection-based, staged,
+  or replay-based across multiple passes before final materialization
 - how an implementation packs, splits, or re-organizes intermediate node blocks
   in order to remain under the intermediate-node size limit
 
@@ -279,3 +287,6 @@ revision:
    packing, or re-organization strategy.
 19. Conformance does not depend on any specific canonical-embedding algorithm,
    clustering method, or routing-vector selection method.
+20. Conformance does not depend on whether an implementation realizes
+   index-construction planning through a single run, staged execution, or
+   replay-based multi-pass execution before final materialization.
