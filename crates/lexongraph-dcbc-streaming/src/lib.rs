@@ -743,4 +743,74 @@ mod tests {
         ));
         assert_eq!(trainer.state(), TrainerState::Error);
     }
+
+    #[test]
+    fn unsupported_balance_constraints_are_rejected() {
+        let ratio_config = StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(lexongraph_streaming_clustering::BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: Some(1.5),
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        };
+        assert!(matches!(
+            reject_unsupported_balance_constraints(&ratio_config),
+            Err(StreamingClusteringError::InvalidConfiguration { .. })
+        ));
+
+        let penalty_config = StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(lexongraph_streaming_clustering::BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: Some(0.25),
+            }),
+            random_seed: None,
+        };
+        assert!(matches!(
+            reject_unsupported_balance_constraints(&penalty_config),
+            Err(StreamingClusteringError::InvalidConfiguration { .. })
+        ));
+    }
+
+    #[test]
+    fn occupancy_bounds_are_deterministically_derived_from_balance_constraints() {
+        let explicit_bounds_config = StreamingClusteringConfig {
+            cluster_count: 3,
+            dimensions: 2,
+            balance_constraints: Some(lexongraph_streaming_clustering::BalanceConstraints {
+                min_cluster_occupancy: Some(2),
+                max_cluster_occupancy: Some(4),
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        };
+        assert_eq!(
+            derive_occupancy_bounds(&explicit_bounds_config, 9).unwrap(),
+            OccupancyBounds { min: 2, max: 4 }
+        );
+
+        let implicit_max_config = StreamingClusteringConfig {
+            cluster_count: 3,
+            dimensions: 2,
+            balance_constraints: Some(lexongraph_streaming_clustering::BalanceConstraints {
+                min_cluster_occupancy: Some(2),
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        };
+        assert_eq!(
+            derive_occupancy_bounds(&implicit_max_config, 8).unwrap(),
+            OccupancyBounds { min: 2, max: 4 }
+        );
+    }
 }
