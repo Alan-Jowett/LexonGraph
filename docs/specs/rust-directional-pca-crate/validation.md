@@ -4,91 +4,103 @@
 
 ## Status
 
-Draft validation specification for a Rust crate that implements single-layer
-directional-PCA partitioning for LexonGraph.
+Draft validation specification for a Rust crate that realizes streaming
+directional-PCA clustering through the shared LexonGraph streaming clustering
+contract.
 
 ## Validation Scope
 
-These validation entries define the expected conformance surface for the
-directional-PCA crate, including block-to-vector derivation, eligibility
-classification, and successful partition materialization.
+These validation entries define the conformance surface for the streaming
+directional-PCA crate. They cover both:
+
+- realization of the directional-PCA mechanics preserved from
+  `docs/arch/Directional PCA tree.md`
+- conformance to the shared streaming trainer/classifier contract
 
 ## Validation Entries
 
-### VAL-DPCA-001
+### VAL-DPCA-STREAM-001
 
-Inspect the crate's public surface.
+Inspect the repository artifacts for the crate.
 
-**Pass condition:** the crate exposes one deterministic single-layer
-directional-PCA API boundary over ordered block IDs, a block-store dependency,
-typed parameters, typed outcomes, and explicit failures.
+**Pass condition:** the repository includes a crate at
+`crates/lexongraph-directional-pca` and this spec package.
 
-**Traces to:** REQ-DPCA-001, REQ-DPCA-002
+**Traces to:** REQ-DPCA-STREAM-001
 
-### VAL-DPCA-002
+### VAL-DPCA-STREAM-002
 
-Run the crate twice with the same ordered input block IDs, the same loaded
-block contents, and the same parameters.
+Inspect the crate's public surface and specification references.
 
-**Pass condition:** both runs produce identical groups, the same explicit
-eligibility outcome, or the same explicit failure.
+**Pass condition:** the crate exposes concrete implementations of
+`StreamingClusterTrainer` and `StreamingClusterClassifier`, remains subordinate
+to the directional-PCA architecture note, the shared streaming clustering
+contract, and the PCA crate specification, and does not expose the retired
+public block-store boundary.
 
-**Traces to:** REQ-DPCA-003, REQ-DPCA-013
+**Traces to:** REQ-DPCA-STREAM-002, REQ-DPCA-STREAM-003, REQ-DPCA-STREAM-004
 
-### VAL-DPCA-003
+### VAL-DPCA-STREAM-003
 
-Run the crate on the same logical input block set in different block-ID orders.
+Construct a trainer with valid shared configuration and valid directional
+parameters.
 
-**Pass condition:** the crate preserves input-order semantics and does not
-claim permutation equivalence.
+**Pass condition:** construction succeeds deterministically and preserves hard
+`K`, dimensionality, deterministic seed behavior, and the supplied directional
+parameters.
 
-**Traces to:** REQ-DPCA-003
+**Traces to:** REQ-DPCA-STREAM-005
 
-### VAL-DPCA-004
+### VAL-DPCA-STREAM-004
 
-Load one branch block with known branch-entry embeddings and one conformant leaf
-block with a known leaf-entry embedding.
+Construct a trainer with caller-provided shared balance constraints.
 
-**Pass condition:** the crate derives each representative embedding as the
-arithmetic centroid of that block's stored entry embeddings.
+**Pass condition:** construction fails explicitly through the shared
+invalid-configuration category rather than silently ignoring unsupported balance
+configuration.
 
-**Traces to:** REQ-DPCA-004
+**Traces to:** REQ-DPCA-STREAM-006, REQ-DPCA-STREAM-019
 
-### VAL-DPCA-005
+### VAL-DPCA-STREAM-005
 
-Cause representative-embedding derivation to encounter each of the following:
+Exercise one pass with multiple batches whose concatenated order is known.
 
-- a missing block ID
-- a block-store failure
-- a malformed or invalid loaded block
-- an empty block embedding set
-- incompatible embedding specifications
-- unsupported, dimensionally inconsistent, or non-finite embeddings
+**Pass condition:** `finish_pass()` realizes exactly one caller-visible
+directional-PCA pass over the concatenated pass dataset order and does not
+perform hidden extra passes.
 
-**Pass condition:** each case fails explicitly.
+**Traces to:** REQ-DPCA-STREAM-008, REQ-DPCA-STREAM-009
 
-**Traces to:** REQ-DPCA-005
+### VAL-DPCA-STREAM-006
 
-### VAL-DPCA-006
+Complete a second pass whose observed count or ordered embedding content differs
+from the first completed pass.
 
-Invoke the crate with invalid retained-dimension controls, non-positive
-axis-resolution budget, non-positive temperature, and invalid eligibility
-thresholds.
+**Pass condition:** continuation fails explicitly before claiming conformant
+refinement of the same training run.
 
-**Pass condition:** each invalid parameter case fails explicitly.
+**Traces to:** REQ-DPCA-STREAM-010
 
-**Traces to:** REQ-DPCA-006
+### VAL-DPCA-STREAM-007
 
-### VAL-DPCA-007
+Exercise malformed streamed input, including wrong dimensionality, non-finite
+values, and an empty completed pass.
 
-Inspect the execution path over a representative eligible fixture.
+**Pass condition:** each case fails explicitly through the shared
+malformed-input surface.
 
-**Pass condition:** the layer-local PCA is realized by the repository PCA crate
-surface rather than an undocumented independent PCA implementation.
+**Traces to:** REQ-DPCA-STREAM-007, REQ-DPCA-STREAM-019
 
-**Traces to:** REQ-DPCA-007
+### VAL-DPCA-STREAM-008
 
-### VAL-DPCA-008
+Inspect the execution path over a representative conformant fixture.
+
+**Pass condition:** the directional-PCA pass is realized by the repository PCA
+crate surface rather than an undocumented independent PCA implementation.
+
+**Traces to:** REQ-DPCA-STREAM-011
+
+### VAL-DPCA-STREAM-009
 
 Use a fixture with known retained PCA coordinates, centroid direction, and
 explained variance.
@@ -96,53 +108,113 @@ explained variance.
 **Pass condition:** the realized per-axis scores reflect both directional
 coefficients and explained variance according to the configured `gamma`.
 
-**Traces to:** REQ-DPCA-008
+**Traces to:** REQ-DPCA-STREAM-012
 
-### VAL-DPCA-009
+### VAL-DPCA-STREAM-010
 
-Use a fixture whose damped axis scores produce non-trivial allocation under a
-configured axis-resolution budget.
+Use a fixture whose damped axis scores produce non-trivial allocation relative
+to a hard cluster target `K`.
 
 **Pass condition:** the per-axis resolution counts follow the documented
 temperature-controlled allocation rule and deterministic correction behavior.
 
-**Traces to:** REQ-DPCA-009
+**Traces to:** REQ-DPCA-STREAM-013
 
-### VAL-DPCA-010
+### VAL-DPCA-STREAM-011
 
 Use a fixture whose retained PCA coordinates are unevenly distributed.
 
 **Pass condition:** the conformant default assignment path uses quantile binning
 rather than equal-width binning.
 
-**Traces to:** REQ-DPCA-010
+**Traces to:** REQ-DPCA-STREAM-014
 
-### VAL-DPCA-011
+### VAL-DPCA-STREAM-012
 
-Run an eligible fixture that yields multiple populated grid cells.
+Exercise three exact-K boundary fixtures:
 
-**Pass condition:** the result contains one group per populated cell, each group
-includes a numeric centroid vector and the ordered member block IDs assigned to
-that cell, and no empty cells are materialized.
+- first-pass `Observed N < K`
+- infeasible directional parameters
+- a realized directional-PCA partition that cannot produce exactly `K` stable,
+  non-empty clusters without changing the documented semantics
 
-**Traces to:** REQ-DPCA-011
+**Pass condition:** each case fails explicitly rather than silently forcing an
+exact-K outcome.
 
-### VAL-DPCA-012
+**Traces to:** REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-019
 
-Run fixtures that violate the configured minimum input count, explained-variance
-support threshold, and effective-rank threshold.
+### VAL-DPCA-STREAM-013
 
-**Pass condition:** each case returns an explicit eligibility outcome instead of
-a successful partition or a silent no-op.
+Inspect pass reports across at least two passes.
 
-**Traces to:** REQ-DPCA-012
+**Pass condition:** each report exposes deterministic `observed_count`,
+`quality_metric`, `balance_metric`, fixed metric directions, and stable cluster
+IDs. When no explicit balance constraints are configured, `balance_metric` is
+zero.
 
-### VAL-DPCA-013
+**Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017
 
-Inspect the repository workspace and verification artifacts for the crate.
+### VAL-DPCA-STREAM-014
 
-**Pass condition:** the repository contains the directional-PCA crate, the spec
-package, executable tests realizing this validation surface, and Cargo workspace
-wiring for the crate.
+Exercise multiple completed passes on a fixture whose internal group ordering
+would otherwise change.
 
-**Traces to:** REQ-DPCA-014, REQ-DPCA-015
+**Pass condition:** pass reports and classifier assignments preserve stable
+externally visible cluster IDs across passes.
+
+**Traces to:** REQ-DPCA-STREAM-017
+
+### VAL-DPCA-STREAM-015
+
+Complete training and exercise classifier assignment on valid and malformed
+embeddings.
+
+**Pass condition:** the classifier deterministically maps each valid embedding
+to exactly one cluster ID in `[0, K)`, rejects malformed embeddings through the
+shared malformed-input category, and does not require replay of the original
+training dataset.
+
+**Traces to:** REQ-DPCA-STREAM-018, REQ-DPCA-STREAM-019
+
+### VAL-DPCA-STREAM-016
+
+Exercise invalid configuration and illegal lifecycle transitions.
+
+**Pass condition:** failures are surfaced deterministically through the shared
+streaming error categories, and illegal lifecycle transitions place the trainer
+in terminal error state where required by the shared contract.
+
+**Traces to:** REQ-DPCA-STREAM-019
+
+### VAL-DPCA-STREAM-017
+
+Inspect the crate's public surface and executable verification artifacts after
+the streaming rework.
+
+**Pass condition:** public helpers, types, and tests that existed only to
+support the retired public block-store boundary have been removed, and the
+retained artifacts are limited to the scaled-down native streaming crate
+boundary.
+
+**Traces to:** REQ-DPCA-STREAM-020
+
+### VAL-DPCA-STREAM-018
+
+Run the shared streaming clustering conformance helpers against the crate.
+
+**Pass condition:** the crate passes the shared lifecycle, metric,
+malformed-input, determinism, and cluster-ID continuity checks.
+
+**Traces to:** REQ-DPCA-STREAM-021
+
+### VAL-DPCA-STREAM-019
+
+Run directional-PCA-focused executable tests for the crate's observable
+boundary.
+
+**Pass condition:** executable tests exist for pass ordering, cross-pass
+continuity, PCA reuse, scoring, allocation, quantile binning, exact-K failure,
+stable cluster IDs, classifier assignment, and dead-code cleanup of the retired
+block-store boundary.
+
+**Traces to:** REQ-DPCA-STREAM-021

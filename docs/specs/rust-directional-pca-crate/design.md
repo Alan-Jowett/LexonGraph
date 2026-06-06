@@ -4,239 +4,239 @@
 
 ## Status
 
-Draft design specification for a Rust crate that implements single-layer
-directional-PCA partitioning for LexonGraph.
+Draft design specification for a Rust crate that realizes streaming
+directional-PCA clustering through the shared LexonGraph streaming clustering
+contract.
 
 ## Design Goals
 
 The crate design is intended to be:
 
-- deterministic at the crate boundary
-- explicit about block-to-vector derivation
-- narrowly scoped to one partitioning layer
-- aligned with the existing PCA and block-storage crates
-- easy to migrate to a future shared clustering trait
+- faithful to the directional-PCA algorithm described in
+  `docs/arch/Directional PCA tree.md`
+- conformant to the shared streaming clustering contract
+- deterministic at the observable boundary
+- explicit about exact-K failure behavior
+- minimal after removal of the retired block-store surface
 
 ## Crate Boundary
 
 The crate owns:
 
-- the typed directional-PCA layer input, output, and error surfaces
-- representative-embedding derivation from loaded blocks
-- layer eligibility evaluation
-- directional axis scoring, axis-resolution allocation, and bucket assignment
-- directional-PCA-oriented diagnostics and error taxonomy
+- a concrete streaming directional-PCA trainer implementation
+- a concrete streaming directional-PCA classifier implementation
+- mapping from shared streaming configuration to the crate's directional
+  parameters
+- pass-scoped directional-PCA fitting, partitioning, and stable cluster-ID
+  realization
+- the minimal retained state needed for same-dataset multi-pass refinement
 
 The crate does not own:
 
-- recursive orchestration across multiple layers
+- block loading or representative-embedding derivation from stored blocks
+- recursive tree construction
 - centroid block persistence
-- shared multi-algorithm trait ownership
-- block canonicalization or storage backend implementation details
+- the shared streaming trait definitions
 - PCA eigendecomposition internals beyond invoking the PCA crate
 
-## Core Types
+## Design Entries
 
-### DSG-DPCA-001 `Crate boundary`
+### DSG-DPCA-STREAM-001 `Composite normative boundary`
 
-The repository contains a dedicated `lexongraph-directional-pca` crate whose
-public surface implements this specification package.
+The crate depends on `docs/arch/Directional PCA tree.md` for the algorithm's
+directional-PCA mechanics and stabilizer rationale, on
+`docs/specs/rust-streaming-clustering-crate` for the shared trainer/classifier
+contract, and on `docs/specs/rust-pca-crate` for PCA behavior.
 
-### DSG-DPCA-002 `DirectionalPcaLayerInput`
+The crate does not redefine those sources.
 
-A typed input structure containing:
+### DSG-DPCA-STREAM-002 `Concrete trainer/classifier realization`
 
-- ordered input block IDs
-- typed layer parameters
+The crate exposes one trainer type implementing `StreamingClusterTrainer` and
+one classifier type implementing `StreamingClusterClassifier`.
 
-The storage dependency is supplied separately as a `BlockStore` implementer at
-the execution boundary rather than embedded inside the input value.
+### DSG-DPCA-STREAM-003 `Minimal public surface`
 
-### DSG-DPCA-003 `DirectionalPcaLayerParams`
+The public crate boundary is native to streamed embeddings and excludes the
+retired block-store-backed single-layer API.
 
-A typed parameter structure containing at minimum:
+The observable type surface is limited to the configuration, trainer,
+classifier, and diagnostics needed for the streaming contract plus
+directional-PCA-specific configuration.
 
-- retained PCA dimension count or equivalent truncation control
-- axis-resolution budget
-- variance exponent `gamma`
-- temperature `tau`
-- minimum input count
-- minimum effective rank
-- minimum explained-variance support
+### DSG-DPCA-STREAM-004 `Shared configuration plus directional parameters`
 
-### DSG-DPCA-004 `DirectionalPcaLayerOutcome`
+Trainer construction is driven by:
 
-The public execution boundary returns one of:
+- `StreamingClusteringConfig` for hard `K`, dimensionality, optional balance
+  constraints, and deterministic seed behavior
+- typed directional parameters for retained dimensions, `gamma`, `tau`, and any
+  retained eligibility or stability thresholds
 
-- a successful partitioning result
-- an explicit eligibility outcome
-- an explicit failure
+The shared `cluster_count` is the hard observable cluster target for each
+completed pass and for the final classifier.
 
-Eligibility is not represented as successful partitioning with synthetic
-singleton groups.
+Shared balance constraints are not realized as a directional-PCA balancing
+policy in this scaled-down revision; if they are supplied, construction fails
+through the shared invalid-configuration category.
 
-### DSG-DPCA-005 `DirectionalPcaLayerResult`
+### DSG-DPCA-STREAM-005 `Observable lifecycle`
 
-A successful result contains:
+The trainer follows the shared lifecycle:
 
-- the representative embedding specification shared across the loaded inputs
-- a collection of partition groups
+`Idle -> Ingesting -> PassComplete -> Ingesting/TrainingComplete -> Classifier`
 
-### DSG-DPCA-006 `DirectionalPcaGroup`
+Illegal transitions are rejected deterministically through the shared invalid
+transition category and enter the terminal error state required by the shared
+contract.
 
-Each group contains:
+### DSG-DPCA-STREAM-006 `Pass ingestion boundary`
 
-- a numeric centroid vector
-- ordered member block IDs
+`ingest_batch()` validates streamed embeddings through the shared malformed-input
+surface and appends them to the current pass dataset order.
 
-Group member order preserves the input order induced by the requested block-ID
-sequence.
+The crate does not materialize block IDs, loaded blocks, or representative
+embedding records at this boundary.
 
-### DSG-DPCA-007 `DirectionalPcaEligibility`
+### DSG-DPCA-STREAM-007 `First-pass baseline and cross-pass continuity`
 
-An explicit eligibility structure classifies at least:
+The first completed pass establishes the logical dataset for one training run.
+Each later pass is validated against that baseline for:
 
-- insufficient input count
-- insufficient explained variance
-- insufficient effective rank
+- identical observed count
+- identical ordered embedding content
 
-### DSG-DPCA-008 `DirectionalPcaError`
+Deviation fails explicitly before the trainer claims conformant refinement of
+the same run.
 
-An explicit error taxonomy covers at minimum:
+### DSG-DPCA-STREAM-008 `Pass realization`
 
-- block-store failures
-- missing blocks
-- malformed or invalid loaded blocks
-- empty block embedding sets
-- incompatible embedding specifications
-- unsupported embedding encodings
-- invalid or non-finite decoded embedding values
-- invalid parameter bounds
-- PCA failures surfaced from the PCA crate
-- invalid numeric state during scoring, allocation, or centroid materialization
+Each successful `finish_pass()` realizes one caller-visible directional-PCA pass
+over the embeddings observed in that pass:
 
-## API Surface
+1. validate exact-K feasibility prerequisites
+2. fit layer-local PCA through the repository PCA crate
+3. compute centroid-direction coefficients and explained-variance-weighted axis
+   scores
+4. derive per-axis resolution from the hard cluster target `K`
+5. quantile-bin retained PCA coordinates
+6. materialize exactly `K` stable, non-empty clusters or fail explicitly
+7. compute pass metrics and expose the pass report
 
-### DSG-DPCA-009
-`run_directional_pca_layer(input, store) -> Result<DirectionalPcaLayerOutcome, DirectionalPcaError>`
+The crate does not perform hidden extra passes.
 
-The public API exposes one deterministic single-layer partitioning operation
-that accepts typed input plus a `BlockStore` implementation and returns either a
-typed outcome or an explicit failure.
-
-## Execution Flow
-
-### DSG-DPCA-010 `Block loading and representative embedding derivation`
-
-For each requested block ID, the crate:
-
-1. loads the block through the storage trait
-2. fails explicitly on absence or storage failure
-3. inspects the typed block entries
-4. decodes all entry embeddings according to the shared embedding specification
-5. computes the arithmetic centroid of those entry embeddings as the block's
-   representative embedding
-
-For branch blocks, the centroid is taken over the branch-entry embeddings.
-
-For leaf blocks under the current block model, the representative embedding is
-the single leaf-entry embedding.
-
-### DSG-DPCA-011 `Embedding compatibility boundary`
-
-All requested inputs must agree on one embedding specification before PCA
-begins.
-
-The crate does not silently coerce between encodings or dimensionalities.
-
-### DSG-DPCA-012 `Parameter validation`
-
-Before PCA execution, the crate validates parameter bounds, including retained
-dimension controls, positive axis budget, valid temperature, minimum input count
-of at least two samples, and non-negative eligibility thresholds.
-
-### DSG-DPCA-013 `Eligibility evaluation`
-
-After representative embeddings are materialized and before bucket assignment,
-the crate evaluates whether the layer is eligible to partition under the typed
-minimum-count and numerical-stability thresholds.
-
-If the layer is ineligible, the operation returns an explicit eligibility
-outcome instead of fabricating a partition.
-
-### DSG-DPCA-014 `PCA realization`
-
-When eligible, the crate fits a layer-local PCA transform by invoking the
-repository PCA crate on the ordered representative embeddings and truncates or
-retains coordinates according to the typed parameters.
-
-### DSG-DPCA-015 `Directional scoring`
+### DSG-DPCA-STREAM-009 `Directional scoring`
 
 The crate computes:
 
-- the layer centroid in the original embedding space
+- the pass centroid in embedding space
 - directional coefficients by projecting that centroid onto retained PCA axes
 - per-axis scores by combining directional magnitude with explained variance
   using the configured `gamma`
 
-### DSG-DPCA-016 `Axis allocation`
+The conformant scoring effect is equivalent to `|alpha_i| * lambda_i^gamma`.
+
+### DSG-DPCA-STREAM-010 `Temperature-controlled resolution allocation`
 
 The crate log-damps the per-axis scores, applies temperature-controlled
-normalization, converts the result into per-axis resolution counts under the
-configured axis-resolution budget, and applies deterministic correction so the
-final allocation satisfies the documented budget semantics.
+normalization, converts the result into per-axis resolution counts relative to
+the hard cluster target `K`, and applies deterministic correction so the
+documented allocation semantics are satisfied.
 
-### DSG-DPCA-017 `Quantile binning`
+The design keeps the distinction explicit between per-axis resolution and the
+realized Cartesian cell count induced by those choices.
 
-The conformant bucket-assignment path partitions each retained PCA coordinate
-axis with quantile binning and assigns each representative embedding to one grid
-cell determined by its retained-coordinate bin tuple.
+### DSG-DPCA-STREAM-011 `Quantile binning`
 
-### DSG-DPCA-018 `Group materialization`
+The conformant assignment path partitions each retained PCA coordinate with
+quantile binning and assigns each embedding to one grid cell determined by its
+retained-coordinate bin tuple.
 
-For each populated grid cell, the crate materializes one output group whose
-member IDs are the assigned block IDs in preserved input order and whose centroid
-vector is the arithmetic centroid of the member representative embeddings in the
-original embedding space.
+Equal-width binning is outside the conformant default path for this crate.
 
-Empty cells are not materialized as groups.
+### DSG-DPCA-STREAM-012 `Exact-K boundary`
 
-### DSG-DPCA-019 `Determinism boundary`
+The crate's observable contract requires exact `K` stable, non-empty clusters.
 
-The conformant execution boundary is the public crate behavior claimed by this
-specification package.
+If the realized directional-PCA partition yields fewer populated cells than `K`,
+more than `K` populated cells without a documented deterministic collapse rule,
+or otherwise cannot satisfy exact-K without changing the documented semantics,
+the trainer fails explicitly through the shared unsatisfiable-constraint or
+invalid-configuration surface as appropriate.
 
-Conformance requires that repeated executions over the same ordered inputs,
-loaded block contents, and parameters produce the same groups, the same
-eligibility outcome, or the same explicit failure.
+### DSG-DPCA-STREAM-013 `Stable cluster identity`
 
-### DSG-DPCA-020 `Repository realization`
+Externally visible cluster IDs remain stable across completed passes.
 
-This specification package shall be realized as a concrete Rust crate in the
-repository, and that implementation shall expose the public API and behavioral
-surface defined by this document.
+If repeated directional-PCA fits would otherwise permute internal group order,
+the crate applies deterministic matching and tie-breaking before exposing pass
+reports or classifier assignments.
 
-### DSG-DPCA-021 `Verification realization`
+### DSG-DPCA-STREAM-014 `Pass reports`
 
-The repository shall include automated tests that realize the validation entries
-in `docs/specs/rust-directional-pca-crate/validation.md`, with each validation
-entry mapped to one or more executable tests.
+Each completed pass yields a `PassReport` whose:
+
+- `observed_count` equals the number of embeddings ingested in that pass
+- `quality_metric` is deterministic and comparable across passes within one run
+- `balance_metric` is deterministic and comparable across passes within one run
+- metric directions remain fixed for the full run
+- `cluster_ids` match the stable externally visible cluster identifiers
+
+When no explicit balance constraints are configured, `balance_metric` is zero.
+
+### DSG-DPCA-STREAM-015 `Classifier realization`
+
+After `complete_training()`, `into_classifier()` consumes the trainer and yields
+a classifier that uses the final stable directional-PCA partition state to
+assign valid embeddings deterministically into `[0, K)`.
+
+The classifier reuses the shared malformed-input surface.
+
+### DSG-DPCA-STREAM-016 `Error mapping`
+
+The observable boundary maps failures into the shared error categories:
+
+- invalid configuration
+- invalid transition
+- unsatisfiable constraint
+- malformed input
+
+Directional-PCA-specific diagnostics may still appear in messages or internal
+helpers, but the public category surface remains aligned with the shared
+contract.
+
+### DSG-DPCA-STREAM-017 `Verification realization`
+
+The repository includes automated tests that exercise both:
+
+- directional-PCA-specific mechanics at the crate's conformant boundary
+- the shared streaming clustering conformance helpers
+
+### DSG-DPCA-STREAM-018 `Dead-code removal`
+
+The concrete crate realization removes public types, helpers, and verification
+artifacts whose only purpose was supporting the retired block-store-backed API.
+
+The retained implementation is intentionally the minimal code needed for the
+scaled-down native streaming directional-PCA boundary.
 
 ## Traceability
 
 | Design ID | Satisfies |
 |---|---|
-| DSG-DPCA-001 | REQ-DPCA-001, REQ-DPCA-014, REQ-DPCA-015 |
-| DSG-DPCA-002..004 | REQ-DPCA-001, REQ-DPCA-002, REQ-DPCA-011, REQ-DPCA-012 |
-| DSG-DPCA-005..008 | REQ-DPCA-011, REQ-DPCA-012, REQ-DPCA-014 |
-| DSG-DPCA-009 | REQ-DPCA-001, REQ-DPCA-002, REQ-DPCA-011, REQ-DPCA-012 |
-| DSG-DPCA-010..011 | REQ-DPCA-004, REQ-DPCA-005 |
-| DSG-DPCA-012 | REQ-DPCA-006 |
-| DSG-DPCA-013 | REQ-DPCA-012 |
-| DSG-DPCA-014 | REQ-DPCA-007 |
-| DSG-DPCA-015 | REQ-DPCA-008 |
-| DSG-DPCA-016 | REQ-DPCA-009 |
-| DSG-DPCA-017 | REQ-DPCA-010 |
-| DSG-DPCA-018 | REQ-DPCA-003, REQ-DPCA-011 |
-| DSG-DPCA-019 | REQ-DPCA-003, REQ-DPCA-013 |
-| DSG-DPCA-020..021 | REQ-DPCA-014, REQ-DPCA-015 |
+| DSG-DPCA-STREAM-001 | REQ-DPCA-STREAM-002 |
+| DSG-DPCA-STREAM-002 | REQ-DPCA-STREAM-001, REQ-DPCA-STREAM-003 |
+| DSG-DPCA-STREAM-003 | REQ-DPCA-STREAM-004, REQ-DPCA-STREAM-020 |
+| DSG-DPCA-STREAM-004 | REQ-DPCA-STREAM-005, REQ-DPCA-STREAM-006 |
+| DSG-DPCA-STREAM-005..007 | REQ-DPCA-STREAM-007, REQ-DPCA-STREAM-008, REQ-DPCA-STREAM-009, REQ-DPCA-STREAM-010, REQ-DPCA-STREAM-019 |
+| DSG-DPCA-STREAM-008 | REQ-DPCA-STREAM-009, REQ-DPCA-STREAM-011, REQ-DPCA-STREAM-015 |
+| DSG-DPCA-STREAM-009 | REQ-DPCA-STREAM-012 |
+| DSG-DPCA-STREAM-010 | REQ-DPCA-STREAM-013 |
+| DSG-DPCA-STREAM-011 | REQ-DPCA-STREAM-014 |
+| DSG-DPCA-STREAM-012 | REQ-DPCA-STREAM-015 |
+| DSG-DPCA-STREAM-013 | REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017 |
+| DSG-DPCA-STREAM-014 | REQ-DPCA-STREAM-016 |
+| DSG-DPCA-STREAM-015 | REQ-DPCA-STREAM-018 |
+| DSG-DPCA-STREAM-016 | REQ-DPCA-STREAM-019 |
+| DSG-DPCA-STREAM-017 | REQ-DPCA-STREAM-021 |
+| DSG-DPCA-STREAM-018 | REQ-DPCA-STREAM-020 |
