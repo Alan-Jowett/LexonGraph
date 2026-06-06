@@ -23,6 +23,7 @@ use lexongraph_streaming_indexer::{
     StreamingIndexingResult, StreamingIndexingRun, StreamingIndexingStatus,
     StreamingIndexingStatusObserver,
 };
+use sha2::{Digest, Sha256};
 
 // ─── Shared test infrastructure ───────────────────────────────────────────────
 
@@ -222,6 +223,9 @@ impl ContentResolver<&'static str> for MapResolver {
             body: r.as_bytes().to_vec(),
         })
     }
+    fn fingerprint(&self, r: &&'static str) -> Result<BlockHash, Self::Error> {
+        Ok(hash_bytes(r.as_bytes()))
+    }
 }
 
 /// Equivalent resolver with a distinct implementation type.
@@ -236,6 +240,9 @@ impl ContentResolver<&'static str> for MirrorResolver {
             body: r.as_bytes().to_vec(),
         })
     }
+    fn fingerprint(&self, r: &&'static str) -> Result<BlockHash, Self::Error> {
+        Ok(hash_bytes(r.as_bytes()))
+    }
 }
 
 /// Always fails to resolve.
@@ -245,6 +252,9 @@ struct FailingResolver;
 impl ContentResolver<&'static str> for FailingResolver {
     type Error = FixtureError;
     fn resolve(&self, _: &&'static str) -> Result<Content, Self::Error> {
+        Err(FixtureError("resolver unavailable".into()))
+    }
+    fn fingerprint(&self, _: &&'static str) -> Result<BlockHash, Self::Error> {
         Err(FixtureError("resolver unavailable".into()))
     }
 }
@@ -260,6 +270,29 @@ impl ContentResolver<&'static str> for UnusableResolver {
             media_type: String::new(),
             body: r.as_bytes().to_vec(),
         })
+    }
+    fn fingerprint(&self, r: &&'static str) -> Result<BlockHash, Self::Error> {
+        Ok(hash_bytes(r.as_bytes()))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AliasResolver;
+
+impl ContentResolver<&'static str> for AliasResolver {
+    type Error = FixtureError;
+    fn resolve(&self, r: &&'static str) -> Result<Content, Self::Error> {
+        let body = match *r {
+            "alpha-alias-1" | "alpha-alias-2" => b"alpha".to_vec(),
+            other => other.as_bytes().to_vec(),
+        };
+        Ok(Content {
+            media_type: "text/plain".into(),
+            body,
+        })
+    }
+    fn fingerprint(&self, r: &&'static str) -> Result<BlockHash, Self::Error> {
+        Ok(hash_bytes(r.as_bytes()))
     }
 }
 
@@ -653,6 +686,13 @@ impl StreamingClusteringFactory for BadObservedCountFactory {
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
 
+fn hash_bytes(bytes: &[u8]) -> BlockHash {
+    let digest = Sha256::digest(bytes);
+    let mut hash = [0_u8; BlockHash::LEN];
+    hash.copy_from_slice(&digest);
+    BlockHash::from_bytes(hash)
+}
+
 fn embedding_spec() -> EmbeddingSpec {
     EmbeddingSpec {
         dims: 2,
@@ -959,6 +999,32 @@ async fn val_stream_indexer_010_two_identical_passes_accepted() {
 
     assert_eq!(r1.observed_item_count, r2.observed_item_count);
     assert_eq!(r2.completed_pass_count, 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_011_later_pass_with_different_content_reference_fails() {
+    let first = IndexItem {
+        metadata: vec![],
+        content_ref: "alpha-alias-1",
+    };
+    let second = IndexItem {
+        metadata: vec![],
+        content_ref: "alpha-alias-2",
+    };
+    let mut run = StreamingIndexingRun::with_defaults(
+        AliasResolver,
+        AsciiEmbeddingProvider,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&[first]).await.unwrap();
+    run.finish_pass().unwrap();
+    let err = run.ingest_batch(&[second]).await.unwrap_err();
+    assert!(
+        matches!(err, StreamingIndexerError::ReplayMismatch(_)),
+        "{err}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1765,6 +1831,74 @@ async fn mismatched_observed_count_fails_explicitly() {
         matches!(error, StreamingIndexerError::ClusteringFailure(_)),
         "expected explicit clustering failure, got: {error}"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mismatched_observed_count_emits_failed_status() {
+    use lexongraph_streaming_indexer::StreamingIndexingPhase;
+    use lexongraph_streaming_indexer::StreamingIndexingStatusState;
+
+    let log: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let log_clone = Arc::clone(&log);
+    let observer: StreamingIndexingStatusObserver =
+        Arc::new(move |s| log_clone.lock().unwrap().push(s));
+
+    let items = [item("alpha"), item("bravo")];
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        BadObservedCountFactory,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+
+    run.ingest_batch(&items).await.unwrap();
+    let _ = run.finish_pass().unwrap_err();
+
+    let captured = log.lock().unwrap();
+    assert!(captured.iter().any(|s| {
+        matches!(s.phase, StreamingIndexingPhase::TrainingPass { .. })
+            && s.state == StreamingIndexingStatusState::Failed
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn short_assignment_batch_emits_failed_status() {
+    use lexongraph_streaming_indexer::StreamingIndexingPhase;
+    use lexongraph_streaming_indexer::StreamingIndexingStatusState;
+
+    let log: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let log_clone = Arc::clone(&log);
+    let observer: StreamingIndexingStatusObserver =
+        Arc::new(move |s| log_clone.lock().unwrap().push(s));
+
+    let items = [item("alpha"), item("bravo"), item("charlie")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        ShortAssignClusteringFactory,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+    let _ = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap_err();
+
+    let captured = log.lock().unwrap();
+    assert!(captured.iter().any(|s| {
+        s.phase == StreamingIndexingPhase::FirstLayerClustering
+            && s.state == StreamingIndexingStatusState::Failed
+    }));
 }
 
 // ─── VAL-STREAM-INDEXER-025 ───────────────────────────────────────────────────

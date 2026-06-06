@@ -92,6 +92,7 @@ pub struct IndexingPassReport {
 pub trait ContentResolver<R> {
     type Error: std::error::Error;
     fn resolve(&self, content_ref: &R) -> Result<Content, Self::Error>;
+    fn fingerprint(&self, content_ref: &R) -> Result<BlockHash, Self::Error>;
 }
 
 /// Derives a canonical (representative) embedding from the finalized entries
@@ -338,6 +339,7 @@ enum RunPhase {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct BaselineItem {
+    content_ref_hash: BlockHash,
     metadata_hash: BlockHash,
     content_hash: BlockHash,
     embedding_hash: BlockHash,
@@ -560,7 +562,12 @@ where
             .zip(embeddings.iter())
             .enumerate()
         {
+            let content_ref_hash = self
+                .resolver
+                .fingerprint(&item.content_ref)
+                .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
             let replay_item = BaselineItem {
+                content_ref_hash,
                 metadata_hash: hash_metadata(&item.metadata)
                     .map_err(StreamingIndexerError::InvalidMetadata)?,
                 content_hash: hash_content(content),
@@ -701,6 +708,19 @@ where
         heartbeat.stop();
         if pass_report.observed_count != self.items_seen_in_current_pass {
             self.current_pass_f32_embeddings = buffered;
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: pass_started.elapsed(),
+                    error: Some(format!(
+                        "trainer reported observed_count {} but current pass buffered {} items",
+                        pass_report.observed_count, self.items_seen_in_current_pass
+                    )),
+                },
+            );
             return Err(StreamingIndexerError::ClusteringFailure(format!(
                 "trainer reported observed_count {} but current pass buffered {} items",
                 pass_report.observed_count, self.items_seen_in_current_pass
@@ -907,8 +927,13 @@ where
                 .zip(embeddings.iter())
                 .enumerate()
             {
+                let content_ref_hash = self
+                    .resolver
+                    .fingerprint(&item.content_ref)
+                    .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
                 let expected = &baseline[replay_count + offset];
                 let replay_item = BaselineItem {
+                    content_ref_hash,
                     metadata_hash: hash_metadata(&item.metadata)
                         .map_err(StreamingIndexerError::InvalidMetadata)?,
                     content_hash: hash_content(content),
@@ -1039,6 +1064,20 @@ where
             .assign_batch(&leaf_f32)
             .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
         if assignments.len() != leaf_f32.len() {
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::FirstLayerClustering,
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: unique_leaves.len(),
+                    elapsed: first_layer_started.elapsed(),
+                    error: Some(format!(
+                        "classifier returned {} assignments for {} embeddings",
+                        assignments.len(),
+                        leaf_f32.len()
+                    )),
+                },
+            );
             return Err(StreamingIndexerError::ClusteringFailure(format!(
                 "classifier returned {} assignments for {} embeddings",
                 assignments.len(),
@@ -1159,6 +1198,20 @@ where
                     .assign_batch(&f32_embs)
                     .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
                 if asgn.len() != f32_embs.len() {
+                    emit_status(
+                        &self.observer,
+                        StreamingIndexingStatus {
+                            phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
+                            state: StreamingIndexingStatusState::Failed,
+                            item_count: child_count,
+                            elapsed: higher_layer_started.elapsed(),
+                            error: Some(format!(
+                                "classifier returned {} assignments for {} embeddings",
+                                asgn.len(),
+                                f32_embs.len()
+                            )),
+                        },
+                    );
                     return Err(StreamingIndexerError::ClusteringFailure(format!(
                         "classifier returned {} assignments for {} embeddings",
                         asgn.len(),
@@ -2181,6 +2234,9 @@ mod conformance_support {
                 media_type: "text/plain".into(),
                 body: vec![*r],
             })
+        }
+        fn fingerprint(&self, r: &u8) -> Result<BlockHash, Self::Error> {
+            Ok(hash_bytes(&[*r]))
         }
     }
 

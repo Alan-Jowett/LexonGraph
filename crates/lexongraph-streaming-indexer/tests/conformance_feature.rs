@@ -12,6 +12,7 @@ use lexongraph_streaming_indexer::conformance::{
 use lexongraph_streaming_indexer::{
     CanonicalEmbeddingPolicy, ContentResolver, EmbeddingSpec, IndexItem, StreamingClusteringFactory,
 };
+use sha2::{Digest, Sha256};
 
 // ─── ContentResolver fixture ─────────────────────────────────────────────────
 
@@ -40,6 +41,15 @@ impl ContentResolver<&'static str> for ResolverFixture {
                 body: content_ref.as_bytes().to_vec(),
             }),
         }
+    }
+
+    fn fingerprint(
+        &self,
+        content_ref: &&'static str,
+    ) -> Result<lexongraph_streaming_indexer::BlockHash, Self::Error> {
+        Ok(lexongraph_streaming_indexer::BlockHash::from_bytes(
+            Sha256::digest(content_ref.as_bytes()).into(),
+        ))
     }
 }
 
