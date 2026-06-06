@@ -353,45 +353,27 @@ mod conformance_support {
         }
 
         let classifier = build_classifier(harness.conforming_trainer(), &sample_passes)?;
-        match classifier.assign(harness.wrong_dimension_embedding().as_slice()) {
-            Err(StreamingClusteringError::MalformedInput { .. }) => {}
-            Err(error) => return Err(ConformanceError::Implementation(error)),
-            Ok(cluster_id) => {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected wrong-dimensionality embedding to fail, got cluster {cluster_id}"
-                )));
-            }
-        }
-        match classifier.assign(harness.nan_embedding().as_slice()) {
-            Err(StreamingClusteringError::MalformedInput { .. }) => {}
-            Err(error) => return Err(ConformanceError::Implementation(error)),
-            Ok(cluster_id) => {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected non-finite embedding to fail, got cluster {cluster_id}"
-                )));
-            }
-        }
+        assert_classifier_rejects_malformed_input(
+            &classifier,
+            harness.wrong_dimension_embedding().as_slice(),
+            harness.nan_embedding().as_slice(),
+        )?;
 
         let malformed_input_classifier =
             build_classifier(harness.malformed_input_accepting_trainer(), &sample_passes)?;
-        match malformed_input_classifier.assign(harness.wrong_dimension_embedding().as_slice()) {
-            Ok(_) => {}
-            Err(StreamingClusteringError::MalformedInput { .. }) => {
+        match assert_classifier_rejects_malformed_input(
+            &malformed_input_classifier,
+            harness.wrong_dimension_embedding().as_slice(),
+            harness.nan_embedding().as_slice(),
+        ) {
+            Err(ConformanceError::Expectation(_)) => {}
+            Err(error) => return Err(error),
+            Ok(()) => {
                 return Err(ConformanceError::Expectation(
-                    "expected malformed-input-accepting fixture to accept wrong-dimensional input"
+                    "expected malformed-input-accepting fixture to fail the malformed-input rejection checks"
                         .into(),
                 ));
             }
-            Err(error) => return Err(ConformanceError::Implementation(error)),
-        }
-        match malformed_input_classifier.assign(harness.nan_embedding().as_slice()) {
-            Ok(_) => {}
-            Err(StreamingClusteringError::MalformedInput { .. }) => {
-                return Err(ConformanceError::Expectation(
-                    "expected malformed-input-accepting fixture to accept non-finite input".into(),
-                ));
-            }
-            Err(error) => return Err(ConformanceError::Implementation(error)),
         }
 
         Ok(())
@@ -501,6 +483,36 @@ mod conformance_support {
         trainer
             .into_classifier()
             .map_err(ConformanceError::Implementation)
+    }
+
+    fn assert_classifier_rejects_malformed_input<C>(
+        classifier: &C,
+        wrong_dimension_embedding: &[f32],
+        nan_embedding: &[f32],
+    ) -> ConformanceResult
+    where
+        C: StreamingClusterClassifier,
+    {
+        match classifier.assign(wrong_dimension_embedding) {
+            Err(StreamingClusteringError::MalformedInput { .. }) => {}
+            Err(error) => return Err(ConformanceError::Implementation(error)),
+            Ok(cluster_id) => {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected wrong-dimensionality embedding to fail, got cluster {cluster_id}"
+                )));
+            }
+        }
+        match classifier.assign(nan_embedding) {
+            Err(StreamingClusteringError::MalformedInput { .. }) => {}
+            Err(error) => return Err(ConformanceError::Implementation(error)),
+            Ok(cluster_id) => {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected non-finite embedding to fail, got cluster {cluster_id}"
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 
