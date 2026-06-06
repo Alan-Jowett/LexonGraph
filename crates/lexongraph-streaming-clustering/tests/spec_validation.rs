@@ -6,7 +6,7 @@ mod support;
 use std::path::Path;
 
 use lexongraph_streaming_clustering::{
-    MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer,
+    BalanceConstraints, MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer,
     StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_config,
 };
 use support::{
@@ -172,6 +172,121 @@ fn val_stream_trait_014_classifier_contract_does_not_standardize_serialization()
     let source =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
     assert!(!source.contains("fn serialize_classifier"));
+}
+
+#[test]
+fn val_stream_trait_015_invalid_base_configuration_is_rejected_explicitly() {
+    let zero_cluster_count = StreamingClusteringConfig {
+        cluster_count: 0,
+        dimensions: 2,
+        balance_constraints: None,
+        random_seed: None,
+    };
+    assert!(matches!(
+        validate_config(&zero_cluster_count),
+        Err(StreamingClusteringError::InvalidConfiguration { .. })
+    ));
+
+    let zero_dimensions = StreamingClusteringConfig {
+        cluster_count: 2,
+        dimensions: 0,
+        balance_constraints: None,
+        random_seed: None,
+    };
+    assert!(matches!(
+        validate_config(&zero_dimensions),
+        Err(StreamingClusteringError::InvalidConfiguration { .. })
+    ));
+}
+
+#[test]
+fn val_stream_trait_016_invalid_balance_constraints_are_rejected_explicitly() {
+    let invalid_configs = vec![
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: Some(0),
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: Some(0),
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: Some(3),
+                max_cluster_occupancy: Some(2),
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: Some(0.0),
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: Some(f64::NAN),
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: Some(-1.0),
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: Some(f64::NAN),
+            }),
+            random_seed: None,
+        },
+    ];
+
+    for config in invalid_configs {
+        assert!(matches!(
+            validate_config(&config),
+            Err(StreamingClusteringError::InvalidConfiguration { .. })
+        ));
+    }
 }
 
 fn run_reports_and_assignments(

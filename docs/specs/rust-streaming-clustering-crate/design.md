@@ -117,6 +117,19 @@ Deterministic classifier serialization is not standardized in this revision. If
 an implementation exposes serialization in its own tests, determinism may be
 validated there, but not as a cross-implementation contract requirement.
 
+### DSG-STREAM-TRAIT-014 `Base configuration validity`
+
+The shared validation helper rejects invalid base configuration before any
+training activity begins. In this revision, zero cluster count and zero
+embedding dimensionality are classified as `InvalidConfiguration`.
+
+### DSG-STREAM-TRAIT-015 `Balance-constraint validity`
+
+When balance constraints are supplied, the shared validation helper rejects
+zero occupancies, contradictory occupancy bounds, non-finite or non-positive
+maximum cluster-size ratios, and non-finite or negative soft-balance penalties
+as `InvalidConfiguration`.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -133,3 +146,5 @@ validated there, but not as a cross-implementation contract requirement.
 | DSG-STREAM-TRAIT-010..011 | REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-015, REQ-STREAM-TRAIT-016 |
 | DSG-STREAM-TRAIT-012 | REQ-STREAM-TRAIT-013 |
 | DSG-STREAM-TRAIT-013 | REQ-STREAM-TRAIT-018 |
+| DSG-STREAM-TRAIT-014 | REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-019 |
+| DSG-STREAM-TRAIT-015 | REQ-STREAM-TRAIT-004, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-020 |
