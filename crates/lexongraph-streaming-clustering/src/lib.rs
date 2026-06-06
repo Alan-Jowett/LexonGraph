@@ -304,12 +304,16 @@ mod conformance_support {
             harness.unstable_cluster_ids_trainer(),
             &sample_passes,
             &expected_assignments,
-        )?;
-        if unstable_trace.pass_reports == expected_pass_reports {
-            return Err(ConformanceError::Expectation(
-                "expected unstable cluster-ID fixture to differ from the conforming pass reports"
-                    .into(),
-            ));
+        );
+        match unstable_trace {
+            Err(ConformanceError::Expectation(_)) => {}
+            Err(error) => return Err(error),
+            Ok(trace) => {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected unstable cluster-ID fixture to fail, got pass reports {:?}",
+                    trace.pass_reports
+                )));
+            }
         }
 
         let mut invalid_transition_trainer = harness.conforming_trainer();
@@ -393,7 +397,7 @@ mod conformance_support {
             )));
         }
 
-        let mut pass_reports = Vec::with_capacity(passes.len());
+        let mut pass_reports: Vec<PassReport> = Vec::with_capacity(passes.len());
         for pass in passes {
             for batch in pass {
                 trainer.ingest_batch(batch)?;
@@ -410,6 +414,14 @@ mod conformance_support {
                     "expected {} cluster ids in pass report, got {}",
                     trainer.config().cluster_count,
                     report.cluster_ids.len()
+                )));
+            }
+            if let Some(previous_report) = pass_reports.last()
+                && report.cluster_ids != previous_report.cluster_ids
+            {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected cluster ids {:?} to remain stable across passes, got {:?}",
+                    previous_report.cluster_ids, report.cluster_ids
                 )));
             }
             if trainer.state() != TrainerState::PassComplete {
