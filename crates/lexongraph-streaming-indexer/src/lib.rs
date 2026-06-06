@@ -325,7 +325,6 @@ enum RunPhase {
     Training,
     TrainingComplete,
     Finalized,
-    Error,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -781,16 +780,12 @@ where
             )));
         }
 
-        let baseline = self.baseline.take().ok_or_else(|| {
+        let baseline = self.baseline.as_ref().ok_or_else(|| {
             StreamingIndexerError::InvalidLifecycleTransition("no baseline established".into())
         })?;
-
-        // Guard against double finalization
-        self.phase = RunPhase::Error;
-
         let classifier = self
             .classifier
-            .take()
+            .as_ref()
             .expect("classifier must be present in TrainingComplete phase");
 
         let result = self
@@ -806,11 +801,11 @@ where
     // ── Private: perform the actual materialization ────────────
 
     async fn do_finalize<I, B>(
-        &mut self,
+        &self,
         replay_batches: I,
         baseline: &[BaselineItem],
         store: &dyn BlockStore,
-        classifier: <SCF::Trainer as StreamingClusterTrainer>::Classifier,
+        classifier: &<SCF::Trainer as StreamingClusterTrainer>::Classifier,
     ) -> Result<StreamingIndexingResult, StreamingIndexerError>
     where
         I: IntoIterator<Item = B>,

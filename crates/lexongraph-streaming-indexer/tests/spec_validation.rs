@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Executable verification for docs/specs/rust-streaming-indexer-crate/validation.md
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -115,6 +115,59 @@ impl BlockStore for FaultyIdStore {
         } else {
             Ok(serialized.hash)
         }
+    }
+
+    fn get(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
+            return Ok(None);
+        };
+        lexongraph_block::deserialize_block(&bytes, block_id)
+            .map(Some)
+            .map_err(|e| match e {
+                BlockError::HashMismatch { expected, actual } => {
+                    BlockStoreError::IntegrityMismatch { expected, actual }
+                }
+                other => BlockStoreError::MalformedContent(other),
+            })
+    }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        Ok(Box::new(ids.into_iter().map(Ok)))
+    }
+}
+
+#[derive(Default)]
+struct FailOnceStore {
+    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    should_fail: Cell<bool>,
+}
+
+impl FailOnceStore {
+    fn new() -> Self {
+        Self {
+            blocks: RefCell::default(),
+            should_fail: Cell::new(true),
+        }
+    }
+}
+
+impl BlockStore for FailOnceStore {
+    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
+        if self.should_fail.replace(false) {
+            return Err(BlockStoreError::BackendFailure("transient failure".into()));
+        }
+        let serialized =
+            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+        self.blocks
+            .borrow_mut()
+            .insert(serialized.hash, serialized.bytes);
+        Ok(serialized.hash)
     }
 
     fn get(
@@ -1189,7 +1242,7 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn leaf_store_integrity_mismatch_is_explicit() {
     let items = [item("alpha")];
     let store = FaultyIdStore::corrupt_leaf_ids();
@@ -1217,7 +1270,7 @@ async fn leaf_store_integrity_mismatch_is_explicit() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn branch_store_integrity_mismatch_is_explicit() {
     let items = [item("alpha"), item("bravo"), item("charlie")];
     let store = FaultyIdStore::corrupt_branch_ids();
@@ -1243,6 +1296,40 @@ async fn branch_store_integrity_mismatch_is_explicit() {
         ),
         "expected explicit branch integrity mismatch, got: {error}"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn finalize_failure_does_not_consume_training_complete_state() {
+    let items = [item("alpha"), item("bravo")];
+    let store = FailOnceStore::new();
+    let mut run = StreamingIndexingRun::with_defaults(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+
+    let error = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StreamingIndexerError::Storage(BlockStoreError::BackendFailure(_))
+        ),
+        "expected transient storage failure, got: {error}"
+    );
+
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(!result.block_ids.is_empty(), "retry should succeed");
 }
 
 // ─── VAL-STREAM-INDEXER-024 ───────────────────────────────────────────────────
