@@ -643,6 +643,41 @@ async fn val_stream_indexer_010_two_identical_passes_accepted() {
     assert_eq!(r2.completed_pass_count, 2);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn metadata_order_differences_do_not_break_replay_equivalence() {
+    use ciborium::Value;
+
+    let first = IndexItem {
+        metadata: vec![
+            (Value::Text("b".into()), Value::Integer(2.into())),
+            (Value::Text("a".into()), Value::Integer(1.into())),
+        ],
+        content_ref: "alpha",
+    };
+    let second = IndexItem {
+        metadata: vec![
+            (Value::Text("a".into()), Value::Integer(1.into())),
+            (Value::Text("b".into()), Value::Integer(2.into())),
+        ],
+        content_ref: "alpha",
+    };
+
+    let mut run = StreamingIndexingRun::with_defaults(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(std::slice::from_ref(&first))
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+    run.ingest_batch(std::slice::from_ref(&second))
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+}
+
 // ─── VAL-STREAM-INDEXER-011 ───────────────────────────────────────────────────
 // Later pass with different items fails.
 
@@ -1075,6 +1110,11 @@ async fn val_stream_indexer_022_clustering_failure_on_zero_norm_is_explicit() {
         matches!(err, StreamingIndexerError::ClusteringFailure(_)),
         "{err}"
     );
+    let err_again = run.finish_pass().unwrap_err();
+    assert!(
+        matches!(err_again, StreamingIndexerError::ClusteringFailure(_)),
+        "{err_again}"
+    );
 }
 
 // ─── VAL-STREAM-INDEXER-023 ───────────────────────────────────────────────────
@@ -1225,6 +1265,20 @@ fn derived_cluster_count_overflow_is_explicit() {
     let spec = embedding_spec();
     let error = factory
         .create_trainer(spec.dims as usize, usize::MAX, 256, &spec)
+        .unwrap_err();
+
+    assert!(
+        matches!(error, StreamingClusteringError::InvalidConfiguration { .. }),
+        "expected explicit invalid configuration, got: {error}"
+    );
+}
+
+#[test]
+fn impossible_min_two_children_grouping_fails_early() {
+    let factory = DcbcStreamingClusteringFactory::new(8);
+    let spec = embedding_spec();
+    let error = factory
+        .create_trainer(spec.dims as usize, 3, 24, &spec)
         .unwrap_err();
 
     assert!(

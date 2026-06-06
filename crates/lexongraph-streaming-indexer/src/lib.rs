@@ -32,7 +32,7 @@ use ciborium::ser::into_writer;
 use half::f16;
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
-    serialize_block,
+    canonicalize_metadata, serialize_block,
 };
 pub use lexongraph_block::{
     BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata, SerializedBlock,
@@ -290,7 +290,11 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
                 let needed = estimated_child_count.div_ceil(max_per.max(2));
                 let max_sensible = estimated_child_count / 2;
                 if needed > max_sensible {
-                    1
+                    return Err(StreamingClusteringError::InvalidConfiguration {
+                        message: format!(
+                            "cannot satisfy minimum two-children-per-branch constraint for {estimated_child_count} children with block size target {block_size_target}"
+                        ),
+                    });
                 } else {
                     u32::try_from(needed).map_err(|_| {
                         StreamingClusteringError::InvalidConfiguration {
@@ -651,13 +655,28 @@ where
 
         // Feed all buffered embeddings as one batch
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
-        trainer
-            .ingest_batch(&buffered)
-            .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
+        let ingest_result = trainer.ingest_batch(&buffered);
+        if let Err(error) = ingest_result {
+            stop_status_heartbeat(heartbeat);
+            self.current_pass_f32_embeddings = buffered;
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: pass_started.elapsed(),
+                    error: Some(error.to_string()),
+                },
+            );
+            return Err(StreamingIndexerError::ClusteringFailure(error.to_string()));
+        }
+
         let pass_report = match trainer.finish_pass() {
             Ok(report) => report,
             Err(error) => {
                 stop_status_heartbeat(heartbeat);
+                self.current_pass_f32_embeddings = buffered;
                 emit_status(
                     &self.observer,
                     StreamingIndexingStatus {
@@ -1344,8 +1363,10 @@ fn hash_content(content: &Content) -> BlockHash {
 }
 
 fn hash_metadata(metadata: &Metadata) -> Result<BlockHash, String> {
+    let canonical = canonicalize_metadata(metadata.clone())
+        .map_err(|error| format!("failed to canonicalize metadata for replay hashing: {error}"))?;
     let mut encoded = Vec::new();
-    into_writer(metadata, &mut encoded)
+    into_writer(&canonical, &mut encoded)
         .map_err(|error| format!("failed to encode metadata for replay hashing: {error}"))?;
     Ok(hash_bytes(&encoded))
 }

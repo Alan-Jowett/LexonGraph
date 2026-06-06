@@ -335,7 +335,7 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
                 ));
             }
             for entry in &mut block.entries {
-                entry.metadata = normalize_map(entry.metadata.clone())?;
+                entry.metadata = canonicalize_metadata(entry.metadata.clone())?;
             }
             Ok(Block::Leaf(block))
         }
@@ -344,6 +344,12 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
 
 fn normalize_optional_map(value: Option<ExtensionMap>) -> Result<Option<ExtensionMap>, BlockError> {
     value.map(normalize_map).transpose()
+}
+
+/// Canonicalizes leaf-entry metadata using the same rules enforced during block
+/// validation and serialization. Duplicate keys are rejected.
+pub fn canonicalize_metadata(metadata: Metadata) -> Result<Metadata, BlockError> {
+    normalize_map(metadata)
 }
 
 fn normalize_map(entries: Vec<(Value, Value)>) -> Result<Vec<(Value, Value)>, BlockError> {
