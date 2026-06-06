@@ -22,9 +22,9 @@ streaming indexer crate. They cover both:
 Inspect the repository artifacts for the new crate.
 
 **Pass condition:** the repository includes a crate at
-`crates/lexongraph-streaming-indexer` and this specification package, and this
-specification package does not require legacy batch-oriented indexer artifacts
-to remain present as a precondition for the streaming line's applicability.
+`crates/lexongraph-streaming-indexer` and this specification package, and the
+streaming line's applicability does not depend on legacy batch-oriented indexer
+artifacts remaining present.
 
 **Traces to:** REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-003
 
