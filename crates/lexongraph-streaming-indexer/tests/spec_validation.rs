@@ -96,6 +96,20 @@ impl ContentResolver<&'static str> for MapResolver {
     }
 }
 
+/// Equivalent resolver with a distinct implementation type.
+#[derive(Clone, Copy)]
+struct MirrorResolver;
+
+impl ContentResolver<&'static str> for MirrorResolver {
+    type Error = FixtureError;
+    fn resolve(&self, r: &&'static str) -> Result<Content, Self::Error> {
+        Ok(Content {
+            media_type: "text/plain".into(),
+            body: r.as_bytes().to_vec(),
+        })
+    }
+}
+
 /// Always fails to resolve.
 #[derive(Clone, Copy)]
 struct FailingResolver;
@@ -394,10 +408,10 @@ async fn val_stream_indexer_005_distinct_resolver_types_share_the_same_contract(
         .await
         .unwrap();
 
-    // A second resolver that wraps the same data differently.
+    // A distinct resolver implementation with the same observable behavior.
     let store2 = MemoryBlockStore::default();
     let mut run2 = StreamingIndexingRun::with_defaults(
-        MapResolver, // same resolver type but a fresh instance
+        MirrorResolver,
         AsciiEmbeddingProvider,
         embedding_spec(),
         256,

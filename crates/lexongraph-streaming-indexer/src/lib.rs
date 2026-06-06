@@ -101,8 +101,9 @@ pub trait CanonicalEmbeddingPolicy {
 
 /// Creates a fresh [`StreamingClusterTrainer`] for a single clustering layer.
 /// The factory is consulted once per layer: for the caller-visible first layer
-/// it is called at the start of the first training pass; for each higher layer
-/// it is called during final materialization with the known child count.
+/// it is created lazily during `finish_pass()` once the first pass's item count
+/// is known; for each higher layer it is called during final materialization
+/// with the known child count.
 pub trait StreamingClusteringFactory {
     type Trainer: StreamingClusterTrainer;
     type Error: std::error::Error;
@@ -621,15 +622,48 @@ where
 
         let trainer = self.trainer.as_mut().unwrap();
 
+        let pass_number = self.completed_passes + 1;
+        let pass_started = Instant::now();
+        emit_status(
+            &self.observer,
+            StreamingIndexingStatus {
+                phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                state: StreamingIndexingStatusState::Started,
+                item_count: self.items_seen_in_current_pass,
+                elapsed: Duration::ZERO,
+                error: None,
+            },
+        );
+        let heartbeat = start_status_heartbeat(
+            &self.observer,
+            StreamingIndexingPhase::TrainingPass { pass_number },
+            self.items_seen_in_current_pass,
+            pass_started,
+        );
+
         // Feed all buffered embeddings as one batch
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
         trainer
             .ingest_batch(&buffered)
             .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-
-        let pass_report = trainer
-            .finish_pass()
-            .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
+        let pass_report = match trainer.finish_pass() {
+            Ok(report) => report,
+            Err(error) => {
+                stop_status_heartbeat(heartbeat);
+                emit_status(
+                    &self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                        state: StreamingIndexingStatusState::Failed,
+                        item_count: self.items_seen_in_current_pass,
+                        elapsed: pass_started.elapsed(),
+                        error: Some(error.to_string()),
+                    },
+                );
+                return Err(StreamingIndexerError::ClusteringFailure(error.to_string()));
+            }
+        };
+        stop_status_heartbeat(heartbeat);
 
         // Establish baseline after first completed pass
         if self.baseline.is_none() {
@@ -642,12 +676,10 @@ where
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::TrainingPass {
-                    pass_number: self.completed_passes,
-                },
+                phase: StreamingIndexingPhase::TrainingPass { pass_number },
                 state: StreamingIndexingStatusState::Completed,
                 item_count: pass_report.observed_count,
-                elapsed: Duration::ZERO,
+                elapsed: pass_started.elapsed(),
                 error: None,
             },
         );
@@ -1324,7 +1356,7 @@ fn ensure_min_two_per_group(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
         };
     }
 
-    // Append singletons to the largest group (deterministic: largest by index in case of tie).
+    // Append singletons to the largest group (deterministic: earliest largest group wins ties).
     let target = ok.iter_mut().max_by_key(|g| g.len()).unwrap();
     for singleton in singletons {
         target.extend(singleton);
