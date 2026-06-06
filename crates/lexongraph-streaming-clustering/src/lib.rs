@@ -433,6 +433,15 @@ mod conformance_support {
             .iter()
             .map(|(embedding, _)| classifier.assign(embedding.as_slice()))
             .collect::<Result<Vec<_>, _>>()?;
+        for cluster_id in &assignments {
+            if *cluster_id >= classifier.config().cluster_count {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected classifier assignment to be in [0, {}), got {}",
+                    classifier.config().cluster_count,
+                    cluster_id
+                )));
+            }
+        }
 
         Ok(TrainingTrace {
             pass_reports,
