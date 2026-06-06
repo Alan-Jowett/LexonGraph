@@ -699,6 +699,13 @@ where
             }
         };
         heartbeat.stop();
+        if pass_report.observed_count != self.items_seen_in_current_pass {
+            self.current_pass_f32_embeddings = buffered;
+            return Err(StreamingIndexerError::ClusteringFailure(format!(
+                "trainer reported observed_count {} but current pass buffered {} items",
+                pass_report.observed_count, self.items_seen_in_current_pass
+            )));
+        }
 
         // Establish baseline after first completed pass
         if self.baseline.is_none() {
@@ -1031,6 +1038,13 @@ where
         let assignments = classifier
             .assign_batch(&leaf_f32)
             .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
+        if assignments.len() != leaf_f32.len() {
+            return Err(StreamingIndexerError::ClusteringFailure(format!(
+                "classifier returned {} assignments for {} embeddings",
+                assignments.len(),
+                leaf_f32.len()
+            )));
+        }
         let groups = ensure_min_two_per_group(assignments_to_groups(&assignments));
         heartbeat.stop();
 
@@ -1144,6 +1158,13 @@ where
                 let asgn = layer_cls
                     .assign_batch(&f32_embs)
                     .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
+                if asgn.len() != f32_embs.len() {
+                    return Err(StreamingIndexerError::ClusteringFailure(format!(
+                        "classifier returned {} assignments for {} embeddings",
+                        asgn.len(),
+                        f32_embs.len()
+                    )));
+                }
                 heartbeat.stop();
 
                 emit_status(

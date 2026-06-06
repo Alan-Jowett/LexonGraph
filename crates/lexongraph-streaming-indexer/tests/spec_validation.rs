@@ -403,6 +403,34 @@ struct SparseIdClassifier {
     config: StreamingClusteringConfig,
 }
 
+#[derive(Clone, Copy)]
+struct ShortAssignClusteringFactory;
+
+#[derive(Clone)]
+struct ShortAssignTrainer {
+    config: StreamingClusteringConfig,
+    observed_count: usize,
+}
+
+#[derive(Clone)]
+struct ShortAssignClassifier {
+    config: StreamingClusteringConfig,
+}
+
+#[derive(Clone, Copy)]
+struct BadObservedCountFactory;
+
+#[derive(Clone)]
+struct BadObservedCountTrainer {
+    config: StreamingClusteringConfig,
+    observed_count: usize,
+}
+
+#[derive(Clone)]
+struct BadObservedCountClassifier {
+    config: StreamingClusteringConfig,
+}
+
 impl StreamingClusterClassifier for SparseIdClassifier {
     fn config(&self) -> &StreamingClusteringConfig {
         &self.config
@@ -410,6 +438,33 @@ impl StreamingClusterClassifier for SparseIdClassifier {
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
         Ok(if embedding[0] < 99.0 { 0 } else { u32::MAX })
+    }
+}
+
+impl StreamingClusterClassifier for ShortAssignClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn assign(&self, _: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        Ok(0)
+    }
+
+    fn assign_batch(
+        &self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<Vec<ClusterId>, StreamingClusteringError> {
+        Ok(vec![0; embeddings.len().saturating_sub(1)])
+    }
+}
+
+impl StreamingClusterClassifier for BadObservedCountClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn assign(&self, _: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        Ok(0)
     }
 }
 
@@ -451,6 +506,82 @@ impl StreamingClusterTrainer for SparseIdTrainer {
     }
 }
 
+impl StreamingClusterTrainer for ShortAssignTrainer {
+    type Classifier = ShortAssignClassifier;
+
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn state(&self) -> TrainerState {
+        TrainerState::Ingesting
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Vec<f32>]) -> Result<(), StreamingClusteringError> {
+        self.observed_count += embeddings.len();
+        Ok(())
+    }
+
+    fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
+        Ok(PassReport {
+            observed_count: self.observed_count,
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::LargerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: vec![0],
+        })
+    }
+
+    fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+        Ok(())
+    }
+
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+        Ok(ShortAssignClassifier {
+            config: self.config,
+        })
+    }
+}
+
+impl StreamingClusterTrainer for BadObservedCountTrainer {
+    type Classifier = BadObservedCountClassifier;
+
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn state(&self) -> TrainerState {
+        TrainerState::Ingesting
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Vec<f32>]) -> Result<(), StreamingClusteringError> {
+        self.observed_count += embeddings.len();
+        Ok(())
+    }
+
+    fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
+        Ok(PassReport {
+            observed_count: self.observed_count + 1,
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::LargerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: vec![0],
+        })
+    }
+
+    fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+        Ok(())
+    }
+
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+        Ok(BadObservedCountClassifier {
+            config: self.config,
+        })
+    }
+}
+
 impl StreamingClusteringFactory for SparseIdClusteringFactory {
     type Trainer = SparseIdTrainer;
     type Error = StreamingClusteringError;
@@ -465,6 +596,52 @@ impl StreamingClusteringFactory for SparseIdClusteringFactory {
         Ok(SparseIdTrainer {
             config: StreamingClusteringConfig {
                 cluster_count: 2,
+                dimensions,
+                balance_constraints: None,
+                random_seed: None,
+            },
+            observed_count: 0,
+        })
+    }
+}
+
+impl StreamingClusteringFactory for ShortAssignClusteringFactory {
+    type Trainer = ShortAssignTrainer;
+    type Error = StreamingClusteringError;
+
+    fn create_trainer(
+        &self,
+        dimensions: usize,
+        _: usize,
+        _: usize,
+        _: &EmbeddingSpec,
+    ) -> Result<Self::Trainer, StreamingClusteringError> {
+        Ok(ShortAssignTrainer {
+            config: StreamingClusteringConfig {
+                cluster_count: 2,
+                dimensions,
+                balance_constraints: None,
+                random_seed: None,
+            },
+            observed_count: 0,
+        })
+    }
+}
+
+impl StreamingClusteringFactory for BadObservedCountFactory {
+    type Trainer = BadObservedCountTrainer;
+    type Error = StreamingClusteringError;
+
+    fn create_trainer(
+        &self,
+        dimensions: usize,
+        _: usize,
+        _: usize,
+        _: &EmbeddingSpec,
+    ) -> Result<Self::Trainer, StreamingClusteringError> {
+        Ok(BadObservedCountTrainer {
+            config: StreamingClusteringConfig {
+                cluster_count: 1,
                 dimensions,
                 balance_constraints: None,
                 random_seed: None,
@@ -1500,6 +1677,54 @@ async fn sparse_cluster_ids_do_not_trigger_large_group_allocation() {
         .await;
 
     assert!(result.is_ok(), "sparse cluster IDs should still finalize");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn short_assignment_batch_fails_explicitly() {
+    let items = [item("alpha"), item("bravo"), item("charlie")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        ShortAssignClusteringFactory,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+    let error = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, StreamingIndexerError::ClusteringFailure(_)),
+        "expected explicit clustering failure, got: {error}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mismatched_observed_count_fails_explicitly() {
+    let items = [item("alpha"), item("bravo")];
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        BadObservedCountFactory,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    let error = run.finish_pass().unwrap_err();
+
+    assert!(
+        matches!(error, StreamingIndexerError::ClusteringFailure(_)),
+        "expected explicit clustering failure, got: {error}"
+    );
 }
 
 // ─── VAL-STREAM-INDEXER-025 ───────────────────────────────────────────────────
