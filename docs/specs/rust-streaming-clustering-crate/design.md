@@ -1,0 +1,135 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+# Rust Streaming Clustering Trait Crate Design
+
+## Status
+
+Draft design specification for a Rust crate that defines the shared LexonGraph
+streaming multi-pass clustering contract.
+
+## Design Goals
+
+The crate design is intended to be:
+
+- reusable across future clustering implementations
+- explicit about lifecycle and error semantics
+- deterministic at the observable API boundary
+- minimal on the default production-facing surface
+- algorithm-neutral
+
+## Crate Boundary
+
+The crate owns:
+
+- shared trainer and classifier traits
+- shared configuration, metric, and lifecycle types
+- shared malformed-input and configuration validation helpers
+- conformance helpers for downstream implementations
+
+The crate does not own:
+
+- a concrete clustering algorithm
+- centroid update rules or optimization heuristics
+- block transport, indexing orchestration, or search traversal
+- standardized classifier serialization bytes
+
+## Design Entries
+
+### DSG-STREAM-TRAIT-001 `Shared crate boundary`
+
+The crate boundary owns shared trainer/classifier traits, shared configuration
+and metric types, lifecycle/state-machine types, and conformance helpers. It
+does not own a concrete clustering algorithm.
+
+### DSG-STREAM-TRAIT-002 `Trainer lifecycle surface`
+
+The trainer trait exposes incremental ingestion over caller-supplied batches,
+an explicit `finish_pass` transition, caller-directed completion of training,
+and finalization into a classifier only after that completion step.
+
+### DSG-STREAM-TRAIT-003 `Classifier surface`
+
+The classifier trait exposes deterministic hard assignment for valid embeddings
+and rejects malformed embeddings through the shared error surface.
+
+### DSG-STREAM-TRAIT-004 `Shared configuration types`
+
+The crate defines shared configuration types that include `K`, input
+dimensionality, optional balance-constraint configuration, and an optional
+deterministic seed without fixing the downstream optimization method.
+
+### DSG-STREAM-TRAIT-005 `Pass reporting`
+
+The crate defines shared pass-report types carrying `quality_metric`,
+`balance_metric`, and explicit metric-direction metadata so callers can compare
+passes within one run.
+
+### DSG-STREAM-TRAIT-006 `Shared error categories`
+
+The crate defines a shared error enum with category-level variants for invalid
+configuration, invalid transition, unsatisfiable constraint, and malformed
+input. Exact diagnostic wording is non-normative.
+
+### DSG-STREAM-TRAIT-007 `Observable state machine`
+
+The crate defines an explicit lifecycle model equivalent to
+`Idle -> Ingesting -> PassComplete -> Ingesting/TrainingComplete`, followed by
+consuming `into_classifier()` from `TrainingComplete`, with terminal failure on
+illegal transitions.
+
+### DSG-STREAM-TRAIT-008 `Cluster ID continuity`
+
+Cluster identity continuity is a contract-level observable. Implementations may
+choose any internal matching strategy, but the externally visible cluster IDs
+and classifier IDs must remain stable across passes.
+
+### DSG-STREAM-TRAIT-009 `Dataset-size-independent surface`
+
+The default public API avoids any surface requiring dataset replay buffers,
+full assignment materialization, or whole-dataset ownership inside the contract
+types.
+
+### DSG-STREAM-TRAIT-010 `Feature-gated conformance helpers`
+
+The crate exposes conformance helpers behind a non-default `conformance`
+feature so downstream implementations can verify lifecycle, metric, rejection,
+and classifier semantics from tests.
+
+### DSG-STREAM-TRAIT-011 `Harness shape`
+
+The conformance-helper surface provides reusable harness contracts for:
+
+- a conforming trainer fixture
+- a fixture that changes observable cluster IDs across passes
+- caller-supplied pass inputs and expected pass reports
+- caller-supplied sample embeddings and expected assignments
+- malformed-input fixtures for classifier rejection checks
+
+### DSG-STREAM-TRAIT-012 `Deterministic seed policy`
+
+Deterministic default behavior is modeled as either explicit use of a supplied
+seed or a fixed implementation-defined deterministic default seed path.
+Implicit nondeterministic seeding is disallowed at the contract boundary.
+
+### DSG-STREAM-TRAIT-013 `Serialization boundary`
+
+Deterministic classifier serialization is not standardized in this revision. If
+an implementation exposes serialization in its own tests, determinism may be
+validated there, but not as a cross-implementation contract requirement.
+
+## Traceability
+
+| Design ID | Satisfies |
+|---|---|
+| DSG-STREAM-TRAIT-001 | REQ-STREAM-TRAIT-001, REQ-STREAM-TRAIT-002, REQ-STREAM-TRAIT-017 |
+| DSG-STREAM-TRAIT-002 | REQ-STREAM-TRAIT-003, REQ-STREAM-TRAIT-005, REQ-STREAM-TRAIT-009, REQ-STREAM-TRAIT-012 |
+| DSG-STREAM-TRAIT-003 | REQ-STREAM-TRAIT-007, REQ-STREAM-TRAIT-009, REQ-STREAM-TRAIT-010 |
+| DSG-STREAM-TRAIT-004 | REQ-STREAM-TRAIT-003, REQ-STREAM-TRAIT-004, REQ-STREAM-TRAIT-013, REQ-STREAM-TRAIT-017 |
+| DSG-STREAM-TRAIT-005 | REQ-STREAM-TRAIT-006 |
+| DSG-STREAM-TRAIT-006 | REQ-STREAM-TRAIT-010 |
+| DSG-STREAM-TRAIT-007 | REQ-STREAM-TRAIT-005, REQ-STREAM-TRAIT-012 |
+| DSG-STREAM-TRAIT-008 | REQ-STREAM-TRAIT-008 |
+| DSG-STREAM-TRAIT-009 | REQ-STREAM-TRAIT-011 |
+| DSG-STREAM-TRAIT-010..011 | REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-015, REQ-STREAM-TRAIT-016 |
+| DSG-STREAM-TRAIT-012 | REQ-STREAM-TRAIT-013 |
+| DSG-STREAM-TRAIT-013 | REQ-STREAM-TRAIT-018 |
