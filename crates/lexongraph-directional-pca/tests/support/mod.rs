@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 
-#![allow(dead_code)]
-
 use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
 use lexongraph_streaming_clustering::{
     BalanceConstraints, ClusterId, Embedding, PassInput, PassReport, StreamingClusteringConfig,

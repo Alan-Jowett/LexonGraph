@@ -1527,6 +1527,7 @@ version = "0.1.0"
 dependencies = [
  "lexongraph-pca",
  "lexongraph-streaming-clustering",
+ "sha2 0.10.9",
 ]
 
 [[package]]

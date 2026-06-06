@@ -11,6 +11,7 @@ use lexongraph_streaming_clustering::{
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaParams {
@@ -28,7 +29,7 @@ pub struct DirectionalPcaStreamingTrainer {
     params: DirectionalPcaParams,
     state: TrainerState,
     current_pass: Vec<Embedding>,
-    baseline_pass: Option<Vec<Embedding>>,
+    baseline_fingerprint: Option<PassFingerprint>,
     completed_passes: usize,
     model: Option<DirectionalPcaModel>,
 }
@@ -43,6 +44,12 @@ pub struct DirectionalPcaStreamingClassifier {
 struct DirectionalPcaModel {
     centroids: Vec<Embedding>,
     quality_metric: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PassFingerprint {
+    observed_count: usize,
+    digest: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
@@ -64,7 +71,7 @@ impl DirectionalPcaStreamingTrainer {
             params,
             state: TrainerState::Idle,
             current_pass: Vec::new(),
-            baseline_pass: None,
+            baseline_fingerprint: None,
             completed_passes: 0,
             model: None,
         })
@@ -96,6 +103,7 @@ impl DirectionalPcaStreamingTrainer {
         }
 
         let observed_count = self.current_pass.len();
+        let current_fingerprint = fingerprint_pass(self.current_pass.as_slice());
         if self.completed_passes == 0 {
             let minimum_required = self
                 .params
@@ -106,14 +114,14 @@ impl DirectionalPcaStreamingTrainer {
                     "first pass established N = {observed_count}, smaller than the required minimum {minimum_required}"
                 )));
             }
-            self.baseline_pass = Some(self.current_pass.clone());
+            self.baseline_fingerprint = Some(current_fingerprint);
         } else {
-            let baseline = self.baseline_pass.as_ref().ok_or_else(|| {
+            let baseline = self.baseline_fingerprint.as_ref().ok_or_else(|| {
                 unsatisfiable_constraint(
                     "missing baseline dataset for later directional-PCA passes",
                 )
             })?;
-            if baseline != &self.current_pass {
+            if baseline != &current_fingerprint {
                 return Err(malformed_input(
                     "later passes must replay the same logical dataset in the same order",
                 ));
@@ -558,6 +566,21 @@ fn compute_quality_metric(
         return Err(unsatisfiable_constraint("quality metric became non-finite"));
     }
     Ok(total)
+}
+
+fn fingerprint_pass(embeddings: &[Embedding]) -> PassFingerprint {
+    let mut hasher = Sha256::new();
+    for embedding in embeddings {
+        hasher.update(embedding.len().to_le_bytes());
+        for value in embedding {
+            hasher.update(value.to_bits().to_le_bytes());
+        }
+    }
+
+    PassFingerprint {
+        observed_count: embeddings.len(),
+        digest: hasher.finalize().into(),
+    }
 }
 
 fn compute_centroid(embeddings: &[Embedding]) -> Result<Embedding, StreamingClusteringError> {
