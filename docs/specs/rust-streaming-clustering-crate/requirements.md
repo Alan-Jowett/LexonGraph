@@ -125,6 +125,24 @@ classifier serialization. Deterministic classification behavior is required,
 while serialization remains implementation-defined unless a future revision
 standardizes it.
 
+### REQ-STREAM-TRAIT-019
+
+The configuration surface shall reject invalid base configuration values
+through the shared `InvalidConfiguration` error category, including
+zero cluster count and zero embedding dimensionality.
+
+### REQ-STREAM-TRAIT-020
+
+When caller-provided balance constraints are present, the configuration surface
+shall reject invalid balance-constraint values through the shared
+`InvalidConfiguration` error category. In this revision:
+
+- minimum occupancy must be positive when provided
+- maximum occupancy must be positive when provided
+- minimum occupancy must not exceed maximum occupancy when both are provided
+- maximum cluster size ratio must be finite and positive when provided
+- soft balance penalty must be finite and non-negative when provided
+
 ## Out of Scope
 
 This crate does not define or own:

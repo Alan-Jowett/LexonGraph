@@ -142,3 +142,23 @@ Inspect the classifier contract shape.
 cross-implementation byte encoding for classifiers.
 
 **Traces to:** REQ-STREAM-TRAIT-018
+
+### VAL-STREAM-TRAIT-015
+
+Exercise invalid base configuration inputs.
+
+**Pass condition:** zero cluster count and zero embedding dimensionality are
+rejected explicitly through the shared `InvalidConfiguration` error category.
+
+**Traces to:** REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-019
+
+### VAL-STREAM-TRAIT-016
+
+Exercise invalid caller-provided balance constraints.
+
+**Pass condition:** zero occupancies, contradictory occupancy bounds,
+non-finite or non-positive maximum cluster-size ratios, and non-finite or
+negative soft-balance penalties are rejected explicitly through the shared
+`InvalidConfiguration` error category.
+
+**Traces to:** REQ-STREAM-TRAIT-004, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-020
