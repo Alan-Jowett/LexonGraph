@@ -303,9 +303,9 @@ fn validate_params(
             params.retained_dimension_count, config.cluster_count
         )));
     }
-    if !params.variance_exponent.is_finite() || !(0.0..=1.0).contains(&params.variance_exponent) {
+    if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
         return Err(invalid_configuration(format!(
-            "variance_exponent must be finite and in [0, 1], got {}",
+            "variance_exponent must be finite and non-negative, got {}",
             params.variance_exponent
         )));
     }
@@ -572,7 +572,7 @@ fn compute_quality_metric(
 fn fingerprint_pass(embeddings: &[Embedding]) -> PassFingerprint {
     let mut hasher = Sha256::new();
     for embedding in embeddings {
-        hasher.update(embedding.len().to_le_bytes());
+        hasher.update((embedding.len() as u64).to_le_bytes());
         for value in embedding {
             hasher.update(value.to_bits().to_le_bytes());
         }
