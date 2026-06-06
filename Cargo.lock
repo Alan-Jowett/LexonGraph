@@ -1583,6 +1583,22 @@ name = "lexongraph-streaming-clustering"
 version = "0.1.0"
 
 [[package]]
+name = "lexongraph-streaming-indexer"
+version = "0.1.0"
+dependencies = [
+ "ciborium",
+ "half",
+ "lexongraph-block",
+ "lexongraph-block-store",
+ "lexongraph-dcbc-streaming",
+ "lexongraph-embeddings-trait",
+ "lexongraph-streaming-clustering",
+ "pollster",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
