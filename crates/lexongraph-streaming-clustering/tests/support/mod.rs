@@ -85,9 +85,9 @@ impl StreamingClusterTrainer for FixtureTrainer {
                 self.state = TrainerState::Ingesting;
             }
             TrainerState::Ingesting => {}
-            TrainerState::TrainingComplete
-            | TrainerState::ClassifierProduced
-            | TrainerState::Error => return self.invalid_transition("ingest_batch"),
+            TrainerState::TrainingComplete | TrainerState::Error => {
+                return self.invalid_transition("ingest_batch");
+            }
         }
 
         for embedding in embeddings {
@@ -136,16 +136,14 @@ impl StreamingClusterTrainer for FixtureTrainer {
         Ok(())
     }
 
-    fn into_classifier(mut self) -> Result<Self::Classifier, StreamingClusteringError> {
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
         if self.state != TrainerState::TrainingComplete {
             let state = self.state;
-            self.state = TrainerState::Error;
             return Err(StreamingClusteringError::InvalidTransition {
                 state,
                 operation: "into_classifier".into(),
             });
         }
-        self.state = TrainerState::ClassifierProduced;
         Ok(FixtureClassifier {
             config: self.config.clone(),
         })

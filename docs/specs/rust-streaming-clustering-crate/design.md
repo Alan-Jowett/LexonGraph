@@ -73,8 +73,9 @@ input. Exact diagnostic wording is non-normative.
 ### DSG-STREAM-TRAIT-007 `Observable state machine`
 
 The crate defines an explicit lifecycle model equivalent to
-`Idle -> Ingesting -> PassComplete -> Ingesting/TrainingComplete ->
-ClassifierProduced`, with terminal failure on illegal transitions.
+`Idle -> Ingesting -> PassComplete -> Ingesting/TrainingComplete`, followed by
+consuming `into_classifier()` from `TrainingComplete`, with terminal failure on
+illegal transitions.
 
 ### DSG-STREAM-TRAIT-008 `Cluster ID continuity`
 

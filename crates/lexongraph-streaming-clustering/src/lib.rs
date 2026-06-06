@@ -46,7 +46,6 @@ pub enum TrainerState {
     Ingesting,
     PassComplete,
     TrainingComplete,
-    ClassifierProduced,
     Error,
 }
 
