@@ -617,13 +617,9 @@ fn euclidean_norm(vector: &[f64]) -> Result<f64, StreamingClusteringError> {
 }
 
 fn balance_metric(
-    balance_constraints: Option<&lexongraph_streaming_clustering::BalanceConstraints>,
+    _balance_constraints: Option<&lexongraph_streaming_clustering::BalanceConstraints>,
 ) -> f64 {
-    if balance_constraints.is_some() {
-        0.0
-    } else {
-        0.0
-    }
+    0.0
 }
 
 pub(crate) fn costs_equal(left: f64, right: f64) -> bool {
