@@ -1,0 +1,144 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+# Rust Streaming Clustering Trait Crate Validation
+
+## Status
+
+Draft validation specification for a Rust crate that defines the shared
+LexonGraph streaming multi-pass clustering contract.
+
+## Validation Scope
+
+These validation entries define the expected conformance surface for the shared
+streaming clustering trait crate.
+
+## Validation Entries
+
+### VAL-STREAM-TRAIT-001
+
+Inspect the crate public surface.
+
+**Pass condition:** the default public API exposes trainer/classifier contract
+types, shared configuration/metric/error types, and no concrete clustering
+implementation.
+
+**Traces to:** REQ-STREAM-TRAIT-001, REQ-STREAM-TRAIT-002, REQ-STREAM-TRAIT-017
+
+### VAL-STREAM-TRAIT-002
+
+Exercise a conforming fixture that ingests batches across multiple passes and
+reports pass completion.
+
+**Pass condition:** the caller controls `finish_pass` and training
+stop/continue decisions.
+
+**Traces to:** REQ-STREAM-TRAIT-005, REQ-STREAM-TRAIT-012
+
+### VAL-STREAM-TRAIT-003
+
+Exercise a fixture where first-pass completion establishes `N < K`.
+
+**Pass condition:** the contract surfaces explicit failure rather than silently
+reducing `K` or producing empty clusters.
+
+**Traces to:** REQ-STREAM-TRAIT-003, REQ-STREAM-TRAIT-010
+
+### VAL-STREAM-TRAIT-004
+
+Inspect or execute pass reporting.
+
+**Pass condition:** each pass report exposes deterministic `quality_metric`,
+`balance_metric`, and direction-of-improvement metadata.
+
+**Traces to:** REQ-STREAM-TRAIT-006
+
+### VAL-STREAM-TRAIT-005
+
+Exercise classifier production after training completion.
+
+**Pass condition:** the classifier deterministically assigns each valid
+embedding to exactly one cluster ID in `[0, K)`.
+
+**Traces to:** REQ-STREAM-TRAIT-007, REQ-STREAM-TRAIT-009
+
+### VAL-STREAM-TRAIT-006
+
+Exercise malformed embeddings and illegal lifecycle transitions.
+
+**Pass condition:** failures are explicit and route through the shared
+category-level error surface.
+
+**Traces to:** REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-012
+
+### VAL-STREAM-TRAIT-007
+
+Inspect the public API for dataset-size coupling.
+
+**Pass condition:** the contract does not require full-dataset materialization
+or full assignment retention as part of normal trait use.
+
+**Traces to:** REQ-STREAM-TRAIT-011
+
+### VAL-STREAM-TRAIT-008
+
+Exercise seeded and default deterministic fixtures twice with identical inputs
+and pass boundaries.
+
+**Pass condition:** observable metrics and assignments are identical across
+runs.
+
+**Traces to:** REQ-STREAM-TRAIT-013
+
+### VAL-STREAM-TRAIT-009
+
+Inspect the crate feature surface.
+
+**Pass condition:** conformance helpers are exposed only through a non-default
+`conformance` feature.
+
+**Traces to:** REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-015
+
+### VAL-STREAM-TRAIT-010
+
+Inspect repository verification artifacts.
+
+**Pass condition:** executable tests exist for the validation surface and
+conformance-helper rejection behavior.
+
+**Traces to:** REQ-STREAM-TRAIT-016
+
+### VAL-STREAM-TRAIT-011
+
+Run the conformance helpers against a fixture that changes externally visible
+cluster IDs across passes without preserving continuity.
+
+**Pass condition:** the suite rejects the fixture as an expectation failure.
+
+**Traces to:** REQ-STREAM-TRAIT-008, REQ-STREAM-TRAIT-014
+
+### VAL-STREAM-TRAIT-012
+
+Run the conformance helpers against a malformed-input fixture that accepts
+wrong dimensionality or `NaN` classifier input as valid.
+
+**Pass condition:** the suite rejects the fixture.
+
+**Traces to:** REQ-STREAM-TRAIT-007, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-014
+
+### VAL-STREAM-TRAIT-013
+
+Inspect the default public surface.
+
+**Pass condition:** the shared contract remains algorithm-neutral and does not
+require a specific clustering method.
+
+**Traces to:** REQ-STREAM-TRAIT-017
+
+### VAL-STREAM-TRAIT-014
+
+Inspect the classifier contract shape.
+
+**Pass condition:** this revision does not claim a standardized
+cross-implementation byte encoding for classifiers.
+
+**Traces to:** REQ-STREAM-TRAIT-018

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-streaming-clustering"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Intended for use from downstream test code via `[dev-dependencies]`.
+# Enabling this in `[dependencies]` broadens the crate's public API surface.
+conformance = []

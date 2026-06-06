@@ -13,5 +13,6 @@ members = [
     "crates/lexongraph-indexer",
     "crates/lexongraph-pca",
     "crates/lexongraph-search",
+    "crates/lexongraph-streaming-clustering",
 ]
 resolver = "2"
