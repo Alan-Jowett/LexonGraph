@@ -727,31 +727,60 @@ async fn one_shot_index(
 }
 
 // ─── VAL-STREAM-INDEXER-001 ───────────────────────────────────────────────────
-// Crate and spec exist; old lexongraph-indexer crate is untouched.
+// Crate and spec exist; the streaming spec defines its own normative boundary.
 
 #[test]
-fn val_stream_indexer_001_crate_and_spec_coexist() {
+fn val_stream_indexer_001_crate_and_spec_define_direct_boundary() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
         .parent()
         .and_then(|path| path.parent())
         .expect("crate should be nested under <repo>/crates/<crate>");
+    let requirements_path = repo_root
+        .join("docs")
+        .join("specs")
+        .join("rust-streaming-indexer-crate")
+        .join("requirements.md");
+    let validation_path = repo_root
+        .join("docs")
+        .join("specs")
+        .join("rust-streaming-indexer-crate")
+        .join("validation.md");
+
     assert!(
         repo_root
             .join("crates")
-            .join("lexongraph-indexer")
+            .join("lexongraph-streaming-indexer")
             .join("Cargo.toml")
             .exists(),
-        "existing lexongraph-indexer crate should remain present"
+        "streaming-indexer crate should remain present"
     );
     assert!(
-        repo_root
-            .join("docs")
-            .join("specs")
-            .join("rust-streaming-indexer-crate")
-            .join("requirements.md")
-            .exists(),
+        requirements_path.exists(),
         "streaming-indexer spec package should remain present"
+    );
+    assert!(
+        validation_path.exists(),
+        "streaming-indexer validation spec should remain present"
+    );
+
+    let requirements = std::fs::read_to_string(&requirements_path)
+        .expect("streaming-indexer requirements should be readable");
+    let validation = std::fs::read_to_string(&validation_path)
+        .expect("streaming-indexer validation should be readable");
+
+    assert!(
+        requirements.contains("docs/protocol/indexing.md")
+            && requirements.contains("docs/protocol/blocks.md"),
+        "requirements must anchor the streaming line to the indexing and block protocols"
+    );
+    assert!(
+        requirements.contains("without making the legacy batch-oriented"),
+        "requirements must exclude the legacy batch indexer line from the normative boundary"
+    );
+    assert!(
+        validation.contains("does not require legacy batch-oriented indexer artifacts"),
+        "validation must not require legacy batch artifacts to remain present"
     );
     let _ = include_str!("../src/lib.rs");
 }

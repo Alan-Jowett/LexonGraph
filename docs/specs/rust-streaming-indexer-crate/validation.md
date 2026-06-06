@@ -22,8 +22,9 @@ streaming indexer crate. They cover both:
 Inspect the repository artifacts for the new crate.
 
 **Pass condition:** the repository includes a crate at
-`crates/lexongraph-streaming-indexer` and this specification package, while the
-existing `lexongraph-indexer` crate and spec package remain present.
+`crates/lexongraph-streaming-indexer` and this specification package, and this
+specification package does not require legacy batch-oriented indexer artifacts
+to remain present as a precondition for the streaming line's applicability.
 
 **Traces to:** REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-003
 
@@ -34,7 +35,8 @@ Inspect the new crate's public surface and specification references.
 **Pass condition:** the crate exposes a caller-visible streaming replay
 lifecycle, remains subordinate to the indexing and block protocols, and
 consumes the shared streaming clustering contract rather than defining a new
-clustering contract locally.
+clustering contract locally or depending on the legacy batch-oriented indexer
+crate/specification package as part of its normative boundary.
 
 **Traces to:** REQ-STREAM-INDEXER-002, REQ-STREAM-INDEXER-004,
 REQ-STREAM-INDEXER-010
