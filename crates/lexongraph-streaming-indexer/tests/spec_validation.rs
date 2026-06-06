@@ -1219,6 +1219,20 @@ fn val_stream_indexer_024_conformance_helpers_are_feature_gated() {
     // the compile_fail doctest in lib.rs guards against that.
 }
 
+#[test]
+fn derived_cluster_count_overflow_is_explicit() {
+    let factory = DcbcStreamingClusteringFactory::new(8);
+    let spec = embedding_spec();
+    let error = factory
+        .create_trainer(spec.dims as usize, usize::MAX, 256, &spec)
+        .unwrap_err();
+
+    assert!(
+        matches!(error, StreamingClusteringError::InvalidConfiguration { .. }),
+        "expected explicit invalid configuration, got: {error}"
+    );
+}
+
 // ─── VAL-STREAM-INDEXER-025 ───────────────────────────────────────────────────
 // Repeated passes require caller replay; the crate does not rematerialize data.
 

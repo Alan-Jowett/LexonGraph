@@ -6,7 +6,8 @@
 //! indexing large datasets.  Callers drive one or more training passes (each
 //! a full replay of the item set in batches), then signal training completion,
 //! then supply a final materialization replay.  The crate uses the shared
-//! [`StreamingClusterTrainer`] / [`StreamingClusterClassifier`] contract from
+//! [`StreamingClusterTrainer`] /
+//! [`lexongraph_streaming_clustering::StreamingClusterClassifier`] contract from
 //! `lexongraph-streaming-clustering` for the first parent-producing layer and
 //! for every higher layer.  The built-in default clustering realization is
 //! backed by `lexongraph-dcbc-streaming`.
@@ -291,7 +292,13 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
                 if needed > max_sensible {
                     1
                 } else {
-                    (needed as u32).max(1)
+                    u32::try_from(needed).map_err(|_| {
+                        StreamingClusteringError::InvalidConfiguration {
+                            message: format!(
+                                "derived cluster count {needed} exceeds u32::MAX for estimated child count {estimated_child_count}"
+                            ),
+                        }
+                    })?
                 }
             }
         };
@@ -1379,7 +1386,7 @@ fn ensure_min_two_per_group(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
         };
     }
 
-    // Append singletons to the largest group (deterministic: earliest largest group wins ties).
+    // Append singletons to the largest group (deterministic: latest largest group wins ties).
     let target = ok.iter_mut().max_by_key(|g| g.len()).unwrap();
     for singleton in singletons {
         target.extend(singleton);
