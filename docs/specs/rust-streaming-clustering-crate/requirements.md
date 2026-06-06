@@ -129,7 +129,7 @@ standardizes it.
 
 The configuration surface shall reject invalid base configuration values
 through the shared `InvalidConfiguration` error category, including
-non-positive cluster count and non-positive embedding dimensionality.
+zero cluster count and zero embedding dimensionality.
 
 ### REQ-STREAM-TRAIT-020
 

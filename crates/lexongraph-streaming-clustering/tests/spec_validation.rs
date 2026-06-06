@@ -252,7 +252,29 @@ fn val_stream_trait_016_invalid_balance_constraints_are_rejected_explicitly() {
             balance_constraints: Some(BalanceConstraints {
                 min_cluster_occupancy: None,
                 max_cluster_occupancy: None,
+                max_cluster_size_ratio: Some(-1.0),
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
                 max_cluster_size_ratio: Some(f64::NAN),
+                soft_balance_penalty: None,
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: Some(f64::INFINITY),
                 soft_balance_penalty: None,
             }),
             random_seed: None,
@@ -276,6 +298,17 @@ fn val_stream_trait_016_invalid_balance_constraints_are_rejected_explicitly() {
                 max_cluster_occupancy: None,
                 max_cluster_size_ratio: None,
                 soft_balance_penalty: Some(f64::NAN),
+            }),
+            random_seed: None,
+        },
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: Some(BalanceConstraints {
+                min_cluster_occupancy: None,
+                max_cluster_occupancy: None,
+                max_cluster_size_ratio: None,
+                soft_balance_penalty: Some(f64::INFINITY),
             }),
             random_seed: None,
         },
