@@ -626,7 +626,7 @@ where
         // Create the trainer now that we know the exact item count.
         // For subsequent passes the trainer is already present (reused).
         if self.trainer.is_none() {
-            let dims = self.embedding_spec.dims as usize;
+            let dims = embedding_dims_usize(&self.embedding_spec)?;
             let item_count = self.items_seen_in_current_pass;
             let new_trainer = self
                 .factory
@@ -1083,7 +1083,7 @@ where
                 // Two children always merge into one root without clustering.
                 vec![vec![0usize, 1]]
             } else {
-                let dims = self.embedding_spec.dims as usize;
+                let dims = embedding_dims_usize(&self.embedding_spec)?;
 
                 let higher_layer_started = Instant::now();
                 emit_status(
@@ -1391,6 +1391,15 @@ fn hash_metadata(metadata: &Metadata) -> Result<BlockHash, String> {
     into_writer(&canonical, &mut encoded)
         .map_err(|error| format!("failed to encode metadata for replay hashing: {error}"))?;
     Ok(hash_bytes(&encoded))
+}
+
+fn embedding_dims_usize(spec: &EmbeddingSpec) -> Result<usize, StreamingIndexerError> {
+    usize::try_from(spec.dims).map_err(|_| {
+        StreamingIndexerError::ClusteringFailure(format!(
+            "embedding spec dims {} do not fit into usize on this target",
+            spec.dims
+        ))
+    })
 }
 
 fn assignments_to_groups(assignments: &[ClusterId]) -> Vec<Vec<usize>> {
