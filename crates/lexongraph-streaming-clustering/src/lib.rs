@@ -250,6 +250,7 @@ mod conformance_support {
 
         fn conforming_trainer(&self) -> Self::Trainer;
         fn unstable_cluster_ids_trainer(&self) -> Self::Trainer;
+        fn malformed_input_accepting_trainer(&self) -> Self::Trainer;
         fn sample_passes(&self) -> Vec<PassInput>;
         fn expected_pass_reports(&self) -> Vec<PassReport>;
         fn expected_assignments(&self) -> Vec<(Embedding, ClusterId)>;
@@ -369,6 +370,28 @@ mod conformance_support {
                     "expected non-finite embedding to fail, got cluster {cluster_id}"
                 )));
             }
+        }
+
+        let malformed_input_classifier =
+            build_classifier(harness.malformed_input_accepting_trainer(), &sample_passes)?;
+        match malformed_input_classifier.assign(harness.wrong_dimension_embedding().as_slice()) {
+            Ok(_) => {}
+            Err(StreamingClusteringError::MalformedInput { .. }) => {
+                return Err(ConformanceError::Expectation(
+                    "expected malformed-input-accepting fixture to accept wrong-dimensional input"
+                        .into(),
+                ));
+            }
+            Err(error) => return Err(ConformanceError::Implementation(error)),
+        }
+        match malformed_input_classifier.assign(harness.nan_embedding().as_slice()) {
+            Ok(_) => {}
+            Err(StreamingClusteringError::MalformedInput { .. }) => {
+                return Err(ConformanceError::Expectation(
+                    "expected malformed-input-accepting fixture to accept non-finite input".into(),
+                ));
+            }
+            Err(error) => return Err(ConformanceError::Implementation(error)),
         }
 
         Ok(())

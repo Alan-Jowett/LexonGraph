@@ -143,6 +143,19 @@ shall reject invalid balance-constraint values through the shared
 - maximum cluster size ratio must be finite and positive when provided
 - soft balance penalty must be finite and non-negative when provided
 
+### REQ-STREAM-TRAIT-021
+
+The feature-gated conformance-helper surface shall expose a public
+`ConformanceError` type that distinguishes implementation-reported shared
+contract errors from suite expectation failures. Only implementation-reported
+failures shall preserve an underlying source error.
+
+### REQ-STREAM-TRAIT-022
+
+The conformance harness contract shall provide a trainer fixture whose
+resulting classifier accepts wrong-dimensional or non-finite embeddings as
+valid so the suite can verify malformed-input rejection behavior.
+
 ## Out of Scope
 
 This crate does not define or own:

@@ -118,12 +118,12 @@ cluster IDs across passes without preserving continuity.
 
 ### VAL-STREAM-TRAIT-012
 
-Run the conformance helpers against a malformed-input fixture that accepts
-wrong dimensionality or `NaN` classifier input as valid.
+Run the conformance helpers against the dedicated malformed-input-accepting
+fixture whose classifier accepts wrong dimensionality and `NaN` input as valid.
 
 **Pass condition:** the suite rejects the fixture.
 
-**Traces to:** REQ-STREAM-TRAIT-007, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-014
+**Traces to:** REQ-STREAM-TRAIT-007, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-022
 
 ### VAL-STREAM-TRAIT-013
 
@@ -162,3 +162,14 @@ negative soft-balance penalties are rejected explicitly through the shared
 `InvalidConfiguration` error category.
 
 **Traces to:** REQ-STREAM-TRAIT-004, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-020
+
+### VAL-STREAM-TRAIT-017
+
+Exercise the public conformance-helper error surface.
+
+**Pass condition:** converting a `StreamingClusteringError` into
+`ConformanceError` yields an implementation failure that preserves the
+underlying source error and shared display text, while expectation failures use
+suite-authored messages and expose no source error.
+
+**Traces to:** REQ-STREAM-TRAIT-021
