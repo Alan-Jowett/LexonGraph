@@ -62,6 +62,10 @@ The trainer is constructed from `StreamingClusteringConfig`, validating:
 The crate derives protocol occupancy bounds from the shared balance-constraint
 surface without extending the public shared contract.
 
+Occupancy-based constraints that map directly to the protocol's lower and upper
+cluster-size bounds are accepted; unsupported non-occupancy balance controls are
+rejected through the invalid-configuration category.
+
 ### DSG-DCBC-STREAM-004 `Observable lifecycle`
 
 The trainer follows the shared lifecycle:
@@ -71,11 +75,19 @@ The trainer follows the shared lifecycle:
 Illegal transitions enter the shared terminal error state via the invalid
 transition category.
 
+That includes at least rejecting `complete_training()` before `PassComplete`.
+Because `into_classifier()` consumes the trainer, it must still reject calls
+before `TrainingComplete` deterministically through the shared invalid-transition
+surface.
+
 ### DSG-DCBC-STREAM-005 `Pass ingestion boundary`
 
 `ingest_batch()` validates embedding shape and finiteness through the shared
 malformed-input surface and appends embeddings to the current pass dataset order
 without exposing any dataset-sized public API artifact.
+
+`ingest_batch()` also rejects zero-norm embeddings so that pass-local material
+always remains valid for the protocol's normalization and distance semantics.
 
 During an in-progress pass, the trainer maintains only pass-local working state
 needed to complete the next `finish_pass()`, including:
@@ -96,6 +108,10 @@ configurations that cannot satisfy:
 
 - `Observed N >= K`
 - any deterministically derived DCBC occupancy bounds
+
+This gate covers both trivial underfull first passes and occupancy-derived
+infeasibility where `Observed N >= K` but the derived DCBC bounds still cannot
+be satisfied.
 
 ### DSG-DCBC-STREAM-007 `Cross-pass dataset continuity`
 
@@ -177,6 +193,9 @@ Each completed pass yields a `PassReport` whose:
 After `complete_training()`, `into_classifier()` consumes the trainer and yields
 a classifier that uses the final stable centroids and cluster-ID mapping to
 assign valid embeddings deterministically into `[0, K)`.
+
+The classifier reuses the shared malformed-input surface, including rejection of
+zero-norm embeddings before assignment.
 
 ### DSG-DCBC-STREAM-015 `Dataset-size-independent public surface`
 

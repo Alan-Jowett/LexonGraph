@@ -72,6 +72,9 @@ The trainer configuration shall accept:
 - optional caller-provided balance constraints from the shared trait surface
 - an optional deterministic seed
 
+Occupancy-based balance constraints that can be mapped directly onto the DCBC
+protocol's lower and upper cluster-size bounds shall be accepted explicitly.
+
 ### REQ-DCBC-STREAM-005
 
 The trainer shall expose the protocol's repeated full-dataset DCBC passes
@@ -108,6 +111,11 @@ first completed pass establishes `Observed N`.
 
 If the first completed pass proves that `Observed N < K`, the trainer shall
 fail explicitly through the shared unsatisfiable-constraint error category.
+
+If the first completed pass establishes `Observed N >= K` but the
+deterministically derived DCBC occupancy bounds are still infeasible for that
+`Observed N`, the trainer shall also fail explicitly through the shared
+unsatisfiable-constraint error category.
 
 ### REQ-DCBC-STREAM-009
 
@@ -155,7 +163,8 @@ After caller-directed training completion, the crate shall produce a
 deterministic classifier that:
 
 - assigns each valid embedding to exactly one cluster ID in `[0, K)`
-- rejects malformed embeddings through the shared malformed-input error category
+- rejects malformed embeddings, including zero-norm embeddings, through the
+  shared malformed-input error category
 - does not require the original dataset after classifier production
 
 ### REQ-DCBC-STREAM-014
@@ -173,6 +182,11 @@ Invalid configuration, invalid state transitions, unsatisfiable constraints,
 and malformed input shall be surfaced through the shared streaming error
 categories with deterministic terminal-error behavior for illegal lifecycle
 transitions.
+
+This includes at least:
+
+- rejecting `complete_training()` before the trainer reaches `PassComplete`
+- rejecting `into_classifier()` before the trainer reaches `TrainingComplete`
 
 ### REQ-DCBC-STREAM-016
 

@@ -18,6 +18,34 @@ pub fn config() -> StreamingClusteringConfig {
     }
 }
 
+pub fn supported_balance_config() -> StreamingClusteringConfig {
+    StreamingClusteringConfig {
+        cluster_count: 2,
+        dimensions: 2,
+        balance_constraints: Some(lexongraph_streaming_clustering::BalanceConstraints {
+            min_cluster_occupancy: Some(1),
+            max_cluster_occupancy: Some(1),
+            max_cluster_size_ratio: None,
+            soft_balance_penalty: None,
+        }),
+        random_seed: None,
+    }
+}
+
+pub fn infeasible_occupancy_config() -> StreamingClusteringConfig {
+    StreamingClusteringConfig {
+        cluster_count: 2,
+        dimensions: 2,
+        balance_constraints: Some(lexongraph_streaming_clustering::BalanceConstraints {
+            min_cluster_occupancy: Some(2),
+            max_cluster_occupancy: Some(2),
+            max_cluster_size_ratio: None,
+            soft_balance_penalty: None,
+        }),
+        random_seed: None,
+    }
+}
+
 pub fn sample_passes() -> Vec<PassInput> {
     vec![
         vec![vec![vec![1.0, 0.0]], vec![vec![-1.0, 0.0]]],
@@ -60,6 +88,10 @@ pub fn wrong_dimension_embedding() -> Vec<f32> {
 
 pub fn nan_embedding() -> Vec<f32> {
     vec![f32::NAN, 0.0]
+}
+
+pub fn zero_norm_embedding() -> Vec<f32> {
+    vec![0.0, 0.0]
 }
 
 pub struct Harness;

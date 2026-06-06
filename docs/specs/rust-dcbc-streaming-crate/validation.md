@@ -201,3 +201,53 @@ initialization, assignment determinism, centroid-update semantics, first-pass
 feasibility rejection, and pass-to-iteration realization.
 
 **Traces to:** REQ-DCBC-STREAM-017
+
+### VAL-DCBC-STREAM-019
+
+Construct a trainer with supported occupancy-based balance constraints.
+
+**Pass condition:** trainer construction succeeds deterministically and preserves
+the supplied occupancy-based balance configuration.
+
+**Traces to:** REQ-DCBC-STREAM-004, REQ-DCBC-STREAM-009
+
+### VAL-DCBC-STREAM-020
+
+Complete a second pass whose observed count differs from the first completed
+pass while preserving the shared prefix ordering.
+
+**Pass condition:** continuation fails explicitly before claiming
+protocol-conformant multi-pass execution.
+
+**Traces to:** REQ-DCBC-STREAM-007
+
+### VAL-DCBC-STREAM-021
+
+Complete a first pass where `Observed N >= K` but the deterministically derived
+occupancy bounds are still infeasible.
+
+**Pass condition:** `finish_pass()` fails explicitly through the shared
+unsatisfiable-constraint error category.
+
+**Traces to:** REQ-DCBC-STREAM-008, REQ-DCBC-STREAM-009, REQ-DCBC-STREAM-015
+
+### VAL-DCBC-STREAM-022
+
+Exercise zero-norm embeddings at trainer-ingestion time and at classifier
+assignment time.
+
+**Pass condition:** both surfaces reject the zero-norm embedding through the
+shared malformed-input category.
+
+**Traces to:** REQ-DCBC-STREAM-013, REQ-DCBC-STREAM-015
+
+### VAL-DCBC-STREAM-023
+
+Exercise `complete_training()` before `PassComplete` and `into_classifier()`
+before `TrainingComplete`.
+
+**Pass condition:** both calls fail explicitly through the shared
+invalid-transition category, and `complete_training()` places the trainer in the
+terminal error state.
+
+**Traces to:** REQ-DCBC-STREAM-015
