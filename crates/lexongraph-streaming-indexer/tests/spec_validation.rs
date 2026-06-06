@@ -1666,6 +1666,20 @@ fn impossible_min_two_children_grouping_fails_early() {
 }
 
 #[test]
+fn two_child_branch_capacity_failure_is_explicit() {
+    let factory = DcbcStreamingClusteringFactory::new(8);
+    let spec = embedding_spec();
+    let error = factory
+        .create_trainer(spec.dims as usize, 2, 24, &spec)
+        .unwrap_err();
+
+    assert!(
+        matches!(error, StreamingClusteringError::InvalidConfiguration { .. }),
+        "expected explicit invalid configuration, got: {error}"
+    );
+}
+
+#[test]
 fn unsupported_embedding_encoding_fails_explicitly_in_default_factory() {
     let factory = DcbcStreamingClusteringFactory::new(8);
     let spec = EmbeddingSpec {

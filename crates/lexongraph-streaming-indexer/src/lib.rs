@@ -1733,7 +1733,9 @@ fn max_children_per_branch(
     }
     let min_size = serialized_branch_size(spec, 2)?;
     if min_size > block_size_target {
-        return Ok(1);
+        return Err(format!(
+            "minimum 2-child branch serializes to {min_size} bytes, exceeding block size target {block_size_target}"
+        ));
     }
     let mut low = 2;
     let mut high = 2;
