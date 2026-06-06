@@ -654,18 +654,18 @@ where
                 error: None,
             },
         );
-        let heartbeat = start_status_heartbeat(
+        let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
             &self.observer,
             StreamingIndexingPhase::TrainingPass { pass_number },
             self.items_seen_in_current_pass,
             pass_started,
-        );
+        ));
 
         // Feed all buffered embeddings as one batch
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
         let ingest_result = trainer.ingest_batch(&buffered);
         if let Err(error) = ingest_result {
-            stop_status_heartbeat(heartbeat);
+            heartbeat.stop();
             self.current_pass_f32_embeddings = buffered;
             emit_status(
                 &self.observer,
@@ -683,7 +683,7 @@ where
         let pass_report = match trainer.finish_pass() {
             Ok(report) => report,
             Err(error) => {
-                stop_status_heartbeat(heartbeat);
+                heartbeat.stop();
                 self.current_pass_f32_embeddings = buffered;
                 emit_status(
                     &self.observer,
@@ -698,7 +698,7 @@ where
                 return Err(StreamingIndexerError::ClusteringFailure(error.to_string()));
             }
         };
-        stop_status_heartbeat(heartbeat);
+        heartbeat.stop();
 
         // Establish baseline after first completed pass
         if self.baseline.is_none() {
@@ -1016,12 +1016,12 @@ where
                 error: None,
             },
         );
-        let heartbeat = start_status_heartbeat(
+        let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
             &self.observer,
             StreamingIndexingPhase::FirstLayerClustering,
             unique_leaves.len(),
             first_layer_started,
-        );
+        ));
 
         let leaf_f32: Vec<Vec<f32>> = unique_leaves
             .iter()
@@ -1032,7 +1032,7 @@ where
             .assign_batch(&leaf_f32)
             .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
         let groups = ensure_min_two_per_group(assignments_to_groups(&assignments));
-        stop_status_heartbeat(heartbeat);
+        heartbeat.stop();
 
         emit_status(
             &self.observer,
@@ -1106,12 +1106,12 @@ where
                         error: None,
                     },
                 );
-                let heartbeat = start_status_heartbeat(
+                let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
                     &self.observer,
                     StreamingIndexingPhase::HigherLayerClustering { layer_index },
                     child_count,
                     higher_layer_started,
-                );
+                ));
 
                 let f32_embs: Vec<Vec<f32>> = current_layer
                     .iter()
@@ -1144,7 +1144,7 @@ where
                 let asgn = layer_cls
                     .assign_batch(&f32_embs)
                     .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-                stop_status_heartbeat(heartbeat);
+                heartbeat.stop();
 
                 emit_status(
                     &self.observer,
@@ -1344,6 +1344,24 @@ fn stop_status_heartbeat(heartbeat: Option<(mpsc::Sender<()>, thread::JoinHandle
     if let Some((stop_tx, handle)) = heartbeat {
         let _ = stop_tx.send(());
         let _ = handle.join();
+    }
+}
+
+struct StatusHeartbeatGuard(Option<(mpsc::Sender<()>, thread::JoinHandle<()>)>);
+
+impl StatusHeartbeatGuard {
+    fn new(heartbeat: Option<(mpsc::Sender<()>, thread::JoinHandle<()>)>) -> Self {
+        Self(heartbeat)
+    }
+
+    fn stop(&mut self) {
+        stop_status_heartbeat(self.0.take());
+    }
+}
+
+impl Drop for StatusHeartbeatGuard {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
