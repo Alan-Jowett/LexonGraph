@@ -59,8 +59,9 @@ The crate shall remain subordinate to:
 
 If those sources appear to conflict, the streaming trait specification is
 authoritative for the shared contract surface, this specification package is
-authoritative for the crate boundary it defines, and the architecture note is
-authoritative for the directional-PCA algorithmic intent preserved here.
+authoritative for the crate boundary and parameter-domain rules it defines, and
+the architecture note is authoritative for the directional-PCA algorithmic
+intent preserved here.
 
 ### REQ-DPCA-STREAM-003
 
@@ -89,6 +90,10 @@ surface, and the directional parameters shall include at minimum:
 - temperature `tau`
 - explicit stability or eligibility thresholds retained by the scaled-down
   streaming crate boundary
+
+For this crate boundary, `gamma` shall be finite and non-negative. The
+architecture note's discussion of example or heuristic `gamma` ranges is
+non-normative for this crate's accepted configuration domain.
 
 ### REQ-DPCA-STREAM-006
 
