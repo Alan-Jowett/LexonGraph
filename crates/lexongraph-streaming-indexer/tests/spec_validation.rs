@@ -13,7 +13,10 @@ use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
-use lexongraph_streaming_clustering::{StreamingClusteringConfig, StreamingClusteringError};
+use lexongraph_streaming_clustering::{
+    ClusterId, MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
+    StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+};
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, CanonicalEmbeddingPolicy, ContentResolver,
     DcbcStreamingClusteringFactory, IndexItem, StreamingClusteringFactory, StreamingIndexerError,
@@ -382,6 +385,91 @@ impl StreamingClusteringFactory for PairClusteringFactory {
             dimensions,
             balance_constraints: None,
             random_seed: None,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SparseIdClusteringFactory;
+
+#[derive(Clone)]
+struct SparseIdTrainer {
+    config: StreamingClusteringConfig,
+    observed_count: usize,
+}
+
+#[derive(Clone)]
+struct SparseIdClassifier {
+    config: StreamingClusteringConfig,
+}
+
+impl StreamingClusterClassifier for SparseIdClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        Ok(if embedding[0] < 99.0 { 0 } else { u32::MAX })
+    }
+}
+
+impl StreamingClusterTrainer for SparseIdTrainer {
+    type Classifier = SparseIdClassifier;
+
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn state(&self) -> TrainerState {
+        TrainerState::Ingesting
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Vec<f32>]) -> Result<(), StreamingClusteringError> {
+        self.observed_count += embeddings.len();
+        Ok(())
+    }
+
+    fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
+        Ok(PassReport {
+            observed_count: self.observed_count,
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::LargerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: vec![0, u32::MAX],
+        })
+    }
+
+    fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+        Ok(())
+    }
+
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+        Ok(SparseIdClassifier {
+            config: self.config,
+        })
+    }
+}
+
+impl StreamingClusteringFactory for SparseIdClusteringFactory {
+    type Trainer = SparseIdTrainer;
+    type Error = StreamingClusteringError;
+
+    fn create_trainer(
+        &self,
+        dimensions: usize,
+        _: usize,
+        _: usize,
+        _: &EmbeddingSpec,
+    ) -> Result<Self::Trainer, StreamingClusteringError> {
+        Ok(SparseIdTrainer {
+            config: StreamingClusteringConfig {
+                cluster_count: 2,
+                dimensions,
+                balance_constraints: None,
+                random_seed: None,
+            },
+            observed_count: 0,
         })
     }
 }
@@ -1372,6 +1460,46 @@ fn impossible_min_two_children_grouping_fails_early() {
         matches!(error, StreamingClusteringError::InvalidConfiguration { .. }),
         "expected explicit invalid configuration, got: {error}"
     );
+}
+
+#[test]
+fn unsupported_embedding_encoding_fails_explicitly_in_default_factory() {
+    let factory = DcbcStreamingClusteringFactory::new(8);
+    let spec = EmbeddingSpec {
+        dims: 2,
+        encoding: "bogus".into(),
+    };
+    let error = factory
+        .create_trainer(spec.dims as usize, 8, 256, &spec)
+        .unwrap_err();
+
+    assert!(
+        matches!(error, StreamingClusteringError::InvalidConfiguration { .. }),
+        "expected explicit invalid configuration, got: {error}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sparse_cluster_ids_do_not_trigger_large_group_allocation() {
+    let items = [item("alpha"), item("zulu"), item("bravo"), item("yankee")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        SparseIdClusteringFactory,
+        embedding_spec(),
+        256,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await;
+
+    assert!(result.is_ok(), "sparse cluster IDs should still finalize");
 }
 
 // ─── VAL-STREAM-INDEXER-025 ───────────────────────────────────────────────────

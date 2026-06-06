@@ -21,6 +21,7 @@
 //! let _ = std::any::type_name::<conformance::ConformanceError>();
 //! ```
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -281,9 +282,17 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
             // Unknown count: use the configured default.
             self.cluster_count.max(1)
         } else {
-            let max_per =
-                max_children_per_branch(embedding_spec, block_size_target, estimated_child_count)
-                    .unwrap_or(estimated_child_count);
+            let max_per = max_children_per_branch(
+                embedding_spec,
+                block_size_target,
+                estimated_child_count,
+            )
+            .map_err(|message| StreamingClusteringError::InvalidConfiguration {
+                message: format!(
+                    "cannot derive branch capacity for embedding spec {} dims under {}: {message}",
+                    embedding_spec.dims, embedding_spec.encoding
+                ),
+            })?;
             if estimated_child_count <= max_per.max(1) {
                 1 // All items fit in a single block.
             } else {
@@ -1370,13 +1379,11 @@ fn assignments_to_groups(assignments: &[ClusterId]) -> Vec<Vec<usize>> {
     if assignments.is_empty() {
         return Vec::new();
     }
-    let max_id = assignments.iter().copied().max().unwrap_or(0) as usize;
-    let mut groups: Vec<Vec<usize>> = vec![Vec::new(); max_id + 1];
+    let mut groups: BTreeMap<ClusterId, Vec<usize>> = BTreeMap::new();
     for (i, &id) in assignments.iter().enumerate() {
-        groups[id as usize].push(i);
+        groups.entry(id).or_default().push(i);
     }
-    groups.retain(|g| !g.is_empty());
-    groups
+    groups.into_values().collect()
 }
 
 /// Ensure no group has fewer than 2 items by merging singletons into the
