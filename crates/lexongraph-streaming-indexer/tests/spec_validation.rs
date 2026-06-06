@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use lexongraph_block::{
@@ -286,12 +287,28 @@ async fn one_shot_index(
 
 #[test]
 fn val_stream_indexer_001_crate_and_spec_coexist() {
-    // Verifies that this crate compiles and the old indexer crate still exists.
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("crate should be nested under <repo>/crates/<crate>");
     assert!(
-        std::path::Path::new("Cargo.toml").exists()
-            || std::path::Path::new("../lexongraph-indexer/Cargo.toml").exists()
+        repo_root
+            .join("crates")
+            .join("lexongraph-indexer")
+            .join("Cargo.toml")
+            .exists(),
+        "existing lexongraph-indexer crate should remain present"
     );
-    // Static assertion: both crate root lib.rs files are present.
+    assert!(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-streaming-indexer-crate")
+            .join("requirements.md")
+            .exists(),
+        "streaming-indexer spec package should remain present"
+    );
     let _ = include_str!("../src/lib.rs");
 }
 
@@ -786,12 +803,13 @@ async fn val_stream_indexer_018_branch_entries_sorted_and_deduplicated() {
                     window[0].embedding <= window[1].embedding,
                     "entries not sorted by embedding"
                 );
-                // No duplicate child IDs
-                assert_ne!(
-                    window[0].child, window[1].child,
-                    "duplicate child IDs in branch"
-                );
             }
+            let unique_children: HashSet<_> = entries.iter().map(|entry| entry.child).collect();
+            assert_eq!(
+                unique_children.len(),
+                entries.len(),
+                "duplicate child IDs in branch"
+            );
         }
     }
 }

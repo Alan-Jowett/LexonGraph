@@ -27,6 +27,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use ciborium::ser::into_writer;
 use half::f16;
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
@@ -43,6 +44,7 @@ use lexongraph_streaming_clustering::{
     ClusterId, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringConfig,
     StreamingClusteringError,
 };
+use sha2::{Digest, Sha256};
 
 // ─────────────────────────────────────────────────────────────
 // Public input / output types
@@ -123,6 +125,7 @@ pub enum StreamingIndexerError {
     EmptyInput,
     EmptyPass(String),
     ReplayMismatch(String),
+    ReplayFingerprint(String),
     ContentResolution(String),
     UnusableContent(String),
     EmbeddingFailure(String),
@@ -143,6 +146,7 @@ impl fmt::Display for StreamingIndexerError {
             Self::EmptyInput => write!(f, "streaming indexing requires at least one item"),
             Self::EmptyPass(m) => write!(f, "pass is empty: {m}"),
             Self::ReplayMismatch(m) => write!(f, "replay mismatch: {m}"),
+            Self::ReplayFingerprint(m) => write!(f, "replay fingerprinting failed: {m}"),
             Self::ContentResolution(m) => write!(f, "content resolution failed: {m}"),
             Self::UnusableContent(m) => write!(f, "resolved content is unusable: {m}"),
             Self::EmbeddingFailure(m) => write!(f, "embedding generation failed: {m}"),
@@ -311,11 +315,11 @@ enum RunPhase {
     Error,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct BaselineItem {
-    metadata: Metadata,
-    content: Content,
-    embedding: Vec<u8>,
+    metadata_hash: BlockHash,
+    content_hash: BlockHash,
+    embedding_hash: BlockHash,
 }
 
 struct IndexedChild {
@@ -536,9 +540,10 @@ where
             .enumerate()
         {
             let replay_item = BaselineItem {
-                metadata: item.metadata.clone(),
-                content: content.clone(),
-                embedding: embedding.clone(),
+                metadata_hash: hash_metadata(&item.metadata)
+                    .map_err(StreamingIndexerError::ReplayFingerprint)?,
+                content_hash: hash_content(content),
+                embedding_hash: hash_bytes(embedding),
             };
             if let Some(baseline) = &self.baseline {
                 let Some(expected) = baseline.get(offset + index) else {
@@ -717,7 +722,7 @@ where
             )));
         }
 
-        let baseline = self.baseline.clone().ok_or_else(|| {
+        let baseline = self.baseline.take().ok_or_else(|| {
             StreamingIndexerError::InvalidLifecycleTransition("no baseline established".into())
         })?;
 
@@ -834,9 +839,10 @@ where
             {
                 let expected = &baseline[replay_count + offset];
                 let replay_item = BaselineItem {
-                    metadata: item.metadata.clone(),
-                    content: content.clone(),
-                    embedding: embedding.clone(),
+                    metadata_hash: hash_metadata(&item.metadata)
+                        .map_err(StreamingIndexerError::ReplayFingerprint)?,
+                    content_hash: hash_content(content),
+                    embedding_hash: hash_bytes(embedding),
                 };
                 if expected != &replay_item {
                     return Err(StreamingIndexerError::ReplayMismatch(format!(
@@ -1254,6 +1260,32 @@ fn stop_status_heartbeat(heartbeat: Option<(mpsc::Sender<()>, thread::JoinHandle
         let _ = stop_tx.send(());
         let _ = handle.join();
     }
+}
+
+fn hash_bytes(bytes: &[u8]) -> BlockHash {
+    let digest = Sha256::digest(bytes);
+    let mut hash = [0_u8; BlockHash::LEN];
+    hash.copy_from_slice(&digest);
+    BlockHash::from_bytes(hash)
+}
+
+fn hash_content(content: &Content) -> BlockHash {
+    let mut hasher = Sha256::new();
+    hasher.update((content.media_type.len() as u64).to_le_bytes());
+    hasher.update(content.media_type.as_bytes());
+    hasher.update((content.body.len() as u64).to_le_bytes());
+    hasher.update(&content.body);
+    let digest = hasher.finalize();
+    let mut hash = [0_u8; BlockHash::LEN];
+    hash.copy_from_slice(&digest);
+    BlockHash::from_bytes(hash)
+}
+
+fn hash_metadata(metadata: &Metadata) -> Result<BlockHash, String> {
+    let mut encoded = Vec::new();
+    into_writer(metadata, &mut encoded)
+        .map_err(|error| format!("failed to encode metadata for replay hashing: {error}"))?;
+    Ok(hash_bytes(&encoded))
 }
 
 fn assignments_to_groups(assignments: &[ClusterId]) -> Vec<Vec<usize>> {
