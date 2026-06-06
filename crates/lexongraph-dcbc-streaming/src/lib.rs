@@ -654,6 +654,15 @@ pub(crate) fn constraint_error(message: impl Into<String>) -> StreamingClusterin
 mod tests {
     use super::*;
 
+    fn config() -> StreamingClusteringConfig {
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 2,
+            balance_constraints: None,
+            random_seed: None,
+        }
+    }
+
     #[test]
     fn first_completed_pass_uses_protocol_farthest_point_initialization() {
         let prepared = prepare_pass(&[vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]], 2).unwrap();
@@ -672,6 +681,20 @@ mod tests {
 
         assert_eq!(raw_centroids[0], vec![0.0, 1.0]);
         assert_eq!(raw_centroids[1], vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn input_order_is_semantically_significant_for_streaming_initialization() {
+        let ordered = prepare_pass(&[vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]], 2).unwrap();
+        let reordered =
+            prepare_pass(&[vec![0.0, 1.0], vec![1.0, 0.0], vec![-1.0, 0.0]], 2).unwrap();
+
+        let (ordered_centroids, _) =
+            initialize_centroids(&ordered.raw_points, &ordered.normalized_points, 3).unwrap();
+        let (reordered_centroids, _) =
+            initialize_centroids(&reordered.raw_points, &reordered.normalized_points, 3).unwrap();
+
+        assert_ne!(ordered_centroids, reordered_centroids);
     }
 
     #[test]
@@ -702,6 +725,61 @@ mod tests {
     }
 
     #[test]
+    fn constrained_unique_optimum_fixture_returns_the_global_minimum_assignment() {
+        let prepared = prepare_pass(
+            &[
+                vec![1.0, 2.0, -1.0],
+                vec![1.0, 2.0, 2.0],
+                vec![2.0, 2.0, 1.0],
+                vec![-1.0, -1.0, -2.0],
+            ],
+            3,
+        )
+        .unwrap();
+        let (_, start_centroids) =
+            initialize_centroids(&prepared.raw_points, &prepared.normalized_points, 2).unwrap();
+        let result = run_iteration(
+            &prepared.raw_points,
+            &prepared.normalized_points,
+            &start_centroids,
+            prepared.dimensions,
+            OccupancyBounds { min: 2, max: 2 },
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(result.assignment, vec![1, 0, 0, 1]);
+    }
+
+    #[test]
+    fn assignments_cover_each_point_once_and_respect_capacities() {
+        let prepared = prepare_pass(
+            &[
+                vec![1.0, 0.0],
+                vec![0.9, 0.1],
+                vec![-1.0, 0.0],
+                vec![-0.9, 0.1],
+            ],
+            2,
+        )
+        .unwrap();
+        let (_, start_centroids) =
+            initialize_centroids(&prepared.raw_points, &prepared.normalized_points, 2).unwrap();
+        let result = run_iteration(
+            &prepared.raw_points,
+            &prepared.normalized_points,
+            &start_centroids,
+            prepared.dimensions,
+            OccupancyBounds { min: 2, max: 2 },
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(result.assignment.len(), prepared.raw_points.len());
+        assert_eq!(result.cluster_sizes, vec![2, 2]);
+    }
+
+    #[test]
     fn zero_norm_centroids_use_the_smallest_member_for_distance_computations() {
         let prepared = prepare_pass(&[vec![1.0, 0.0], vec![-1.0, 0.0]], 2).unwrap();
         let (_, start_centroids) =
@@ -721,14 +799,59 @@ mod tests {
     }
 
     #[test]
-    fn later_passes_must_match_the_baseline_dataset() {
-        let config = StreamingClusteringConfig {
-            cluster_count: 2,
-            dimensions: 2,
-            balance_constraints: None,
-            random_seed: None,
+    fn centroid_summation_uses_ascending_point_index() {
+        let prepared = prepare_pass(&[vec![1e16], vec![-1e16], vec![1.0]], 1).unwrap();
+        let (_, start_centroids) =
+            initialize_centroids(&prepared.raw_points, &prepared.normalized_points, 1).unwrap();
+        let result = run_iteration(
+            &prepared.raw_points,
+            &prepared.normalized_points,
+            &start_centroids,
+            prepared.dimensions,
+            OccupancyBounds { min: 1, max: 3 },
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(result.raw_centroids[0][0], 1.0 / 3.0);
+    }
+
+    #[test]
+    fn objective_matches_a_protocol_recomputation() {
+        let prepared = prepare_pass(&[vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]], 2).unwrap();
+        let (_, start_centroids) =
+            initialize_centroids(&prepared.raw_points, &prepared.normalized_points, 2).unwrap();
+        let result = run_iteration(
+            &prepared.raw_points,
+            &prepared.normalized_points,
+            &start_centroids,
+            prepared.dimensions,
+            OccupancyBounds { min: 1, max: 2 },
+            2,
+        )
+        .unwrap();
+
+        let recomputed = recompute_objective(
+            prepared.raw_points.as_slice(),
+            prepared.normalized_points.as_slice(),
+            &result,
+        );
+        assert!((result.objective_value - recomputed).abs() < EPSILON);
+    }
+
+    #[test]
+    fn classifier_assigns_to_a_later_centroid_when_it_is_nearer() {
+        let classifier = DcbcStreamingClassifier {
+            config: config(),
+            normalized_centroids: vec![vec![1.0, 0.0], vec![-1.0, 0.0]],
         };
-        let mut trainer = DcbcStreamingTrainer::new(config).unwrap();
+
+        assert_eq!(classifier.assign(&[-1.0, 0.0]).unwrap(), 1);
+    }
+
+    #[test]
+    fn later_passes_must_match_the_baseline_dataset() {
+        let mut trainer = DcbcStreamingTrainer::new(config()).unwrap();
         trainer
             .ingest_batch(&[vec![1.0, 0.0], vec![-1.0, 0.0]])
             .unwrap();
@@ -812,5 +935,62 @@ mod tests {
             derive_occupancy_bounds(&implicit_max_config, 8).unwrap(),
             OccupancyBounds { min: 2, max: 4 }
         );
+    }
+
+    fn recompute_objective(
+        raw_points: &[Vec<f64>],
+        normalized_points: &[Vec<f64>],
+        result: &IterationResult,
+    ) -> f64 {
+        let memberships = memberships(result.assignment.as_slice(), result.raw_centroids.len());
+        let normalized_centroids: Vec<Vec<f64>> = result
+            .raw_centroids
+            .iter()
+            .enumerate()
+            .map(|(cluster_index, centroid)| {
+                let norm = norm(centroid);
+                if norm < EPSILON {
+                    normalized_points[memberships[cluster_index][0]].clone()
+                } else {
+                    centroid.iter().map(|value| value / norm).collect()
+                }
+            })
+            .collect();
+
+        result
+            .assignment
+            .iter()
+            .enumerate()
+            .map(|(point_index, &cluster_index)| {
+                1.0 - dot(
+                    &normalize(raw_points[point_index].as_slice()),
+                    &normalized_centroids[cluster_index],
+                )
+            })
+            .sum()
+    }
+
+    fn memberships(assignment: &[usize], cluster_count: usize) -> Vec<Vec<usize>> {
+        let mut memberships = vec![Vec::new(); cluster_count];
+        for (point_index, &cluster_index) in assignment.iter().enumerate() {
+            memberships[cluster_index].push(point_index);
+        }
+        memberships
+    }
+
+    fn normalize(vector: &[f64]) -> Vec<f64> {
+        let vector_norm = norm(vector);
+        vector.iter().map(|value| value / vector_norm).collect()
+    }
+
+    fn norm(vector: &[f64]) -> f64 {
+        vector.iter().map(|value| value * value).sum::<f64>().sqrt()
+    }
+
+    fn dot(left: &[f64], right: &[f64]) -> f64 {
+        left.iter()
+            .zip(right.iter())
+            .map(|(lhs, rhs)| lhs * rhs)
+            .sum()
     }
 }
