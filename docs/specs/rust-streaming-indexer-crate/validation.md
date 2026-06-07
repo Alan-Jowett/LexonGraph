@@ -313,3 +313,16 @@ contract remains unchanged.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-014,
 REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
+
+### VAL-STREAM-INDEXER-029
+
+Inspect the repository verification artifacts for algorithm-agnostic built-in
+clustering behavior.
+
+**Pass condition:** algorithm-agnostic built-in-path behavioral cases whose
+fixtures are compatible with both built-in algorithms' caller-supplied settings
+are realized as a matrix over both built-in clustering realizations rather than
+favoring one built-in algorithm, while unsupported or algorithm-specific
+behavior remains covered by separate targeted tests.
+
+**Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033

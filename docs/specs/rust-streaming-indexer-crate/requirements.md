@@ -299,6 +299,16 @@ When a built-in clustering realization is selected through the indexer API, the
 crate shall require the caller to provide that algorithm's settings rather than
 supplying implicit built-in clustering settings.
 
+### REQ-STREAM-INDEXER-033
+
+The repository verification artifacts for algorithm-agnostic built-in-path
+behavior over fixtures compatible with both built-in clustering realizations'
+caller-supplied settings shall realize the corresponding validation coverage as
+a matrix over both built-in clustering realizations.
+
+Algorithm-specific behavior may be validated through separate targeted cases
+rather than forced into that symmetric matrix.
+
 ## Out of Scope
 
 This crate does not define or own:

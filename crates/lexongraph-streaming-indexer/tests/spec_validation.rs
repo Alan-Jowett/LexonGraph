@@ -5,6 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use lexongraph_block::{
@@ -743,6 +744,47 @@ fn directional_pca_builtin_clustering() -> BuiltInClustering {
     })
 }
 
+#[derive(Clone)]
+struct BuiltInAlgorithmCase {
+    name: &'static str,
+    clustering: BuiltInClustering,
+}
+
+fn built_in_algorithm_cases() -> [BuiltInAlgorithmCase; 2] {
+    [
+        BuiltInAlgorithmCase {
+            name: "dcbc",
+            clustering: dcbc_builtin_clustering(),
+        },
+        BuiltInAlgorithmCase {
+            name: "directional-pca",
+            clustering: directional_pca_builtin_clustering(),
+        },
+    ]
+}
+
+fn run_with_builtin<RS, EP>(
+    resolver: RS,
+    embedding_provider: EP,
+    clustering: BuiltInClustering,
+    embedding_spec: EmbeddingSpec,
+    block_size_target: usize,
+) -> StreamingIndexingRun<
+    &'static str,
+    RS,
+    EP,
+    ArithmeticMeanCanonicalEmbeddingPolicy,
+    BuiltInClusteringFactory,
+> {
+    StreamingIndexingRun::with_builtin_clustering(
+        resolver,
+        embedding_provider,
+        clustering,
+        embedding_spec,
+        block_size_target,
+    )
+}
+
 fn run_with_builtin_dcbc<RS, EP>(
     resolver: RS,
     embedding_provider: EP,
@@ -781,6 +823,26 @@ fn run_with_builtin_dcbc_and_canonical<RS, EP, CEP>(
     )
 }
 
+async fn one_shot_index_with_clustering(
+    clustering: BuiltInClustering,
+    items: &[IndexItem<&'static str>],
+    block_size_target: usize,
+) -> Result<(StreamingIndexingResult, MemoryBlockStore), StreamingIndexerError> {
+    let store = MemoryBlockStore::default();
+    let mut run = run_with_builtin(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        clustering,
+        embedding_spec(),
+        block_size_target,
+    );
+    run.ingest_batch(items).await?;
+    run.finish_pass()?;
+    run.mark_training_complete()?;
+    let result = run.finalize(std::iter::once(items), &store).await?;
+    Ok((result, store))
+}
+
 /// Run one training pass + mark_complete + finalize for a set of items.
 async fn one_shot_index(
     items: &[IndexItem<&'static str>],
@@ -798,6 +860,16 @@ async fn one_shot_index(
     run.mark_training_complete()?;
     let result = run.finalize(std::iter::once(items), &store).await?;
     Ok((result, store))
+}
+
+async fn for_each_builtin_algorithm_case<F, Fut>(mut f: F)
+where
+    F: FnMut(BuiltInAlgorithmCase) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    for case in built_in_algorithm_cases() {
+        f(case).await;
+    }
 }
 
 // ─── VAL-STREAM-INDEXER-001 ───────────────────────────────────────────────────
@@ -893,33 +965,56 @@ fn val_stream_indexer_002_public_surface_inspection() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_003_empty_pass_fails_explicitly() {
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    // finish_pass without any ingest_batch
-    let err = run.finish_pass().unwrap_err();
-    assert!(matches!(err, StreamingIndexerError::EmptyPass(_)), "{err}");
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.finish_pass().unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::EmptyPass(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_003_empty_item_list_in_finalize_fails_explicitly() {
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&[item("alpha")]).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
-    // Finalize with empty slice mismatches baseline (1 item vs 0).
-    let err = run
-        .finalize(
-            std::iter::empty::<&[IndexItem<&'static str>]>(),
-            &MemoryBlockStore::default(),
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            StreamingIndexerError::ReplayMismatch(_) | StreamingIndexerError::EmptyInput
-        ),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&[item("alpha"), item("bravo")])
+            .await
+            .unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
+        let err = run
+            .finalize(
+                std::iter::empty::<&[IndexItem<&'static str>]>(),
+                &MemoryBlockStore::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StreamingIndexerError::ReplayMismatch(_) | StreamingIndexerError::EmptyInput
+            ),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-004 ───────────────────────────────────────────────────
@@ -939,32 +1034,31 @@ fn val_stream_indexer_004_index_item_shape() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_005_distinct_resolver_types_share_the_same_contract() {
-    let (result_map, _) = one_shot_index(&[item("alpha"), item("bravo")], 256)
-        .await
-        .unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let (result_map, _) = one_shot_index_with_clustering(case.clustering.clone(), &items, 256)
+            .await
+            .unwrap();
 
-    // A distinct resolver implementation with the same observable behavior.
-    let store2 = MemoryBlockStore::default();
-    let mut run2 = run_with_builtin_dcbc(
-        MirrorResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
-    run2.ingest_batch(&[item("alpha"), item("bravo")])
-        .await
-        .unwrap();
-    run2.finish_pass().unwrap();
-    run2.mark_training_complete().unwrap();
-    let result2 = run2
-        .finalize(
-            std::iter::once([item("alpha"), item("bravo")].as_slice()),
-            &store2,
-        )
-        .await
-        .unwrap();
+        let store2 = MemoryBlockStore::default();
+        let mut run2 = run_with_builtin(
+            MirrorResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run2.ingest_batch(&items).await.unwrap();
+        run2.finish_pass().unwrap();
+        run2.mark_training_complete().unwrap();
+        let result2 = run2
+            .finalize(std::iter::once(items.as_slice()), &store2)
+            .await
+            .unwrap();
 
-    assert_eq!(result_map.root_id, result2.root_id);
+        assert_eq!(result_map.root_id, result2.root_id, "{}", case.name);
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-006 ───────────────────────────────────────────────────
@@ -972,14 +1066,22 @@ async fn val_stream_indexer_005_distinct_resolver_types_share_the_same_contract(
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_006_uses_shared_embeddings_trait_contract() {
-    // If the provider fails, the error propagates as EmbeddingFailure.
-    let mut run =
-        run_with_builtin_dcbc(MapResolver, FailingEmbeddingProvider, embedding_spec(), 256);
-    let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            FailingEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-007 ───────────────────────────────────────────────────
@@ -1058,32 +1160,49 @@ async fn val_stream_indexer_008_override_path_accepts_custom_policies() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_009_pass_report_deterministic_with_multiple_batches() {
-    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering.clone(),
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&items[..2]).await.unwrap();
+        run.ingest_batch(&items[2..]).await.unwrap();
+        let report = run.finish_pass().unwrap();
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    // Ingest as two separate batches
-    run.ingest_batch(&items[..2]).await.unwrap();
-    run.ingest_batch(&items[2..]).await.unwrap();
-    let report = run.finish_pass().unwrap();
+        assert_eq!(report.observed_item_count, 4, "{}", case.name);
+        assert_eq!(report.completed_pass_count, 1, "{}", case.name);
 
-    assert_eq!(report.observed_item_count, 4);
-    assert_eq!(report.completed_pass_count, 1);
+        let mut run2 = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run2.ingest_batch(&items).await.unwrap();
+        let report2 = run2.finish_pass().unwrap();
 
-    // Second run with one batch yields the same report
-    let mut run2 =
-        run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run2.ingest_batch(&items).await.unwrap();
-    let report2 = run2.finish_pass().unwrap();
-
-    assert_eq!(report.observed_item_count, report2.observed_item_count);
-    assert_eq!(
-        report.clustering_quality_metric,
-        report2.clustering_quality_metric
-    );
-    assert_eq!(
-        report.clustering_quality_direction,
-        report2.clustering_quality_direction
-    );
+        assert_eq!(
+            report.observed_item_count, report2.observed_item_count,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            report.clustering_quality_metric, report2.clustering_quality_metric,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            report.clustering_quality_direction, report2.clustering_quality_direction,
+            "{}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-010 ───────────────────────────────────────────────────
@@ -1091,39 +1210,60 @@ async fn val_stream_indexer_009_pass_report_deterministic_with_multiple_batches(
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_010_two_identical_passes_accepted() {
-    let items = [item("alpha"), item("bravo")];
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&items).await.unwrap();
+        let r1 = run.finish_pass().unwrap();
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&items).await.unwrap();
-    let r1 = run.finish_pass().unwrap();
+        run.ingest_batch(&items).await.unwrap();
+        let r2 = run.finish_pass().unwrap();
 
-    run.ingest_batch(&items).await.unwrap();
-    let r2 = run.finish_pass().unwrap();
-
-    assert_eq!(r1.observed_item_count, r2.observed_item_count);
-    assert_eq!(r2.completed_pass_count, 2);
+        assert_eq!(
+            r1.observed_item_count, r2.observed_item_count,
+            "{}",
+            case.name
+        );
+        assert_eq!(r2.completed_pass_count, 2, "{}", case.name);
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_011_later_pass_with_different_content_reference_fails() {
-    let first = IndexItem {
-        metadata: vec![],
-        content_ref: "alpha-alias-1",
-    };
-    let second = IndexItem {
-        metadata: vec![],
-        content_ref: "alpha-alias-2",
-    };
-    let mut run =
-        run_with_builtin_dcbc(AliasResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
+    for_each_builtin_algorithm_case(|case| async move {
+        let first = IndexItem {
+            metadata: vec![],
+            content_ref: "alpha-alias-1",
+        };
+        let second = IndexItem {
+            metadata: vec![],
+            content_ref: "alpha-alias-2",
+        };
+        let mut run = run_with_builtin(
+            AliasResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
 
-    run.ingest_batch(&[first]).await.unwrap();
-    run.finish_pass().unwrap();
-    let err = run.ingest_batch(&[second]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::ReplayMismatch(_)),
-        "{err}"
-    );
+        run.ingest_batch(&[first, item("bravo")]).await.unwrap();
+        run.finish_pass().unwrap();
+        let err = run.ingest_batch(&[second]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::ReplayMismatch(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1145,15 +1285,28 @@ async fn metadata_order_differences_do_not_break_replay_equivalence() {
         content_ref: "alpha",
     };
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(std::slice::from_ref(&first))
-        .await
-        .unwrap();
-    run.finish_pass().unwrap();
-    run.ingest_batch(std::slice::from_ref(&second))
-        .await
-        .unwrap();
-    run.finish_pass().unwrap();
+    for_each_builtin_algorithm_case(|case| {
+        let first = first.clone();
+        let second = second.clone();
+        async move {
+            let mut run = run_with_builtin(
+                MapResolver,
+                AsciiEmbeddingProvider,
+                case.clustering,
+                embedding_spec(),
+                256,
+            );
+            run.ingest_batch(&[first.clone(), item("bravo")])
+                .await
+                .unwrap();
+            run.finish_pass().unwrap();
+            run.ingest_batch(&[second.clone(), item("bravo")])
+                .await
+                .unwrap();
+            run.finish_pass().unwrap();
+        }
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-011 ───────────────────────────────────────────────────
@@ -1161,36 +1314,58 @@ async fn metadata_order_differences_do_not_break_replay_equivalence() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_011_later_pass_with_different_items_fails() {
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&[item("alpha"), item("bravo")])
-        .await
-        .unwrap();
-    run.finish_pass().unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&[item("alpha"), item("bravo")])
+            .await
+            .unwrap();
+        run.finish_pass().unwrap();
 
-    // Different item in pass 2
-    let err = run
-        .ingest_batch(&[item("alpha"), item("DIFFERENT")])
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::ReplayMismatch(_)),
-        "{err}"
-    );
+        let err = run
+            .ingest_batch(&[item("alpha"), item("DIFFERENT")])
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::ReplayMismatch(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_011_later_pass_with_more_items_fails() {
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&[item("alpha")]).await.unwrap();
-    run.finish_pass().unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&[item("alpha"), item("bravo")])
+            .await
+            .unwrap();
+        run.finish_pass().unwrap();
 
-    // Pass 2 has too many items
-    run.ingest_batch(&[item("alpha")]).await.unwrap();
-    let err = run.ingest_batch(&[item("extra")]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::ReplayMismatch(_)),
-        "{err}"
-    );
+        run.ingest_batch(&[item("alpha"), item("bravo")])
+            .await
+            .unwrap();
+        let err = run.ingest_batch(&[item("extra")]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::ReplayMismatch(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-012 ───────────────────────────────────────────────────
@@ -1198,33 +1373,47 @@ async fn val_stream_indexer_011_later_pass_with_more_items_fails() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_012_finalize_before_training_complete_fails() {
-    let items = [item("alpha")];
-    let store = MemoryBlockStore::default();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let store = MemoryBlockStore::default();
 
-    // No pass at all
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    let err = run
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
-        "{err}"
-    );
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering.clone(),
+            embedding_spec(),
+            256,
+        );
+        let err = run
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
+            "{}: {err}",
+            case.name
+        );
 
-    // Pass done but mark_training_complete not called
-    let mut run2 =
-        run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run2.ingest_batch(&items).await.unwrap();
-    run2.finish_pass().unwrap();
-    let err2 = run2
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err2, StreamingIndexerError::InvalidLifecycleTransition(_)),
-        "{err2}"
-    );
+        let mut run2 = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run2.ingest_batch(&items).await.unwrap();
+        run2.finish_pass().unwrap();
+        let err2 = run2
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err2, StreamingIndexerError::InvalidLifecycleTransition(_)),
+            "{}: {err2}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-013 ───────────────────────────────────────────────────
@@ -1232,20 +1421,33 @@ async fn val_stream_indexer_012_finalize_before_training_complete_fails() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_013_successful_finalize_after_training_complete() {
-    let items = [item("alpha"), item("bravo")];
-    let store = MemoryBlockStore::default();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let store = MemoryBlockStore::default();
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
-    let result = run
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap();
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
+        let result = run
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap();
 
-    assert!(!result.block_ids.is_empty());
-    assert!(store.get(&result.root_id).unwrap().is_some());
+        assert!(!result.block_ids.is_empty(), "{}", case.name);
+        assert!(
+            store.get(&result.root_id).unwrap().is_some(),
+            "{}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-014 ───────────────────────────────────────────────────
@@ -1253,47 +1455,65 @@ async fn val_stream_indexer_013_successful_finalize_after_training_complete() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_014_finalize_with_different_items_fails() {
-    let items = [item("alpha"), item("bravo")];
-    let store = MemoryBlockStore::default();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let store = MemoryBlockStore::default();
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
 
-    // Wrong item count
-    let err = run
-        .finalize(std::iter::once([item("alpha")].as_slice()), &store)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::ReplayMismatch(_)),
-        "{err}"
-    );
+        let err = run
+            .finalize(std::iter::once([item("alpha")].as_slice()), &store)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::ReplayMismatch(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_014_finalize_with_wrong_order_fails() {
-    let items = [item("alpha"), item("bravo")];
-    let store = MemoryBlockStore::default();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let store = MemoryBlockStore::default();
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
 
-    // Reversed order
-    let err = run
-        .finalize(
-            std::iter::once([item("bravo"), item("alpha")].as_slice()),
-            &store,
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::ReplayMismatch(_)),
-        "{err}"
-    );
+        let err = run
+            .finalize(
+                std::iter::once([item("bravo"), item("alpha")].as_slice()),
+                &store,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::ReplayMismatch(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-015 ───────────────────────────────────────────────────
@@ -1301,16 +1521,26 @@ async fn val_stream_indexer_014_finalize_with_wrong_order_fails() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_015_resolved_content_stored_inline_in_leaf() {
-    let (result, store) = one_shot_index(&[item("alpha")], 256).await.unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let (result, store) = one_shot_index_with_clustering(case.clustering, &items, 256)
+            .await
+            .unwrap();
 
-    let root = store.get(&result.root_id).unwrap().unwrap();
-    match into_entries(root) {
-        TypedEntries::Leaf(_, entries) => {
-            assert_eq!(entries[0].content.media_type, "text/plain");
-            assert_eq!(entries[0].content.body, b"alpha".to_vec());
+        let mut found_alpha_leaf = false;
+        for id in &result.block_ids {
+            let block = store.get(id).unwrap().unwrap();
+            if let TypedEntries::Leaf(_, entries) = into_entries(block)
+                && entries[0].content.body == b"alpha".to_vec()
+            {
+                assert_eq!(entries[0].content.media_type, "text/plain", "{}", case.name);
+                found_alpha_leaf = true;
+                break;
+            }
         }
-        TypedEntries::Branch(_, _) => panic!("expected leaf root for single item"),
-    }
+        assert!(found_alpha_leaf, "{}: missing alpha leaf block", case.name);
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-016 ───────────────────────────────────────────────────
@@ -1336,17 +1566,27 @@ async fn val_stream_indexer_016_single_item_produces_leaf_root() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_017_multiple_items_produce_single_root() {
-    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
-    let (result, store) = one_shot_index(&items, 256).await.unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+        let (result, store) = one_shot_index_with_clustering(case.clustering, &items, 256)
+            .await
+            .unwrap();
 
-    // Root must exist in the store
-    assert!(store.get(&result.root_id).unwrap().is_some());
-    // All block IDs must be resolvable
-    for id in &result.block_ids {
-        assert!(store.get(id).unwrap().is_some(), "missing block {id}");
-    }
-    // At least one block per leaf + at least one parent
-    assert!(result.block_ids.len() >= items.len());
+        assert!(
+            store.get(&result.root_id).unwrap().is_some(),
+            "{}",
+            case.name
+        );
+        for id in &result.block_ids {
+            assert!(
+                store.get(id).unwrap().is_some(),
+                "{}: missing block {id}",
+                case.name
+            );
+        }
+        assert!(result.block_ids.len() >= items.len(), "{}", case.name);
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-018 ───────────────────────────────────────────────────
@@ -1354,29 +1594,33 @@ async fn val_stream_indexer_017_multiple_items_produce_single_root() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_018_branch_entries_sorted_and_deduplicated() {
-    // Include a duplicate to force deduplication
-    let items = [item("alpha"), item("alpha"), item("bravo"), item("charlie")];
-    let (result, store) = one_shot_index(&items, 256).await.unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("alpha"), item("bravo"), item("charlie")];
+        let (result, store) = one_shot_index_with_clustering(case.clustering, &items, 256)
+            .await
+            .unwrap();
 
-    // Walk all blocks and verify branch-entry invariants
-    for id in &result.block_ids {
-        let validated = store.get(id).unwrap().unwrap();
-        if let TypedEntries::Branch(_, entries) = into_entries(validated) {
-            for window in entries.windows(2) {
-                // Sorted by embedding bytes
-                assert!(
-                    window[0].embedding <= window[1].embedding,
-                    "entries not sorted by embedding"
+        for id in &result.block_ids {
+            let validated = store.get(id).unwrap().unwrap();
+            if let TypedEntries::Branch(_, entries) = into_entries(validated) {
+                for window in entries.windows(2) {
+                    assert!(
+                        window[0].embedding <= window[1].embedding,
+                        "{}: entries not sorted by embedding",
+                        case.name
+                    );
+                }
+                let unique_children: HashSet<_> = entries.iter().map(|entry| entry.child).collect();
+                assert_eq!(
+                    unique_children.len(),
+                    entries.len(),
+                    "{}: duplicate child IDs in branch",
+                    case.name
                 );
             }
-            let unique_children: HashSet<_> = entries.iter().map(|entry| entry.child).collect();
-            assert_eq!(
-                unique_children.len(),
-                entries.len(),
-                "duplicate child IDs in branch"
-            );
         }
-    }
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-019 ───────────────────────────────────────────────────
@@ -1384,34 +1628,41 @@ async fn val_stream_indexer_018_branch_entries_sorted_and_deduplicated() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_019_intermediate_nodes_respect_size_target() {
-    let items = [item("alpha"), item("bravo"), item("charlie")];
-    let (result, store) = one_shot_index(&items, 256).await.unwrap();
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo"), item("charlie")];
+        let (result, store) = one_shot_index_with_clustering(case.clustering.clone(), &items, 256)
+            .await
+            .unwrap();
 
-    for id in &result.block_ids {
-        let validated = store.get(id).unwrap().unwrap();
-        let bytes = serialize_block(&validated.block).unwrap().bytes;
-        if matches!(validated.block, lexongraph_block::Block::Branch(_)) {
-            assert!(
-                bytes.len() <= 256,
-                "branch block {} serializes to {} bytes, exceeds 256",
-                id,
-                bytes.len()
-            );
+        for id in &result.block_ids {
+            let validated = store.get(id).unwrap().unwrap();
+            let bytes = serialize_block(&validated.block).unwrap().bytes;
+            if matches!(validated.block, lexongraph_block::Block::Branch(_)) {
+                assert!(
+                    bytes.len() <= 256,
+                    "{}: branch block {} serializes to {} bytes, exceeds 256",
+                    case.name,
+                    id,
+                    bytes.len()
+                );
+            }
         }
-    }
 
-    // Tiny block size target → fail explicitly
-    let err = one_shot_index(&[item("alpha"), item("bravo")], 24)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            StreamingIndexerError::IntermediateNodeTooLarge { .. }
-                | StreamingIndexerError::ClusteringFailure(_)
-        ),
-        "expected size-target failure, got: {err}"
-    );
+        let err =
+            one_shot_index_with_clustering(case.clustering, &[item("alpha"), item("bravo")], 24)
+                .await
+                .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StreamingIndexerError::IntermediateNodeTooLarge { .. }
+                    | StreamingIndexerError::ClusteringFailure(_)
+            ),
+            "{}: expected size-target failure, got: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-020 ───────────────────────────────────────────────────
@@ -1437,13 +1688,27 @@ fn val_stream_indexer_020_higher_layers_use_streaming_clustering() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_021_deterministic_across_two_runs() {
-    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+        let (r1, _) = one_shot_index_with_clustering(case.clustering.clone(), &items, 256)
+            .await
+            .unwrap();
+        let (r2, _) = one_shot_index_with_clustering(case.clustering, &items, 256)
+            .await
+            .unwrap();
 
-    let (r1, _) = one_shot_index(&items, 256).await.unwrap();
-    let (r2, _) = one_shot_index(&items, 256).await.unwrap();
-
-    assert_eq!(r1.root_id, r2.root_id, "root IDs must be equal");
-    assert_eq!(r1.block_ids, r2.block_ids, "block ID sets must be equal");
+        assert_eq!(
+            r1.root_id, r2.root_id,
+            "{}: root IDs must be equal",
+            case.name
+        );
+        assert_eq!(
+            r1.block_ids, r2.block_ids,
+            "{}: block ID sets must be equal",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-022 ───────────────────────────────────────────────────
@@ -1451,79 +1716,113 @@ async fn val_stream_indexer_021_deterministic_across_two_runs() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_content_resolution_failure_is_explicit() {
-    let mut run = run_with_builtin_dcbc(
-        FailingResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
-    let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::ContentResolution(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            FailingResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::ContentResolution(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_unusable_content_failure_is_explicit() {
-    let mut run = run_with_builtin_dcbc(
-        UnusableResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
-    let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::UnusableContent(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            UnusableResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::UnusableContent(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_invalid_metadata_failure_is_explicit() {
     use ciborium::Value;
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    let err = run
-        .ingest_batch(&[IndexItem {
-            metadata: vec![
-                (Value::Text("dup".into()), Value::Integer(1.into())),
-                (Value::Text("dup".into()), Value::Integer(2.into())),
-            ],
-            content_ref: "alpha",
-        }])
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::InvalidMetadata(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run
+            .ingest_batch(&[IndexItem {
+                metadata: vec![
+                    (Value::Text("dup".into()), Value::Integer(1.into())),
+                    (Value::Text("dup".into()), Value::Integer(2.into())),
+                ],
+                content_ref: "alpha",
+            }])
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::InvalidMetadata(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_embedding_failure_is_explicit() {
-    let mut run =
-        run_with_builtin_dcbc(MapResolver, FailingEmbeddingProvider, embedding_spec(), 256);
-    let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            FailingEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_wrong_length_embedding_failure_is_explicit() {
-    let mut run = run_with_builtin_dcbc(
-        MapResolver,
-        WrongLengthEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
-    let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            WrongLengthEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1586,21 +1885,32 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
     let observer: StreamingIndexingStatusObserver =
         Arc::new(move |s| log_clone.lock().unwrap().push(s));
 
-    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
-    let store = MemoryBlockStore::default();
+    for_each_builtin_algorithm_case(|case| {
+        let observer = Arc::clone(&observer);
+        async move {
+            let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+            let store = MemoryBlockStore::default();
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256)
-        .with_observer(observer);
+            let mut run = run_with_builtin(
+                MapResolver,
+                AsciiEmbeddingProvider,
+                case.clustering,
+                embedding_spec(),
+                256,
+            )
+            .with_observer(observer);
 
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
-    run.finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap();
+            run.ingest_batch(&items).await.unwrap();
+            run.finish_pass().unwrap();
+            run.mark_training_complete().unwrap();
+            run.finalize(std::iter::once(items.as_slice()), &store)
+                .await
+                .unwrap();
+        }
+    })
+    .await;
 
     let captured = log.lock().unwrap();
-    // Must have received at least a TrainingPass completion and leaf events
     let has_pass_complete = captured.iter().any(|s| {
         matches!(s.phase, StreamingIndexingPhase::TrainingPass { .. })
             && s.state == StreamingIndexingStatusState::Completed
@@ -1642,77 +1952,111 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn leaf_store_integrity_mismatch_is_explicit() {
-    let items = [item("alpha")];
-    let store = FaultyIdStore::corrupt_leaf_ids();
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let store = FaultyIdStore::corrupt_leaf_ids();
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
 
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
-    let error = run
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap_err();
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
+        let error = run
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap_err();
 
-    assert!(
-        matches!(
-            error,
-            StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
-        ),
-        "expected explicit leaf integrity mismatch, got: {error}"
-    );
+        assert!(
+            matches!(
+                error,
+                StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+            ),
+            "{}: expected explicit leaf integrity mismatch, got: {error}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn branch_store_integrity_mismatch_is_explicit() {
-    let items = [item("alpha"), item("bravo"), item("charlie")];
-    let store = FaultyIdStore::corrupt_branch_ids();
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo"), item("charlie")];
+        let store = FaultyIdStore::corrupt_branch_ids();
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
 
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
-    let error = run
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap_err();
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
+        let error = run
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap_err();
 
-    assert!(
-        matches!(
-            error,
-            StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
-        ),
-        "expected explicit branch integrity mismatch, got: {error}"
-    );
+        assert!(
+            matches!(
+                error,
+                StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+            ),
+            "{}: expected explicit branch integrity mismatch, got: {error}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn finalize_failure_does_not_consume_training_complete_state() {
-    let items = [item("alpha"), item("bravo")];
-    let store = FailOnceStore::new();
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
+        let store = FailOnceStore::new();
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
 
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
 
-    let error = run
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(
-            error,
-            StreamingIndexerError::Storage(BlockStoreError::BackendFailure(_))
-        ),
-        "expected transient storage failure, got: {error}"
-    );
+        let error = run
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StreamingIndexerError::Storage(BlockStoreError::BackendFailure(_))
+            ),
+            "{}: expected transient storage failure, got: {error}",
+            case.name
+        );
 
-    let result = run
-        .finalize(std::iter::once(items.as_slice()), &store)
-        .await
-        .unwrap();
-    assert!(!result.block_ids.is_empty(), "retry should succeed");
+        let result = run
+            .finalize(std::iter::once(items.as_slice()), &store)
+            .await
+            .unwrap();
+        assert!(
+            !result.block_ids.is_empty(),
+            "{}: retry should succeed",
+            case.name
+        );
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-024 ───────────────────────────────────────────────────
@@ -1932,26 +2276,31 @@ async fn short_assignment_batch_emits_failed_status() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_025_repeated_passes_require_caller_replay() {
-    // The fact that ingest_batch takes &[IndexItem] (caller-supplied) and
-    // the run does not expose any "repeat last pass" method is the verification.
-    // We exercise the replay requirement by explicitly providing items for both passes.
-    let items = [item("alpha"), item("bravo")];
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo")];
 
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    // Caller must supply items again
-    run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
-    run.mark_training_complete().unwrap();
-    let result = run
-        .finalize(
-            std::iter::once(items.as_slice()),
-            &MemoryBlockStore::default(),
-        )
-        .await
-        .unwrap();
-    assert!(!result.block_ids.is_empty());
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.ingest_batch(&items).await.unwrap();
+        run.finish_pass().unwrap();
+        run.mark_training_complete().unwrap();
+        let result = run
+            .finalize(
+                std::iter::once(items.as_slice()),
+                &MemoryBlockStore::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!result.block_ids.is_empty(), "{}", case.name);
+    })
+    .await;
 }
 
 // ─── VAL-STREAM-INDEXER-026 ───────────────────────────────────────────────────
@@ -1992,29 +2341,47 @@ fn val_stream_indexer_027_verification_artifacts_exist() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mark_training_complete_without_any_pass_fails() {
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    let err = run.mark_training_complete().unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        let err = run.mark_training_complete().unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn mark_training_complete_with_open_pass_fails() {
-    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-    run.ingest_batch(&[item("alpha")]).await.unwrap();
-    // Pass not finished yet
-    let err = run.mark_training_complete().unwrap_err();
-    assert!(
-        matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
-        "{err}"
-    );
+    for_each_builtin_algorithm_case(|case| async move {
+        let mut run = run_with_builtin(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            case.clustering,
+            embedding_spec(),
+            256,
+        );
+        run.ingest_batch(&[item("alpha")]).await.unwrap();
+        let err = run.mark_training_complete().unwrap_err();
+        assert!(
+            matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
+            "{}: {err}",
+            case.name
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn duplicate_items_collapse_to_single_leaf_root() {
-    // All duplicates → single unique leaf → that leaf is the root.
     let items = [item("same"), item("same"), item("same")];
     let (result, store) = one_shot_index(&items, 256).await.unwrap();
 
@@ -2097,49 +2464,66 @@ async fn val_stream_indexer_028_builtin_selection_supports_dcbc_and_directional_
     assert!(!dpca_result.block_ids.is_empty());
 }
 
+// ─── VAL-STREAM-INDEXER-029 ───────────────────────────────────────────────────
+// Algorithm-agnostic built-in-path behavior is realized as a two-algorithm matrix.
+
+#[test]
+fn val_stream_indexer_029_algorithm_agnostic_built_in_behavior_is_matrizized() {
+    let src = include_str!("../tests/spec_validation.rs");
+    let matrix_loop_count = src.matches("for_each_builtin_algorithm_case(").count();
+    assert!(
+        src.contains("built_in_algorithm_cases()"),
+        "spec_validation.rs must define a built-in algorithm matrix helper"
+    );
+    assert!(
+        matrix_loop_count >= 10,
+        "spec_validation.rs should use the built-in algorithm matrix across many algorithm-agnostic cases; found {matrix_loop_count}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn two_pass_training_accepted_and_deterministic() {
-    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    for_each_builtin_algorithm_case(|case| async move {
+        let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
 
-    let _run_once = |items: &'static [IndexItem<&'static str>]| async move {
-        let store = MemoryBlockStore::default();
-        let mut run =
-            run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-        run.ingest_batch(items).await.unwrap();
-        run.finish_pass().unwrap();
-        run.ingest_batch(items).await.unwrap();
-        run.finish_pass().unwrap();
-        run.mark_training_complete().unwrap();
-        run.finalize(std::iter::once(items), &store).await.unwrap()
-    };
-
-    // Rust closures can't easily be called twice with async — run two separate identical setups.
-    let r1 = {
-        let store = MemoryBlockStore::default();
-        let mut run =
-            run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-        run.ingest_batch(&items).await.unwrap();
-        run.finish_pass().unwrap();
-        run.ingest_batch(&items).await.unwrap();
-        run.finish_pass().unwrap();
-        run.mark_training_complete().unwrap();
-        run.finalize(std::iter::once(items.as_slice()), &store)
-            .await
-            .unwrap()
-    };
-    let r2 = {
-        let store = MemoryBlockStore::default();
-        let mut run =
-            run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
-        run.ingest_batch(&items).await.unwrap();
-        run.finish_pass().unwrap();
-        run.ingest_batch(&items).await.unwrap();
-        run.finish_pass().unwrap();
-        run.mark_training_complete().unwrap();
-        run.finalize(std::iter::once(items.as_slice()), &store)
-            .await
-            .unwrap()
-    };
-    assert_eq!(r1.root_id, r2.root_id);
-    assert_eq!(r1.block_ids, r2.block_ids);
+        let r1 = {
+            let store = MemoryBlockStore::default();
+            let mut run = run_with_builtin(
+                MapResolver,
+                AsciiEmbeddingProvider,
+                case.clustering.clone(),
+                embedding_spec(),
+                256,
+            );
+            run.ingest_batch(&items).await.unwrap();
+            run.finish_pass().unwrap();
+            run.ingest_batch(&items).await.unwrap();
+            run.finish_pass().unwrap();
+            run.mark_training_complete().unwrap();
+            run.finalize(std::iter::once(items.as_slice()), &store)
+                .await
+                .unwrap()
+        };
+        let r2 = {
+            let store = MemoryBlockStore::default();
+            let mut run = run_with_builtin(
+                MapResolver,
+                AsciiEmbeddingProvider,
+                case.clustering,
+                embedding_spec(),
+                256,
+            );
+            run.ingest_batch(&items).await.unwrap();
+            run.finish_pass().unwrap();
+            run.ingest_batch(&items).await.unwrap();
+            run.finish_pass().unwrap();
+            run.mark_training_complete().unwrap();
+            run.finalize(std::iter::once(items.as_slice()), &store)
+                .await
+                .unwrap()
+        };
+        assert_eq!(r1.root_id, r2.root_id, "{}", case.name);
+        assert_eq!(r1.block_ids, r2.block_ids, "{}", case.name);
+    })
+    .await;
 }

@@ -259,6 +259,17 @@ for the protocol-conforming finished tree.
 The crate exposes reusable conformance-test helpers for its indexer-owned policy
 traits behind a non-default Cargo feature intended for downstream tests only.
 
+### DSG-STREAM-INDEXER-022 `Built-in algorithm verification matrix`
+
+Algorithm-agnostic behavior exercised through the built-in clustering-selection
+surface over fixtures compatible with both algorithms' caller-supplied settings
+is intended to hold regardless of whether the caller selects the built-in
+directional-PCA realization or the built-in DCBC realization.
+
+Repository verification artifacts therefore realize that algorithm-agnostic
+built-in-path behavior through a two-algorithm matrix, while algorithm-specific
+behavior remains covered by separate targeted cases.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -277,3 +288,4 @@ traits behind a non-default Cargo feature intended for downstream tests only.
 | DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026 |
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
+| DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
