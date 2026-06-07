@@ -177,6 +177,9 @@ Provider-specific crates may choose their own batching or chunking strategy, but
 the observable result seen by callers shall remain one compatible embedding per
 input in input order.
 
+When the ordered input collection is empty, the observable result is an empty
+ordered embedding collection.
+
 ## Traceability
 
 | Design ID | Satisfies |

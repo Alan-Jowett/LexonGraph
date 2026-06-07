@@ -91,6 +91,9 @@ inputs for the LexonGraph request path in this revision.
 The provider may choose its own internal request grouping or chunking strategy,
 but that choice is not exposed as part of the public API.
 
+When the caller supplies an empty logical batch, the provider returns an empty
+ordered embedding batch and does not issue a remote embeddings request.
+
 ### DSG-EMBED-OAI-006 `Response translation`
 
 For each provider-issued request in this revision, the provider requires the

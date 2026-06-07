@@ -404,6 +404,31 @@ async fn val_embed_oai_008_batch_results_preserve_logical_input_order() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn val_embed_oai_009_empty_batch_returns_empty_without_request() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/embeddings");
+        then.status(500);
+    });
+
+    let provider = OpenAiEmbeddingProvider::from_openai_compatible(OpenAiCompatibleConfig {
+        api_base: format!("{}/v1", server.base_url()),
+        api_key: "test-key".into(),
+        model: "test-model".into(),
+        org_id: None,
+        project_id: None,
+    });
+
+    let embeddings = provider
+        .embed_batch(&[], &embedding_spec(2, "f32le"))
+        .await
+        .unwrap();
+
+    assert!(embeddings.is_empty());
+    assert_eq!(mock.calls(), 0);
+}
+
 fn embedding_spec(dims: u64, encoding: &str) -> EmbeddingSpec {
     EmbeddingSpec {
         dims,

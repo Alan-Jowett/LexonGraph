@@ -101,3 +101,12 @@ with correct response indices.
 the returned translated embeddings.
 
 **Traces to:** REQ-EMBED-OAI-010
+
+### VAL-EMBED-OAI-009
+
+Invoke the provider with an empty ordered input batch.
+
+**Pass condition:** the provider returns an empty ordered embedding batch and
+does not issue a remote embeddings request.
+
+**Traces to:** REQ-EMBED-OAI-005

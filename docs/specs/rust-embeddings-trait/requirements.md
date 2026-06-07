@@ -136,6 +136,9 @@ The shared batch-embedding contract shall preserve one-to-one cardinality
 between the ordered input collection and the returned ordered embedding
 collection.
 
+An empty ordered input collection is valid and shall return an empty ordered
+embedding collection.
+
 ### REQ-EMBED-TRAIT-016
 
 The shared trait surface shall preserve a single-input compatibility path so

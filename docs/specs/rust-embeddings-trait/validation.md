@@ -33,10 +33,12 @@ asynchronous work before returning valid embedding bytes for one or more
 ordered inputs.
 
 **Pass condition:** the shared contract supports asynchronous provider
-realization and returns one ordered embedding per supplied input, with each
-embedding compatible with the requested `EmbeddingSpec`.
+realization, preserves the single-input compatibility path, and returns one
+ordered embedding per supplied input, with each embedding compatible with the
+requested `EmbeddingSpec`.
 
-**Traces to:** REQ-EMBED-TRAIT-002, REQ-EMBED-TRAIT-004
+**Traces to:** REQ-EMBED-TRAIT-002, REQ-EMBED-TRAIT-004,
+REQ-EMBED-TRAIT-016
 
 ### VAL-EMBED-TRAIT-003
 
@@ -162,3 +164,13 @@ wrong order for the supplied ordered input batch.
 expectation-category failure.
 
 **Traces to:** REQ-EMBED-TRAIT-012, REQ-EMBED-TRAIT-015, REQ-EMBED-TRAIT-014
+
+### VAL-EMBED-TRAIT-014
+
+Invoke the shared ordered batch-embedding contract with an empty ordered input
+collection.
+
+**Pass condition:** the operation succeeds with an empty ordered embedding
+collection.
+
+**Traces to:** REQ-EMBED-TRAIT-015
