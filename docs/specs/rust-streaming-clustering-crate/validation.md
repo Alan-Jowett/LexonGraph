@@ -165,11 +165,19 @@ negative soft-balance penalties are rejected explicitly through the shared
 
 ### VAL-STREAM-TRAIT-017
 
-Exercise the public conformance-helper error surface.
+Exercise the public conformance-helper error surface through
+`run_streaming_clustering_suite()`.
 
-**Pass condition:** converting a `StreamingClusteringError` into
-`ConformanceError` yields an implementation failure that preserves the
-underlying source error and shared display text, while expectation failures use
-suite-authored messages and expose no source error.
+**Pass condition:** tests drive the suite through:
+
+- at least one implementation-reported shared contract failure returned from
+  `run_streaming_clustering_suite()`
+- at least one suite-authored expectation failure returned from
+  `run_streaming_clustering_suite()`
+
+For the implementation-reported failure, the returned `ConformanceError` shall
+preserve the underlying source error and shared display text. For the
+expectation failure, the returned `ConformanceError` shall use a suite-authored
+message and expose no source error.
 
 **Traces to:** REQ-STREAM-TRAIT-021
