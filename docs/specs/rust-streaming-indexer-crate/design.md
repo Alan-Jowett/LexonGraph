@@ -44,8 +44,9 @@ The crate does not own:
 
 The crate depends on the indexing and block protocol documents plus the block
 crate, block-storage trait crate, embeddings-trait crate, streaming clustering
-trait crate, and streaming DCBC crate specification package for their owned
-concerns. The crate does not redefine those sources.
+trait crate, streaming DCBC crate specification package, and directional-PCA
+crate specification package for their owned concerns. The crate does not
+redefine those sources.
 
 ### DSG-STREAM-INDEXER-002 `Direct protocol-anchored line`
 
@@ -87,14 +88,19 @@ The crate consumes:
 - a streaming clustering realization or factory whose trainer/classifier surface
   is defined by the shared streaming clustering contract
 
-### DSG-STREAM-INDEXER-006 `Built-in defaults`
+### DSG-STREAM-INDEXER-006 `Built-in clustering selection`
 
 The crate exposes:
 
 - a built-in arithmetic-mean canonical-embedding policy
-- a built-in streaming clustering realization backed by
-  `lexongraph-dcbc-streaming`
-- a primary default constructor path that wires both defaults automatically
+- built-in streaming clustering realizations backed by
+  `lexongraph-directional-pca` and `lexongraph-dcbc-streaming`
+- a caller-visible built-in clustering-selection surface that requires explicit
+  selection of one realization without requiring a caller-implemented factory
+- caller-supplied algorithm settings supported by the selected built-in
+  clustering realization
+- no implicit built-in default clustering algorithm or implicit built-in
+  clustering settings
 
 The crate also exposes override paths for caller-supplied canonical-embedding
 and clustering policies.
@@ -253,6 +259,17 @@ for the protocol-conforming finished tree.
 The crate exposes reusable conformance-test helpers for its indexer-owned policy
 traits behind a non-default Cargo feature intended for downstream tests only.
 
+### DSG-STREAM-INDEXER-022 `Built-in algorithm verification matrix`
+
+Algorithm-agnostic behavior exercised through the built-in clustering-selection
+surface over fixtures compatible with both algorithms' caller-supplied settings
+is intended to hold regardless of whether the caller selects the built-in
+directional-PCA realization or the built-in DCBC realization.
+
+Repository verification artifacts therefore realize that algorithm-agnostic
+built-in-path behavior through a two-algorithm matrix, while algorithm-specific
+behavior remains covered by separate targeted cases.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -261,7 +278,7 @@ traits behind a non-default Cargo feature intended for downstream tests only.
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
 | DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015 |
-| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015 |
+| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032 |
 | DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017 |
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028 |
@@ -271,3 +288,4 @@ traits behind a non-default Cargo feature intended for downstream tests only.
 | DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026 |
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
+| DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
