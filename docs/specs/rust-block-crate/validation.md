@@ -178,7 +178,7 @@ repository and execute its automated verification suite.
 specified public API surface, and the automated tests cover the behavioral
 validation entries `VAL-001` through `VAL-017`.
 
-**Traces to:** REQ-BLOCK-CRATE-010
+**Traces to:** REQ-BLOCK-CRATE-001, REQ-BLOCK-CRATE-010
 
 ### VAL-019
 

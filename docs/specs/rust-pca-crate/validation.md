@@ -50,7 +50,7 @@ Fit the same data twice.
 
 **Pass condition:** the resulting serialized PCA transform bytes are identical.
 
-**Traces to:** REQ-PCA-008, REQ-PCA-024
+**Traces to:** REQ-PCA-008, REQ-PCA-024, REQ-PCA-031
 
 ### VAL-PCA-005
 
@@ -68,9 +68,12 @@ runs with the same merge tree yield identical serialized transform bytes.
 Apply and then reconstruct a full-rank transform over representative inputs.
 
 **Pass condition:** reconstruction matches the original inputs within the
-documented tolerance.
+documented tolerance, and the batch-application and in-place convenience paths
+preserve the same behavioral semantics as repeated single-vector application
+within the documented tolerance.
 
-**Traces to:** REQ-PCA-010, REQ-PCA-011, REQ-PCA-012
+**Traces to:** REQ-PCA-010, REQ-PCA-011, REQ-PCA-012, REQ-PCA-014,
+REQ-PCA-031
 
 ### VAL-PCA-007
 
@@ -85,11 +88,12 @@ Truncate a full-rank transform.
 
 Finalize PCA on fixtures with tied or repeated eigenvalues.
 
-**Pass condition:** eigenvalue ordering is deterministic, equal-magnitude pivot
-ties resolve with the documented lower-index rule, and the canonical sign rule
-forces the selected pivot entry non-negative.
+**Pass condition:** the documented PCA finalization path yields deterministic
+eigenvalue ordering, equal-magnitude pivot ties resolve with the documented
+lower-index rule, and the canonical sign rule forces the selected pivot entry
+non-negative.
 
-**Traces to:** REQ-PCA-017, REQ-PCA-018
+**Traces to:** REQ-PCA-016, REQ-PCA-017, REQ-PCA-018
 
 ### VAL-PCA-009
 
@@ -179,4 +183,5 @@ Inspect the repository workspace and PCA crate verification artifacts.
 **Pass condition:** the repository contains the PCA crate, the spec package, and
 executable automated tests realizing this validation surface.
 
-**Traces to:** REQ-PCA-026, REQ-PCA-027, REQ-PCA-028
+**Traces to:** REQ-PCA-001, REQ-PCA-002, REQ-PCA-026, REQ-PCA-027,
+REQ-PCA-028

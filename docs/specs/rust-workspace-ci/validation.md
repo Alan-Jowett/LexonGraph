@@ -142,3 +142,14 @@ license, and does not advertise badges for workflows that are not present in
 this repository.
 
 **Traces to:** REQ-CI-017
+
+### VAL-CI-015
+
+Inspect the governed-file selector used by the repository-managed SPDX
+verification surface.
+
+**Pass condition:** generated-but-tracked files outside the authored header
+policy surface, including `Cargo.lock`, remain excluded from required SPDX
+header enforcement while governed authored files remain in scope.
+
+**Traces to:** REQ-CI-011

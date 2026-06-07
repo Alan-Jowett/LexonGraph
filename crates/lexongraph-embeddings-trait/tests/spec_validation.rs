@@ -71,6 +71,21 @@ fn val_embed_trait_002_default_batch_embedding_fallback_preserves_input_order() 
     assert_eq!(embeddings, vec![vec![b'a', 5], vec![b'b', 5]]);
 }
 
+#[test]
+fn val_embed_trait_014_empty_batch_returns_empty_result() {
+    let provider = AsyncFixtureProvider;
+    let embeddings = pollster::block_on(provider.embed_batch(
+        &[],
+        &EmbeddingSpec {
+            dims: 2,
+            encoding: "i8".into(),
+        },
+    ))
+    .unwrap();
+
+    assert!(embeddings.is_empty());
+}
+
 #[derive(Clone, Debug)]
 struct FixtureError(String);
 

@@ -60,6 +60,9 @@ for the request paths used by LexonGraph consumers.
 The provider may choose its own internal request grouping or chunking strategy,
 which is not part of the public contract in this revision.
 
+An empty logical batch is valid and shall return an empty ordered embedding
+batch without issuing a remote embeddings request.
+
 ### REQ-EMBED-OAI-006
 
 The crate shall convert returned embeddings into bytes compatible with the

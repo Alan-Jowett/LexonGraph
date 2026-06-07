@@ -179,7 +179,7 @@ Both consumers use the same typed model and protocol-conformance logic.
 
 | Design ID | Satisfies |
 |---|---|
-| DSG-001..009 | REQ-BLOCK-CRATE-001, 003, 004, 005, 007, 011, 012, 013 |
+| DSG-001..009 | REQ-BLOCK-CRATE-001, 003, 004, 005, 007, 008, 011, 012, 013, 014 |
 | DSG-010..011 | REQ-BLOCK-CRATE-002, 005, 007 |
 | DSG-012 | REQ-BLOCK-CRATE-004, 009, 012 |
 | DSG-013 | REQ-BLOCK-CRATE-003, 011, 013 |
