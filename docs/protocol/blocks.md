@@ -278,6 +278,21 @@ Version 1 evolution rules:
 These rules preserve deterministic hashing while allowing controlled protocol
 growth.
 
+## Historical Compatibility Note
+
+Historical corpora produced before commit
+`127c0e58ced80b734a04abfc506708bfd171b219` encoded top-level wire key `1` as
+textual `kind` rather than numeric `level`.
+
+Those historical encodings are not part of the current runtime conformance
+surface for version 1. Steady-state decoders for this published revision remain
+strictly `level`-based, and migration of historical corpora is handled by
+one-off tooling outside the runtime block and storage crates.
+
+Because block identifiers are derived from the canonical serialized bytes of the
+entire block, migrating a historical `kind = "leaf"` block to the current
+`level = 0` encoding produces a new block identifier.
+
 ## Canonical Example
 
 The following illustrates the logical structure, not literal encoded bytes:

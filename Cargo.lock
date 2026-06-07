@@ -1348,6 +1348,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-block-legacy-migrate"
+version = "0.1.0"
+dependencies = [
+ "ciborium",
+ "clap",
+ "lexongraph-block",
+ "lexongraph-block-store",
+ "lexongraph-block-store-fs",
+ "tempfile",
+]
+
+[[package]]
 name = "lexongraph-block-store"
 version = "0.1.0"
 dependencies = [

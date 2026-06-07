@@ -4,6 +4,7 @@
 members = [
     "crates/lexongraph-block",
     "crates/lexongraph-block-inspect",
+    "crates/lexongraph-block-legacy-migrate",
     "crates/lexongraph-block-store",
     "crates/lexongraph-block-store-fs",
     "crates/lexongraph-dcbc-streaming",
