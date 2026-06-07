@@ -731,7 +731,6 @@ fn dcbc_builtin_clustering() -> BuiltInClustering {
 fn directional_pca_builtin_clustering() -> BuiltInClustering {
     BuiltInClustering::DirectionalPca(DirectionalPcaBuiltInClusteringSettings {
         cluster_count: 1,
-        balance_constraints: None,
         random_seed: None,
         params: DirectionalPcaParams {
             retained_dimension_count: 1,
@@ -1085,10 +1084,22 @@ async fn val_stream_indexer_006_uses_shared_embeddings_trait_contract() {
 }
 
 // ─── VAL-STREAM-INDEXER-007 ───────────────────────────────────────────────────
-// Built-in directional-PCA selection requires explicit caller-provided settings.
+// Built-in directional-PCA selection requires explicit caller-provided supported
+// settings.
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_007_directional_pca_builtin_selection_requires_explicit_settings() {
+    let src = include_str!("../src/lib.rs");
+    let dpca_settings = src
+        .split("pub struct DirectionalPcaBuiltInClusteringSettings {")
+        .nth(1)
+        .and_then(|tail| tail.split("\n}").next())
+        .expect("DirectionalPcaBuiltInClusteringSettings definition should exist");
+    assert!(
+        !dpca_settings.contains("balance_constraints"),
+        "DirectionalPcaBuiltInClusteringSettings must not expose unsupported balance constraints"
+    );
+
     let store = MemoryBlockStore::default();
     let mut run = StreamingIndexingRun::with_builtin_clustering(
         MapResolver,

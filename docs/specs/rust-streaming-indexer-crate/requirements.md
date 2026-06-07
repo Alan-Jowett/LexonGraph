@@ -319,8 +319,8 @@ This crate does not define or own:
 - the shared embedding-provider trait contract
 - the shared streaming clustering trait definitions
 - legacy batch-oriented implementation lines or their repository lifecycle
-- any concrete clustering algorithm beyond the built-in directional-PCA and
-  DCBC realizations defined by this crate
+- any concrete clustering algorithm beyond the two built-in clustering
+  selection options exposed by this crate
 
 ## Relationship to Other Specifications
 

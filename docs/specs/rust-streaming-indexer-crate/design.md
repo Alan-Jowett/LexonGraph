@@ -97,8 +97,8 @@ The crate exposes:
   `lexongraph-directional-pca` and `lexongraph-dcbc-streaming`
 - a caller-visible built-in clustering-selection surface that requires explicit
   selection of one realization without requiring a caller-implemented factory
-- caller-supplied algorithm settings for the selected built-in clustering
-  realization
+- caller-supplied algorithm settings supported by the selected built-in
+  clustering realization
 - no implicit built-in default clustering algorithm or implicit built-in
   clustering settings
 

@@ -85,12 +85,13 @@ shared contract without redefining embedding-provider behavior locally.
 
 Construct the streaming indexer through its built-in clustering-selection path,
 selecting directional PCA and supplying caller-provided directional-PCA
-settings.
+settings supported by that realization.
 
 **Pass condition:** the runtime can be created without a caller-implemented
 factory, uses the built-in arithmetic-mean canonical policy unless another
 canonical policy is explicitly supplied, requires explicit built-in algorithm
-selection, and consumes the caller-provided directional-PCA settings.
+selection, and consumes the caller-provided directional-PCA settings supported
+by that realization.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013,
 REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032

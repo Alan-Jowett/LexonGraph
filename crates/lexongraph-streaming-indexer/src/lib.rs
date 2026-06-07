@@ -310,10 +310,11 @@ pub struct DcbcBuiltInClusteringSettings {
 }
 
 /// Caller-supplied settings for the built-in directional-PCA clustering path.
+/// Balance constraints are intentionally omitted because the underlying
+/// directional-PCA trainer rejects them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaBuiltInClusteringSettings {
     pub cluster_count: u32,
-    pub balance_constraints: Option<BalanceConstraints>,
     pub random_seed: Option<u64>,
     pub params: DirectionalPcaParams,
 }
@@ -448,7 +449,7 @@ impl StreamingClusteringFactory for BuiltInClusteringFactory {
                 StreamingClusteringConfig {
                     cluster_count: settings.cluster_count,
                     dimensions,
-                    balance_constraints: settings.balance_constraints.clone(),
+                    balance_constraints: None,
                     random_seed: settings.random_seed,
                 },
                 settings.params.clone(),
