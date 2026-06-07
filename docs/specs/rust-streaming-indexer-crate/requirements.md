@@ -70,9 +70,9 @@ The new crate shall remain subordinate to:
 
 This specification package shall define the streaming indexer line directly
 against `docs/protocol/indexing.md`, `docs/protocol/blocks.md`, and its owned
-subordinate specifications without making the legacy batch-oriented
-`lexongraph-indexer` crate or `docs/specs/rust-indexer-crate/` package part of
-the streaming crate's normative conformance boundary.
+subordinate specifications without making any retired legacy batch-oriented
+indexing crate or specification package part of the streaming crate's
+normative conformance boundary.
 
 ### REQ-STREAM-INDEXER-004
 

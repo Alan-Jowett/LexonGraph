@@ -792,7 +792,8 @@ fn val_stream_indexer_001_crate_and_spec_define_direct_boundary() {
         "REQ-STREAM-INDEXER-003 must exclude the legacy batch indexer line from the normative boundary"
     );
     assert!(
-        val_stream_indexer_001.contains("legacy batch-oriented indexer")
+        val_stream_indexer_001.contains("retired legacy")
+            && val_stream_indexer_001.contains("batch-oriented indexing")
             && val_stream_indexer_001.contains("artifacts")
             && val_stream_indexer_001.contains("does not depend on")
             && val_stream_indexer_001.contains("remaining present"),

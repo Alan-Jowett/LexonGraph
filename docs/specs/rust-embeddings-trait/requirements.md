@@ -44,7 +44,7 @@ to describe required embedding dimensionality and encoding.
 ### REQ-EMBED-TRAIT-003
 
 The crate shall define a reusable public input type representing embedding
-input without depending on `lexongraph-indexer` or `lexongraph-search`.
+input without depending on any indexing or search orchestration crate.
 
 ### REQ-EMBED-TRAIT-004
 
