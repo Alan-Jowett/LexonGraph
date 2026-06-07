@@ -12,8 +12,8 @@ protocol through a caller-visible streaming replay boundary.
 This document specifies the crate-level requirements for a new Rust crate that:
 
 - implements `docs/protocol/indexing.md`
-- preserves the same protocol-visible indexing outputs as the existing
-  `lexongraph-indexer` crate
+- preserves the protocol-visible indexing outputs and invariants defined by
+  `docs/protocol/indexing.md` and `docs/protocol/blocks.md`
 - exposes a caller-visible replay-based streaming API for large datasets
 - uses the shared streaming clustering contract for its clustering boundary
 
@@ -28,8 +28,10 @@ This document is layered on top of:
 - `docs/specs/rust-dcbc-streaming-crate/` for the built-in default clustering
   realization
 
-This document does not retire or redefine the existing `docs/specs/rust-indexer-crate/`
-package. The old and new indexer lines coexist in this revision.
+This document defines the streaming indexer line directly against the protocol
+documents and owned subordinate specifications listed above. Legacy
+batch-oriented indexer artifacts are outside this specification package's
+normative boundary.
 
 ## Terminology
 
@@ -66,8 +68,11 @@ The new crate shall remain subordinate to:
 
 ### REQ-STREAM-INDEXER-003
 
-This revision shall preserve the existing `lexongraph-indexer` crate and
-`docs/specs/rust-indexer-crate/` package unchanged as the older indexer line.
+This specification package shall define the streaming indexer line directly
+against `docs/protocol/indexing.md`, `docs/protocol/blocks.md`, and its owned
+subordinate specifications without making the legacy batch-oriented
+`lexongraph-indexer` crate or `docs/specs/rust-indexer-crate/` package part of
+the streaming crate's normative conformance boundary.
 
 ### REQ-STREAM-INDEXER-004
 
@@ -281,7 +286,7 @@ This crate does not define or own:
 - storage backend implementations
 - the shared embedding-provider trait contract
 - the shared streaming clustering trait definitions
-- the existing batch-oriented `lexongraph-indexer` crate's API boundary
+- legacy batch-oriented implementation lines or their repository lifecycle
 - any single required concrete clustering algorithm beyond the built-in default
   path defined by this crate
 

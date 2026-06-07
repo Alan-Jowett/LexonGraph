@@ -36,7 +36,7 @@ The crate does not own:
 - storage backend implementations
 - the shared embedding-provider trait contract
 - the shared streaming clustering trait definitions
-- the existing batch-oriented indexer crate's API boundary
+- legacy batch-oriented implementation lines or their repository lifecycle
 
 ## Design Entries
 
@@ -47,10 +47,12 @@ crate, block-storage trait crate, embeddings-trait crate, streaming clustering
 trait crate, and streaming DCBC crate specification package for their owned
 concerns. The crate does not redefine those sources.
 
-### DSG-STREAM-INDEXER-002 `Parallel make-before-break line`
+### DSG-STREAM-INDEXER-002 `Direct protocol-anchored line`
 
-The new crate is a parallel implementation line. It does not replace or narrow
-the existing `lexongraph-indexer` crate or its specification package.
+The streaming crate is specified directly against the indexing and block
+protocols plus its owned subordinate specifications. Legacy batch-oriented
+crate and specification artifacts are outside this package's conformance
+boundary and are not required to remain present for this package to apply.
 
 ### DSG-STREAM-INDEXER-003 `Public replay lifecycle`
 
@@ -199,8 +201,8 @@ own those protocol checks.
 
 The built-in default canonical-embedding policy computes the component-wise
 arithmetic mean of the embeddings stored in a child-bearing block's finalized
-entries, reusing the same deterministic numeric rules as the existing indexer
-line for supported encodings.
+entries, using deterministic numeric rules that preserve the indexing and block
+protocols' externally visible invariants for supported encodings.
 
 ### DSG-STREAM-INDEXER-017 `Status observer model`
 

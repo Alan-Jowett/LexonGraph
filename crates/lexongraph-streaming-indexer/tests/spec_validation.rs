@@ -39,6 +39,16 @@ impl MemoryBlockStore {
     }
 }
 
+fn markdown_section<'a>(document: &'a str, heading: &str) -> &'a str {
+    let marker = format!("### {heading}");
+    let start = document
+        .find(&marker)
+        .unwrap_or_else(|| panic!("document must contain section heading `{heading}`"));
+    let tail = &document[start..];
+    let end = tail.find("\n### ").unwrap_or(tail.len());
+    &tail[..end]
+}
+
 impl BlockStore for MemoryBlockStore {
     fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
         let serialized =
@@ -727,31 +737,66 @@ async fn one_shot_index(
 }
 
 // ─── VAL-STREAM-INDEXER-001 ───────────────────────────────────────────────────
-// Crate and spec exist; old lexongraph-indexer crate is untouched.
+// Crate and spec exist; the streaming spec defines its own normative boundary.
 
 #[test]
-fn val_stream_indexer_001_crate_and_spec_coexist() {
+fn val_stream_indexer_001_crate_and_spec_define_direct_boundary() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
         .parent()
         .and_then(|path| path.parent())
         .expect("crate should be nested under <repo>/crates/<crate>");
+    let requirements_path = repo_root
+        .join("docs")
+        .join("specs")
+        .join("rust-streaming-indexer-crate")
+        .join("requirements.md");
+    let validation_path = repo_root
+        .join("docs")
+        .join("specs")
+        .join("rust-streaming-indexer-crate")
+        .join("validation.md");
+
     assert!(
         repo_root
             .join("crates")
-            .join("lexongraph-indexer")
+            .join("lexongraph-streaming-indexer")
             .join("Cargo.toml")
             .exists(),
-        "existing lexongraph-indexer crate should remain present"
+        "streaming-indexer crate should remain present"
     );
     assert!(
-        repo_root
-            .join("docs")
-            .join("specs")
-            .join("rust-streaming-indexer-crate")
-            .join("requirements.md")
-            .exists(),
+        requirements_path.exists(),
         "streaming-indexer spec package should remain present"
+    );
+    assert!(
+        validation_path.exists(),
+        "streaming-indexer validation spec should remain present"
+    );
+
+    let requirements = std::fs::read_to_string(&requirements_path)
+        .expect("streaming-indexer requirements should be readable");
+    let validation = std::fs::read_to_string(&validation_path)
+        .expect("streaming-indexer validation should be readable");
+    let req_stream_indexer_003 = markdown_section(&requirements, "REQ-STREAM-INDEXER-003");
+    let val_stream_indexer_001 = markdown_section(&validation, "VAL-STREAM-INDEXER-001");
+
+    assert!(
+        req_stream_indexer_003.contains("docs/protocol/indexing.md")
+            && req_stream_indexer_003.contains("docs/protocol/blocks.md"),
+        "REQ-STREAM-INDEXER-003 must anchor the streaming line to the indexing and block protocols"
+    );
+    assert!(
+        req_stream_indexer_003.contains("legacy batch-oriented")
+            && req_stream_indexer_003.contains("normative conformance boundary"),
+        "REQ-STREAM-INDEXER-003 must exclude the legacy batch indexer line from the normative boundary"
+    );
+    assert!(
+        val_stream_indexer_001.contains("legacy batch-oriented indexer")
+            && val_stream_indexer_001.contains("artifacts")
+            && val_stream_indexer_001.contains("does not depend on")
+            && val_stream_indexer_001.contains("remaining present"),
+        "VAL-STREAM-INDEXER-001 must not require legacy batch artifacts to remain present"
     );
     let _ = include_str!("../src/lib.rs");
 }
