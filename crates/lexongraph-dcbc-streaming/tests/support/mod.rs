@@ -109,6 +109,10 @@ impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanc
         HarnessTrainer::unstable_cluster_ids()
     }
 
+    fn malformed_input_accepting_trainer(&self) -> Self::Trainer {
+        HarnessTrainer::malformed_input_accepting()
+    }
+
     fn sample_passes(&self) -> Vec<PassInput> {
         sample_passes()
     }
@@ -144,6 +148,7 @@ pub struct HarnessTrainer {
 enum HarnessMode {
     Conforming,
     UnstableClusterIds,
+    MalformedInputAccepting,
 }
 
 impl HarnessTrainer {
@@ -162,10 +167,14 @@ impl HarnessTrainer {
     fn unstable_cluster_ids() -> Self {
         Self::new(HarnessMode::UnstableClusterIds)
     }
+
+    fn malformed_input_accepting() -> Self {
+        Self::new(HarnessMode::MalformedInputAccepting)
+    }
 }
 
 impl StreamingClusterTrainer for HarnessTrainer {
-    type Classifier = DcbcStreamingClassifier;
+    type Classifier = HarnessClassifier;
 
     fn config(&self) -> &StreamingClusteringConfig {
         self.inner.config()
@@ -193,6 +202,28 @@ impl StreamingClusterTrainer for HarnessTrainer {
     }
 
     fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
-        self.inner.into_classifier()
+        Ok(HarnessClassifier {
+            inner: self.inner.into_classifier()?,
+            mode: self.mode,
+        })
+    }
+}
+
+pub struct HarnessClassifier {
+    inner: DcbcStreamingClassifier,
+    mode: HarnessMode,
+}
+
+impl lexongraph_streaming_clustering::StreamingClusterClassifier for HarnessClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        self.inner.config()
+    }
+
+    fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        if matches!(self.mode, HarnessMode::MalformedInputAccepting) {
+            let first = embedding.first().copied().unwrap_or(0.0);
+            return Ok(if first >= 0.0 { 0 } else { 1 });
+        }
+        self.inner.assign(embedding)
     }
 }

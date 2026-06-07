@@ -12,6 +12,7 @@ use lexongraph_streaming_clustering::{
 pub enum FixtureMode {
     Conforming,
     UnstableClusterIds,
+    MalformedInputAccepting,
 }
 
 pub struct FixtureTrainer {
@@ -33,6 +34,10 @@ impl FixtureTrainer {
 
     pub fn unstable_cluster_ids() -> Self {
         Self::new(None, FixtureMode::UnstableClusterIds)
+    }
+
+    pub fn malformed_input_accepting() -> Self {
+        Self::new(None, FixtureMode::MalformedInputAccepting)
     }
 
     fn new(random_seed: Option<u64>, mode: FixtureMode) -> Self {
@@ -146,12 +151,14 @@ impl StreamingClusterTrainer for FixtureTrainer {
         }
         Ok(FixtureClassifier {
             config: self.config.clone(),
+            mode: self.mode,
         })
     }
 }
 
 pub struct FixtureClassifier {
     config: StreamingClusteringConfig,
+    mode: FixtureMode,
 }
 
 impl StreamingClusterClassifier for FixtureClassifier {
@@ -160,6 +167,10 @@ impl StreamingClusterClassifier for FixtureClassifier {
     }
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        if matches!(self.mode, FixtureMode::MalformedInputAccepting) {
+            let first = embedding.first().copied().unwrap_or(0.0);
+            return Ok(if first >= 0.0 { 0 } else { 1 });
+        }
         validate_embedding(embedding, self.config.dimensions)?;
         Ok(if embedding[0] >= 0.0 { 0 } else { 1 })
     }
@@ -224,6 +235,10 @@ impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanc
 
     fn unstable_cluster_ids_trainer(&self) -> Self::Trainer {
         FixtureTrainer::unstable_cluster_ids()
+    }
+
+    fn malformed_input_accepting_trainer(&self) -> Self::Trainer {
+        FixtureTrainer::malformed_input_accepting()
     }
 
     fn sample_passes(&self) -> Vec<PassInput> {

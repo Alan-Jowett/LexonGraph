@@ -130,6 +130,21 @@ zero occupancies, contradictory occupancy bounds, non-finite or non-positive
 maximum cluster-size ratios, and non-finite or negative soft-balance penalties
 as `InvalidConfiguration`.
 
+### DSG-STREAM-TRAIT-016 `Conformance error surface`
+
+The feature-gated conformance module exposes a public
+`ConformanceError::{Implementation, Expectation}` enum. `Display` forwards
+implementation failures to the shared streaming-clustering error text,
+expectation failures use suite-authored diagnostic strings, and `source()`
+returns the underlying implementation error only for `Implementation`.
+
+### DSG-STREAM-TRAIT-017 `Malformed-input-accepting fixture`
+
+The conformance harness contract includes a dedicated trainer fixture whose
+resulting classifier intentionally accepts wrong-dimensional and non-finite
+embeddings as valid assignments. The suite executes this fixture so downstream
+tests can prove the helper rejects malformed-input-accepting implementations.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -148,3 +163,5 @@ as `InvalidConfiguration`.
 | DSG-STREAM-TRAIT-013 | REQ-STREAM-TRAIT-018 |
 | DSG-STREAM-TRAIT-014 | REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-019 |
 | DSG-STREAM-TRAIT-015 | REQ-STREAM-TRAIT-004, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-020 |
+| DSG-STREAM-TRAIT-016 | REQ-STREAM-TRAIT-021 |
+| DSG-STREAM-TRAIT-017 | REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-022 |
