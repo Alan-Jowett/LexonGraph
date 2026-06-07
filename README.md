@@ -63,13 +63,16 @@ Current packages cover:
 
 - `rust-block-crate`
 - `rust-block-storage-trait`
-- `rust-dcbc-crate`
+- `rust-dcbc-streaming-crate`
+- `rust-directional-pca-crate`
 - `rust-embeddings-openai-crate`
 - `rust-embeddings-trait`
 - `rust-filesystem-block-store`
-- `rust-indexer-crate`
+- `rust-block-inspect-cli`
 - `rust-pca-crate`
 - `rust-search-crate`
+- `rust-streaming-clustering-crate`
+- `rust-streaming-indexer-crate`
 - `rust-workspace-ci`
 
 ## Rust workspace
@@ -79,14 +82,17 @@ The top-level Cargo workspace currently contains:
 | Crate | Role |
 | --- | --- |
 | `lexongraph-block` | Typed block model, validation, canonical CBOR serialization, and block-hash derivation |
+| `lexongraph-block-inspect` | CLI for inspecting canonical block encodings and decoded block structure |
 | `lexongraph-block-store` | Backend-agnostic `BlockStore` trait plus conformance harnesses |
 | `lexongraph-block-store-fs` | Local filesystem implementation of the block-store contract |
-| `lexongraph-dcbc` | Deterministic capacity-constrained balanced clustering implementation |
+| `lexongraph-dcbc-streaming` | Deterministic streaming DCBC clustering implementation |
+| `lexongraph-directional-pca` | Deterministic directional PCA utilities for streaming clustering workflows |
 | `lexongraph-embeddings-trait` | Shared async embedding-provider contract plus opt-in conformance helpers |
 | `lexongraph-embeddings-openai` | OpenAI-compatible and Azure OpenAI embedding-provider implementation |
-| `lexongraph-indexer` | Protocol-conforming indexing orchestration with embedding-provider and node-packing policy hooks |
 | `lexongraph-pca` | Deterministic, streaming-first PCA accumulation, affine transform algebra, and stable transform artifact encoding |
 | `lexongraph-search` | Protocol-conforming search orchestration with trait-based policy hooks |
+| `lexongraph-streaming-clustering` | Shared streaming clustering contract plus conformance helpers |
+| `lexongraph-streaming-indexer` | Protocol-conforming streaming indexing orchestration with replay-based ingestion |
 
 At the moment, the implemented storage backend in this repository is the local
 filesystem block store. Broader deployment shapes remain part of the overall
@@ -123,13 +129,17 @@ re-checks the full tracked repository surface.
 .
 |- crates/
 |  |- lexongraph-block
+|  |- lexongraph-block-inspect
 |  |- lexongraph-block-store
 |  |- lexongraph-block-store-fs
-|  |- lexongraph-dcbc
+|  |- lexongraph-dcbc-streaming
+|  |- lexongraph-directional-pca
 |  |- lexongraph-embeddings-openai
 |  |- lexongraph-embeddings-trait
-|  |- lexongraph-indexer
-|  `- lexongraph-search
+|  |- lexongraph-pca
+|  |- lexongraph-search
+|  |- lexongraph-streaming-clustering
+|  `- lexongraph-streaming-indexer
 |- docs/
 |  |- protocol/
 |  |- specs/

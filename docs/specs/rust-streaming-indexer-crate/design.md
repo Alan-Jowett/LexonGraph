@@ -50,9 +50,10 @@ concerns. The crate does not redefine those sources.
 ### DSG-STREAM-INDEXER-002 `Direct protocol-anchored line`
 
 The streaming crate is specified directly against the indexing and block
-protocols plus its owned subordinate specifications. Legacy batch-oriented
-crate and specification artifacts are outside this package's conformance
-boundary and are not required to remain present for this package to apply.
+protocols plus its owned subordinate specifications. Retired legacy
+batch-oriented indexing crate and specification artifacts are outside this
+package's conformance boundary and are not required to remain present for this
+package to apply.
 
 ### DSG-STREAM-INDEXER-003 `Public replay lifecycle`
 

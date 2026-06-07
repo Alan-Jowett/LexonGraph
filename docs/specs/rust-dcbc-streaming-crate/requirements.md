@@ -208,7 +208,7 @@ The repository shall include executable verification artifacts covering both:
 This crate does not define or own:
 
 - changes to `docs/protocol/dcbc.md`
-- changes to the existing `lexongraph-dcbc` crate
+- non-streaming legacy DCBC implementation lines
 - changes to the shared streaming clustering trait crate
 - approximate clustering methods
 - stochastic initialization without deterministic seeding
