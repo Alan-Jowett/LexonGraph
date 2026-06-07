@@ -12,16 +12,18 @@ use lexongraph_block::{
     serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_directional_pca::DirectionalPcaParams;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_clustering::{
     ClusterId, MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
     StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
 use lexongraph_streaming_indexer::{
-    ArithmeticMeanCanonicalEmbeddingPolicy, CanonicalEmbeddingPolicy, ContentResolver,
-    DcbcStreamingClusteringFactory, IndexItem, StreamingClusteringFactory, StreamingIndexerError,
-    StreamingIndexingResult, StreamingIndexingRun, StreamingIndexingStatus,
-    StreamingIndexingStatusObserver,
+    ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInClustering, BuiltInClusteringFactory,
+    CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInClusteringSettings,
+    DcbcStreamingClusteringFactory, DirectionalPcaBuiltInClusteringSettings, IndexItem,
+    StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingResult,
+    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
 };
 use sha2::{Digest, Sha256};
 
@@ -717,13 +719,75 @@ fn item(s: &'static str) -> IndexItem<&'static str> {
     }
 }
 
+fn dcbc_builtin_clustering() -> BuiltInClustering {
+    BuiltInClustering::Dcbc(DcbcBuiltInClusteringSettings {
+        cluster_count: 2,
+        balance_constraints: None,
+        random_seed: None,
+    })
+}
+
+fn directional_pca_builtin_clustering() -> BuiltInClustering {
+    BuiltInClustering::DirectionalPca(DirectionalPcaBuiltInClusteringSettings {
+        cluster_count: 1,
+        balance_constraints: None,
+        random_seed: None,
+        params: DirectionalPcaParams {
+            retained_dimension_count: 1,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    })
+}
+
+fn run_with_builtin_dcbc<RS, EP>(
+    resolver: RS,
+    embedding_provider: EP,
+    embedding_spec: EmbeddingSpec,
+    block_size_target: usize,
+) -> StreamingIndexingRun<
+    &'static str,
+    RS,
+    EP,
+    ArithmeticMeanCanonicalEmbeddingPolicy,
+    BuiltInClusteringFactory,
+> {
+    StreamingIndexingRun::with_builtin_clustering(
+        resolver,
+        embedding_provider,
+        dcbc_builtin_clustering(),
+        embedding_spec,
+        block_size_target,
+    )
+}
+
+fn run_with_builtin_dcbc_and_canonical<RS, EP, CEP>(
+    resolver: RS,
+    embedding_provider: EP,
+    canonical_embedding_policy: CEP,
+    embedding_spec: EmbeddingSpec,
+    block_size_target: usize,
+) -> StreamingIndexingRun<&'static str, RS, EP, CEP, BuiltInClusteringFactory> {
+    StreamingIndexingRun::with_canonical_policy(
+        resolver,
+        embedding_provider,
+        canonical_embedding_policy,
+        dcbc_builtin_clustering(),
+        embedding_spec,
+        block_size_target,
+    )
+}
+
 /// Run one training pass + mark_complete + finalize for a set of items.
 async fn one_shot_index(
     items: &[IndexItem<&'static str>],
     block_size_target: usize,
 ) -> Result<(StreamingIndexingResult, MemoryBlockStore), StreamingIndexerError> {
     let store = MemoryBlockStore::default();
-    let mut run = StreamingIndexingRun::with_defaults(
+    let mut run = run_with_builtin_dcbc(
         MapResolver,
         AsciiEmbeddingProvider,
         embedding_spec(),
@@ -807,11 +871,16 @@ fn val_stream_indexer_001_crate_and_spec_define_direct_boundary() {
 
 #[test]
 fn val_stream_indexer_002_public_surface_inspection() {
-    // Verify that the streaming clustering dependency is declared.
+    // Verify that the shared streaming contract and both built-in clustering
+    // dependencies are declared.
     let manifest = include_str!("../Cargo.toml");
     assert!(
         manifest.contains("lexongraph-dcbc-streaming"),
         "Cargo.toml must depend on lexongraph-dcbc-streaming"
+    );
+    assert!(
+        manifest.contains("lexongraph-directional-pca"),
+        "Cargo.toml must depend on lexongraph-directional-pca"
     );
     assert!(
         manifest.contains("lexongraph-streaming-clustering"),
@@ -824,12 +893,7 @@ fn val_stream_indexer_002_public_surface_inspection() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_003_empty_pass_fails_explicitly() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     // finish_pass without any ingest_batch
     let err = run.finish_pass().unwrap_err();
     assert!(matches!(err, StreamingIndexerError::EmptyPass(_)), "{err}");
@@ -837,12 +901,7 @@ async fn val_stream_indexer_003_empty_pass_fails_explicitly() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_003_empty_item_list_in_finalize_fails_explicitly() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&[item("alpha")]).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_training_complete().unwrap();
@@ -886,7 +945,7 @@ async fn val_stream_indexer_005_distinct_resolver_types_share_the_same_contract(
 
     // A distinct resolver implementation with the same observable behavior.
     let store2 = MemoryBlockStore::default();
-    let mut run2 = StreamingIndexingRun::with_defaults(
+    let mut run2 = run_with_builtin_dcbc(
         MirrorResolver,
         AsciiEmbeddingProvider,
         embedding_spec(),
@@ -914,12 +973,8 @@ async fn val_stream_indexer_005_distinct_resolver_types_share_the_same_contract(
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_006_uses_shared_embeddings_trait_contract() {
     // If the provider fails, the error propagates as EmbeddingFailure.
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        FailingEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run =
+        run_with_builtin_dcbc(MapResolver, FailingEmbeddingProvider, embedding_spec(), 256);
     let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
     assert!(
         matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
@@ -928,12 +983,27 @@ async fn val_stream_indexer_006_uses_shared_embeddings_trait_contract() {
 }
 
 // ─── VAL-STREAM-INDEXER-007 ───────────────────────────────────────────────────
-// Primary default constructor requires no explicit policies.
+// Built-in directional-PCA selection requires explicit caller-provided settings.
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_007_default_constructor_needs_no_explicit_policies() {
-    let (result, store) = one_shot_index(&[item("alpha")], 256).await.unwrap();
-    assert_eq!(result.block_ids.len(), 1);
+async fn val_stream_indexer_007_directional_pca_builtin_selection_requires_explicit_settings() {
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::with_builtin_clustering(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        directional_pca_builtin_clustering(),
+        embedding_spec(),
+        256,
+    );
+    let items = [item("alpha"), item("bravo")];
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_training_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(!result.block_ids.is_empty());
     assert!(store.get(&result.root_id).unwrap().is_some());
 }
 
@@ -945,8 +1015,9 @@ async fn val_stream_indexer_008_override_path_accepts_custom_policies() {
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
     let store = MemoryBlockStore::default();
 
-    // with_canonical_policy: override canonical, keep DCBC default.
-    let mut run = StreamingIndexingRun::with_canonical_policy(
+    // with_canonical_policy: override canonical while still selecting a built-in
+    // clustering realization explicitly.
+    let mut run = run_with_builtin_dcbc_and_canonical(
         MapResolver,
         AsciiEmbeddingProvider,
         FirstChildCanonicalPolicy,
@@ -989,12 +1060,7 @@ async fn val_stream_indexer_008_override_path_accepts_custom_policies() {
 async fn val_stream_indexer_009_pass_report_deterministic_with_multiple_batches() {
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     // Ingest as two separate batches
     run.ingest_batch(&items[..2]).await.unwrap();
     run.ingest_batch(&items[2..]).await.unwrap();
@@ -1004,12 +1070,8 @@ async fn val_stream_indexer_009_pass_report_deterministic_with_multiple_batches(
     assert_eq!(report.completed_pass_count, 1);
 
     // Second run with one batch yields the same report
-    let mut run2 = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run2 =
+        run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run2.ingest_batch(&items).await.unwrap();
     let report2 = run2.finish_pass().unwrap();
 
@@ -1031,12 +1093,7 @@ async fn val_stream_indexer_009_pass_report_deterministic_with_multiple_batches(
 async fn val_stream_indexer_010_two_identical_passes_accepted() {
     let items = [item("alpha"), item("bravo")];
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&items).await.unwrap();
     let r1 = run.finish_pass().unwrap();
 
@@ -1057,12 +1114,8 @@ async fn val_stream_indexer_011_later_pass_with_different_content_reference_fail
         metadata: vec![],
         content_ref: "alpha-alias-2",
     };
-    let mut run = StreamingIndexingRun::with_defaults(
-        AliasResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run =
+        run_with_builtin_dcbc(AliasResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
 
     run.ingest_batch(&[first]).await.unwrap();
     run.finish_pass().unwrap();
@@ -1092,12 +1145,7 @@ async fn metadata_order_differences_do_not_break_replay_equivalence() {
         content_ref: "alpha",
     };
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(std::slice::from_ref(&first))
         .await
         .unwrap();
@@ -1113,12 +1161,7 @@ async fn metadata_order_differences_do_not_break_replay_equivalence() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_011_later_pass_with_different_items_fails() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&[item("alpha"), item("bravo")])
         .await
         .unwrap();
@@ -1137,12 +1180,7 @@ async fn val_stream_indexer_011_later_pass_with_different_items_fails() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_011_later_pass_with_more_items_fails() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&[item("alpha")]).await.unwrap();
     run.finish_pass().unwrap();
 
@@ -1164,12 +1202,7 @@ async fn val_stream_indexer_012_finalize_before_training_complete_fails() {
     let store = MemoryBlockStore::default();
 
     // No pass at all
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     let err = run
         .finalize(std::iter::once(items.as_slice()), &store)
         .await
@@ -1180,12 +1213,8 @@ async fn val_stream_indexer_012_finalize_before_training_complete_fails() {
     );
 
     // Pass done but mark_training_complete not called
-    let mut run2 = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run2 =
+        run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run2.ingest_batch(&items).await.unwrap();
     run2.finish_pass().unwrap();
     let err2 = run2
@@ -1206,12 +1235,7 @@ async fn val_stream_indexer_013_successful_finalize_after_training_complete() {
     let items = [item("alpha"), item("bravo")];
     let store = MemoryBlockStore::default();
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_training_complete().unwrap();
@@ -1232,12 +1256,7 @@ async fn val_stream_indexer_014_finalize_with_different_items_fails() {
     let items = [item("alpha"), item("bravo")];
     let store = MemoryBlockStore::default();
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_training_complete().unwrap();
@@ -1258,12 +1277,7 @@ async fn val_stream_indexer_014_finalize_with_wrong_order_fails() {
     let items = [item("alpha"), item("bravo")];
     let store = MemoryBlockStore::default();
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_training_complete().unwrap();
@@ -1437,7 +1451,7 @@ async fn val_stream_indexer_021_deterministic_across_two_runs() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_content_resolution_failure_is_explicit() {
-    let mut run = StreamingIndexingRun::with_defaults(
+    let mut run = run_with_builtin_dcbc(
         FailingResolver,
         AsciiEmbeddingProvider,
         embedding_spec(),
@@ -1452,7 +1466,7 @@ async fn val_stream_indexer_022_content_resolution_failure_is_explicit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_unusable_content_failure_is_explicit() {
-    let mut run = StreamingIndexingRun::with_defaults(
+    let mut run = run_with_builtin_dcbc(
         UnusableResolver,
         AsciiEmbeddingProvider,
         embedding_spec(),
@@ -1469,12 +1483,7 @@ async fn val_stream_indexer_022_unusable_content_failure_is_explicit() {
 async fn val_stream_indexer_022_invalid_metadata_failure_is_explicit() {
     use ciborium::Value;
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     let err = run
         .ingest_batch(&[IndexItem {
             metadata: vec![
@@ -1493,12 +1502,8 @@ async fn val_stream_indexer_022_invalid_metadata_failure_is_explicit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_embedding_failure_is_explicit() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        FailingEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run =
+        run_with_builtin_dcbc(MapResolver, FailingEmbeddingProvider, embedding_spec(), 256);
     let err = run.ingest_batch(&[item("alpha")]).await.unwrap_err();
     assert!(
         matches!(err, StreamingIndexerError::EmbeddingFailure(_)),
@@ -1508,7 +1513,7 @@ async fn val_stream_indexer_022_embedding_failure_is_explicit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_wrong_length_embedding_failure_is_explicit() {
-    let mut run = StreamingIndexingRun::with_defaults(
+    let mut run = run_with_builtin_dcbc(
         MapResolver,
         WrongLengthEmbeddingProvider,
         embedding_spec(),
@@ -1552,12 +1557,7 @@ async fn val_stream_indexer_022_clustering_failure_on_zero_norm_is_explicit() {
     // Zero-norm embeddings are rejected by DCBC with MalformedInput.
     // With the buffered design, the trainer is fed in finish_pass.
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        ZeroEmbeddingProvider,
-        embedding_spec(),
-        96,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, ZeroEmbeddingProvider, embedding_spec(), 96);
     // ingest_batch succeeds (buffers embeddings, no trainer yet)
     run.ingest_batch(&items).await.unwrap();
     // finish_pass feeds to trainer → zero-norm detected
@@ -1589,13 +1589,8 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
     let store = MemoryBlockStore::default();
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    )
-    .with_observer(observer);
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256)
+        .with_observer(observer);
 
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
@@ -1649,12 +1644,7 @@ async fn val_stream_indexer_023_observer_receives_structured_status_updates() {
 async fn leaf_store_integrity_mismatch_is_explicit() {
     let items = [item("alpha")];
     let store = FaultyIdStore::corrupt_leaf_ids();
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
 
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
@@ -1677,12 +1667,7 @@ async fn leaf_store_integrity_mismatch_is_explicit() {
 async fn branch_store_integrity_mismatch_is_explicit() {
     let items = [item("alpha"), item("bravo"), item("charlie")];
     let store = FaultyIdStore::corrupt_branch_ids();
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
 
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
@@ -1705,12 +1690,7 @@ async fn branch_store_integrity_mismatch_is_explicit() {
 async fn finalize_failure_does_not_consume_training_complete_state() {
     let items = [item("alpha"), item("bravo")];
     let store = FailOnceStore::new();
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
 
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
@@ -1957,12 +1937,7 @@ async fn val_stream_indexer_025_repeated_passes_require_caller_replay() {
     // We exercise the replay requirement by explicitly providing items for both passes.
     let items = [item("alpha"), item("bravo")];
 
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     // Caller must supply items again
@@ -1980,20 +1955,24 @@ async fn val_stream_indexer_025_repeated_passes_require_caller_replay() {
 }
 
 // ─── VAL-STREAM-INDEXER-026 ───────────────────────────────────────────────────
-// Depends on lexongraph-dcbc-streaming; default path delegates through contract.
+// Depends on both built-in clustering crates; built-in paths delegate through contract.
 
 #[test]
-fn val_stream_indexer_026_depends_on_dcbc_streaming() {
+fn val_stream_indexer_026_depends_on_both_builtin_clustering_crates() {
     let manifest = include_str!("../Cargo.toml");
     assert!(
         manifest.contains("lexongraph-dcbc-streaming"),
         "Cargo.toml must depend on lexongraph-dcbc-streaming"
     );
-    // DcbcStreamingClusteringFactory is the built-in default — it delegates
-    // to DcbcStreamingTrainer which implements StreamingClusterTrainer.
-    // Verified by compiling the crate: DcbcStreamingClusteringFactory::new(2)
-    // must be constructible and usable.
+    assert!(
+        manifest.contains("lexongraph-directional-pca"),
+        "Cargo.toml must depend on lexongraph-directional-pca"
+    );
+    // The explicit DCBC factory remains available, and the built-in selection
+    // wrapper must be constructible for both built-in choices.
     let _factory = DcbcStreamingClusteringFactory::new(2);
+    let _built_in_dcbc = BuiltInClusteringFactory::new(dcbc_builtin_clustering());
+    let _built_in_dpca = BuiltInClusteringFactory::new(directional_pca_builtin_clustering());
 }
 
 // ─── VAL-STREAM-INDEXER-027 ───────────────────────────────────────────────────
@@ -2013,12 +1992,7 @@ fn val_stream_indexer_027_verification_artifacts_exist() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mark_training_complete_without_any_pass_fails() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     let err = run.mark_training_complete().unwrap_err();
     assert!(
         matches!(err, StreamingIndexerError::InvalidLifecycleTransition(_)),
@@ -2028,12 +2002,7 @@ async fn mark_training_complete_without_any_pass_fails() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn mark_training_complete_with_open_pass_fails() {
-    let mut run = StreamingIndexingRun::with_defaults(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        embedding_spec(),
-        256,
-    );
+    let mut run = run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
     run.ingest_batch(&[item("alpha")]).await.unwrap();
     // Pass not finished yet
     let err = run.mark_training_complete().unwrap_err();
@@ -2060,7 +2029,7 @@ async fn duplicate_items_collapse_to_single_leaf_root() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn default_path_and_explicit_defaults_produce_same_result() {
+async fn built_in_dcbc_selection_and_explicit_dcbc_factory_produce_same_result() {
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
 
     let (r1, _) = one_shot_index(&items, 256).await.unwrap();
@@ -2086,18 +2055,56 @@ async fn default_path_and_explicit_defaults_produce_same_result() {
     assert_eq!(r1.block_ids, r2.block_ids);
 }
 
+// ─── VAL-STREAM-INDEXER-028 ───────────────────────────────────────────────────
+// Built-in selection supports both algorithms and requires caller-owned settings.
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_028_builtin_selection_supports_dcbc_and_directional_pca() {
+    let items = [item("alpha"), item("bravo")];
+
+    let dcbc_store = MemoryBlockStore::default();
+    let mut dcbc_run = StreamingIndexingRun::with_builtin_clustering(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        dcbc_builtin_clustering(),
+        embedding_spec(),
+        256,
+    );
+    dcbc_run.ingest_batch(&items).await.unwrap();
+    dcbc_run.finish_pass().unwrap();
+    dcbc_run.mark_training_complete().unwrap();
+    let dcbc_result = dcbc_run
+        .finalize(std::iter::once(items.as_slice()), &dcbc_store)
+        .await
+        .unwrap();
+    assert!(!dcbc_result.block_ids.is_empty());
+
+    let dpca_store = MemoryBlockStore::default();
+    let mut dpca_run = StreamingIndexingRun::with_builtin_clustering(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        directional_pca_builtin_clustering(),
+        embedding_spec(),
+        256,
+    );
+    dpca_run.ingest_batch(&items).await.unwrap();
+    dpca_run.finish_pass().unwrap();
+    dpca_run.mark_training_complete().unwrap();
+    let dpca_result = dpca_run
+        .finalize(std::iter::once(items.as_slice()), &dpca_store)
+        .await
+        .unwrap();
+    assert!(!dpca_result.block_ids.is_empty());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn two_pass_training_accepted_and_deterministic() {
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
 
     let _run_once = |items: &'static [IndexItem<&'static str>]| async move {
         let store = MemoryBlockStore::default();
-        let mut run = StreamingIndexingRun::with_defaults(
-            MapResolver,
-            AsciiEmbeddingProvider,
-            embedding_spec(),
-            256,
-        );
+        let mut run =
+            run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
         run.ingest_batch(items).await.unwrap();
         run.finish_pass().unwrap();
         run.ingest_batch(items).await.unwrap();
@@ -2109,12 +2116,8 @@ async fn two_pass_training_accepted_and_deterministic() {
     // Rust closures can't easily be called twice with async — run two separate identical setups.
     let r1 = {
         let store = MemoryBlockStore::default();
-        let mut run = StreamingIndexingRun::with_defaults(
-            MapResolver,
-            AsciiEmbeddingProvider,
-            embedding_spec(),
-            256,
-        );
+        let mut run =
+            run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
         run.ingest_batch(&items).await.unwrap();
         run.finish_pass().unwrap();
         run.ingest_batch(&items).await.unwrap();
@@ -2126,12 +2129,8 @@ async fn two_pass_training_accepted_and_deterministic() {
     };
     let r2 = {
         let store = MemoryBlockStore::default();
-        let mut run = StreamingIndexingRun::with_defaults(
-            MapResolver,
-            AsciiEmbeddingProvider,
-            embedding_spec(),
-            256,
-        );
+        let mut run =
+            run_with_builtin_dcbc(MapResolver, AsciiEmbeddingProvider, embedding_spec(), 256);
         run.ingest_batch(&items).await.unwrap();
         run.finish_pass().unwrap();
         run.ingest_batch(&items).await.unwrap();

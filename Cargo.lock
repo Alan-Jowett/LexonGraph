@@ -1426,6 +1426,7 @@ dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
  "lexongraph-dcbc-streaming",
+ "lexongraph-directional-pca",
  "lexongraph-embeddings-trait",
  "lexongraph-streaming-clustering",
  "pollster",

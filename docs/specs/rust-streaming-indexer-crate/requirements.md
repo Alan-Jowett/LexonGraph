@@ -25,7 +25,9 @@ This document is layered on top of:
 - `docs/specs/rust-block-storage-trait/`
 - `docs/specs/rust-embeddings-trait/`
 - `docs/specs/rust-streaming-clustering-crate/`
-- `docs/specs/rust-dcbc-streaming-crate/` for the built-in default clustering
+- `docs/specs/rust-dcbc-streaming-crate/` for one built-in clustering
+  realization
+- `docs/specs/rust-directional-pca-crate/` for one built-in clustering
   realization
 
 This document defines the streaming indexer line directly against the protocol
@@ -65,6 +67,9 @@ The new crate shall remain subordinate to:
   their owned dependency concerns
 - `docs/specs/rust-streaming-clustering-crate/` for the shared streaming
   clustering contract
+- `docs/specs/rust-dcbc-streaming-crate/` and
+  `docs/specs/rust-directional-pca-crate/` for the built-in clustering
+  realizations owned outside this crate
 
 ### REQ-STREAM-INDEXER-003
 
@@ -126,15 +131,16 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 
 ### REQ-STREAM-INDEXER-011
 
-The crate shall provide a built-in default streaming clustering realization for
-parent-layer grouping that depends on `lexongraph-dcbc-streaming` rather than
-reimplementing streaming DCBC mechanics locally.
+The crate shall provide built-in streaming clustering realizations for
+parent-layer grouping that depend on both `lexongraph-dcbc-streaming` and
+`lexongraph-directional-pca` rather than reimplementing either clustering
+algorithm locally.
 
 ### REQ-STREAM-INDEXER-012
 
 The crate shall provide an explicit API path that accepts a caller-supplied
 streaming clustering realization or factory so downstream users can replace the
-built-in default clustering behavior.
+built-in clustering behavior.
 
 ### REQ-STREAM-INDEXER-013
 
@@ -145,10 +151,11 @@ finalized entries.
 
 ### REQ-STREAM-INDEXER-014
 
-The crate shall provide a primary default-instantiation path for the streaming
-indexing runtime API that uses the built-in arithmetic-mean canonical-embedding
-policy and the built-in streaming DCBC-backed clustering realization without
-requiring callers to pass either policy explicitly.
+The crate shall not assign an implicit built-in default clustering algorithm.
+
+The caller-facing built-in clustering path for the streaming indexing runtime
+API shall require the caller to select one supported built-in clustering
+realization explicitly.
 
 ### REQ-STREAM-INDEXER-015
 
@@ -227,6 +234,8 @@ The crate shall surface explicit failure when:
 - content resolution fails, is inaccessible, or returns content unusable for
   indexing
 - embedding generation fails
+- the caller omits a required built-in clustering algorithm selection or
+  required clustering settings
 - a later replay differs from the established logical item set or replay order
 - clustering, canonical-embedding selection, block construction, or storage
   fails
@@ -277,6 +286,19 @@ The repository shall include automated verification artifacts that realize the
 validation surface defined in
 `docs/specs/rust-streaming-indexer-crate/validation.md`.
 
+### REQ-STREAM-INDEXER-031
+
+The crate shall provide a caller-visible built-in clustering-selection surface
+that requires callers to choose either the built-in streaming directional-PCA
+realization or the built-in streaming DCBC realization without implementing a
+custom `StreamingClusteringFactory`.
+
+### REQ-STREAM-INDEXER-032
+
+When a built-in clustering realization is selected through the indexer API, the
+crate shall require the caller to provide that algorithm's settings rather than
+supplying implicit built-in clustering settings.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -287,8 +309,8 @@ This crate does not define or own:
 - the shared embedding-provider trait contract
 - the shared streaming clustering trait definitions
 - legacy batch-oriented implementation lines or their repository lifecycle
-- any single required concrete clustering algorithm beyond the built-in default
-  path defined by this crate
+- any concrete clustering algorithm beyond the built-in directional-PCA and
+  DCBC realizations defined by this crate
 
 ## Relationship to Other Specifications
 
@@ -296,5 +318,5 @@ This document is subordinate to `docs/protocol/indexing.md` and
 `docs/protocol/blocks.md`.
 
 This document is also subordinate to the block crate, block-storage trait,
-embeddings-trait, streaming clustering, and streaming DCBC specification
-packages for their owned concerns.
+embeddings-trait, streaming clustering, streaming DCBC, and directional-PCA
+specification packages for their owned concerns.

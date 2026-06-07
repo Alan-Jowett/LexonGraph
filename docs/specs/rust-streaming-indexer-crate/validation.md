@@ -34,9 +34,11 @@ Inspect the new crate's public surface and specification references.
 
 **Pass condition:** the crate exposes a caller-visible streaming replay
 lifecycle, remains subordinate to the indexing and block protocols, and
-consumes the shared streaming clustering contract rather than defining a new
-clustering contract locally or depending on a retired legacy batch-oriented
-indexing crate/specification package as part of its normative boundary.
+consumes the shared streaming clustering contract, references the built-in DCBC
+and directional-PCA specification packages for their owned clustering
+algorithms, and does not define a new clustering contract locally or depend on
+a retired legacy batch-oriented indexing crate/specification package as part of
+its normative boundary.
 
 **Traces to:** REQ-STREAM-INDEXER-002, REQ-STREAM-INDEXER-004,
 REQ-STREAM-INDEXER-010
@@ -81,15 +83,17 @@ shared contract without redefining embedding-provider behavior locally.
 
 ### VAL-STREAM-INDEXER-007
 
-Construct the streaming indexer through its primary default-instantiation path.
+Construct the streaming indexer through its built-in clustering-selection path,
+selecting directional PCA and supplying caller-provided directional-PCA
+settings.
 
-**Pass condition:** the runtime can be created without the caller supplying
-explicit canonical-embedding or clustering policies, and the built-in defaults
-are the arithmetic-mean canonical policy and the streaming DCBC-backed
-clustering realization.
+**Pass condition:** the runtime can be created without a caller-implemented
+factory, uses the built-in arithmetic-mean canonical policy unless another
+canonical policy is explicitly supplied, requires explicit built-in algorithm
+selection, and consumes the caller-provided directional-PCA settings.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013,
-REQ-STREAM-INDEXER-014
+REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
 
 ### VAL-STREAM-INDEXER-008
 
@@ -276,12 +280,13 @@ the crate to retain or rematerialize the entire dataset on the caller's behalf.
 
 ### VAL-STREAM-INDEXER-026
 
-Inspect the new crate's dependency manifest and built-in default clustering
-realization.
+Inspect the new crate's dependency manifest and built-in clustering
+realizations.
 
-**Pass condition:** the crate depends on `lexongraph-dcbc-streaming`, and the
-built-in default clustering path delegates through the shared streaming
-clustering contract rather than reimplementing streaming DCBC mechanics locally.
+**Pass condition:** the crate depends on `lexongraph-dcbc-streaming` and
+`lexongraph-directional-pca`, and each built-in clustering path delegates
+through the shared streaming clustering contract rather than reimplementing
+either algorithm locally.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-019
 
@@ -293,3 +298,18 @@ Inspect the repository verification artifacts for the new crate.
 validation surface.
 
 **Traces to:** REQ-STREAM-INDEXER-030
+
+### VAL-STREAM-INDEXER-028
+
+Construct the streaming indexer through its built-in clustering-selection
+surface, selecting directional PCA in one case and DCBC in another.
+
+**Pass condition:** callers can choose either built-in clustering algorithm
+through the indexer API without implementing a custom
+`StreamingClusteringFactory`, each selection requires caller-supplied settings
+for the chosen algorithm, attempts to omit the required algorithm choice or
+required settings fail explicitly, and the rest of the streaming runtime
+contract remains unchanged.
+
+**Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-014,
+REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032

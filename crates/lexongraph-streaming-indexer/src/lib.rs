@@ -9,8 +9,10 @@
 //! [`StreamingClusterTrainer`] /
 //! [`lexongraph_streaming_clustering::StreamingClusterClassifier`] contract from
 //! `lexongraph-streaming-clustering` for the first parent-producing layer and
-//! for every higher layer.  The built-in default clustering realization is
-//! backed by `lexongraph-dcbc-streaming`.
+//! for every higher layer. Callers explicitly choose a built-in clustering path
+//! backed by either `lexongraph-dcbc-streaming` or
+//! `lexongraph-directional-pca`, or they can provide a custom clustering
+//! factory.
 //!
 //! ```compile_fail
 //! #[cfg(feature = "conformance")]
@@ -40,8 +42,11 @@ pub use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
+use lexongraph_directional_pca::{
+    DirectionalPcaParams, DirectionalPcaStreamingClassifier, DirectionalPcaStreamingTrainer,
+};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
-pub use lexongraph_streaming_clustering::MetricDirection;
+pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
 use lexongraph_streaming_clustering::{
     ClusterId, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringConfig,
     StreamingClusteringError,
@@ -248,10 +253,10 @@ impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Built-in streaming clustering factory (DCBC-backed)
+// Built-in streaming clustering factories
 // ─────────────────────────────────────────────────────────────
 
-/// Default [`StreamingClusteringFactory`] backed by `lexongraph-dcbc-streaming`.
+/// Explicit [`StreamingClusteringFactory`] backed by `lexongraph-dcbc-streaming`.
 ///
 /// `cluster_count` is the fallback only when `create_trainer` is invoked with
 /// an `estimated_child_count` of zero. When the child count is known, the
@@ -279,43 +284,12 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
         block_size_target: usize,
         embedding_spec: &EmbeddingSpec,
     ) -> Result<DcbcStreamingTrainer, StreamingClusteringError> {
-        let cluster_count = if estimated_child_count == 0 {
-            // Unknown count: use the configured default.
-            self.cluster_count.max(1)
-        } else {
-            let max_per = max_children_per_branch(
-                embedding_spec,
-                block_size_target,
-                estimated_child_count,
-            )
-            .map_err(|message| StreamingClusteringError::InvalidConfiguration {
-                message: format!(
-                    "cannot derive branch capacity for embedding spec {} dims under {}: {message}",
-                    embedding_spec.dims, embedding_spec.encoding
-                ),
-            })?;
-            if estimated_child_count <= max_per.max(1) {
-                1 // All items fit in a single block.
-            } else {
-                let needed = estimated_child_count.div_ceil(max_per.max(2));
-                let max_sensible = estimated_child_count / 2;
-                if needed > max_sensible {
-                    return Err(StreamingClusteringError::InvalidConfiguration {
-                        message: format!(
-                            "cannot satisfy minimum two-children-per-branch constraint for {estimated_child_count} children with block size target {block_size_target}"
-                        ),
-                    });
-                } else {
-                    u32::try_from(needed).map_err(|_| {
-                        StreamingClusteringError::InvalidConfiguration {
-                            message: format!(
-                                "derived cluster count {needed} exceeds u32::MAX for estimated child count {estimated_child_count}"
-                            ),
-                        }
-                    })?
-                }
-            }
-        };
+        let cluster_count = derived_dcbc_cluster_count(
+            self.cluster_count,
+            estimated_child_count,
+            block_size_target,
+            embedding_spec,
+        )?;
 
         DcbcStreamingTrainer::new(StreamingClusteringConfig {
             cluster_count,
@@ -323,6 +297,164 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
             balance_constraints: None,
             random_seed: None,
         })
+    }
+}
+
+/// Caller-supplied settings for the built-in DCBC clustering path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DcbcBuiltInClusteringSettings {
+    /// Fallback cluster count used when the child count is not yet known.
+    pub cluster_count: u32,
+    pub balance_constraints: Option<BalanceConstraints>,
+    pub random_seed: Option<u64>,
+}
+
+/// Caller-supplied settings for the built-in directional-PCA clustering path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DirectionalPcaBuiltInClusteringSettings {
+    pub cluster_count: u32,
+    pub balance_constraints: Option<BalanceConstraints>,
+    pub random_seed: Option<u64>,
+    pub params: DirectionalPcaParams,
+}
+
+/// Built-in clustering choices exposed by the streaming indexer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BuiltInClustering {
+    Dcbc(DcbcBuiltInClusteringSettings),
+    DirectionalPca(DirectionalPcaBuiltInClusteringSettings),
+}
+
+/// Built-in classifier wrapper covering all built-in clustering realizations.
+pub enum BuiltInStreamingClusterClassifier {
+    Dcbc(<DcbcStreamingTrainer as StreamingClusterTrainer>::Classifier),
+    DirectionalPca(DirectionalPcaStreamingClassifier),
+}
+
+impl StreamingClusterClassifier for BuiltInStreamingClusterClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        match self {
+            Self::Dcbc(classifier) => classifier.config(),
+            Self::DirectionalPca(classifier) => classifier.config(),
+        }
+    }
+
+    fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        match self {
+            Self::Dcbc(classifier) => classifier.assign(embedding),
+            Self::DirectionalPca(classifier) => classifier.assign(embedding),
+        }
+    }
+}
+
+/// Built-in trainer wrapper covering all built-in clustering realizations.
+pub enum BuiltInStreamingClusterTrainer {
+    Dcbc(DcbcStreamingTrainer),
+    DirectionalPca(DirectionalPcaStreamingTrainer),
+}
+
+impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
+    type Classifier = BuiltInStreamingClusterClassifier;
+
+    fn config(&self) -> &StreamingClusteringConfig {
+        match self {
+            Self::Dcbc(trainer) => trainer.config(),
+            Self::DirectionalPca(trainer) => trainer.config(),
+        }
+    }
+
+    fn state(&self) -> lexongraph_streaming_clustering::TrainerState {
+        match self {
+            Self::Dcbc(trainer) => trainer.state(),
+            Self::DirectionalPca(trainer) => trainer.state(),
+        }
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Vec<f32>]) -> Result<(), StreamingClusteringError> {
+        match self {
+            Self::Dcbc(trainer) => trainer.ingest_batch(embeddings),
+            Self::DirectionalPca(trainer) => trainer.ingest_batch(embeddings),
+        }
+    }
+
+    fn finish_pass(
+        &mut self,
+    ) -> Result<lexongraph_streaming_clustering::PassReport, StreamingClusteringError> {
+        match self {
+            Self::Dcbc(trainer) => trainer.finish_pass(),
+            Self::DirectionalPca(trainer) => trainer.finish_pass(),
+        }
+    }
+
+    fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+        match self {
+            Self::Dcbc(trainer) => trainer.complete_training(),
+            Self::DirectionalPca(trainer) => trainer.complete_training(),
+        }
+    }
+
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+        match self {
+            Self::Dcbc(trainer) => trainer.into_classifier().map(Self::Classifier::Dcbc),
+            Self::DirectionalPca(trainer) => trainer
+                .into_classifier()
+                .map(Self::Classifier::DirectionalPca),
+        }
+    }
+}
+
+/// Built-in [`StreamingClusteringFactory`] selecting either DCBC or directional
+/// PCA based on caller-supplied settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuiltInClusteringFactory {
+    clustering: BuiltInClustering,
+}
+
+impl BuiltInClusteringFactory {
+    pub fn new(clustering: BuiltInClustering) -> Self {
+        Self { clustering }
+    }
+}
+
+impl StreamingClusteringFactory for BuiltInClusteringFactory {
+    type Trainer = BuiltInStreamingClusterTrainer;
+    type Error = StreamingClusteringError;
+
+    fn create_trainer(
+        &self,
+        dimensions: usize,
+        estimated_child_count: usize,
+        block_size_target: usize,
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<Self::Trainer, Self::Error> {
+        match &self.clustering {
+            BuiltInClustering::Dcbc(settings) => {
+                let cluster_count = derived_dcbc_cluster_count(
+                    settings.cluster_count,
+                    estimated_child_count,
+                    block_size_target,
+                    embedding_spec,
+                )?;
+
+                DcbcStreamingTrainer::new(StreamingClusteringConfig {
+                    cluster_count,
+                    dimensions,
+                    balance_constraints: settings.balance_constraints.clone(),
+                    random_seed: settings.random_seed,
+                })
+                .map(BuiltInStreamingClusterTrainer::Dcbc)
+            }
+            BuiltInClustering::DirectionalPca(settings) => DirectionalPcaStreamingTrainer::new(
+                StreamingClusteringConfig {
+                    cluster_count: settings.cluster_count,
+                    dimensions,
+                    balance_constraints: settings.balance_constraints.clone(),
+                    random_seed: settings.random_seed,
+                },
+                settings.params.clone(),
+            )
+            .map(BuiltInStreamingClusterTrainer::DirectionalPca),
+        }
     }
 }
 
@@ -358,13 +490,14 @@ struct IndexedChild {
 /// Orchestrates one streaming indexing run.
 ///
 /// **Lifecycle**
-/// 1. Create via [`with_defaults`], [`with_canonical_policy`], or [`new`].
+/// 1. Create via [`with_builtin_clustering`], [`with_canonical_policy`], or
+///    [`new`].
 /// 2. Replay the item set in one or more passes:  
 ///    `ingest_batch` (one or more times) → `finish_pass` → repeat.
 /// 3. Call `mark_training_complete` once satisfied.
 /// 4. Call `finalize` with the same item set to produce the finished index.
 ///
-/// [`with_defaults`]: StreamingIndexingRun::with_defaults
+/// [`with_builtin_clustering`]: StreamingIndexingRun::with_builtin_clustering
 /// [`with_canonical_policy`]: StreamingIndexingRun::with_canonical_policy
 /// [`new`]: StreamingIndexingRun::new
 pub struct StreamingIndexingRun<R, CR, EP, CEP, SCF>
@@ -398,14 +531,15 @@ impl<R, CR, EP>
         CR,
         EP,
         ArithmeticMeanCanonicalEmbeddingPolicy,
-        DcbcStreamingClusteringFactory,
+        BuiltInClusteringFactory,
     >
 {
-    /// Primary default constructor: uses the built-in arithmetic-mean
-    /// canonical-embedding policy and built-in DCBC streaming clustering.
-    pub fn with_defaults(
+    /// Constructor using the built-in arithmetic-mean canonical-embedding
+    /// policy plus an explicit built-in clustering choice.
+    pub fn with_builtin_clustering(
         resolver: CR,
         embedding_provider: EP,
+        clustering: BuiltInClustering,
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Self {
@@ -413,20 +547,21 @@ impl<R, CR, EP>
             resolver,
             embedding_provider,
             ArithmeticMeanCanonicalEmbeddingPolicy,
-            DcbcStreamingClusteringFactory { cluster_count: 2 },
+            BuiltInClusteringFactory::new(clustering),
             embedding_spec,
             block_size_target,
         )
     }
 }
 
-impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, DcbcStreamingClusteringFactory> {
-    /// Explicit canonical-embedding policy override; keeps the built-in DCBC
-    /// streaming clustering.
+impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, BuiltInClusteringFactory> {
+    /// Explicit canonical-embedding policy override paired with an explicit
+    /// built-in clustering choice.
     pub fn with_canonical_policy(
         resolver: CR,
         embedding_provider: EP,
         canonical_embedding_policy: CEP,
+        clustering: BuiltInClustering,
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Self {
@@ -434,7 +569,7 @@ impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, DcbcStreamingClusterin
             resolver,
             embedding_provider,
             canonical_embedding_policy,
-            DcbcStreamingClusteringFactory { cluster_count: 2 },
+            BuiltInClusteringFactory::new(clustering),
             embedding_spec,
             block_size_target,
         )
@@ -1774,6 +1909,45 @@ fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec
             "unsupported embedding encoding {other:?} for arithmetic-mean canonical policy"
         )),
     }
+}
+
+fn derived_dcbc_cluster_count(
+    fallback_cluster_count: u32,
+    estimated_child_count: usize,
+    block_size_target: usize,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<u32, StreamingClusteringError> {
+    if estimated_child_count == 0 {
+        return Ok(fallback_cluster_count.max(1));
+    }
+
+    let max_per = max_children_per_branch(embedding_spec, block_size_target, estimated_child_count)
+        .map_err(|message| StreamingClusteringError::InvalidConfiguration {
+            message: format!(
+                "cannot derive branch capacity for embedding spec {} dims under {}: {message}",
+                embedding_spec.dims, embedding_spec.encoding
+            ),
+        })?;
+
+    if estimated_child_count <= max_per.max(1) {
+        return Ok(1);
+    }
+
+    let needed = estimated_child_count.div_ceil(max_per.max(2));
+    let max_sensible = estimated_child_count / 2;
+    if needed > max_sensible {
+        return Err(StreamingClusteringError::InvalidConfiguration {
+            message: format!(
+                "cannot satisfy minimum two-children-per-branch constraint for {estimated_child_count} children with block size target {block_size_target}"
+            ),
+        });
+    }
+
+    u32::try_from(needed).map_err(|_| StreamingClusteringError::InvalidConfiguration {
+        message: format!(
+            "derived cluster count {needed} exceeds u32::MAX for estimated child count {estimated_child_count}"
+        ),
+    })
 }
 
 fn max_children_per_branch(
