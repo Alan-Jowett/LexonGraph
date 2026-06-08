@@ -296,6 +296,7 @@ pub enum StreamingIndexingStatusState {
 pub struct StreamingIndexingStatus {
     pub phase: StreamingIndexingPhase,
     pub state: StreamingIndexingStatusState,
+    pub item_count: usize,
     pub phase_total_unit_count: Option<usize>,
     pub completed_unit_count: usize,
     pub remaining_unit_count: Option<usize>,
@@ -644,6 +645,14 @@ struct LayerBuildStatus<'a> {
     progress: &'a Arc<AtomicUsize>,
 }
 
+fn advance_progress(progress: &Arc<AtomicUsize>, delta: usize, total: usize) {
+    let _ = progress.fetch_update(
+        AtomicOrdering::Relaxed,
+        AtomicOrdering::Relaxed,
+        |current| Some(current.saturating_add(delta).min(total)),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────
 // StreamingIndexingRun — the public orchestration type
 // ─────────────────────────────────────────────────────────────
@@ -948,6 +957,9 @@ where
                 materializability_bound,
                 self.block_size_target,
                 |stage, item_count, state| {
+                    if matches!(state, StreamingIndexingStatusState::InProgress) {
+                        advance_progress(&pass_progress, item_count, pass_total);
+                    }
                     stage_statuses.observe(stage, state, item_count);
                 },
             )
@@ -2117,6 +2129,7 @@ fn status_with_progress(
     StreamingIndexingStatus {
         phase,
         state,
+        item_count: phase_total_unit_count.unwrap_or(completed_unit_count),
         phase_total_unit_count,
         completed_unit_count,
         remaining_unit_count: remaining_units(phase_total_unit_count, completed_unit_count),

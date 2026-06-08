@@ -346,25 +346,21 @@ schedule-independent.
 
 The observer contract defines phase-native work-unit semantics as follows:
 
-- `TrainingPass { pass_number }`: units are logical input items in the current
-  replayed training pass; the total is the established pass item count; the
-  completed count advances as pass items are handed to the streaming clustering
-  trainer.
-- `LeafMaterialization`: units are replayed logical items materialized into
-  leaf blocks; the total is the baseline logical item count; the completed
+- `PlanningPass { pass_number }`: units are logical input items in the current
+  replayed planning pass; the total is the established pass item count; the
+  completed count advances according to the latest hierarchy-planning work units
+  reported for that pass and is capped at the pass total.
+- `HierarchyPlanning { stage }`: units are logical items covered by the
+  caller-visible planning-stage callbacks for that stage; the total may be
+  unavailable because recursive stage work is not known up front; the completed
+  count advances as stage callbacks report work units for that stage.
+- `FinalMaterializationReplay`: units are replayed logical items materialized
+  into leaf blocks; the total is the baseline logical item count; the completed
   count advances as replay-verified items are persisted as leaf blocks.
-- `FirstLayerClustering`: units are unique leaf children assigned into
-  first-layer parent groups; the total is the unique leaf-child count entering
-  first-layer clustering; the completed count advances as child assignments are
-  produced.
-- `HigherLayerClustering { layer_index }`: units are current-layer child
-  entries assigned into parent groups for that higher layer; the total is the
-  child-entry count entering that layer's clustering step; the completed count
-  advances as assignments are produced.
-- `LayerMaterialization { layer_index }`: units are planned parent groups for
-  that layer's block-construction step; the total is the number of groups
-  scheduled for materialization in that layer; the completed count advances as
-  branch blocks for those groups are materialized.
+- `BottomUpAssembly { layer_index }`: units are planned parent groups for that
+  bottom-up layer; the total is the number of groups scheduled for
+  materialization in that layer; the completed count advances as branch blocks
+  for those groups are materialized.
 
 When a total is known, the remaining count is derived as `total - completed`.
 Within one execution of a phase, the completed count is monotonic

@@ -1205,7 +1205,7 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_015_status_progress_counts_have_phase_semantics() {
+async fn val_stream_indexer_036_status_progress_counts_have_phase_semantics() {
     use lexongraph_streaming_indexer::StreamingIndexingPhase;
     use lexongraph_streaming_indexer::StreamingIndexingStatusState;
 

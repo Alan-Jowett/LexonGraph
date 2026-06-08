@@ -410,11 +410,10 @@ explicitly before reporting a successful final result.
 
 Run a deterministic fixture that exercises:
 
-- at least one non-trivial training pass
-- leaf materialization
-- first-layer clustering
-- at least one higher-layer clustering step
-- at least one layer materialization step
+- at least one non-trivial planning pass
+- at least one hierarchy-planning stage
+- final materialization replay
+- at least one bottom-up assembly layer
 
 Capture the observer stream and inspect the per-phase progress payloads.
 

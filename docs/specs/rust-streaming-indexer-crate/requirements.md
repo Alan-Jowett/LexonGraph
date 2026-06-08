@@ -387,11 +387,10 @@ for the progress-count fields exposed to the status observer, including:
 
 These semantics shall be phase-specific for at least:
 
-- `TrainingPass`
-- `LeafMaterialization`
-- `FirstLayerClustering`
-- `HigherLayerClustering`
-- `LayerMaterialization`
+- `PlanningPass`
+- `HierarchyPlanning`
+- `FinalMaterializationReplay`
+- `BottomUpAssembly`
 
 If a quantity is unavailable for a phase at a given moment, the observer
 contract shall represent that explicitly rather than overloading another count
