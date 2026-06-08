@@ -1349,6 +1349,66 @@ async fn val_stream_indexer_016_terminal_partition_normalization_can_collapse_du
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn regression_bottom_up_status_uses_semantic_layer_indexes() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+        item("golf"),
+        item("hotel"),
+    ];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        FixedHierarchyPlanningPolicy,
+        embedding_spec(),
+        160,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    run.finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    let bottom_up_layers = statuses
+        .iter()
+        .filter_map(|status| match status.phase {
+            StreamingIndexingPhase::BottomUpAssembly { layer_index } => Some(layer_index),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        bottom_up_layers,
+        std::collections::BTreeSet::from([0, 1, 2])
+    );
+    let layer_zero_completions = statuses
+        .iter()
+        .filter(|status| {
+            status.phase == StreamingIndexingPhase::BottomUpAssembly { layer_index: 0 }
+                && status.state == StreamingIndexingStatusState::Completed
+        })
+        .count();
+    assert!(
+        layer_zero_completions >= 2,
+        "sibling terminal assemblies should reuse semantic layer 0 instead of allocating fresh global layer numbers"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_017_replay_uses_content_reference_identity() {
     let mut run = StreamingIndexingRun::with_builtin_planning(
         AliasResolver,
