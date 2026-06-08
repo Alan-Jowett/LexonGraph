@@ -5,6 +5,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use lexongraph_block::{
     BlockError, BlockHash, BranchBlock, Content, EmbeddingSpec, TypedEntries, into_entries,
@@ -32,6 +34,49 @@ use sha2::{Digest, Sha256};
 #[derive(Default)]
 struct MemoryBlockStore {
     blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+}
+
+#[derive(Default)]
+struct SlowBranchStore {
+    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+}
+
+impl BlockStore for SlowBranchStore {
+    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
+        if matches!(block, lexongraph_block::Block::Branch(_)) {
+            thread::sleep(Duration::from_millis(250));
+        }
+        let serialized =
+            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+        self.blocks
+            .borrow_mut()
+            .insert(serialized.hash, serialized.bytes);
+        Ok(serialized.hash)
+    }
+
+    fn get(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
+            return Ok(None);
+        };
+        lexongraph_block::deserialize_block(&bytes, block_id)
+            .map(Some)
+            .map_err(|error| match error {
+                BlockError::HashMismatch { expected, actual } => {
+                    BlockStoreError::IntegrityMismatch { expected, actual }
+                }
+                other => BlockStoreError::MalformedContent(other),
+            })
+    }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        Ok(Box::new(ids.into_iter().map(Ok)))
+    }
 }
 
 impl BlockStore for MemoryBlockStore {
@@ -66,6 +111,46 @@ impl BlockStore for MemoryBlockStore {
     ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
         let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
         Ok(Box::new(ids.into_iter().map(Ok)))
+    }
+}
+
+#[derive(Clone, Default)]
+struct DeclaredButUnusedStagePlanningPolicy;
+
+impl HierarchicalPlanningPolicy for DeclaredButUnusedStagePlanningPolicy {
+    type Error = FixtureError;
+
+    fn declared_stages(&self) -> std::collections::BTreeSet<PlanningStage> {
+        [PlanningStage::Coarse, PlanningStage::Fine]
+            .into_iter()
+            .collect()
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![FinalizedPartition {
+                    id: "p0".into(),
+                    parent_id: None,
+                    child_ids: vec![],
+                    item_indices: (0..embeddings.len()).collect(),
+                    terminal: true,
+                    planning_stage: PlanningStage::Single,
+                }],
+            },
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: std::collections::BTreeSet::new(),
+        })
     }
 }
 
@@ -905,29 +990,11 @@ async fn val_stream_indexer_022_invalid_hybrid_configuration_is_explicit() {
         })
         .count();
     assert_eq!(planning_failures, 1);
-    assert!(statuses.iter().any(|status| {
+    assert!(!statuses.iter().any(|status| {
         matches!(
             status.phase,
-            StreamingIndexingPhase::HierarchyPlanning {
-                stage: PlanningStage::Coarse
-            }
-        ) && status.state == StreamingIndexingStatusState::Started
-    }));
-    assert!(statuses.iter().any(|status| {
-        matches!(
-            status.phase,
-            StreamingIndexingPhase::HierarchyPlanning {
-                stage: PlanningStage::Coarse
-            }
-        ) && status.state == StreamingIndexingStatusState::InProgress
-    }));
-    assert!(statuses.iter().any(|status| {
-        matches!(
-            status.phase,
-            StreamingIndexingPhase::HierarchyPlanning {
-                stage: PlanningStage::Coarse
-            }
-        ) && status.state == StreamingIndexingStatusState::Failed
+            StreamingIndexingPhase::HierarchyPlanning { .. }
+        )
     }));
 }
 
@@ -998,7 +1065,7 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
         item("echo"),
         item("foxtrot"),
     ];
-    let store = MemoryBlockStore::default();
+    let store = SlowBranchStore::default();
     let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
@@ -1037,6 +1104,23 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
             StreamingIndexingPhase::BottomUpAssembly { .. }
         ) && status.state == StreamingIndexingStatusState::Completed
     }));
+    let mut bottom_up_in_progress_counts = HashMap::<usize, usize>::new();
+    for status in statuses.iter().filter(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::BottomUpAssembly { .. }
+        ) && status.state == StreamingIndexingStatusState::InProgress
+    }) {
+        let StreamingIndexingPhase::BottomUpAssembly { layer_index } = status.phase else {
+            unreachable!("filtered to bottom-up assembly statuses")
+        };
+        *bottom_up_in_progress_counts.entry(layer_index).or_default() += 1;
+    }
+    assert!(
+        bottom_up_in_progress_counts
+            .values()
+            .any(|count| *count >= 2)
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1088,7 +1172,7 @@ async fn val_stream_indexer_018_storage_integrity_is_checked() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_023_failed_bottom_up_assembly_emits_failed_status() {
+async fn val_stream_indexer_023_failed_bottom_up_assembly_does_not_fail_replay_status() {
     let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let observer: StreamingIndexingStatusObserver = {
         let statuses = Arc::clone(&statuses);
@@ -1115,6 +1199,12 @@ async fn val_stream_indexer_023_failed_bottom_up_assembly_emits_failed_status() 
         ) && status.state == StreamingIndexingStatusState::Failed
     }));
     assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::FinalMaterializationReplay
+        ) && status.state == StreamingIndexingStatusState::Completed
+    }));
+    assert!(!statuses.iter().any(|status| {
         matches!(
             status.phase,
             StreamingIndexingPhase::FinalMaterializationReplay
@@ -1159,6 +1249,37 @@ async fn val_stream_indexer_024_invalid_hierarchy_emits_failed_status() {
                 stage: PlanningStage::Custom
             }
         ) && status.state == StreamingIndexingStatusState::Failed
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_027_unused_declared_stages_do_not_emit_status() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        DeclaredButUnusedStagePlanningPolicy,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo")])
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    assert!(!statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning { .. }
+        )
     }));
 }
 
@@ -1227,12 +1348,10 @@ async fn val_stream_indexer_026_clustering_failure_is_explicit() {
         matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
             && status.state == StreamingIndexingStatusState::Failed
     }));
-    assert!(statuses.iter().any(|status| {
+    assert!(!statuses.iter().any(|status| {
         matches!(
             status.phase,
-            StreamingIndexingPhase::HierarchyPlanning {
-                stage: PlanningStage::Custom
-            }
-        ) && status.state == StreamingIndexingStatusState::Failed
+            StreamingIndexingPhase::HierarchyPlanning { .. }
+        )
     }));
 }

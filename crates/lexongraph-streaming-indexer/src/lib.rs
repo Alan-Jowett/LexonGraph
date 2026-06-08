@@ -157,6 +157,38 @@ pub trait HierarchicalPlanningPolicy {
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error>;
+
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        let outcome = self.finish_planning_pass(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+        )?;
+        for stage in outcome.stages_used.iter().copied() {
+            observe_stage(
+                stage,
+                embeddings.len(),
+                StreamingIndexingStatusState::Started,
+            );
+            observe_stage(
+                stage,
+                embeddings.len(),
+                StreamingIndexingStatusState::InProgress,
+            );
+        }
+        Ok(outcome)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -489,12 +521,35 @@ where
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut noop = |_, _, _| {};
         derive_hierarchy_from_factory(
             &self.factory,
             embeddings,
             embedding_spec,
             materializability_bound,
             block_size_target,
+            &mut noop,
+        )
+    }
+
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        derive_hierarchy_from_factory(
+            &self.factory,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut observe_stage,
         )
     }
 }
@@ -520,12 +575,35 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut noop = |_, _, _| {};
         derive_hierarchy_from_built_in(
             &self.planning,
             embeddings,
             embedding_spec,
             materializability_bound,
             block_size_target,
+            &mut noop,
+        )
+    }
+
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        derive_hierarchy_from_built_in(
+            &self.planning,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut observe_stage,
         )
     }
 }
@@ -835,38 +913,18 @@ where
             pass_started,
         ));
 
-        let declared_stages = self.planning_policy.declared_stages();
-        for stage in declared_stages.iter().copied() {
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                    state: StreamingIndexingStatusState::Started,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: Duration::ZERO,
-                    error: None,
-                },
-            );
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                    state: StreamingIndexingStatusState::InProgress,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: pass_started.elapsed(),
-                    error: None,
-                },
-            );
-        }
-
+        let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
         let outcome = self
             .planning_policy
-            .finish_planning_pass(
+            .finish_planning_pass_with_stage_observer(
                 &buffered,
                 &self.embedding_spec,
                 materializability_bound,
                 self.block_size_target,
+                |stage, item_count, state| {
+                    stage_statuses.observe(stage, state, item_count);
+                },
             )
             .map_err(map_planning_policy_error);
 
@@ -885,18 +943,7 @@ where
                         error: Some(error.to_string()),
                     },
                 );
-                for stage in declared_stages.iter().copied() {
-                    emit_status(
-                        &self.observer,
-                        StreamingIndexingStatus {
-                            phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                            state: StreamingIndexingStatusState::Failed,
-                            item_count: self.items_seen_in_current_pass,
-                            elapsed: pass_started.elapsed(),
-                            error: Some(error.to_string()),
-                        },
-                    );
-                }
+                stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 return Err(error);
             }
         };
@@ -917,33 +964,10 @@ where
                     error: Some(error.to_string()),
                 },
             );
-            for stage in outcome.stages_used.iter().copied() {
-                emit_status(
-                    &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                        state: StreamingIndexingStatusState::Failed,
-                        item_count: self.items_seen_in_current_pass,
-                        elapsed: pass_started.elapsed(),
-                        error: Some(error.to_string()),
-                    },
-                );
-            }
+            stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             return Err(error);
         }
-        for stage in declared_stages.iter().copied() {
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                    state: StreamingIndexingStatusState::Completed,
-                    item_count: usize::from(outcome.stages_used.contains(&stage))
-                        * self.items_seen_in_current_pass,
-                    elapsed: pass_started.elapsed(),
-                    error: None,
-                },
-            );
-        }
+        stage_statuses.complete_all(pass_started.elapsed());
 
         if self.baseline.is_none() {
             self.baseline = Some(std::mem::take(&mut self.current_pass_items));
@@ -1058,7 +1082,7 @@ where
             materializability_bound(&self.embedding_spec, self.block_size_target)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
 
-        let started = Instant::now();
+        let replay_started = Instant::now();
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
@@ -1073,10 +1097,10 @@ where
             &self.observer,
             StreamingIndexingPhase::FinalMaterializationReplay,
             baseline.len(),
-            started,
+            replay_started,
         ));
 
-        let result = async {
+        let replay_result = async {
             let mut replay_count = 0usize;
             let mut leaf_children: Vec<IndexedChild> = Vec::with_capacity(baseline.len());
             let mut persisted_ids: Vec<BlockHash> = Vec::new();
@@ -1201,56 +1225,61 @@ where
                 )));
             }
 
-            if leaf_children.len() == 1 {
-                let root_id = leaf_children[0].child;
-                dedup_sort_ids(&mut persisted_ids);
-                return Ok(StreamingIndexingResult {
-                    root_id,
-                    block_ids: persisted_ids,
-                });
-            }
-
-            let root_child = self.materialize_hierarchy_bottom_up(
-                hierarchy,
-                &leaf_children,
-                materializability_bound,
-                store,
-                &mut persisted_ids,
-            )?;
-
-            dedup_sort_ids(&mut persisted_ids);
-            Ok(StreamingIndexingResult {
-                root_id: root_child.child,
-                block_ids: persisted_ids,
-            })
+            Ok((leaf_children, persisted_ids))
         }
         .await;
 
         heartbeat.stop();
-        match &result {
-            Ok(indexing_result) => emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::FinalMaterializationReplay,
-                    state: StreamingIndexingStatusState::Completed,
-                    item_count: indexing_result.block_ids.len(),
-                    elapsed: started.elapsed(),
-                    error: None,
-                },
-            ),
-            Err(error) => emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::FinalMaterializationReplay,
-                    state: StreamingIndexingStatusState::Failed,
-                    item_count: baseline.len(),
-                    elapsed: started.elapsed(),
-                    error: Some(error.to_string()),
-                },
-            ),
+        let (leaf_children, mut persisted_ids) = match replay_result {
+            Ok(replay_materialization) => {
+                emit_status(
+                    &self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::FinalMaterializationReplay,
+                        state: StreamingIndexingStatusState::Completed,
+                        item_count: baseline.len(),
+                        elapsed: replay_started.elapsed(),
+                        error: None,
+                    },
+                );
+                replay_materialization
+            }
+            Err(error) => {
+                emit_status(
+                    &self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::FinalMaterializationReplay,
+                        state: StreamingIndexingStatusState::Failed,
+                        item_count: baseline.len(),
+                        elapsed: replay_started.elapsed(),
+                        error: Some(error.to_string()),
+                    },
+                );
+                return Err(error);
+            }
+        };
+
+        if leaf_children.len() == 1 {
+            let root_id = leaf_children[0].child;
+            dedup_sort_ids(&mut persisted_ids);
+            return Ok(StreamingIndexingResult {
+                root_id,
+                block_ids: persisted_ids,
+            });
         }
 
-        result
+        let root_child = self.materialize_hierarchy_bottom_up(
+            hierarchy,
+            &leaf_children,
+            materializability_bound,
+            store,
+            &mut persisted_ids,
+        )?;
+        dedup_sort_ids(&mut persisted_ids);
+        Ok(StreamingIndexingResult {
+            root_id: root_child.child,
+            block_ids: persisted_ids,
+        })
     }
 
     fn materialize_hierarchy_bottom_up(
@@ -1385,6 +1414,12 @@ where
                     error: None,
                 },
             );
+            let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
+                &self.observer,
+                phase.clone(),
+                current.len(),
+                started,
+            ));
 
             let next_level = current.iter().map(|child| child.level).max().unwrap_or(0) + 1;
             let next_layer = match self.build_branch_layer(
@@ -1396,6 +1431,7 @@ where
             ) {
                 Ok(next_layer) => next_layer,
                 Err(error) => {
+                    heartbeat.stop();
                     emit_status(
                         &self.observer,
                         StreamingIndexingStatus {
@@ -1411,6 +1447,7 @@ where
             };
             current = normalize_current_layer(next_layer);
 
+            heartbeat.stop();
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
@@ -1512,10 +1549,14 @@ fn derive_hierarchy_from_built_in(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     _block_size_target: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match planning {
-        BuiltInPlanning::Dcbc(settings) => {
-            derive_hierarchy_with_builder(embeddings, materializability_bound, |partition_len| {
+        BuiltInPlanning::Dcbc(settings) => derive_hierarchy_with_builder(
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            |partition_len| {
                 Ok(PartitionPlanner::new(
                     PlanningStage::Single,
                     create_built_in_trainer(
@@ -1526,10 +1567,13 @@ fn derive_hierarchy_from_built_in(
                         materializability_bound,
                     )?,
                 ))
-            })
-        }
-        BuiltInPlanning::DirectionalPca(settings) => {
-            derive_hierarchy_with_builder(embeddings, materializability_bound, |partition_len| {
+            },
+        ),
+        BuiltInPlanning::DirectionalPca(settings) => derive_hierarchy_with_builder(
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            |partition_len| {
                 Ok(PartitionPlanner::new(
                     PlanningStage::Single,
                     create_built_in_trainer(
@@ -1540,31 +1584,36 @@ fn derive_hierarchy_from_built_in(
                         materializability_bound,
                     )?,
                 ))
-            })
-        }
+            },
+        ),
         BuiltInPlanning::Hybrid(settings) => {
             if settings.fine_partition_max_items < 2 {
                 return Err(StreamingIndexerError::InvalidHybridPlanningConfiguration(
                     "fine_partition_max_items must be at least 2".into(),
                 ));
             }
-            derive_hierarchy_with_builder(embeddings, materializability_bound, |partition_len| {
-                let (stage, phase) = if partition_len <= settings.fine_partition_max_items {
-                    (PlanningStage::Fine, settings.fine.clone())
-                } else {
-                    (PlanningStage::Coarse, settings.coarse.clone())
-                };
-                Ok(PartitionPlanner::new(
-                    stage,
-                    create_built_in_trainer(
-                        &phase,
-                        partition_len,
-                        embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
-                ))
-            })
+            derive_hierarchy_with_builder(
+                embeddings,
+                materializability_bound,
+                stage_observer,
+                |partition_len| {
+                    let (stage, phase) = if partition_len <= settings.fine_partition_max_items {
+                        (PlanningStage::Fine, settings.fine.clone())
+                    } else {
+                        (PlanningStage::Coarse, settings.coarse.clone())
+                    };
+                    Ok(PartitionPlanner::new(
+                        stage,
+                        create_built_in_trainer(
+                            &phase,
+                            partition_len,
+                            embeddings.first().map_or(0, std::vec::Vec::len),
+                            embedding_spec,
+                            materializability_bound,
+                        )?,
+                    ))
+                },
+            )
         }
     }
 }
@@ -1621,17 +1670,23 @@ fn derive_hierarchy_from_factory<F>(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     block_size_target: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 ) -> Result<PlanningPassOutcome, StreamingClusteringError>
 where
     F: StreamingClusteringFactory,
 {
     let dimensions = embeddings.first().map_or(0, std::vec::Vec::len);
-    derive_hierarchy_with_builder(embeddings, materializability_bound, |partition_len| {
-        let trainer = factory
-            .create_trainer(dimensions, partition_len, block_size_target, embedding_spec)
-            .map_err(|error| invalid_config(error.to_string()))?;
-        Ok(PartitionPlanner::new(PlanningStage::Custom, trainer))
-    })
+    derive_hierarchy_with_builder(
+        embeddings,
+        materializability_bound,
+        stage_observer,
+        |partition_len| {
+            let trainer = factory
+                .create_trainer(dimensions, partition_len, block_size_target, embedding_spec)
+                .map_err(|error| invalid_config(error.to_string()))?;
+            Ok(PartitionPlanner::new(PlanningStage::Custom, trainer))
+        },
+    )
 }
 
 struct PartitionPlanner<T> {
@@ -1674,15 +1729,17 @@ where
     }
 }
 
-fn derive_hierarchy_with_builder<E, B, P>(
+fn derive_hierarchy_with_builder<E, B, P, SO>(
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
+    stage_observer: &mut SO,
     mut planner_builder: B,
 ) -> Result<PlanningPassOutcome, E>
 where
     E: From<StreamingClusteringError>,
     B: FnMut(usize) -> Result<P, E>,
     P: PartitionPlannerRunner,
+    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 {
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
@@ -1707,6 +1764,7 @@ where
         None,
         embeddings,
         materializability_bound,
+        stage_observer,
         &mut planner_builder,
         &mut accumulator,
         &mut partitions,
@@ -1726,12 +1784,13 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn derive_partition_recursive<E, B, P>(
+fn derive_partition_recursive<E, B, P, SO>(
     indices: &[usize],
     partition_id: String,
     parent_id: Option<String>,
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
+    stage_observer: &mut SO,
     planner_builder: &mut B,
     accumulator: &mut PlanningMetricAccumulator,
     partitions: &mut Vec<FinalizedPartition>,
@@ -1740,6 +1799,7 @@ where
     E: From<StreamingClusteringError>,
     B: FnMut(usize) -> Result<P, E>,
     P: PartitionPlannerRunner,
+    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 {
     let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
     if terminal {
@@ -1756,6 +1816,12 @@ where
 
     let planner = planner_builder(indices.len())?;
     let stage = planner.stage();
+    stage_observer(stage, indices.len(), StreamingIndexingStatusState::Started);
+    stage_observer(
+        stage,
+        indices.len(),
+        StreamingIndexingStatusState::InProgress,
+    );
     let partition_embeddings = indices
         .iter()
         .map(|&index| embeddings[index].clone())
@@ -1806,6 +1872,7 @@ where
             Some(partition_id.clone()),
             embeddings,
             materializability_bound,
+            stage_observer,
             planner_builder,
             accumulator,
             partitions,
@@ -1863,6 +1930,96 @@ impl PlanningMetricAccumulator {
         } else {
             self.balance_sum / self.cluster_runs as f64
         }
+    }
+}
+
+struct PlanningStageStatusTracker<'a> {
+    observer: &'a Option<StreamingIndexingStatusObserver>,
+    pass_started: Instant,
+    stage_item_counts: BTreeMap<PlanningStage, usize>,
+}
+
+impl<'a> PlanningStageStatusTracker<'a> {
+    fn new(observer: &'a Option<StreamingIndexingStatusObserver>, pass_started: Instant) -> Self {
+        Self {
+            observer,
+            pass_started,
+            stage_item_counts: BTreeMap::new(),
+        }
+    }
+
+    fn observe(
+        &mut self,
+        stage: PlanningStage,
+        state: StreamingIndexingStatusState,
+        item_count: usize,
+    ) {
+        match state {
+            StreamingIndexingStatusState::Started => self.ensure_started(stage, item_count),
+            StreamingIndexingStatusState::InProgress => {
+                self.ensure_started(stage, item_count);
+                let total = self.stage_item_counts.entry(stage).or_insert(0);
+                *total += item_count;
+                emit_status(
+                    self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                        state,
+                        item_count: *total,
+                        elapsed: self.pass_started.elapsed(),
+                        error: None,
+                    },
+                );
+            }
+            StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed => {}
+        }
+    }
+
+    fn complete_all(&self, elapsed: Duration) {
+        for (stage, item_count) in &self.stage_item_counts {
+            emit_status(
+                self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
+                    state: StreamingIndexingStatusState::Completed,
+                    item_count: *item_count,
+                    elapsed,
+                    error: None,
+                },
+            );
+        }
+    }
+
+    fn fail_all(&self, elapsed: Duration, error: &str) {
+        for (stage, item_count) in &self.stage_item_counts {
+            emit_status(
+                self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: *item_count,
+                    elapsed,
+                    error: Some(error.to_owned()),
+                },
+            );
+        }
+    }
+
+    fn ensure_started(&mut self, stage: PlanningStage, item_count: usize) {
+        if self.stage_item_counts.contains_key(&stage) {
+            return;
+        }
+        self.stage_item_counts.insert(stage, 0);
+        emit_status(
+            self.observer,
+            StreamingIndexingStatus {
+                phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                state: StreamingIndexingStatusState::Started,
+                item_count,
+                elapsed: Duration::ZERO,
+                error: None,
+            },
+        );
     }
 }
 
