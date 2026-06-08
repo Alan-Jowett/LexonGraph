@@ -370,6 +370,23 @@ When a total is known, the remaining count is derived as `total - completed`.
 Within one execution of a phase, the completed count is monotonic
 non-decreasing and shall not exceed the phase total.
 
+### DSG-STREAM-INDEXER-030 `Semantic bottom-up layer identity`
+
+For `BottomUpAssembly { layer_index }`, `layer_index` identifies the semantic
+parent layer currently being materialized rather than a globally incrementing
+assembly step counter.
+
+The reported value is derived from the child block level being merged in that
+phase, so:
+
+- materializing parents directly over leaves reports `layer_index = 0`
+- materializing parents over level-1 branch children reports `layer_index = 1`
+- higher layers continue analogously
+
+Recursive, repeated, or concurrent subtree assembly may therefore reuse the
+same `layer_index` multiple times when those operations build the same semantic
+layer.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -395,3 +412,4 @@ non-decreasing and shall not exceed the phase total.
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039 |
+| DSG-STREAM-INDEXER-030 | REQ-STREAM-INDEXER-040 |
