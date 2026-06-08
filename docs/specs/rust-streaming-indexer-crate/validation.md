@@ -424,3 +424,19 @@ derive materially useful progress such as "processed X / Y, Z remaining"
 without inferring semantics from elapsed time alone.
 
 **Traces to:** REQ-STREAM-INDEXER-039
+
+### VAL-STREAM-INDEXER-037
+
+Run a deterministic fixture whose finalized hierarchy causes multiple bottom-up
+assemblies at the same semantic depth plus at least one higher-layer merge.
+
+Capture the observer stream and inspect the reported
+`BottomUpAssembly { layer_index }` phases.
+
+**Pass condition:** the recorded `layer_index` values identify the semantic
+parent layer being materialized rather than the temporal count of recursive
+assembly operations. Distinct subtree or sibling assemblies that build the same
+semantic layer reuse the same `layer_index`, and the observed layer indexes are
+bounded by the assembled tree depth implied by the hierarchy and block levels.
+
+**Traces to:** REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-040

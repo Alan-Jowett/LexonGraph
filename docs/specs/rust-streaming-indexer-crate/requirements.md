@@ -396,6 +396,16 @@ If a quantity is unavailable for a phase at a given moment, the observer
 contract shall represent that explicitly rather than overloading another count
 with ambiguous meaning.
 
+### REQ-STREAM-INDEXER-040
+
+For `BottomUpAssembly { layer_index }` status phases, `layer_index` shall name
+the semantic bottom-up layer being materialized, measured from leaf level 0 in
+the block protocol, rather than the temporal count of recursive or sequential
+assembly operations.
+
+Independent subtree or sibling assemblies that materialize the same semantic
+parent layer shall therefore report the same `layer_index`.
+
 ## Out of Scope
 
 This crate does not define or own:

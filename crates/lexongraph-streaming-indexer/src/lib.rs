@@ -1346,7 +1346,6 @@ where
             .cloned()
             .map(|partition| (partition.id.clone(), partition))
             .collect::<HashMap<_, _>>();
-        let mut layer_index = 0usize;
         self.materialize_partition(
             &hierarchy.root_partition_id,
             &partitions,
@@ -1354,7 +1353,6 @@ where
             materializability_bound,
             store,
             persisted_ids,
-            &mut layer_index,
         )
     }
 
@@ -1367,7 +1365,6 @@ where
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
-        layer_index: &mut usize,
     ) -> Result<IndexedChild, StreamingIndexerError> {
         let partition = partitions.get(partition_id).ok_or_else(|| {
             StreamingIndexerError::HierarchyValidation(format!(
@@ -1399,19 +1396,12 @@ where
                         materializability_bound,
                         store,
                         persisted_ids,
-                        layer_index,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        self.assemble_child_set(
-            children,
-            materializability_bound,
-            store,
-            persisted_ids,
-            layer_index,
-        )
+        self.assemble_child_set(children, materializability_bound, store, persisted_ids)
     }
 
     fn assemble_child_set(
@@ -1420,7 +1410,6 @@ where
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
-        layer_index: &mut usize,
     ) -> Result<IndexedChild, StreamingIndexerError> {
         let mut current = normalize_current_layer(children);
         if current.is_empty() {
@@ -1439,9 +1428,14 @@ where
 
             let groups = balanced_groups(current.len(), materializability_bound)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
-            let phase = StreamingIndexingPhase::BottomUpAssembly {
-                layer_index: *layer_index,
-            };
+            let layer_index =
+                usize::try_from(current.iter().map(|child| child.level).max().unwrap_or(0))
+                    .map_err(|_| {
+                        StreamingIndexerError::TerminalPartitionMaterialization(
+                            "semantic bottom-up layer index does not fit usize".into(),
+                        )
+                    })?;
+            let phase = StreamingIndexingPhase::BottomUpAssembly { layer_index };
             let started = Instant::now();
             let legacy_item_count = current.len();
             let phase_total = groups.len();
@@ -1534,7 +1528,6 @@ where
                     legacy_item_count,
                 ),
             );
-            *layer_index += 1;
         }
     }
 
