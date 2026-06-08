@@ -109,8 +109,7 @@ rest of the streaming runtime contract.
 
 ### VAL-STREAM-INDEXER-009
 
-Complete one successful streaming indexing pass with multiple caller-chosen
-batches.
+Complete one successful planning pass with multiple caller-chosen batches.
 
 **Pass condition:** the pass report is deterministic and includes the observed
 item count plus deterministic planning progress or quality information for the

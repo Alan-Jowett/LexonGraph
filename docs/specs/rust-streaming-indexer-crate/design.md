@@ -89,8 +89,8 @@ The crate consumes:
 - a hierarchical planning strategy whose clustering subproblems flow through
   streaming clustering realizations or factories whose trainer/classifier
   surface is defined by the shared streaming clustering contract
-- a terminal-partition normalization policy or equivalent planning rule used by
-  bottom-up assembly
+- a terminal-partition normalization or termination policy, or equivalent
+  planning rule, used by bottom-up assembly
 
 ### DSG-STREAM-INDEXER-006 `Built-in planning selection`
 

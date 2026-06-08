@@ -48,7 +48,7 @@ persisted block tree without requiring the crate to retain the full dataset as a
 public-API obligation.
 
 `Item replay order` means the ordered sequence of indexing items observed across
-all batches in one completed streaming indexing pass.
+all batches in one completed planning pass.
 
 `Partition hierarchy` means the deterministic coarse-to-fine planning tree over
 the replayed logical item set that is finalized before bottom-up block
