@@ -931,7 +931,7 @@ async fn val_stream_indexer_011_invalid_hierarchy_fails_explicitly() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_011_hierarchy_failure_preserves_open_pass_for_retry() {
+async fn regression_hierarchy_failure_preserves_open_pass_for_retry() {
     let mut run = StreamingIndexingRun::new(
         MapResolver,
         AsciiEmbeddingProvider,
@@ -1105,6 +1105,7 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
         ) && status.state == StreamingIndexingStatusState::Completed
     }));
     let mut bottom_up_in_progress_counts = HashMap::<usize, usize>::new();
+    let mut bottom_up_completed_counts = HashMap::<usize, usize>::new();
     for status in statuses.iter().filter(|status| {
         matches!(
             status.phase,
@@ -1116,11 +1117,36 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
         };
         *bottom_up_in_progress_counts.entry(layer_index).or_default() += 1;
     }
+    for status in statuses.iter().filter(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::BottomUpAssembly { .. }
+        ) && status.state == StreamingIndexingStatusState::Completed
+    }) {
+        let StreamingIndexingPhase::BottomUpAssembly { layer_index } = status.phase else {
+            unreachable!("filtered to bottom-up assembly statuses")
+        };
+        bottom_up_completed_counts.insert(layer_index, status.item_count);
+    }
     assert!(
         bottom_up_in_progress_counts
             .values()
             .any(|count| *count >= 2)
     );
+    for status in statuses.iter().filter(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::BottomUpAssembly { .. }
+        ) && status.state == StreamingIndexingStatusState::Started
+    }) {
+        let StreamingIndexingPhase::BottomUpAssembly { layer_index } = status.phase else {
+            unreachable!("filtered to bottom-up assembly statuses")
+        };
+        assert_eq!(
+            bottom_up_completed_counts.get(&layer_index),
+            Some(&status.item_count)
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

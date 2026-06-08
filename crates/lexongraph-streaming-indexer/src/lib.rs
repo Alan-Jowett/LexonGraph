@@ -30,10 +30,12 @@ use std::time::{Duration, Instant};
 use ciborium::{Value, ser::into_writer};
 use half::f16;
 use lexongraph_block::{
-    Block, BlockError, BranchBlock, BranchEntry, LeafEntry, VERSION_1, build_branch_block,
-    build_leaf_block, canonicalize_metadata, serialize_block,
+    Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
+    canonicalize_metadata, serialize_block,
 };
-pub use lexongraph_block::{BlockHash, Content, EmbeddingSpec, Metadata, SerializedBlock};
+pub use lexongraph_block::{
+    BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata, SerializedBlock,
+};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
@@ -1389,6 +1391,7 @@ where
 
             let groups = balanced_groups(current.len(), materializability_bound)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
+            let input_item_count = current.len();
 
             let phase = StreamingIndexingPhase::BottomUpAssembly {
                 layer_index: *layer_index,
@@ -1399,7 +1402,7 @@ where
                 StreamingIndexingStatus {
                     phase: phase.clone(),
                     state: StreamingIndexingStatusState::Started,
-                    item_count: current.len(),
+                    item_count: input_item_count,
                     elapsed: Duration::ZERO,
                     error: None,
                 },
@@ -1409,7 +1412,7 @@ where
                 StreamingIndexingStatus {
                     phase: phase.clone(),
                     state: StreamingIndexingStatusState::InProgress,
-                    item_count: current.len(),
+                    item_count: input_item_count,
                     elapsed: started.elapsed(),
                     error: None,
                 },
@@ -1417,7 +1420,7 @@ where
             let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
                 &self.observer,
                 phase.clone(),
-                current.len(),
+                input_item_count,
                 started,
             ));
 
@@ -1437,7 +1440,7 @@ where
                         StreamingIndexingStatus {
                             phase,
                             state: StreamingIndexingStatusState::Failed,
-                            item_count: current.len(),
+                            item_count: input_item_count,
                             elapsed: started.elapsed(),
                             error: Some(error.to_string()),
                         },
@@ -1453,7 +1456,7 @@ where
                 StreamingIndexingStatus {
                     phase,
                     state: StreamingIndexingStatusState::Completed,
-                    item_count: current.len(),
+                    item_count: input_item_count,
                     elapsed: started.elapsed(),
                     error: None,
                 },
