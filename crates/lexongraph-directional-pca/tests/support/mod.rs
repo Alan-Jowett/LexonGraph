@@ -46,6 +46,26 @@ pub fn exact_k_failure_params() -> DirectionalPcaParams {
     }
 }
 
+pub fn duplicate_refinement_config() -> StreamingClusteringConfig {
+    StreamingClusteringConfig {
+        cluster_count: 3,
+        dimensions: 2,
+        balance_constraints: None,
+        random_seed: None,
+    }
+}
+
+pub fn duplicate_refinement_params() -> DirectionalPcaParams {
+    DirectionalPcaParams {
+        retained_dimension_count: 2,
+        variance_exponent: 1.0,
+        temperature: 1.0,
+        min_input_count: 2,
+        min_effective_rank: 1,
+        min_cumulative_variance: 0.0,
+    }
+}
+
 pub fn unsupported_balance_config() -> StreamingClusteringConfig {
     StreamingClusteringConfig {
         balance_constraints: Some(BalanceConstraints {
@@ -109,6 +129,23 @@ pub fn exact_k_failure_pass() -> PassInput {
         vec![1.0, 0.0],
         vec![0.0, 1.0],
         vec![1.0, 1.0],
+    ]]
+}
+
+pub fn identical_embedding_passes() -> Vec<PassInput> {
+    let pass = vec![
+        vec![vec![5.0, 5.0], vec![5.0, 5.0]],
+        vec![vec![5.0, 5.0], vec![5.0, 5.0]],
+    ];
+    vec![pass.clone(), pass]
+}
+
+pub fn partially_collapsed_duplicate_pass() -> PassInput {
+    vec![vec![
+        vec![0.0, 0.0],
+        vec![0.0, 0.0],
+        vec![0.0, 0.0],
+        vec![10.0, 0.0],
     ]]
 }
 
