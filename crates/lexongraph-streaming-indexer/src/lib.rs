@@ -936,6 +936,7 @@ where
             StreamingIndexingPhase::PlanningPass { pass_number },
             Some(pass_total),
             Arc::clone(&pass_progress),
+            None,
             pass_started,
         ));
 
@@ -1141,6 +1142,7 @@ where
             StreamingIndexingPhase::FinalMaterializationReplay,
             Some(replay_total),
             Arc::clone(&replay_progress),
+            None,
             replay_started,
         ));
 
@@ -1440,28 +1442,35 @@ where
                 layer_index: *layer_index,
             };
             let started = Instant::now();
+            let legacy_item_count = current.len();
             let phase_total = groups.len();
             let phase_progress = Arc::new(AtomicUsize::new(0));
             emit_status(
                 &self.observer,
-                status_with_known_total(
-                    phase.clone(),
-                    StreamingIndexingStatusState::Started,
-                    phase_total,
-                    0,
-                    Duration::ZERO,
-                    None,
+                with_legacy_item_count(
+                    status_with_known_total(
+                        phase.clone(),
+                        StreamingIndexingStatusState::Started,
+                        phase_total,
+                        0,
+                        Duration::ZERO,
+                        None,
+                    ),
+                    legacy_item_count,
                 ),
             );
             emit_status(
                 &self.observer,
-                status_with_known_total(
-                    phase.clone(),
-                    StreamingIndexingStatusState::InProgress,
-                    phase_total,
-                    0,
-                    started.elapsed(),
-                    None,
+                with_legacy_item_count(
+                    status_with_known_total(
+                        phase.clone(),
+                        StreamingIndexingStatusState::InProgress,
+                        phase_total,
+                        0,
+                        started.elapsed(),
+                        None,
+                    ),
+                    legacy_item_count,
                 ),
             );
             let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
@@ -1469,6 +1478,7 @@ where
                 phase.clone(),
                 Some(phase_total),
                 Arc::clone(&phase_progress),
+                Some(legacy_item_count),
                 started,
             ));
 
@@ -1490,13 +1500,16 @@ where
                     heartbeat.stop();
                     emit_status(
                         &self.observer,
-                        status_with_known_total(
-                            phase,
-                            StreamingIndexingStatusState::Failed,
-                            phase_total,
-                            phase_progress.load(AtomicOrdering::Relaxed),
-                            started.elapsed(),
-                            Some(error.to_string()),
+                        with_legacy_item_count(
+                            status_with_known_total(
+                                phase,
+                                StreamingIndexingStatusState::Failed,
+                                phase_total,
+                                phase_progress.load(AtomicOrdering::Relaxed),
+                                started.elapsed(),
+                                Some(error.to_string()),
+                            ),
+                            legacy_item_count,
                         ),
                     );
                     return Err(error);
@@ -1507,13 +1520,16 @@ where
             heartbeat.stop();
             emit_status(
                 &self.observer,
-                status_with_known_total(
-                    phase,
-                    StreamingIndexingStatusState::Completed,
-                    phase_total,
-                    phase_total,
-                    started.elapsed(),
-                    None,
+                with_legacy_item_count(
+                    status_with_known_total(
+                        phase,
+                        StreamingIndexingStatusState::Completed,
+                        phase_total,
+                        phase_total,
+                        started.elapsed(),
+                        None,
+                    ),
+                    legacy_item_count,
                 ),
             );
             *layer_index += 1;
@@ -2080,20 +2096,23 @@ impl<'a> PlanningStageStatusTracker<'a> {
         }
     }
 
-    fn ensure_started(&mut self, stage: PlanningStage, _item_count: usize) {
+    fn ensure_started(&mut self, stage: PlanningStage, item_count: usize) {
         if self.stage_item_counts.contains_key(&stage) {
             return;
         }
         self.stage_item_counts.insert(stage, 0);
         emit_status(
             self.observer,
-            status_with_progress(
-                StreamingIndexingPhase::HierarchyPlanning { stage },
-                StreamingIndexingStatusState::Started,
-                None,
-                0,
-                Duration::ZERO,
-                None,
+            with_legacy_item_count(
+                status_with_progress(
+                    StreamingIndexingPhase::HierarchyPlanning { stage },
+                    StreamingIndexingStatusState::Started,
+                    None,
+                    0,
+                    Duration::ZERO,
+                    None,
+                ),
+                item_count,
             ),
         );
     }
@@ -2145,6 +2164,14 @@ fn status_with_known_total(
     )
 }
 
+fn with_legacy_item_count(
+    mut status: StreamingIndexingStatus,
+    legacy_item_count: usize,
+) -> StreamingIndexingStatus {
+    status.item_count = legacy_item_count;
+    status
+}
+
 fn emit_status(
     observer: &Option<StreamingIndexingStatusObserver>,
     status: StreamingIndexingStatus,
@@ -2159,6 +2186,7 @@ fn start_status_heartbeat(
     phase: StreamingIndexingPhase,
     phase_total_unit_count: Option<usize>,
     progress: Arc<AtomicUsize>,
+    legacy_item_count: Option<usize>,
     started: Instant,
 ) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
     let observer = observer.as_ref().map(Arc::clone)?;
@@ -2169,14 +2197,19 @@ fn start_status_heartbeat(
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
             let _ = catch_unwind(AssertUnwindSafe(|| {
-                observer(status_with_progress(
+                let status = status_with_progress(
                     phase.clone(),
                     StreamingIndexingStatusState::InProgress,
                     phase_total_unit_count,
                     progress.load(AtomicOrdering::Relaxed),
                     started.elapsed(),
                     None,
-                ))
+                );
+                observer(if let Some(legacy_item_count) = legacy_item_count {
+                    with_legacy_item_count(status, legacy_item_count)
+                } else {
+                    status
+                })
             }));
         }
     });

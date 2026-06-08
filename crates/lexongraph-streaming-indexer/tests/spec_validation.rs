@@ -1201,6 +1201,10 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
             Some(status.completed_unit_count)
         );
         assert_eq!(status.remaining_unit_count, Some(0));
+        assert!(
+            status.item_count > status.completed_unit_count,
+            "BottomUpAssembly should preserve the legacy item_count input cardinality"
+        );
     }
 }
 
