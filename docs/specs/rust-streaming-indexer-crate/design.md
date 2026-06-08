@@ -62,10 +62,11 @@ The crate exposes a public orchestration type or equivalent API for one
 streaming indexing run with the following observable lifecycle:
 
 1. start a run for one indexing context
-2. ingest one or more batches of indexing items for the current pass
+2. ingest one or more batches of indexing items for the current planning pass
 3. complete the pass and obtain an `IndexingPassReport`
-4. either begin the next pass or mark training complete
+4. either begin the next pass or mark planning complete
 5. consume one final materialization replay to produce the finished index result
+   by assembling parent layers bottom-up from the finalized partition hierarchy
 
 ### DSG-STREAM-INDEXER-004 `IndexItem`
 
@@ -85,25 +86,29 @@ The crate consumes:
 - a content resolver through an indexer-owned trait
 - an embedding provider through the shared embeddings-trait contract
 - a canonical-embedding policy through an indexer-owned trait
-- a streaming clustering realization or factory whose trainer/classifier surface
-  is defined by the shared streaming clustering contract
+- a hierarchical planning strategy whose clustering subproblems flow through
+  streaming clustering realizations or factories whose trainer/classifier
+  surface is defined by the shared streaming clustering contract
+- a terminal-partition normalization or termination policy, or equivalent
+  planning rule, used by bottom-up assembly
 
-### DSG-STREAM-INDEXER-006 `Built-in clustering selection`
+### DSG-STREAM-INDEXER-006 `Built-in planning selection`
 
 The crate exposes:
 
 - a built-in arithmetic-mean canonical-embedding policy
-- built-in streaming clustering realizations backed by
+- built-in hierarchical planning choices backed by
   `lexongraph-directional-pca` and `lexongraph-dcbc-streaming`
-- a caller-visible built-in clustering-selection surface that requires explicit
-  selection of one realization without requiring a caller-implemented factory
+- a caller-visible built-in planning-selection surface that requires explicit
+  selection of one realization or hybrid coarse/fine combination without
+  requiring a caller-implemented factory
 - caller-supplied algorithm settings supported by the selected built-in
-  clustering realization
-- no implicit built-in default clustering algorithm or implicit built-in
-  clustering settings
+  planning realization or each selected hybrid phase
+- no implicit built-in default planning algorithm or implicit built-in planning
+  settings
 
 The crate also exposes override paths for caller-supplied canonical-embedding
-and clustering policies.
+and planning policies.
 
 ### DSG-STREAM-INDEXER-007 `Replay baseline establishment`
 
@@ -140,35 +145,39 @@ replay order:
 
 1. content resolution for each item
 2. ordered embedding generation for each resolved item
-3. deterministic derivation of leaf-level embeddings and any pass-local leaf
-   artifacts
-4. streaming ingestion of those leaf-level embeddings into the selected shared
-   streaming clustering realization for the first parent-producing layer
-5. pass completion on that clustering realization
+3. deterministic derivation of planning-time item embeddings and any pass-local
+   planning artifacts
+4. deterministic refinement or validation of the hierarchical partition plan
+   over original-item embeddings, using selected shared streaming clustering
+   realizations wherever clustering is required
+5. pass completion on each clustering realization used in that planning work
 6. construction of the public `IndexingPassReport`
 
-The completed pass does not yet claim a finished persisted block tree.
+The completed pass does not yet claim a finished persisted block tree or a
+materialized parent layer.
 
 ### DSG-STREAM-INDEXER-011 `Pass report surface`
 
 `IndexingPassReport` carries at least:
 
 - the observed item count for the completed pass
-- deterministic clustering fitness information for the caller-visible replayed
-  layer, derived from the shared streaming clustering pass-report surface
+- deterministic planning progress or quality information for the caller-visible
+  replayed hierarchy-building work, derived from the shared streaming
+  clustering pass-report surface wherever clustering participates in that work
 - structured state sufficient for caller stop/continue decisions
 
 The report remains deterministic for a fixed indexing context and replay order.
 
-### DSG-STREAM-INDEXER-012 `Training completion gate`
+### DSG-STREAM-INDEXER-012 `Planning completion gate`
 
-The run exposes a caller-directed transition that marks training complete only
-after at least one successful completed pass. Final materialization before that
-transition fails explicitly.
+The run exposes a caller-directed transition that marks planning complete only
+after at least one successful completed pass and after the retained partition
+hierarchy covers the established logical item set. Final materialization before
+that transition fails explicitly.
 
 ### DSG-STREAM-INDEXER-013 `Final materialization replay`
 
-After training completion, the run consumes one final materialization replay of
+After planning completion, the run consumes one final materialization replay of
 the same logical item set in the same replay order.
 
 During that replay, the crate:
@@ -176,18 +185,19 @@ During that replay, the crate:
 1. resolves content and generates embeddings again in deterministic order
 2. constructs exactly one leaf block per item
 3. persists the produced leaf blocks
-4. applies the finalized first-layer clustering state to materialize the first
-   parent-producing layer deterministically
+4. binds each produced leaf deterministically to one terminal partition in the
+   finalized partition hierarchy
+5. materializes parent layers bottom-up from the terminal partitions until
+   exactly one root remains
 
 ### DSG-STREAM-INDEXER-014 `Higher-layer realization`
 
-Once the first parent-producing layer has been materialized, the crate may build
-higher parent layers through internal replay of already materialized child
-blocks rather than requiring further caller replay of the original items.
+Once leaves have been materialized and bound to terminal partitions, the crate
+builds higher parent layers by following ancestor relations in the finalized
+partition hierarchy rather than by further caller replay of the original items.
 
-Any clustering used for those higher layers still flows through the shared
-streaming clustering contract by constructing deterministic internal replays
-over the already materialized child layer.
+Any clustering used to derive or refine that hierarchy before planning
+completion still flows through the shared streaming clustering contract.
 
 ### DSG-STREAM-INDEXER-015 `Core conformance ownership`
 
@@ -216,10 +226,11 @@ protocols' externally visible invariants for supported encodings.
 The crate exposes an optional caller-supplied status observer receiving
 structured progress updates for:
 
-- caller-visible replay-pass progress
-- first-layer clustering start, in-progress, completion, and failure
+- caller-visible replay-pass planning progress
+- hierarchy-planning start, in-progress, completion, and failure for coarse and
+  fine partition work
 - final materialization progress
-- higher-layer construction progress
+- bottom-up assembly progress
 
 The observer surface is sink-agnostic and does not require console output,
 tracing integration, or repository-specific telemetry.
@@ -235,18 +246,23 @@ The crate defines an explicit error surface covering at least:
 - unusable resolved content
 - embedding failure
 - clustering failure
+- hierarchy-validation failure
+- invalid hybrid-planning configuration
 - canonical-embedding failure
 - block-construction failure
+- terminal-partition materialization failure
 - storage failure
 - invalid lifecycle transition
 
 ### DSG-STREAM-INDEXER-019 `Determinism boundary`
 
-If the content resolver, embedding provider, canonical-embedding policy, block
-store interactions affecting visibility, and streaming clustering realization
-are deterministic within one indexing context, then identical item replays,
-pass boundaries, and final materialization replay produce the same pass reports,
-root block ID, and persisted block set.
+If the content resolver, embedding provider, canonical-embedding policy,
+planning strategy, block-store interactions affecting visibility, and any
+streaming clustering realizations used by that planning strategy are
+deterministic within one indexing context, then identical item replays, pass
+boundaries, and final materialization replay produce the same pass reports, the
+same finalized partition hierarchy, the same root block ID, and the same
+persisted block set regardless of concurrent execution schedule.
 
 ### DSG-STREAM-INDEXER-020 `Result packaging`
 
@@ -261,7 +277,7 @@ traits behind a non-default Cargo feature intended for downstream tests only.
 
 ### DSG-STREAM-INDEXER-022 `Built-in algorithm verification matrix`
 
-Algorithm-agnostic behavior exercised through the built-in clustering-selection
+Algorithm-agnostic behavior exercised through the built-in planning-selection
 surface over fixtures compatible with both algorithms' caller-supplied settings
 is intended to hold regardless of whether the caller selects the built-in
 directional-PCA realization or the built-in DCBC realization.
@@ -270,6 +286,47 @@ Repository verification artifacts therefore realize that algorithm-agnostic
 built-in-path behavior through a two-algorithm matrix, while algorithm-specific
 behavior remains covered by separate targeted cases.
 
+### DSG-STREAM-INDEXER-023 `Planning boundary`
+
+The run maintains a deterministic partition hierarchy over the established
+logical item set. Planning operates over replayed original-item embeddings and
+stores only the hierarchy state and replay-baseline information needed for
+later replay validation and bottom-up assembly.
+
+### DSG-STREAM-INDEXER-024 `Partition identity and ancestry`
+
+Every partition in the finalized hierarchy has a deterministic identity derived
+from stable ancestry plus deterministic local child ordering so independent
+subpartition processing does not change observable IDs or parent-child
+relations.
+
+### DSG-STREAM-INDEXER-025 `Terminal partition normalization`
+
+Terminal partitions are not required to correspond one-to-one with final branch
+blocks until normalized against entry deduplication, minimum-child-count, and
+size-target constraints. The crate applies deterministic normalization rules or
+fails explicitly when no conforming normalization exists.
+
+### DSG-STREAM-INDEXER-026 `Materializability bound`
+
+The crate derives a deterministic materializability bound from
+the block size target and `embedding_spec` and uses that bound to determine
+when a partition may remain terminal, must be refined further, or must be fused
+or rejected before materialization.
+
+### DSG-STREAM-INDEXER-027 `Hybrid planning selection`
+
+The built-in planning path supports hybrid coarse/fine behavior through
+caller-visible configuration that selects the coarse-phase algorithm, the
+fine-phase algorithm, the phase boundary, and the settings for each phase
+explicitly.
+
+### DSG-STREAM-INDEXER-028 `Concurrent subpartition execution`
+
+Independent subpartitions may be planned or assembled concurrently, but the
+crate normalizes work ordering and output ordering so observable results remain
+schedule-independent.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -277,15 +334,20 @@ behavior remains covered by separate targeted cases.
 | DSG-STREAM-INDEXER-001 | REQ-STREAM-INDEXER-002 |
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
-| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015 |
-| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032 |
+| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-034 |
+| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017 |
-| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024 |
-| DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028 |
+| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034 |
+| DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
 | DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023 |
 | DSG-STREAM-INDEXER-018 | REQ-STREAM-INDEXER-024 |
-| DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026 |
+| DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
 | DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
+| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-034 |
+| DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-037 |
+| DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
+| DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
+| DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |

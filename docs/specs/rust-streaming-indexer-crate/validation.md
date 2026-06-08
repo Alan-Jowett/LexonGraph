@@ -83,7 +83,7 @@ shared contract without redefining embedding-provider behavior locally.
 
 ### VAL-STREAM-INDEXER-007
 
-Construct the streaming indexer through its built-in clustering-selection path,
+Construct the streaming indexer through its built-in planning-selection path,
 selecting directional PCA and supplying caller-provided directional-PCA
 settings supported by that realization.
 
@@ -99,7 +99,8 @@ REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
 ### VAL-STREAM-INDEXER-008
 
 Construct another streaming indexer through an explicit override path using
-caller-supplied canonical-embedding or clustering implementations.
+caller-supplied canonical-embedding, hierarchical-planning, or clustering
+implementations.
 
 **Pass condition:** the crate accepts those replacements without changing the
 rest of the streaming runtime contract.
@@ -108,12 +109,11 @@ rest of the streaming runtime contract.
 
 ### VAL-STREAM-INDEXER-009
 
-Complete one successful streaming indexing pass with multiple caller-chosen
-batches.
+Complete one successful planning pass with multiple caller-chosen batches.
 
 **Pass condition:** the pass report is deterministic and includes the observed
-item count plus deterministic clustering fitness information for the
-caller-visible replayed layer.
+item count plus deterministic planning progress or quality information for the
+caller-visible replayed hierarchy-building work.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-021
 
@@ -138,7 +138,7 @@ continuation of the run.
 
 ### VAL-STREAM-INDEXER-012
 
-Attempt final materialization before training completion.
+Attempt final materialization before planning completion.
 
 **Pass condition:** the crate fails explicitly rather than producing a finished
 index result.
@@ -147,18 +147,19 @@ index result.
 
 ### VAL-STREAM-INDEXER-013
 
-After training completion, supply a final materialization replay identical to
+After planning completion, supply a final materialization replay identical to
 the established logical item set and replay order.
 
 **Pass condition:** final materialization succeeds without requiring the crate's
-public API to have retained the full logical dataset between passes.
+public API to have retained the full logical dataset between passes, while
+using the finalized partition hierarchy to drive bottom-up assembly.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-016,
-REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-028
+REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035
 
 ### VAL-STREAM-INDEXER-014
 
-After training completion, supply a final materialization replay whose item
+After planning completion, supply a final materialization replay whose item
 count or replay order differs from the established baseline.
 
 **Pass condition:** final materialization fails explicitly.
@@ -189,11 +190,12 @@ Materialize a final result for multiple items that require one or more
 intermediate layers.
 
 **Pass condition:** the crate produces exactly one leaf block per item, builds
-protocol-conforming parent layers until exactly one root block remains, and
-returns the root block ID plus the complete persisted block set.
+protocol-conforming parent layers bottom-up from the finalized partition
+hierarchy until exactly one root block remains, and returns the root block ID
+plus the complete persisted block set.
 
 **Traces to:** REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-027,
-REQ-STREAM-INDEXER-028
+REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035
 
 ### VAL-STREAM-INDEXER-018
 
@@ -219,30 +221,34 @@ REQ-STREAM-INDEXER-027
 
 ### VAL-STREAM-INDEXER-020
 
-Inspect the implementation of higher-layer construction after the first
-parent-producing layer is materialized.
+Inspect the implementation of final assembly from the finalized partition
+hierarchy.
 
-**Pass condition:** any clustering used for higher layers still flows through
-the shared streaming clustering contract rather than an older batch-only
-clustering boundary.
+**Pass condition:** parent-layer construction is driven by the stored partition
+hierarchy, and any clustering used while deriving or refining that hierarchy
+still flows through the shared streaming clustering contract rather than an
+older batch-only clustering boundary.
 
-**Traces to:** REQ-STREAM-INDEXER-020
+**Traces to:** REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-035
 
 ### VAL-STREAM-INDEXER-021
 
 Run the same logical item set, indexing context, pass boundaries, and final
 materialization replay twice with deterministic dependency behavior.
 
-**Pass condition:** both runs produce the same pass reports, the same root block
-ID, and the same persisted block set.
+**Pass condition:** both runs produce the same pass reports, the same finalized
+partition hierarchy, the same root block ID, and the same persisted block set.
 
-**Traces to:** REQ-STREAM-INDEXER-026
+**Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-034,
+REQ-STREAM-INDEXER-037
 
 ### VAL-STREAM-INDEXER-022
 
 Invoke the streaming indexing API with content-resolution failure, unusable
-resolved content, embedding failure, clustering failure, canonical-embedding
-failure, block-construction failure, and storage failure fixtures.
+resolved content, embedding failure, clustering failure, invalid hierarchy,
+invalid hybrid-planning configuration, canonical-embedding failure,
+block-construction failure, terminal-partition materialization failure, and
+storage failure fixtures.
 
 **Pass condition:** each failure is explicit and does not masquerade as success
 or partial success.
@@ -252,7 +258,8 @@ or partial success.
 ### VAL-STREAM-INDEXER-023
 
 Attach a caller-owned in-memory status observer and run a fixture whose
-clustering or higher-layer work remains active long enough to be non-trivial.
+planning or bottom-up assembly work remains active long enough to be
+non-trivial.
 
 **Pass condition:** the observer receives structured start, in-progress, and
 completion or failure updates without requiring stdout, tracing integration, or
@@ -273,21 +280,21 @@ traits exist only behind a non-default, test-oriented feature.
 
 Inspect the caller-visible API surface for dataset-size coupling.
 
-**Pass condition:** repeated passes and final materialization require caller
-replay of the logical item set rather than a default public API obligation for
-the crate to retain or rematerialize the entire dataset on the caller's behalf.
+**Pass condition:** repeated planning passes and final materialization require
+caller replay of the logical item set rather than a default public API
+obligation for the crate to retain or rematerialize the entire dataset on the
+caller's behalf, even if internal partition-plan state is retained.
 
 **Traces to:** REQ-STREAM-INDEXER-017
 
 ### VAL-STREAM-INDEXER-026
 
-Inspect the new crate's dependency manifest and built-in clustering
-realizations.
+Inspect the new crate's dependency manifest and built-in planning realizations.
 
 **Pass condition:** the crate depends on `lexongraph-dcbc-streaming` and
-`lexongraph-directional-pca`, and each built-in clustering path delegates
-through the shared streaming clustering contract rather than reimplementing
-either algorithm locally.
+`lexongraph-directional-pca`, and each built-in planning path delegates through
+the shared streaming clustering contract rather than reimplementing either
+algorithm locally.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-019
 
@@ -302,15 +309,14 @@ validation surface.
 
 ### VAL-STREAM-INDEXER-028
 
-Construct the streaming indexer through its built-in clustering-selection
+Construct the streaming indexer through its built-in planning-selection
 surface, selecting directional PCA in one case and DCBC in another.
 
-**Pass condition:** callers can choose either built-in clustering algorithm
-through the indexer API without implementing a custom
-`StreamingClusteringFactory`, each selection requires caller-supplied settings
-for the chosen algorithm, attempts to omit the required algorithm choice or
-required settings fail explicitly, and the rest of the streaming runtime
-contract remains unchanged.
+**Pass condition:** callers can choose either built-in planning algorithm
+through the indexer API without implementing a custom planning factory, each
+selection requires caller-supplied settings for the chosen algorithm, attempts
+to omit the required algorithm choice or required settings fail explicitly, and
+the rest of the streaming runtime contract remains unchanged.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-014,
 REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
@@ -318,12 +324,74 @@ REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
 ### VAL-STREAM-INDEXER-029
 
 Inspect the repository verification artifacts for algorithm-agnostic built-in
-clustering behavior.
+planning behavior.
 
-**Pass condition:** algorithm-agnostic built-in-path behavioral cases whose
-fixtures are compatible with both built-in algorithms' caller-supplied settings
-are realized as a matrix over both built-in clustering realizations rather than
+**Pass condition:** algorithm-agnostic built-in-path planning and assembly
+cases whose fixtures are compatible with both built-in algorithms'
+caller-supplied settings
+are realized as a matrix over both built-in planning realizations rather than
 favoring one built-in algorithm, while unsupported or algorithm-specific
 behavior remains covered by separate targeted tests.
 
 **Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033
+
+### VAL-STREAM-INDEXER-030
+
+Run identical planning passes twice over the same logical item set and compare
+the resulting partition hierarchies.
+
+**Pass condition:** partition identities, ancestry, and terminal memberships are
+deterministic across both runs.
+
+**Traces to:** REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-037
+
+### VAL-STREAM-INDEXER-031
+
+Construct a finalized partition hierarchy containing overlapping, non-covering,
+or ancestry-inconsistent partitions.
+
+**Pass condition:** the crate fails explicitly before claiming conformant final
+assembly.
+
+**Traces to:** REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-035
+
+### VAL-STREAM-INDEXER-032
+
+Drive planning or assembly to terminal partitions near the
+materializability bound imposed by the block size target and `embedding_spec`.
+
+**Pass condition:** terminal partitions are refined, normalized, or rejected
+deterministically according to the materializability rules and block
+constraints.
+
+**Traces to:** REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038
+
+### VAL-STREAM-INDEXER-033
+
+Construct the built-in hierarchical planning path using one algorithm for the
+coarse phase and another for the fine phase.
+
+**Pass condition:** the coarse/fine phase boundary and the settings for each
+algorithm are explicit, and the resulting planning behavior is deterministic.
+
+**Traces to:** REQ-STREAM-INDEXER-036
+
+### VAL-STREAM-INDEXER-034
+
+Execute the same independent subpartitions under different concurrent
+scheduling orders.
+
+**Pass condition:** both executions produce identical partition hierarchies,
+pass reports, root block IDs, and persisted block sets.
+
+**Traces to:** REQ-STREAM-INDEXER-037
+
+### VAL-STREAM-INDEXER-035
+
+Construct terminal partitions that collapse to singleton or undersized child
+sets after child-ID deduplication.
+
+**Pass condition:** the crate performs deterministic normalization or fails
+explicitly before reporting a successful final result.
+
+**Traces to:** REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038

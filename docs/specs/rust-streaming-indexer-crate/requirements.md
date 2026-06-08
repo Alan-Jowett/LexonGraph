@@ -37,17 +37,25 @@ normative boundary.
 
 ## Terminology
 
-In this spec package, `streaming indexing pass` means one caller-driven replay
-of the logical item set consisting of one or more streamed batches followed by a
-pass-completion operation.
+In this spec package, `planning pass` (also referred to as a `streaming
+indexing pass`) means one caller-driven replay of the logical item set
+consisting of one or more streamed batches followed by a pass-completion
+operation.
 
 `Final materialization replay` means one additional caller-driven replay of the
-same logical item set after training completion, used to construct the finished
+same logical item set after planning completion, used to construct the finished
 persisted block tree without requiring the crate to retain the full dataset as a
 public-API obligation.
 
 `Item replay order` means the ordered sequence of indexing items observed across
-all batches in one completed streaming indexing pass.
+all batches in one completed planning pass.
+
+`Partition hierarchy` means the deterministic coarse-to-fine planning tree over
+the replayed logical item set that is finalized before bottom-up block
+assembly.
+
+`Terminal partition` means one partition in that hierarchy chosen as a direct
+input to bottom-up parent construction over materialized leaves.
 
 ## Requirements
 
@@ -85,10 +93,11 @@ The crate shall define a caller-visible streaming indexing API whose lifecycle
 includes:
 
 - starting a streaming indexing run for one indexing context
-- ingesting one or more batches of indexing items for the current pass
-- completing the current pass and obtaining a deterministic pass report
-- caller-directed training continuation or completion
-- final materialization through a final materialization replay
+- ingesting one or more batches of indexing items for the current planning pass
+- completing the current planning pass and obtaining a deterministic pass report
+- caller-directed planning continuation or completion
+- final materialization through a final materialization replay that assembles the
+  finished block tree bottom-up from the finalized partition hierarchy
 
 ### REQ-STREAM-INDEXER-005
 
@@ -126,21 +135,24 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 - content resolution
 - embedding generation through the shared embeddings-trait contract
 - canonical-embedding selection for child-bearing blocks
-- streaming child-layer clustering through the shared streaming clustering
+- hierarchical planning over replayed original-item embeddings, with any
+  clustering subproblems flowing through the shared streaming clustering
   contract
+- terminal-partition normalization or termination policy used by bottom-up
+  assembly
 
 ### REQ-STREAM-INDEXER-011
 
-The crate shall provide built-in streaming clustering realizations for
-parent-layer grouping that depend on both `lexongraph-dcbc-streaming` and
+The crate shall provide built-in planning realizations for hierarchical planning
+that depend on both `lexongraph-dcbc-streaming` and
 `lexongraph-directional-pca` rather than reimplementing either clustering
 algorithm locally.
 
 ### REQ-STREAM-INDEXER-012
 
 The crate shall provide an explicit API path that accepts a caller-supplied
-streaming clustering realization or factory so downstream users can replace the
-built-in clustering behavior.
+hierarchical planning realization, strategy, or factory so downstream users can
+replace the built-in planning behavior.
 
 ### REQ-STREAM-INDEXER-013
 
@@ -151,17 +163,17 @@ finalized entries.
 
 ### REQ-STREAM-INDEXER-014
 
-The crate shall not assign an implicit built-in default clustering algorithm.
+The crate shall not assign an implicit built-in default planning algorithm.
 
-The caller-facing built-in clustering path for the streaming indexing runtime
-API shall require the caller to select one supported built-in clustering
+The caller-facing built-in planning path for the streaming indexing runtime
+API shall require the caller to select one supported built-in planning
 realization explicitly.
 
 ### REQ-STREAM-INDEXER-015
 
 The crate shall continue to provide explicit API paths that accept
-caller-supplied canonical-embedding and streaming clustering policy
-implementations.
+caller-supplied canonical-embedding, hierarchical planning, and streaming
+clustering policy implementations.
 
 ### REQ-STREAM-INDEXER-016
 
@@ -191,15 +203,19 @@ indexer shall remain authoritative for protocol conformance checks.
 
 For the caller-visible replay passes over original indexing items, the crate
 shall use the shared streaming clustering contract as the clustering boundary
-for deriving the first parent-producing layer from leaf-level embeddings.
+for deriving a deterministic hierarchical partition plan over original-item
+embeddings rather than directly deriving the first parent-producing layer from
+leaf-level embeddings.
 
 ### REQ-STREAM-INDEXER-020
 
-After final materialization of the first parent-producing layer from the final
-materialization replay, the crate may construct higher parent layers through
-internal replay of already materialized child blocks, but any clustering used
-for those higher layers shall continue to flow through the shared streaming
-clustering contract rather than an older batch-only clustering boundary.
+After planning completion and during the final materialization replay, the crate
+shall construct the finished block tree by materializing leaves and assembling
+parent layers bottom-up from the finalized partition hierarchy.
+
+Any clustering used while deriving or refining that hierarchy shall continue to
+flow through the shared streaming clustering contract rather than an older
+batch-only clustering boundary.
 
 ### REQ-STREAM-INDEXER-021
 
@@ -207,23 +223,25 @@ Each completed streaming indexing pass shall return a deterministic structured
 pass report that includes:
 
 - the observed item count for that pass
-- deterministic clustering fitness information derived from the shared
-  streaming clustering surface for the caller-visible replayed layer
+- deterministic planning progress or quality information for the caller-visible
+  replayed hierarchy-building work, derived from the shared streaming
+  clustering surface wherever clustering participates in that work
 - enough structured state for the caller to decide whether to continue or stop
 
 ### REQ-STREAM-INDEXER-022
 
 The crate shall provide an optional caller-supplied status observer contract for
-streaming indexing progress and final materialization progress.
+streaming planning progress, final materialization progress, and bottom-up
+assembly progress.
 
 Status updates shall be emitted as structured data suitable for arbitrary
 caller-owned handling and shall not require any particular sink.
 
 ### REQ-STREAM-INDEXER-023
 
-When clustering or higher-layer construction work remains active long enough to
-be non-trivial, the crate shall emit periodic in-progress status updates rather
-than only terminal state.
+When planning, final materialization, or higher-layer assembly work remains
+active long enough to be non-trivial, the crate shall emit periodic in-progress
+status updates rather than only terminal state.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -234,12 +252,17 @@ The crate shall surface explicit failure when:
 - content resolution fails, is inaccessible, or returns content unusable for
   indexing
 - embedding generation fails
-- the caller omits a required built-in clustering algorithm selection or
-  required clustering settings
+- the caller omits a required built-in planning algorithm selection or required
+  planning settings
 - a later replay differs from the established logical item set or replay order
+- the finalized partition hierarchy is invalid, overlapping, non-covering, or
+  otherwise inconsistent with the replayed logical item set
+- hybrid planning configuration is invalid
+- a terminal partition cannot be normalized or assembled into
+  protocol-conforming parent blocks
 - clustering, canonical-embedding selection, block construction, or storage
   fails
-- final materialization is requested before training completion
+- final materialization is requested before planning completion
 
 ### REQ-STREAM-INDEXER-025
 
@@ -251,8 +274,8 @@ bytes stored inline in the produced leaf entry's `content` payload.
 Given the same logical item set, metadata, content references resolving to the
 same logical content, `embedding_spec`, block size target, deterministic
 dependency behavior, pass boundaries, and replay order, the crate shall produce
-the same pass reports, the same final root block ID, and the same persisted
-block set.
+the same pass reports, the same finalized partition hierarchy, the same final
+root block ID, and the same persisted block set.
 
 ### REQ-STREAM-INDEXER-027
 
@@ -288,26 +311,56 @@ validation surface defined in
 
 ### REQ-STREAM-INDEXER-031
 
-The crate shall provide a caller-visible built-in clustering-selection surface
+The crate shall provide a caller-visible built-in planning-selection surface
 that requires callers to choose either the built-in streaming directional-PCA
 realization or the built-in streaming DCBC realization without implementing a
-custom `StreamingClusteringFactory`.
+custom planning factory.
 
 ### REQ-STREAM-INDEXER-032
 
-When a built-in clustering realization is selected through the indexer API, the
+When a built-in planning realization is selected through the indexer API, the
 crate shall require the caller to provide that algorithm's settings rather than
-supplying implicit built-in clustering settings.
+supplying implicit built-in planning settings.
 
 ### REQ-STREAM-INDEXER-033
 
 The repository verification artifacts for algorithm-agnostic built-in-path
-behavior over fixtures compatible with both built-in clustering realizations'
+behavior over fixtures compatible with both built-in planning realizations'
 caller-supplied settings shall realize the corresponding validation coverage as
-a matrix over both built-in clustering realizations.
+a matrix over both built-in planning realizations.
 
 Algorithm-specific behavior may be validated through separate targeted cases
 rather than forced into that symmetric matrix.
+
+### REQ-STREAM-INDEXER-034
+
+The crate shall define an explicit deterministic planning boundary over replayed
+original-item embeddings that is distinct from final block materialization.
+
+### REQ-STREAM-INDEXER-035
+
+The crate shall define a deterministic mapping from the finalized partition
+hierarchy to a bottom-up block tree, including deterministic normalization or
+explicit failure for singleton, undersized, or oversized terminal partitions.
+
+### REQ-STREAM-INDEXER-036
+
+The crate shall support hybrid coarse/fine algorithm selection and require
+explicit caller-visible configuration for the phase boundary and
+algorithm-specific settings.
+
+### REQ-STREAM-INDEXER-037
+
+Independent subpartitions may be processed concurrently only if partition
+identity, pass reports, root block ID, and persisted block set remain
+deterministic and schedule-independent.
+
+### REQ-STREAM-INDEXER-038
+
+Terminal planning units shall be reconciled against a deterministic
+materializability bound derived from the block size target and
+`embedding_spec` before or during final assembly, or fail explicitly before
+claiming a conformant result.
 
 ## Out of Scope
 
@@ -319,8 +372,8 @@ This crate does not define or own:
 - the shared embedding-provider trait contract
 - the shared streaming clustering trait definitions
 - legacy batch-oriented implementation lines or their repository lifecycle
-- any concrete clustering algorithm beyond the two built-in clustering
-  selection options exposed by this crate
+- any concrete clustering algorithm beyond the built-in directional-PCA and
+  DCBC planning options exposed by this crate
 
 ## Relationship to Other Specifications
 
