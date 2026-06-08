@@ -685,6 +685,7 @@ where
     EP: EmbeddingProvider,
     CEP: CanonicalEmbeddingPolicy,
     HPP: HierarchicalPlanningPolicy,
+    HPP::Error: 'static,
 {
     pub async fn ingest_batch(
         &mut self,
@@ -828,30 +829,6 @@ where
             pass_started,
         ));
 
-        let declared_stages = self.planning_policy.declared_stages();
-        for stage in &declared_stages {
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
-                    state: StreamingIndexingStatusState::Started,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: Duration::ZERO,
-                    error: None,
-                },
-            );
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
-                    state: StreamingIndexingStatusState::InProgress,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: pass_started.elapsed(),
-                    error: None,
-                },
-            );
-        }
-
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
         let outcome = self
             .planning_policy
@@ -861,7 +838,7 @@ where
                 materializability_bound,
                 self.block_size_target,
             )
-            .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()));
+            .map_err(map_planning_policy_error);
 
         let outcome = match outcome {
             Ok(outcome) => outcome,
@@ -878,36 +855,61 @@ where
                         error: Some(error.to_string()),
                     },
                 );
+                return Err(error);
+            }
+        };
+
+        heartbeat.stop();
+        for stage in outcome.stages_used.iter().copied() {
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                    state: StreamingIndexingStatusState::Started,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: Duration::ZERO,
+                    error: None,
+                },
+            );
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                    state: StreamingIndexingStatusState::InProgress,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: pass_started.elapsed(),
+                    error: None,
+                },
+            );
+        }
+        if let Err(error) =
+            validate_partition_hierarchy(&outcome.hierarchy, self.items_seen_in_current_pass)
+                .map_err(StreamingIndexerError::HierarchyValidation)
+        {
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::PlanningPass { pass_number },
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: pass_started.elapsed(),
+                    error: Some(error.to_string()),
+                },
+            );
+            for stage in outcome.stages_used.iter().copied() {
                 emit_status(
                     &self.observer,
                     StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::PlanningPass { pass_number },
+                        phase: StreamingIndexingPhase::HierarchyPlanning { stage },
                         state: StreamingIndexingStatusState::Failed,
                         item_count: self.items_seen_in_current_pass,
                         elapsed: pass_started.elapsed(),
                         error: Some(error.to_string()),
                     },
                 );
-                for stage in &declared_stages {
-                    emit_status(
-                        &self.observer,
-                        StreamingIndexingStatus {
-                            phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
-                            state: StreamingIndexingStatusState::Failed,
-                            item_count: self.items_seen_in_current_pass,
-                            elapsed: pass_started.elapsed(),
-                            error: Some(error.to_string()),
-                        },
-                    );
-                }
-                return Err(error);
             }
-        };
-
-        validate_partition_hierarchy(&outcome.hierarchy, self.items_seen_in_current_pass)
-            .map_err(StreamingIndexerError::HierarchyValidation)?;
-
-        heartbeat.stop();
+            return Err(error);
+        }
         for stage in outcome.stages_used.iter().copied() {
             emit_status(
                 &self.observer,
@@ -1052,164 +1054,181 @@ where
             started,
         ));
 
-        let mut replay_count = 0usize;
-        let mut leaf_children: Vec<IndexedChild> = Vec::with_capacity(baseline.len());
-        let mut persisted_ids: Vec<BlockHash> = Vec::new();
+        let result = async {
+            let mut replay_count = 0usize;
+            let mut leaf_children: Vec<IndexedChild> = Vec::with_capacity(baseline.len());
+            let mut persisted_ids: Vec<BlockHash> = Vec::new();
 
-        for batch in replay_batches {
-            let items = batch.as_ref();
-            if items.is_empty() {
-                continue;
-            }
-
-            for (offset, _) in items.iter().enumerate() {
-                let Some(_) = baseline.get(replay_count + offset) else {
-                    return Err(StreamingIndexerError::ReplayMismatch(format!(
-                        "finalization replay has more items than the {} items in the established baseline",
-                        baseline.len()
-                    )));
-                };
-            }
-
-            let mut inputs = Vec::with_capacity(items.len());
-            let mut contents = Vec::with_capacity(items.len());
-            let mut metadatas = Vec::with_capacity(items.len());
-            for item in items {
-                let content = self
-                    .resolver
-                    .resolve(&item.content_ref)
-                    .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
-                if content.media_type.is_empty() {
-                    return Err(StreamingIndexerError::UnusableContent(
-                        "resolved content must include a media type".into(),
-                    ));
+            for batch in replay_batches {
+                let items = batch.as_ref();
+                if items.is_empty() {
+                    continue;
                 }
-                inputs.push(EmbeddingInput {
-                    media_type: content.media_type.clone(),
-                    body: content.body.clone(),
-                });
-                contents.push(content);
-                metadatas.push(item.metadata.clone());
+
+                for (offset, _) in items.iter().enumerate() {
+                    let Some(_) = baseline.get(replay_count + offset) else {
+                        return Err(StreamingIndexerError::ReplayMismatch(format!(
+                            "finalization replay has more items than the {} items in the established baseline",
+                            baseline.len()
+                        )));
+                    };
+                }
+
+                let mut inputs = Vec::with_capacity(items.len());
+                let mut contents = Vec::with_capacity(items.len());
+                let mut metadatas = Vec::with_capacity(items.len());
+                for item in items {
+                    let content = self
+                        .resolver
+                        .resolve(&item.content_ref)
+                        .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
+                    if content.media_type.is_empty() {
+                        return Err(StreamingIndexerError::UnusableContent(
+                            "resolved content must include a media type".into(),
+                        ));
+                    }
+                    inputs.push(EmbeddingInput {
+                        media_type: content.media_type.clone(),
+                        body: content.body.clone(),
+                    });
+                    contents.push(content);
+                    metadatas.push(item.metadata.clone());
+                }
+
+                let embeddings = self
+                    .embedding_provider
+                    .embed_batch(&inputs, &self.embedding_spec)
+                    .await
+                    .map_err(|e| StreamingIndexerError::EmbeddingFailure(e.to_string()))?;
+                if embeddings.len() != items.len() {
+                    return Err(StreamingIndexerError::EmbeddingFailure(format!(
+                        "expected {} embeddings, got {}",
+                        items.len(),
+                        embeddings.len()
+                    )));
+                }
+
+                for (offset, ((item, content), embedding)) in items
+                    .iter()
+                    .zip(contents.iter())
+                    .zip(embeddings.iter())
+                    .enumerate()
+                {
+                    let content_ref_hash = self
+                        .resolver
+                        .fingerprint(&item.content_ref)
+                        .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
+                    let expected = &baseline[replay_count + offset];
+                    let replay_item = BaselineItem {
+                        content_ref_hash,
+                        metadata_hash: hash_metadata(&item.metadata)
+                            .map_err(StreamingIndexerError::InvalidMetadata)?,
+                        content_hash: hash_content(content),
+                        embedding_hash: hash_bytes(embedding),
+                    };
+                    if expected != &replay_item {
+                        return Err(StreamingIndexerError::ReplayMismatch(format!(
+                            "finalization item {} differs from baseline",
+                            replay_count + offset
+                        )));
+                    }
+                }
+
+                for ((content, metadata), embedding) in
+                    contents.into_iter().zip(metadatas).zip(embeddings.iter())
+                {
+                    validate_embedding_bytes(embedding, &self.embedding_spec, "item")
+                        .map_err(StreamingIndexerError::EmbeddingFailure)?;
+
+                    let leaf = build_leaf_block(
+                        VERSION_1,
+                        self.embedding_spec.clone(),
+                        vec![LeafEntry {
+                            embedding: embedding.clone(),
+                            metadata,
+                            content,
+                        }],
+                        None,
+                    )
+                    .map_err(StreamingIndexerError::BlockConstruction)?;
+
+                    let leaf_block = Block::Leaf(leaf);
+                    let serialized = serialize_block(&leaf_block)
+                        .map_err(StreamingIndexerError::BlockConstruction)?;
+                    let block_id = store
+                        .put(&leaf_block)
+                        .map_err(StreamingIndexerError::Storage)?;
+                    verify_persisted_block_id(block_id, serialized.hash)?;
+                    persisted_ids.push(block_id);
+                    leaf_children.push(IndexedChild {
+                        embedding: embedding.clone(),
+                        child: block_id,
+                        level: 0,
+                    });
+                }
+                replay_count += items.len();
             }
 
-            let embeddings = self
-                .embedding_provider
-                .embed_batch(&inputs, &self.embedding_spec)
-                .await
-                .map_err(|e| StreamingIndexerError::EmbeddingFailure(e.to_string()))?;
-            if embeddings.len() != items.len() {
-                return Err(StreamingIndexerError::EmbeddingFailure(format!(
-                    "expected {} embeddings, got {}",
-                    items.len(),
-                    embeddings.len()
+            if replay_count == 0 {
+                return Err(StreamingIndexerError::EmptyInput);
+            }
+            if replay_count != baseline.len() {
+                return Err(StreamingIndexerError::ReplayMismatch(format!(
+                    "finalization replay had {replay_count} items but baseline has {}",
+                    baseline.len()
                 )));
             }
 
-            for (offset, ((item, content), embedding)) in items
-                .iter()
-                .zip(contents.iter())
-                .zip(embeddings.iter())
-                .enumerate()
-            {
-                let content_ref_hash = self
-                    .resolver
-                    .fingerprint(&item.content_ref)
-                    .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
-                let expected = &baseline[replay_count + offset];
-                let replay_item = BaselineItem {
-                    content_ref_hash,
-                    metadata_hash: hash_metadata(&item.metadata)
-                        .map_err(StreamingIndexerError::InvalidMetadata)?,
-                    content_hash: hash_content(content),
-                    embedding_hash: hash_bytes(embedding),
-                };
-                if expected != &replay_item {
-                    return Err(StreamingIndexerError::ReplayMismatch(format!(
-                        "finalization item {} differs from baseline",
-                        replay_count + offset
-                    )));
-                }
-            }
-
-            for ((content, metadata), embedding) in
-                contents.into_iter().zip(metadatas).zip(embeddings.iter())
-            {
-                validate_embedding_bytes(embedding, &self.embedding_spec, "item")
-                    .map_err(StreamingIndexerError::EmbeddingFailure)?;
-
-                let leaf = build_leaf_block(
-                    VERSION_1,
-                    self.embedding_spec.clone(),
-                    vec![LeafEntry {
-                        embedding: embedding.clone(),
-                        metadata,
-                        content,
-                    }],
-                    None,
-                )
-                .map_err(StreamingIndexerError::BlockConstruction)?;
-
-                let leaf_block = Block::Leaf(leaf);
-                let serialized = serialize_block(&leaf_block)
-                    .map_err(StreamingIndexerError::BlockConstruction)?;
-                let block_id = store
-                    .put(&leaf_block)
-                    .map_err(StreamingIndexerError::Storage)?;
-                verify_persisted_block_id(block_id, serialized.hash)?;
-                persisted_ids.push(block_id);
-                leaf_children.push(IndexedChild {
-                    embedding: embedding.clone(),
-                    child: block_id,
-                    level: 0,
+            if leaf_children.len() == 1 {
+                let root_id = leaf_children[0].child;
+                dedup_sort_ids(&mut persisted_ids);
+                return Ok(StreamingIndexingResult {
+                    root_id,
+                    block_ids: persisted_ids,
                 });
             }
-            replay_count += items.len();
-        }
 
-        if replay_count == 0 {
-            return Err(StreamingIndexerError::EmptyInput);
+            let root_child = self.materialize_hierarchy_bottom_up(
+                hierarchy,
+                &leaf_children,
+                materializability_bound,
+                store,
+                &mut persisted_ids,
+            )?;
+
+            dedup_sort_ids(&mut persisted_ids);
+            Ok(StreamingIndexingResult {
+                root_id: root_child.child,
+                block_ids: persisted_ids,
+            })
         }
-        if replay_count != baseline.len() {
-            return Err(StreamingIndexerError::ReplayMismatch(format!(
-                "finalization replay had {replay_count} items but baseline has {}",
-                baseline.len()
-            )));
-        }
+        .await;
 
         heartbeat.stop();
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::FinalMaterializationReplay,
-                state: StreamingIndexingStatusState::Completed,
-                item_count: replay_count,
-                elapsed: started.elapsed(),
-                error: None,
-            },
-        );
-
-        if leaf_children.len() == 1 {
-            let root_id = leaf_children[0].child;
-            dedup_sort_ids(&mut persisted_ids);
-            return Ok(StreamingIndexingResult {
-                root_id,
-                block_ids: persisted_ids,
-            });
+        match &result {
+            Ok(indexing_result) => emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::FinalMaterializationReplay,
+                    state: StreamingIndexingStatusState::Completed,
+                    item_count: indexing_result.block_ids.len(),
+                    elapsed: started.elapsed(),
+                    error: None,
+                },
+            ),
+            Err(error) => emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::FinalMaterializationReplay,
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: baseline.len(),
+                    elapsed: started.elapsed(),
+                    error: Some(error.to_string()),
+                },
+            ),
         }
 
-        let root_child = self.materialize_hierarchy_bottom_up(
-            hierarchy,
-            &leaf_children,
-            materializability_bound,
-            store,
-            &mut persisted_ids,
-        )?;
-
-        dedup_sort_ids(&mut persisted_ids);
-        Ok(StreamingIndexingResult {
-            root_id: root_child.child,
-            block_ids: persisted_ids,
-        })
+        result
     }
 
     fn materialize_hierarchy_bottom_up(
@@ -1346,8 +1365,28 @@ where
             );
 
             let next_level = current.iter().map(|child| child.level).max().unwrap_or(0) + 1;
-            let next_layer =
-                self.build_branch_layer(&current, &groups, next_level, store, persisted_ids)?;
+            let next_layer = match self.build_branch_layer(
+                &current,
+                &groups,
+                next_level,
+                store,
+                persisted_ids,
+            ) {
+                Ok(next_layer) => next_layer,
+                Err(error) => {
+                    emit_status(
+                        &self.observer,
+                        StreamingIndexingStatus {
+                            phase,
+                            state: StreamingIndexingStatusState::Failed,
+                            item_count: current.len(),
+                            elapsed: started.elapsed(),
+                            error: Some(error.to_string()),
+                        },
+                    );
+                    return Err(error);
+                }
+            };
             current = normalize_current_layer(next_layer);
 
             emit_status(
@@ -2314,6 +2353,20 @@ fn verify_persisted_block_id(
 
 fn invalid_config(message: String) -> StreamingClusteringError {
     StreamingClusteringError::InvalidConfiguration { message }
+}
+
+fn map_planning_policy_error<E>(error: E) -> StreamingIndexerError
+where
+    E: std::error::Error + 'static,
+{
+    if let Some(StreamingClusteringError::InvalidConfiguration { message }) =
+        (&error as &dyn std::error::Error).downcast_ref::<StreamingClusteringError>()
+        && message.contains("fine_partition_max_items")
+    {
+        return StreamingIndexerError::InvalidHybridPlanningConfiguration(message.clone());
+    }
+
+    StreamingIndexerError::ClusteringFailure(error.to_string())
 }
 
 fn validate_partition_hierarchy(
