@@ -310,9 +310,9 @@ fails explicitly when no conforming normalization exists.
 ### DSG-STREAM-INDEXER-026 `Materializability bound`
 
 The crate derives a deterministic materializability bound from
-`block_size_target` and `embedding_spec` and uses that bound to determine when
-a partition may remain terminal, must be refined further, or must be fused or
-rejected before materialization.
+the block size target and `embedding_spec` and uses that bound to determine
+when a partition may remain terminal, must be refined further, or must be fused
+or rejected before materialization.
 
 ### DSG-STREAM-INDEXER-027 `Hybrid planning selection`
 
@@ -340,7 +340,7 @@ schedule-independent.
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
-| DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-037 |
+| DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023 |
 | DSG-STREAM-INDEXER-018 | REQ-STREAM-INDEXER-024 |
 | DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |

@@ -357,9 +357,9 @@ deterministic and schedule-independent.
 ### REQ-STREAM-INDEXER-038
 
 Terminal planning units shall be reconciled against a deterministic
-materializability bound derived from `block_size_target` and `embedding_spec`
-before or during final assembly, or fail explicitly before claiming a
-conformant result.
+materializability bound derived from the block size target and
+`embedding_spec` before or during final assembly, or fail explicitly before
+claiming a conformant result.
 
 ## Out of Scope
 

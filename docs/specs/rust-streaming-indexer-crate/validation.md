@@ -359,7 +359,7 @@ assembly.
 ### VAL-STREAM-INDEXER-032
 
 Drive planning or assembly to terminal partitions near the
-materializability bound imposed by `block_size_target` and `embedding_spec`.
+materializability bound imposed by the block size target and `embedding_spec`.
 
 **Pass condition:** terminal partitions are refined, normalized, or rejected
 deterministically according to the materializability rules and block
