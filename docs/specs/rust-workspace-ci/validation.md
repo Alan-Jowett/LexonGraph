@@ -87,8 +87,10 @@ staged index rather than the working tree.
 
 Inspect contributor documentation and repository hook artifacts.
 
-**Pass condition:** the repository documents `git config core.hooksPath hooks`
-and provides the referenced hook artifacts in-repo.
+**Pass condition:** the README documents `git config core.hooksPath hooks`,
+documents the CI-aligned local Rust verification commands, points readers to
+the current repository surfaces at a high level, and the referenced hook
+artifacts exist in-repo.
 
 **Traces to:** REQ-CI-009, REQ-CI-013
 
@@ -153,3 +155,36 @@ policy surface, including `Cargo.lock`, remain excluded from required SPDX
 header enforcement while governed authored files remain in scope.
 
 **Traces to:** REQ-CI-011
+
+### VAL-CI-016
+
+Inspect `README.md` against the current tracked repository surface.
+
+**Pass condition:** the README accurately summarizes the active workspace
+crates, maintained specification packages including `repository-dependabot`,
+active governed protocol documents, and repository maintenance/configuration
+surfaces that contributors are expected to navigate, without stale omissions.
+
+**Traces to:** REQ-CI-018, REQ-CI-020
+
+### VAL-CI-017
+
+Inspect the README's grouping and status language for referenced repository
+artifacts.
+
+**Pass condition:** active governed and implemented surfaces are clearly
+distinguished from active maintenance surfaces and from supporting, reference,
+or future-facing material, and `docs/protocol/ebcp.md` is not presented as an
+active governed implementation surface.
+
+**Traces to:** REQ-CI-019
+
+### VAL-CI-018
+
+Inspect the README's scope and outbound links.
+
+**Pass condition:** the README remains summary-level, links readers to
+authoritative protocol and specification artifacts for normative behavior, and
+does not duplicate those specifications in full.
+
+**Traces to:** REQ-CI-021
