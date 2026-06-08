@@ -596,7 +596,7 @@ fn refine_duplicate_collapse(
     for (members, duplicate_groups, allocated_extras) in planned_splits {
         let mut peeled_members = BTreeSet::new();
         let mut extra_clusters = Vec::new();
-        for (group, extras_for_group) in duplicate_groups.iter().zip(allocated_extras.into_iter()) {
+        for (group, extras_for_group) in duplicate_groups.iter().zip(allocated_extras) {
             if extras_for_group == 0 {
                 continue;
             }
