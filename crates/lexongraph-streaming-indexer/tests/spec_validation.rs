@@ -369,6 +369,55 @@ impl HierarchicalPlanningPolicy for FixedHierarchyPlanningPolicy {
     }
 }
 
+#[derive(Clone, Default)]
+struct RecoveringHierarchyPlanningPolicy {
+    failed_once: bool,
+}
+
+impl HierarchicalPlanningPolicy for RecoveringHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        if !self.failed_once {
+            self.failed_once = true;
+            let mut invalid = InvalidHierarchyPlanningPolicy;
+            return invalid.finish_planning_pass(embeddings, &embedding_spec(), 0, 0);
+        }
+
+        let mut fixed = FixedHierarchyPlanningPolicy;
+        fixed.finish_planning_pass(embeddings, &embedding_spec(), 0, 0)
+    }
+}
+
+#[derive(Clone, Default)]
+struct ClusteringFailurePlanningPolicy;
+
+impl HierarchicalPlanningPolicy for ClusteringFailurePlanningPolicy {
+    type Error = StreamingClusteringError;
+
+    fn declared_stages(&self) -> std::collections::BTreeSet<PlanningStage> {
+        [PlanningStage::Custom].into_iter().collect()
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        _: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        Err(StreamingClusteringError::MalformedInput {
+            message: "synthetic clustering failure".into(),
+        })
+    }
+}
+
 #[derive(Clone)]
 struct BuiltInAlgorithmCase {
     name: &'static str,
@@ -797,6 +846,28 @@ async fn val_stream_indexer_011_invalid_hierarchy_fails_explicitly() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_011_hierarchy_failure_preserves_open_pass_for_retry() {
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        RecoveringHierarchyPlanningPolicy::default(),
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    assert!(matches!(
+        run.finish_pass().unwrap_err(),
+        StreamingIndexerError::HierarchyValidation(_)
+    ));
+    let retry = run.finish_pass().unwrap();
+    assert_eq!(retry.observed_item_count, 4);
+    assert_eq!(retry.completed_pass_count, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_012_materializability_bound_is_enforced() {
     let mut run = run_with_builtin(dcbc_planning(), 1);
     run.ingest_batch(&[item("alpha"), item("bravo")])
@@ -834,6 +905,30 @@ async fn val_stream_indexer_022_invalid_hybrid_configuration_is_explicit() {
         })
         .count();
     assert_eq!(planning_failures, 1);
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Coarse
+            }
+        ) && status.state == StreamingIndexingStatusState::Started
+    }));
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Coarse
+            }
+        ) && status.state == StreamingIndexingStatusState::InProgress
+    }));
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Coarse
+            }
+        ) && status.state == StreamingIndexingStatusState::Failed
+    }));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1098,6 +1193,46 @@ async fn val_stream_indexer_025_final_replay_mismatch_emits_failed_status() {
         matches!(
             status.phase,
             StreamingIndexingPhase::FinalMaterializationReplay
+        ) && status.state == StreamingIndexingStatusState::Failed
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_026_clustering_failure_is_explicit() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        ClusteringFailurePlanningPolicy,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie")])
+        .await
+        .unwrap();
+    assert!(matches!(
+        run.finish_pass().unwrap_err(),
+        StreamingIndexerError::ClusteringFailure(_)
+    ));
+
+    let statuses = statuses.lock().unwrap().clone();
+    assert!(statuses.iter().any(|status| {
+        matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
+            && status.state == StreamingIndexingStatusState::Failed
+    }));
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Custom
+            }
         ) && status.state == StreamingIndexingStatusState::Failed
     }));
 }

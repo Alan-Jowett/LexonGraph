@@ -835,6 +835,30 @@ where
             pass_started,
         ));
 
+        let declared_stages = self.planning_policy.declared_stages();
+        for stage in declared_stages.iter().copied() {
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                    state: StreamingIndexingStatusState::Started,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: Duration::ZERO,
+                    error: None,
+                },
+            );
+            emit_status(
+                &self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                    state: StreamingIndexingStatusState::InProgress,
+                    item_count: self.items_seen_in_current_pass,
+                    elapsed: pass_started.elapsed(),
+                    error: None,
+                },
+            );
+        }
+
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
         let outcome = self
             .planning_policy
@@ -861,37 +885,28 @@ where
                         error: Some(error.to_string()),
                     },
                 );
+                for stage in declared_stages.iter().copied() {
+                    emit_status(
+                        &self.observer,
+                        StreamingIndexingStatus {
+                            phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                            state: StreamingIndexingStatusState::Failed,
+                            item_count: self.items_seen_in_current_pass,
+                            elapsed: pass_started.elapsed(),
+                            error: Some(error.to_string()),
+                        },
+                    );
+                }
                 return Err(error);
             }
         };
 
         heartbeat.stop();
-        for stage in outcome.stages_used.iter().copied() {
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                    state: StreamingIndexingStatusState::Started,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: Duration::ZERO,
-                    error: None,
-                },
-            );
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                    state: StreamingIndexingStatusState::InProgress,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: pass_started.elapsed(),
-                    error: None,
-                },
-            );
-        }
         if let Err(error) =
             validate_partition_hierarchy(&outcome.hierarchy, self.items_seen_in_current_pass)
                 .map_err(StreamingIndexerError::HierarchyValidation)
         {
+            self.current_pass_f32_embeddings = buffered;
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
@@ -916,13 +931,14 @@ where
             }
             return Err(error);
         }
-        for stage in outcome.stages_used.iter().copied() {
+        for stage in declared_stages.iter().copied() {
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
                     phase: StreamingIndexingPhase::HierarchyPlanning { stage },
                     state: StreamingIndexingStatusState::Completed,
-                    item_count: self.items_seen_in_current_pass,
+                    item_count: usize::from(outcome.stages_used.contains(&stage))
+                        * self.items_seen_in_current_pass,
                     elapsed: pass_started.elapsed(),
                     error: None,
                 },
