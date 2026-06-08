@@ -423,6 +423,31 @@ fn hybrid_planning() -> BuiltInPlanning {
     )
 }
 
+fn invalid_hybrid_planning() -> BuiltInPlanning {
+    BuiltInPlanning::Hybrid(
+        lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
+            coarse: BuiltInPlanningPhase::Dcbc(DcbcBuiltInPlanningSettings {
+                cluster_count: 2,
+                balance_constraints: None,
+                random_seed: None,
+            }),
+            fine: BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                cluster_count: 2,
+                random_seed: None,
+                params: DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            }),
+            fine_partition_max_items: 1,
+        },
+    )
+}
+
 fn built_in_cases() -> [BuiltInAlgorithmCase; 2] {
     [
         BuiltInAlgorithmCase {
@@ -785,30 +810,13 @@ async fn val_stream_indexer_012_materializability_bound_is_enforced() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_022_invalid_hybrid_configuration_is_explicit() {
-    let invalid_hybrid = BuiltInPlanning::Hybrid(
-        lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
-            coarse: BuiltInPlanningPhase::Dcbc(DcbcBuiltInPlanningSettings {
-                cluster_count: 2,
-                balance_constraints: None,
-                random_seed: None,
-            }),
-            fine: BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
-                cluster_count: 2,
-                random_seed: None,
-                params: DirectionalPcaParams {
-                    retained_dimension_count: 1,
-                    variance_exponent: 1.0,
-                    temperature: 1.0,
-                    min_input_count: 2,
-                    min_effective_rank: 1,
-                    min_cumulative_variance: 0.0,
-                },
-            }),
-            fine_partition_max_items: 1,
-        },
-    );
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
 
-    let mut run = run_with_builtin(invalid_hybrid, 256);
+    let mut run = run_with_builtin(invalid_hybrid_planning(), 256).with_observer(observer);
     run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie")])
         .await
         .unwrap();
@@ -816,6 +824,16 @@ async fn val_stream_indexer_022_invalid_hybrid_configuration_is_explicit() {
         run.finish_pass().unwrap_err(),
         StreamingIndexerError::InvalidHybridPlanningConfiguration(_)
     ));
+
+    let statuses = statuses.lock().unwrap().clone();
+    let planning_failures = statuses
+        .iter()
+        .filter(|status| {
+            matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
+                && status.state == StreamingIndexingStatusState::Failed
+        })
+        .count();
+    assert_eq!(planning_failures, 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1001,6 +1019,81 @@ async fn val_stream_indexer_023_failed_bottom_up_assembly_emits_failed_status() 
             StreamingIndexingPhase::BottomUpAssembly { .. }
         ) && status.state == StreamingIndexingStatusState::Failed
     }));
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::FinalMaterializationReplay
+        ) && status.state == StreamingIndexingStatusState::Failed
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_024_invalid_hierarchy_emits_failed_status() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        InvalidHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    assert!(matches!(
+        run.finish_pass().unwrap_err(),
+        StreamingIndexerError::HierarchyValidation(_)
+    ));
+
+    let statuses = statuses.lock().unwrap().clone();
+    assert!(statuses.iter().any(|status| {
+        matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
+            && status.state == StreamingIndexingStatusState::Failed
+    }));
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Custom
+            }
+        ) && status.state == StreamingIndexingStatusState::Failed
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_025_final_replay_mismatch_emits_failed_status() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    let store = MemoryBlockStore::default();
+    let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    assert!(matches!(
+        run.finalize(
+            std::iter::once(
+                [item("delta"), item("charlie"), item("bravo"), item("alpha")].as_slice()
+            ),
+            &store
+        )
+        .await
+        .unwrap_err(),
+        StreamingIndexerError::ReplayMismatch(_)
+    ));
+
+    let statuses = statuses.lock().unwrap().clone();
     assert!(statuses.iter().any(|status| {
         matches!(
             status.phase,

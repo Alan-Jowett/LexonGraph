@@ -232,6 +232,12 @@ impl std::error::Error for StreamingIndexerError {
     }
 }
 
+impl From<StreamingClusteringError> for StreamingIndexerError {
+    fn from(error: StreamingClusteringError) -> Self {
+        Self::ClusteringFailure(error.to_string())
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Status observer
 // ─────────────────────────────────────────────────────────────
@@ -494,7 +500,7 @@ where
 }
 
 impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
-    type Error = StreamingClusteringError;
+    type Error = StreamingIndexerError;
 
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
         match &self.planning {
@@ -1490,7 +1496,7 @@ fn derive_hierarchy_from_built_in(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     _block_size_target: usize,
-) -> Result<PlanningPassOutcome, StreamingClusteringError> {
+) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match planning {
         BuiltInPlanning::Dcbc(settings) => {
             derive_hierarchy_with_builder(embeddings, materializability_bound, |partition_len| {
@@ -1522,7 +1528,7 @@ fn derive_hierarchy_from_built_in(
         }
         BuiltInPlanning::Hybrid(settings) => {
             if settings.fine_partition_max_items < 2 {
-                return Err(invalid_config(
+                return Err(StreamingIndexerError::InvalidHybridPlanningConfiguration(
                     "fine_partition_max_items must be at least 2".into(),
                 ));
             }
@@ -1553,7 +1559,7 @@ fn create_built_in_trainer(
     dimensions: usize,
     _embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
-) -> Result<BuiltInStreamingClusterTrainer, StreamingClusteringError> {
+) -> Result<BuiltInStreamingClusterTrainer, StreamingIndexerError> {
     match phase {
         BuiltInPlanningPhase::Dcbc(settings) => {
             let cluster_count = effective_cluster_count(
@@ -1561,7 +1567,7 @@ fn create_built_in_trainer(
                 partition_len,
                 materializability_bound,
             )
-            .map_err(invalid_config)?;
+            .map_err(map_clustering_configuration_error)?;
             DcbcStreamingTrainer::new(StreamingClusteringConfig {
                 cluster_count,
                 dimensions,
@@ -1569,6 +1575,7 @@ fn create_built_in_trainer(
                 random_seed: settings.random_seed,
             })
             .map(BuiltInStreamingClusterTrainer::Dcbc)
+            .map_err(map_clustering_error)
         }
         BuiltInPlanningPhase::DirectionalPca(settings) => {
             let cluster_count = effective_cluster_count(
@@ -1576,7 +1583,7 @@ fn create_built_in_trainer(
                 partition_len,
                 materializability_bound,
             )
-            .map_err(invalid_config)?;
+            .map_err(map_clustering_configuration_error)?;
             DirectionalPcaStreamingTrainer::new(
                 StreamingClusteringConfig {
                     cluster_count,
@@ -1587,6 +1594,7 @@ fn create_built_in_trainer(
                 settings.params.clone(),
             )
             .map(BuiltInStreamingClusterTrainer::DirectionalPca)
+            .map_err(map_clustering_error)
         }
     }
 }
@@ -2355,10 +2363,23 @@ fn invalid_config(message: String) -> StreamingClusteringError {
     StreamingClusteringError::InvalidConfiguration { message }
 }
 
+fn map_clustering_configuration_error(message: String) -> StreamingIndexerError {
+    StreamingIndexerError::ClusteringFailure(message)
+}
+
+fn map_clustering_error(error: StreamingClusteringError) -> StreamingIndexerError {
+    StreamingIndexerError::ClusteringFailure(error.to_string())
+}
+
 fn map_planning_policy_error<E>(error: E) -> StreamingIndexerError
 where
     E: std::error::Error + 'static,
 {
+    if let Some(error) = (&error as &dyn std::error::Error).downcast_ref::<StreamingIndexerError>()
+    {
+        return error.clone();
+    }
+
     if let Some(StreamingClusteringError::InvalidConfiguration { message }) =
         (&error as &dyn std::error::Error).downcast_ref::<StreamingClusteringError>()
         && message.contains("fine_partition_max_items")
