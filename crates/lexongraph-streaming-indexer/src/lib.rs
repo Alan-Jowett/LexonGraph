@@ -643,6 +643,7 @@ struct LayerBuildStatus<'a> {
     phase: StreamingIndexingPhase,
     started: Instant,
     progress: &'a Arc<AtomicUsize>,
+    legacy_item_count: usize,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1491,6 +1492,7 @@ where
                     phase: phase.clone(),
                     started,
                     progress: &phase_progress,
+                    legacy_item_count,
                 },
                 store,
                 persisted_ids,
@@ -1613,13 +1615,16 @@ where
 
         emit_status(
             &self.observer,
-            status_with_known_total(
-                status.phase,
-                StreamingIndexingStatusState::InProgress,
-                groups.len(),
-                status.progress.load(AtomicOrdering::Relaxed),
-                status.started.elapsed(),
-                None,
+            with_legacy_item_count(
+                status_with_known_total(
+                    status.phase,
+                    StreamingIndexingStatusState::InProgress,
+                    groups.len(),
+                    status.progress.load(AtomicOrdering::Relaxed),
+                    status.started.elapsed(),
+                    None,
+                ),
+                status.legacy_item_count,
             ),
         );
 

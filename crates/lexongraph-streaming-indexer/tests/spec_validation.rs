@@ -1318,6 +1318,16 @@ async fn val_stream_indexer_036_status_progress_counts_have_phase_semantics() {
         assert!(layer_statuses.iter().all(|status| {
             status.phase_total_unit_count == layer_statuses[0].phase_total_unit_count
         }));
+        assert!(
+            layer_statuses
+                .iter()
+                .all(|status| status.item_count == layer_statuses[0].item_count)
+        );
+        assert!(layer_statuses.iter().all(|status| {
+            layer_statuses[0]
+                .phase_total_unit_count
+                .is_some_and(|total| status.item_count > total)
+        }));
         assert!(layer_statuses.iter().any(|status| {
             status.state == StreamingIndexingStatusState::Completed
                 && status.phase_total_unit_count == Some(status.completed_unit_count)
