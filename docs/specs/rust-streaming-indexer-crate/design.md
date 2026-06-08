@@ -348,8 +348,12 @@ The observer contract defines phase-native work-unit semantics as follows:
 
 - `PlanningPass { pass_number }`: units are logical input items in the current
   replayed planning pass; the total is the established pass item count; the
-  completed count advances according to the latest hierarchy-planning work units
-  reported for that pass and is capped at the pass total.
+  completed count is an envelope count that remains zero for non-terminal
+  planning-pass status updates and advances to the pass total only when the
+  planning pass completes. Measurable intra-pass work is surfaced through the
+  stage-specific `HierarchyPlanning { stage }` updates rather than by
+  aggregating overlapping recursive planning units into one misleading pass-wide
+  partial count.
 - `HierarchyPlanning { stage }`: units are logical items covered by the
   caller-visible planning-stage callbacks for that stage; the total may be
   unavailable because recursive stage work is not known up front; the completed

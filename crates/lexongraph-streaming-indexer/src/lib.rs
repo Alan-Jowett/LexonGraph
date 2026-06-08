@@ -645,14 +645,6 @@ struct LayerBuildStatus<'a> {
     progress: &'a Arc<AtomicUsize>,
 }
 
-fn advance_progress(progress: &Arc<AtomicUsize>, delta: usize, total: usize) {
-    let _ = progress.fetch_update(
-        AtomicOrdering::Relaxed,
-        AtomicOrdering::Relaxed,
-        |current| Some(current.saturating_add(delta).min(total)),
-    );
-}
-
 // ─────────────────────────────────────────────────────────────
 // StreamingIndexingRun — the public orchestration type
 // ─────────────────────────────────────────────────────────────
@@ -957,9 +949,6 @@ where
                 materializability_bound,
                 self.block_size_target,
                 |stage, item_count, state| {
-                    if matches!(state, StreamingIndexingStatusState::InProgress) {
-                        advance_progress(&pass_progress, item_count, pass_total);
-                    }
                     stage_statuses.observe(stage, state, item_count);
                 },
             )
@@ -2115,7 +2104,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
 // ─────────────────────────────────────────────────────────────
 
 fn remaining_units(total: Option<usize>, completed: usize) -> Option<usize> {
-    total.map(|total| total.saturating_sub(completed))
+    total.and_then(|total| total.checked_sub(completed))
 }
 
 fn status_with_progress(

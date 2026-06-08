@@ -1244,6 +1244,11 @@ async fn val_stream_indexer_036_status_progress_counts_have_phase_semantics() {
             .all(|status| status.phase_total_unit_count == Some(items.len()))
     );
     assert!(planning_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress
+            && status.completed_unit_count == 0
+            && status.remaining_unit_count == Some(items.len())
+    }));
+    assert!(planning_statuses.iter().any(|status| {
         status.state == StreamingIndexingStatusState::Completed
             && status.completed_unit_count == items.len()
             && status.remaining_unit_count == Some(0)
