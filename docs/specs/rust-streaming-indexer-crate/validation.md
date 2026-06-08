@@ -263,9 +263,19 @@ non-trivial.
 
 **Pass condition:** the observer receives structured start, in-progress, and
 completion or failure updates without requiring stdout, tracing integration, or
-repository-specific telemetry.
+repository-specific telemetry, and for each observed phase:
 
-**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023
+- `completed_unit_count` is present and monotonic non-decreasing within that
+  phase execution
+- `phase_total_unit_count`, when present, never falls below
+  `completed_unit_count`
+- `remaining_unit_count`, when present, equals
+  `phase_total_unit_count - completed_unit_count`
+- in-progress updates reflect advancing completion state when the underlying
+  work advances measurably, rather than only elapsed time
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
+REQ-STREAM-INDEXER-039
 
 ### VAL-STREAM-INDEXER-024
 
@@ -395,3 +405,23 @@ sets after child-ID deduplication.
 explicitly before reporting a successful final result.
 
 **Traces to:** REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038
+
+### VAL-STREAM-INDEXER-036
+
+Run a deterministic fixture that exercises:
+
+- at least one non-trivial training pass
+- leaf materialization
+- first-layer clustering
+- at least one higher-layer clustering step
+- at least one layer materialization step
+
+Capture the observer stream and inspect the per-phase progress payloads.
+
+**Pass condition:** for each exercised phase, the recorded
+`phase_total_unit_count`, `completed_unit_count`, and `remaining_unit_count`
+match the phase-specific semantics defined in the design, and a downstream can
+derive materially useful progress such as "processed X / Y, Z remaining"
+without inferring semantics from elapsed time alone.
+
+**Traces to:** REQ-STREAM-INDEXER-039

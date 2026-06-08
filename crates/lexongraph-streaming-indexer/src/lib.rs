@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -295,7 +296,9 @@ pub enum StreamingIndexingStatusState {
 pub struct StreamingIndexingStatus {
     pub phase: StreamingIndexingPhase,
     pub state: StreamingIndexingStatusState,
-    pub item_count: usize,
+    pub phase_total_unit_count: Option<usize>,
+    pub completed_unit_count: usize,
+    pub remaining_unit_count: Option<usize>,
     pub elapsed: Duration,
     pub error: Option<String>,
 }
@@ -635,6 +638,12 @@ struct IndexedChild {
     level: u64,
 }
 
+struct LayerBuildStatus<'a> {
+    phase: StreamingIndexingPhase,
+    started: Instant,
+    progress: &'a Arc<AtomicUsize>,
+}
+
 // ─────────────────────────────────────────────────────────────
 // StreamingIndexingRun — the public orchestration type
 // ─────────────────────────────────────────────────────────────
@@ -897,20 +906,35 @@ where
 
         let pass_number = self.completed_passes + 1;
         let pass_started = Instant::now();
+        let pass_total = self.items_seen_in_current_pass;
+        let pass_progress = Arc::new(AtomicUsize::new(0));
         emit_status(
             &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::PlanningPass { pass_number },
-                state: StreamingIndexingStatusState::Started,
-                item_count: self.items_seen_in_current_pass,
-                elapsed: Duration::ZERO,
-                error: None,
-            },
+            status_with_known_total(
+                StreamingIndexingPhase::PlanningPass { pass_number },
+                StreamingIndexingStatusState::Started,
+                pass_total,
+                0,
+                Duration::ZERO,
+                None,
+            ),
+        );
+        emit_status(
+            &self.observer,
+            status_with_known_total(
+                StreamingIndexingPhase::PlanningPass { pass_number },
+                StreamingIndexingStatusState::InProgress,
+                pass_total,
+                0,
+                pass_started.elapsed(),
+                None,
+            ),
         );
         let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
             &self.observer,
             StreamingIndexingPhase::PlanningPass { pass_number },
-            self.items_seen_in_current_pass,
+            Some(pass_total),
+            Arc::clone(&pass_progress),
             pass_started,
         ));
 
@@ -937,13 +961,14 @@ where
                 stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 emit_status(
                     &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::PlanningPass { pass_number },
-                        state: StreamingIndexingStatusState::Failed,
-                        item_count: self.items_seen_in_current_pass,
-                        elapsed: pass_started.elapsed(),
-                        error: Some(error.to_string()),
-                    },
+                    status_with_known_total(
+                        StreamingIndexingPhase::PlanningPass { pass_number },
+                        StreamingIndexingStatusState::Failed,
+                        pass_total,
+                        pass_progress.load(AtomicOrdering::Relaxed),
+                        pass_started.elapsed(),
+                        Some(error.to_string()),
+                    ),
                 );
                 return Err(error);
             }
@@ -958,13 +983,14 @@ where
             stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             emit_status(
                 &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::PlanningPass { pass_number },
-                    state: StreamingIndexingStatusState::Failed,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: pass_started.elapsed(),
-                    error: Some(error.to_string()),
-                },
+                status_with_known_total(
+                    StreamingIndexingPhase::PlanningPass { pass_number },
+                    StreamingIndexingStatusState::Failed,
+                    pass_total,
+                    pass_progress.load(AtomicOrdering::Relaxed),
+                    pass_started.elapsed(),
+                    Some(error.to_string()),
+                ),
             );
             return Err(error);
         }
@@ -979,13 +1005,14 @@ where
 
         emit_status(
             &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::PlanningPass { pass_number },
-                state: StreamingIndexingStatusState::Completed,
-                item_count: self.baseline.as_ref().map_or(0, std::vec::Vec::len),
-                elapsed: pass_started.elapsed(),
-                error: None,
-            },
+            status_with_known_total(
+                StreamingIndexingPhase::PlanningPass { pass_number },
+                StreamingIndexingStatusState::Completed,
+                pass_total,
+                pass_total,
+                pass_started.elapsed(),
+                None,
+            ),
         );
 
         let hierarchy_stats = hierarchy_stats(&outcome.hierarchy);
@@ -1084,20 +1111,35 @@ where
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
 
         let replay_started = Instant::now();
+        let replay_total = baseline.len();
+        let replay_progress = Arc::new(AtomicUsize::new(0));
         emit_status(
             &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::FinalMaterializationReplay,
-                state: StreamingIndexingStatusState::Started,
-                item_count: baseline.len(),
-                elapsed: Duration::ZERO,
-                error: None,
-            },
+            status_with_known_total(
+                StreamingIndexingPhase::FinalMaterializationReplay,
+                StreamingIndexingStatusState::Started,
+                replay_total,
+                0,
+                Duration::ZERO,
+                None,
+            ),
+        );
+        emit_status(
+            &self.observer,
+            status_with_known_total(
+                StreamingIndexingPhase::FinalMaterializationReplay,
+                StreamingIndexingStatusState::InProgress,
+                replay_total,
+                0,
+                replay_started.elapsed(),
+                None,
+            ),
         );
         let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
             &self.observer,
             StreamingIndexingPhase::FinalMaterializationReplay,
-            baseline.len(),
+            Some(replay_total),
+            Arc::clone(&replay_progress),
             replay_started,
         ));
 
@@ -1212,6 +1254,7 @@ where
                         child: block_id,
                         level: 0,
                     });
+                    replay_progress.fetch_add(1, AtomicOrdering::Relaxed);
                 }
                 replay_count += items.len();
             }
@@ -1235,26 +1278,28 @@ where
             Ok(replay_materialization) => {
                 emit_status(
                     &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::FinalMaterializationReplay,
-                        state: StreamingIndexingStatusState::Completed,
-                        item_count: baseline.len(),
-                        elapsed: replay_started.elapsed(),
-                        error: None,
-                    },
+                    status_with_known_total(
+                        StreamingIndexingPhase::FinalMaterializationReplay,
+                        StreamingIndexingStatusState::Completed,
+                        replay_total,
+                        replay_total,
+                        replay_started.elapsed(),
+                        None,
+                    ),
                 );
                 replay_materialization
             }
             Err(error) => {
                 emit_status(
                     &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::FinalMaterializationReplay,
-                        state: StreamingIndexingStatusState::Failed,
-                        item_count: baseline.len(),
-                        elapsed: replay_started.elapsed(),
-                        error: Some(error.to_string()),
-                    },
+                    status_with_known_total(
+                        StreamingIndexingPhase::FinalMaterializationReplay,
+                        StreamingIndexingStatusState::Failed,
+                        replay_total,
+                        replay_progress.load(AtomicOrdering::Relaxed),
+                        replay_started.elapsed(),
+                        Some(error.to_string()),
+                    ),
                 );
                 return Err(error);
             }
@@ -1390,36 +1435,39 @@ where
 
             let groups = balanced_groups(current.len(), materializability_bound)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
-            let input_item_count = current.len();
-
             let phase = StreamingIndexingPhase::BottomUpAssembly {
                 layer_index: *layer_index,
             };
             let started = Instant::now();
+            let phase_total = groups.len();
+            let phase_progress = Arc::new(AtomicUsize::new(0));
             emit_status(
                 &self.observer,
-                StreamingIndexingStatus {
-                    phase: phase.clone(),
-                    state: StreamingIndexingStatusState::Started,
-                    item_count: input_item_count,
-                    elapsed: Duration::ZERO,
-                    error: None,
-                },
+                status_with_known_total(
+                    phase.clone(),
+                    StreamingIndexingStatusState::Started,
+                    phase_total,
+                    0,
+                    Duration::ZERO,
+                    None,
+                ),
             );
             emit_status(
                 &self.observer,
-                StreamingIndexingStatus {
-                    phase: phase.clone(),
-                    state: StreamingIndexingStatusState::InProgress,
-                    item_count: input_item_count,
-                    elapsed: started.elapsed(),
-                    error: None,
-                },
+                status_with_known_total(
+                    phase.clone(),
+                    StreamingIndexingStatusState::InProgress,
+                    phase_total,
+                    0,
+                    started.elapsed(),
+                    None,
+                ),
             );
             let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
                 &self.observer,
                 phase.clone(),
-                input_item_count,
+                Some(phase_total),
+                Arc::clone(&phase_progress),
                 started,
             ));
 
@@ -1428,6 +1476,11 @@ where
                 &current,
                 &groups,
                 next_level,
+                LayerBuildStatus {
+                    phase: phase.clone(),
+                    started,
+                    progress: &phase_progress,
+                },
                 store,
                 persisted_ids,
             ) {
@@ -1436,13 +1489,14 @@ where
                     heartbeat.stop();
                     emit_status(
                         &self.observer,
-                        StreamingIndexingStatus {
+                        status_with_known_total(
                             phase,
-                            state: StreamingIndexingStatusState::Failed,
-                            item_count: input_item_count,
-                            elapsed: started.elapsed(),
-                            error: Some(error.to_string()),
-                        },
+                            StreamingIndexingStatusState::Failed,
+                            phase_total,
+                            phase_progress.load(AtomicOrdering::Relaxed),
+                            started.elapsed(),
+                            Some(error.to_string()),
+                        ),
                     );
                     return Err(error);
                 }
@@ -1452,13 +1506,14 @@ where
             heartbeat.stop();
             emit_status(
                 &self.observer,
-                StreamingIndexingStatus {
+                status_with_known_total(
                     phase,
-                    state: StreamingIndexingStatusState::Completed,
-                    item_count: input_item_count,
-                    elapsed: started.elapsed(),
-                    error: None,
-                },
+                    StreamingIndexingStatusState::Completed,
+                    phase_total,
+                    phase_total,
+                    started.elapsed(),
+                    None,
+                ),
             );
             *layer_index += 1;
         }
@@ -1469,6 +1524,7 @@ where
         children: &[IndexedChild],
         groups: &[Vec<usize>],
         parent_level: u64,
+        status: LayerBuildStatus<'_>,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
     ) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
@@ -1535,7 +1591,20 @@ where
                 child: block_id,
                 level: parent_level,
             });
+            status.progress.fetch_add(1, AtomicOrdering::Relaxed);
         }
+
+        emit_status(
+            &self.observer,
+            status_with_known_total(
+                status.phase,
+                StreamingIndexingStatusState::InProgress,
+                groups.len(),
+                status.progress.load(AtomicOrdering::Relaxed),
+                status.started.elapsed(),
+                None,
+            ),
+        );
 
         Ok(next_layer)
     }
@@ -1964,13 +2033,14 @@ impl<'a> PlanningStageStatusTracker<'a> {
                 *total += item_count;
                 emit_status(
                     self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                    status_with_progress(
+                        StreamingIndexingPhase::HierarchyPlanning { stage },
                         state,
-                        item_count: *total,
-                        elapsed: self.pass_started.elapsed(),
-                        error: None,
-                    },
+                        None,
+                        *total,
+                        self.pass_started.elapsed(),
+                        None,
+                    ),
                 );
             }
             StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed => {}
@@ -1981,13 +2051,14 @@ impl<'a> PlanningStageStatusTracker<'a> {
         for (stage, item_count) in &self.stage_item_counts {
             emit_status(
                 self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
-                    state: StreamingIndexingStatusState::Completed,
-                    item_count: *item_count,
+                status_with_progress(
+                    StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
+                    StreamingIndexingStatusState::Completed,
+                    None,
+                    *item_count,
                     elapsed,
-                    error: None,
-                },
+                    None,
+                ),
             );
         }
     }
@@ -1996,31 +2067,33 @@ impl<'a> PlanningStageStatusTracker<'a> {
         for (stage, item_count) in &self.stage_item_counts {
             emit_status(
                 self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
-                    state: StreamingIndexingStatusState::Failed,
-                    item_count: *item_count,
+                status_with_progress(
+                    StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
+                    StreamingIndexingStatusState::Failed,
+                    None,
+                    *item_count,
                     elapsed,
-                    error: Some(error.to_owned()),
-                },
+                    Some(error.to_owned()),
+                ),
             );
         }
     }
 
-    fn ensure_started(&mut self, stage: PlanningStage, item_count: usize) {
+    fn ensure_started(&mut self, stage: PlanningStage, _item_count: usize) {
         if self.stage_item_counts.contains_key(&stage) {
             return;
         }
         self.stage_item_counts.insert(stage, 0);
         emit_status(
             self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::HierarchyPlanning { stage },
-                state: StreamingIndexingStatusState::Started,
-                item_count,
-                elapsed: Duration::ZERO,
-                error: None,
-            },
+            status_with_progress(
+                StreamingIndexingPhase::HierarchyPlanning { stage },
+                StreamingIndexingStatusState::Started,
+                None,
+                0,
+                Duration::ZERO,
+                None,
+            ),
         );
     }
 }
@@ -2028,6 +2101,47 @@ impl<'a> PlanningStageStatusTracker<'a> {
 // ─────────────────────────────────────────────────────────────
 // Private helpers
 // ─────────────────────────────────────────────────────────────
+
+fn remaining_units(total: Option<usize>, completed: usize) -> Option<usize> {
+    total.map(|total| total.saturating_sub(completed))
+}
+
+fn status_with_progress(
+    phase: StreamingIndexingPhase,
+    state: StreamingIndexingStatusState,
+    phase_total_unit_count: Option<usize>,
+    completed_unit_count: usize,
+    elapsed: Duration,
+    error: Option<String>,
+) -> StreamingIndexingStatus {
+    StreamingIndexingStatus {
+        phase,
+        state,
+        phase_total_unit_count,
+        completed_unit_count,
+        remaining_unit_count: remaining_units(phase_total_unit_count, completed_unit_count),
+        elapsed,
+        error,
+    }
+}
+
+fn status_with_known_total(
+    phase: StreamingIndexingPhase,
+    state: StreamingIndexingStatusState,
+    phase_total_unit_count: usize,
+    completed_unit_count: usize,
+    elapsed: Duration,
+    error: Option<String>,
+) -> StreamingIndexingStatus {
+    status_with_progress(
+        phase,
+        state,
+        Some(phase_total_unit_count),
+        completed_unit_count,
+        elapsed,
+        error,
+    )
+}
 
 fn emit_status(
     observer: &Option<StreamingIndexingStatusObserver>,
@@ -2041,7 +2155,8 @@ fn emit_status(
 fn start_status_heartbeat(
     observer: &Option<StreamingIndexingStatusObserver>,
     phase: StreamingIndexingPhase,
-    item_count: usize,
+    phase_total_unit_count: Option<usize>,
+    progress: Arc<AtomicUsize>,
     started: Instant,
 ) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
     let observer = observer.as_ref().map(Arc::clone)?;
@@ -2052,13 +2167,14 @@ fn start_status_heartbeat(
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
             let _ = catch_unwind(AssertUnwindSafe(|| {
-                observer(StreamingIndexingStatus {
-                    phase: phase.clone(),
-                    state: StreamingIndexingStatusState::InProgress,
-                    item_count,
-                    elapsed: started.elapsed(),
-                    error: None,
-                })
+                observer(status_with_progress(
+                    phase.clone(),
+                    StreamingIndexingStatusState::InProgress,
+                    phase_total_unit_count,
+                    progress.load(AtomicOrdering::Relaxed),
+                    started.elapsed(),
+                    None,
+                ))
             }));
         }
     });
