@@ -1428,7 +1428,13 @@ where
 
             let groups = balanced_groups(current.len(), materializability_bound)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
-            let layer_index = current.iter().map(|child| child.level).max().unwrap_or(0) as usize;
+            let layer_index =
+                usize::try_from(current.iter().map(|child| child.level).max().unwrap_or(0))
+                    .map_err(|_| {
+                        StreamingIndexerError::TerminalPartitionMaterialization(
+                            "semantic bottom-up layer index does not fit usize".into(),
+                        )
+                    })?;
             let phase = StreamingIndexingPhase::BottomUpAssembly { layer_index };
             let started = Instant::now();
             let legacy_item_count = current.len();
