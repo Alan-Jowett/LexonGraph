@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -111,46 +112,6 @@ impl BlockStore for MemoryBlockStore {
     ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
         let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
         Ok(Box::new(ids.into_iter().map(Ok)))
-    }
-}
-
-#[derive(Clone, Default)]
-struct DeclaredButUnusedStagePlanningPolicy;
-
-impl HierarchicalPlanningPolicy for DeclaredButUnusedStagePlanningPolicy {
-    type Error = FixtureError;
-
-    fn declared_stages(&self) -> std::collections::BTreeSet<PlanningStage> {
-        [PlanningStage::Coarse, PlanningStage::Fine]
-            .into_iter()
-            .collect()
-    }
-
-    fn finish_planning_pass(
-        &mut self,
-        embeddings: &[Vec<f32>],
-        _: &EmbeddingSpec,
-        _: usize,
-        _: usize,
-    ) -> Result<PlanningPassOutcome, Self::Error> {
-        Ok(PlanningPassOutcome {
-            hierarchy: FinalizedPartitionHierarchy {
-                root_partition_id: "p0".into(),
-                partitions: vec![FinalizedPartition {
-                    id: "p0".into(),
-                    parent_id: None,
-                    child_ids: vec![],
-                    item_indices: (0..embeddings.len()).collect(),
-                    terminal: true,
-                    planning_stage: PlanningStage::Single,
-                }],
-            },
-            planning_quality_metric: 0.0,
-            planning_balance_metric: 0.0,
-            planning_quality_direction: MetricDirection::LargerIsBetter,
-            planning_balance_direction: MetricDirection::SmallerIsBetter,
-            stages_used: std::collections::BTreeSet::new(),
-        })
     }
 }
 
@@ -500,6 +461,31 @@ impl HierarchicalPlanningPolicy for ClusteringFailurePlanningPolicy {
         Err(StreamingClusteringError::MalformedInput {
             message: "synthetic clustering failure".into(),
         })
+    }
+}
+
+#[derive(Clone)]
+struct LiveStageObserverPlanningPolicy {
+    saw_live_stage_status: Arc<AtomicBool>,
+}
+
+impl HierarchicalPlanningPolicy for LiveStageObserverPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        if !self.saw_live_stage_status.load(Ordering::SeqCst) {
+            return Err(FixtureError(
+                "hierarchy stage progress was not emitted before policy execution".into(),
+            ));
+        }
+        let mut fixed = FixedHierarchyPlanningPolicy;
+        fixed.finish_planning_pass(embeddings, &embedding_spec(), 0, 0)
     }
 }
 
@@ -953,6 +939,42 @@ async fn regression_hierarchy_failure_preserves_open_pass_for_retry() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn regression_default_custom_policy_emits_live_stage_progress() {
+    let saw_live_stage_status = Arc::new(AtomicBool::new(false));
+    let observer_flag = Arc::clone(&saw_live_stage_status);
+    let observer: StreamingIndexingStatusObserver = Arc::new(move |status| {
+        if matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Custom
+            }
+        ) && matches!(
+            status.state,
+            StreamingIndexingStatusState::Started | StreamingIndexingStatusState::InProgress
+        ) {
+            observer_flag.store(true, Ordering::SeqCst);
+        }
+    });
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        LiveStageObserverPlanningPolicy {
+            saw_live_stage_status: Arc::clone(&saw_live_stage_status),
+        },
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+    assert!(saw_live_stage_status.load(Ordering::SeqCst));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_012_materializability_bound_is_enforced() {
     let mut run = run_with_builtin(dcbc_planning(), 1);
     run.ingest_batch(&[item("alpha"), item("bravo")])
@@ -1264,6 +1286,25 @@ async fn val_stream_indexer_024_invalid_hierarchy_emits_failed_status() {
     ));
 
     let statuses = statuses.lock().unwrap().clone();
+    let hierarchy_failed = statuses
+        .iter()
+        .position(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom
+                }
+            ) && status.state == StreamingIndexingStatusState::Failed
+        })
+        .expect("hierarchy planning failure status");
+    let planning_failed = statuses
+        .iter()
+        .position(|status| {
+            matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
+                && status.state == StreamingIndexingStatusState::Failed
+        })
+        .expect("planning pass failure status");
+    assert!(hierarchy_failed < planning_failed);
     assert!(statuses.iter().any(|status| {
         matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
             && status.state == StreamingIndexingStatusState::Failed
@@ -1286,15 +1327,7 @@ async fn val_stream_indexer_027_unused_declared_stages_do_not_emit_status() {
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
 
-    let mut run = StreamingIndexingRun::new(
-        MapResolver,
-        AsciiEmbeddingProvider,
-        ArithmeticMeanCanonicalEmbeddingPolicy,
-        DeclaredButUnusedStagePlanningPolicy,
-        embedding_spec(),
-        256,
-    )
-    .with_observer(observer);
+    let mut run = run_with_builtin(hybrid_planning(), 256).with_observer(observer);
     run.ingest_batch(&[item("alpha"), item("bravo")])
         .await
         .unwrap();
@@ -1370,14 +1403,35 @@ async fn val_stream_indexer_026_clustering_failure_is_explicit() {
     ));
 
     let statuses = statuses.lock().unwrap().clone();
+    let hierarchy_failed = statuses
+        .iter()
+        .position(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom
+                }
+            ) && status.state == StreamingIndexingStatusState::Failed
+        })
+        .expect("hierarchy planning failure status");
+    let planning_failed = statuses
+        .iter()
+        .position(|status| {
+            matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
+                && status.state == StreamingIndexingStatusState::Failed
+        })
+        .expect("planning pass failure status");
+    assert!(hierarchy_failed < planning_failed);
     assert!(statuses.iter().any(|status| {
         matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. })
             && status.state == StreamingIndexingStatusState::Failed
     }));
-    assert!(!statuses.iter().any(|status| {
+    assert!(statuses.iter().any(|status| {
         matches!(
             status.phase,
-            StreamingIndexingPhase::HierarchyPlanning { .. }
-        )
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Custom
+            }
+        ) && status.state == StreamingIndexingStatusState::Failed
     }));
 }

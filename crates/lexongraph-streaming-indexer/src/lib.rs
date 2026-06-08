@@ -171,13 +171,7 @@ pub trait HierarchicalPlanningPolicy {
     where
         SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
     {
-        let outcome = self.finish_planning_pass(
-            embeddings,
-            embedding_spec,
-            materializability_bound,
-            block_size_target,
-        )?;
-        for stage in outcome.stages_used.iter().copied() {
+        for stage in self.declared_stages() {
             observe_stage(
                 stage,
                 embeddings.len(),
@@ -189,7 +183,12 @@ pub trait HierarchicalPlanningPolicy {
                 StreamingIndexingStatusState::InProgress,
             );
         }
-        Ok(outcome)
+        self.finish_planning_pass(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+        )
     }
 }
 
@@ -935,6 +934,7 @@ where
             Err(error) => {
                 self.current_pass_f32_embeddings = buffered;
                 heartbeat.stop();
+                stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 emit_status(
                     &self.observer,
                     StreamingIndexingStatus {
@@ -945,7 +945,6 @@ where
                         error: Some(error.to_string()),
                     },
                 );
-                stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 return Err(error);
             }
         };
@@ -956,6 +955,7 @@ where
                 .map_err(StreamingIndexerError::HierarchyValidation)
         {
             self.current_pass_f32_embeddings = buffered;
+            stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
@@ -966,7 +966,6 @@ where
                     error: Some(error.to_string()),
                 },
             );
-            stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             return Err(error);
         }
         stage_statuses.complete_all(pass_started.elapsed());
