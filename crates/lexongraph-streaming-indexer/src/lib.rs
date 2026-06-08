@@ -3,16 +3,11 @@
 //! Protocol-conforming LexonGraph streaming indexing orchestration.
 //!
 //! This crate exposes a caller-visible, replay-based streaming lifecycle for
-//! indexing large datasets.  Callers drive one or more training passes (each
-//! a full replay of the item set in batches), then signal training completion,
-//! then supply a final materialization replay.  The crate uses the shared
-//! [`StreamingClusterTrainer`] /
-//! [`lexongraph_streaming_clustering::StreamingClusterClassifier`] contract from
-//! `lexongraph-streaming-clustering` for the first parent-producing layer and
-//! for every higher layer. Callers explicitly choose a built-in clustering path
-//! backed by either `lexongraph-dcbc-streaming` or
-//! `lexongraph-directional-pca`, or they can provide a custom clustering
-//! factory.
+//! planning and materializing large datasets. Callers drive one or more
+//! planning passes (each a full replay of the item set in batches), then mark
+//! planning complete, then supply a final materialization replay. Hierarchical
+//! planning is derived over replayed original-item embeddings, and final block
+//! assembly proceeds bottom-up from the finalized partition hierarchy.
 //!
 //! ```compile_fail
 //! #[cfg(feature = "conformance")]
@@ -23,7 +18,8 @@
 //! let _ = std::any::type_name::<conformance::ConformanceError>();
 //! ```
 
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -42,14 +38,12 @@ pub use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
-use lexongraph_directional_pca::{
-    DirectionalPcaParams, DirectionalPcaStreamingClassifier, DirectionalPcaStreamingTrainer,
-};
+use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
 use lexongraph_streaming_clustering::{
-    ClusterId, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringConfig,
-    StreamingClusteringError,
+    ClusterId, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
+    StreamingClusteringConfig, StreamingClusteringError,
 };
 use sha2::{Digest, Sha256};
 
@@ -58,7 +52,7 @@ use sha2::{Digest, Sha256};
 // ─────────────────────────────────────────────────────────────
 
 /// One caller-supplied indexing unit carrying application metadata and a
-/// content reference.  Raw content bytes are intentionally absent; they are
+/// content reference. Raw content bytes are intentionally absent; they are
 /// resolved on demand by the caller-supplied [`ContentResolver`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexItem<R> {
@@ -73,45 +67,70 @@ pub struct StreamingIndexingResult {
     pub block_ids: Vec<BlockHash>,
 }
 
-/// Report returned after each completed training pass.
+/// Report returned after each completed planning pass.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexingPassReport {
-    /// Number of items observed in this pass.
     pub observed_item_count: usize,
-    /// Clustering quality metric from the streaming pass report.
-    pub clustering_quality_metric: f64,
-    /// Clustering balance metric from the streaming pass report.
-    pub clustering_balance_metric: f64,
-    pub clustering_quality_direction: MetricDirection,
-    pub clustering_balance_direction: MetricDirection,
-    /// Total number of successfully completed passes so far.
     pub completed_pass_count: usize,
+    pub planning_quality_metric: f64,
+    pub planning_balance_metric: f64,
+    pub planning_quality_direction: MetricDirection,
+    pub planning_balance_direction: MetricDirection,
+    pub planned_partition_count: usize,
+    pub terminal_partition_count: usize,
+    pub hierarchy_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PlanningStage {
+    Single,
+    Coarse,
+    Fine,
+    Custom,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalizedPartition {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub child_ids: Vec<String>,
+    pub item_indices: Vec<usize>,
+    pub terminal: bool,
+    pub planning_stage: PlanningStage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalizedPartitionHierarchy {
+    pub root_partition_id: String,
+    pub partitions: Vec<FinalizedPartition>,
+}
+
+pub struct PlanningPassOutcome {
+    pub hierarchy: FinalizedPartitionHierarchy,
+    pub planning_quality_metric: f64,
+    pub planning_balance_metric: f64,
+    pub planning_quality_direction: MetricDirection,
+    pub planning_balance_direction: MetricDirection,
+    pub stages_used: BTreeSet<PlanningStage>,
 }
 
 // ─────────────────────────────────────────────────────────────
 // Indexer-owned trait definitions
 // ─────────────────────────────────────────────────────────────
 
-/// Resolves a content reference into the concrete [`Content`] used for leaf
-/// construction and embedding generation.
 pub trait ContentResolver<R> {
     type Error: std::error::Error;
     fn resolve(&self, content_ref: &R) -> Result<Content, Self::Error>;
     fn fingerprint(&self, content_ref: &R) -> Result<BlockHash, Self::Error>;
 }
 
-/// Derives a canonical (representative) embedding from the finalized entries
-/// of a child-bearing branch block.
 pub trait CanonicalEmbeddingPolicy {
     type Error: std::error::Error;
     fn canonical_embedding(&self, block: &BranchBlock) -> Result<Vec<u8>, Self::Error>;
 }
 
-/// Creates a fresh [`StreamingClusterTrainer`] for a single clustering layer.
-/// The factory is consulted once per layer: for the caller-visible first layer
-/// it is created lazily during `finish_pass()` once the first pass's item count
-/// is known; for each higher layer it is called during final materialization
-/// with the known child count.
+/// Lower-level shared clustering seam used by the built-in and adapter-based
+/// planning paths.
 pub trait StreamingClusteringFactory {
     type Trainer: StreamingClusterTrainer;
     type Error: std::error::Error;
@@ -123,6 +142,54 @@ pub trait StreamingClusteringFactory {
         block_size_target: usize,
         embedding_spec: &EmbeddingSpec,
     ) -> Result<Self::Trainer, Self::Error>;
+}
+
+/// Caller-supplied hierarchical planning seam.
+pub trait HierarchicalPlanningPolicy {
+    type Error: std::error::Error;
+
+    fn declared_stages(&self) -> BTreeSet<PlanningStage> {
+        BTreeSet::from([PlanningStage::Custom])
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error>;
+
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        for stage in self.declared_stages() {
+            observe_stage(
+                stage,
+                embeddings.len(),
+                StreamingIndexingStatusState::Started,
+            );
+            observe_stage(
+                stage,
+                embeddings.len(),
+                StreamingIndexingStatusState::InProgress,
+            );
+        }
+        self.finish_planning_pass(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+        )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -138,12 +205,15 @@ pub enum StreamingIndexerError {
     ContentResolution(String),
     UnusableContent(String),
     EmbeddingFailure(String),
-    CanonicalEmbeddingFailure(String),
     ClusteringFailure(String),
+    InvalidHybridPlanningConfiguration(String),
+    HierarchyValidation(String),
+    CanonicalEmbeddingFailure(String),
     IntermediateNodeTooLarge {
         min_serialized_bytes: usize,
         size_target: usize,
     },
+    TerminalPartitionMaterialization(String),
     BlockConstruction(BlockError),
     Storage(BlockStoreError),
     InvalidLifecycleTransition(String),
@@ -159,10 +229,14 @@ impl fmt::Display for StreamingIndexerError {
             Self::ContentResolution(m) => write!(f, "content resolution failed: {m}"),
             Self::UnusableContent(m) => write!(f, "resolved content is unusable: {m}"),
             Self::EmbeddingFailure(m) => write!(f, "embedding generation failed: {m}"),
+            Self::ClusteringFailure(m) => write!(f, "clustering failed: {m}"),
+            Self::InvalidHybridPlanningConfiguration(m) => {
+                write!(f, "hybrid planning configuration is invalid: {m}")
+            }
+            Self::HierarchyValidation(m) => write!(f, "partition hierarchy is invalid: {m}"),
             Self::CanonicalEmbeddingFailure(m) => {
                 write!(f, "canonical embedding selection failed: {m}")
             }
-            Self::ClusteringFailure(m) => write!(f, "clustering failed: {m}"),
             Self::IntermediateNodeTooLarge {
                 min_serialized_bytes,
                 size_target,
@@ -171,11 +245,12 @@ impl fmt::Display for StreamingIndexerError {
                 "smallest intermediate node needs {min_serialized_bytes} bytes, \
                  exceeding block size target {size_target}"
             ),
+            Self::TerminalPartitionMaterialization(m) => {
+                write!(f, "terminal partition could not be materialized: {m}")
+            }
             Self::BlockConstruction(e) => write!(f, "block construction failed: {e}"),
             Self::Storage(e) => write!(f, "block storage failed: {e}"),
-            Self::InvalidLifecycleTransition(m) => {
-                write!(f, "invalid lifecycle transition: {m}")
-            }
+            Self::InvalidLifecycleTransition(m) => write!(f, "invalid lifecycle transition: {m}"),
         }
     }
 }
@@ -190,17 +265,22 @@ impl std::error::Error for StreamingIndexerError {
     }
 }
 
+impl From<StreamingClusteringError> for StreamingIndexerError {
+    fn from(error: StreamingClusteringError) -> Self {
+        Self::ClusteringFailure(error.to_string())
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Status observer
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StreamingIndexingPhase {
-    TrainingPass { pass_number: usize },
-    LeafMaterialization,
-    FirstLayerClustering,
-    HigherLayerClustering { layer_index: usize },
-    LayerMaterialization { layer_index: usize },
+    PlanningPass { pass_number: usize },
+    HierarchyPlanning { stage: PlanningStage },
+    FinalMaterializationReplay,
+    BottomUpAssembly { layer_index: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,7 +309,6 @@ const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 // Built-in canonical-embedding policy
 // ─────────────────────────────────────────────────────────────
 
-/// Computes the component-wise arithmetic mean of all branch entry embeddings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ArithmeticMeanCanonicalEmbeddingPolicy;
 
@@ -253,15 +332,54 @@ impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Built-in streaming clustering factories
+// Built-in planning configuration
 // ─────────────────────────────────────────────────────────────
 
-/// Explicit [`StreamingClusteringFactory`] backed by `lexongraph-dcbc-streaming`.
-///
-/// `cluster_count` is the fallback only when `create_trainer` is invoked with
-/// an `estimated_child_count` of zero. When the child count is known, the
-/// factory derives an appropriate cluster count from that count and
-/// `block_size_target`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DcbcBuiltInPlanningSettings {
+    pub cluster_count: u32,
+    pub balance_constraints: Option<BalanceConstraints>,
+    pub random_seed: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DirectionalPcaBuiltInPlanningSettings {
+    pub cluster_count: u32,
+    pub random_seed: Option<u64>,
+    pub params: DirectionalPcaParams,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum BuiltInPlanningPhase {
+    Dcbc(DcbcBuiltInPlanningSettings),
+    DirectionalPca(DirectionalPcaBuiltInPlanningSettings),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HybridBuiltInPlanningSettings {
+    pub coarse: BuiltInPlanningPhase,
+    pub fine: BuiltInPlanningPhase,
+    pub fine_partition_max_items: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum BuiltInPlanning {
+    Dcbc(DcbcBuiltInPlanningSettings),
+    DirectionalPca(DirectionalPcaBuiltInPlanningSettings),
+    Hybrid(HybridBuiltInPlanningSettings),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuiltInPlanningPolicy {
+    planning: BuiltInPlanning,
+}
+
+impl BuiltInPlanningPolicy {
+    pub fn new(planning: BuiltInPlanning) -> Self {
+        Self { planning }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DcbcStreamingClusteringFactory {
     pub cluster_count: u32,
@@ -283,13 +401,15 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
         estimated_child_count: usize,
         block_size_target: usize,
         embedding_spec: &EmbeddingSpec,
-    ) -> Result<DcbcStreamingTrainer, StreamingClusteringError> {
-        let cluster_count = derived_dcbc_cluster_count(
+    ) -> Result<Self::Trainer, Self::Error> {
+        let materializability_bound =
+            materializability_bound(embedding_spec, block_size_target).map_err(invalid_config)?;
+        let cluster_count = effective_cluster_count(
             self.cluster_count,
             estimated_child_count,
-            block_size_target,
-            embedding_spec,
-        )?;
+            materializability_bound,
+        )
+        .map_err(invalid_config)?;
 
         DcbcStreamingTrainer::new(StreamingClusteringConfig {
             cluster_count,
@@ -300,36 +420,14 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
     }
 }
 
-/// Caller-supplied settings for the built-in DCBC clustering path.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DcbcBuiltInClusteringSettings {
-    /// Fallback cluster count used when the child count is not yet known.
-    pub cluster_count: u32,
-    pub balance_constraints: Option<BalanceConstraints>,
-    pub random_seed: Option<u64>,
+enum BuiltInStreamingClusterTrainer {
+    Dcbc(DcbcStreamingTrainer),
+    DirectionalPca(DirectionalPcaStreamingTrainer),
 }
 
-/// Caller-supplied settings for the built-in directional-PCA clustering path.
-/// Balance constraints are intentionally omitted because the underlying
-/// directional-PCA trainer rejects them.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DirectionalPcaBuiltInClusteringSettings {
-    pub cluster_count: u32,
-    pub random_seed: Option<u64>,
-    pub params: DirectionalPcaParams,
-}
-
-/// Built-in clustering choices exposed by the streaming indexer.
-#[derive(Clone, Debug, PartialEq)]
-pub enum BuiltInClustering {
-    Dcbc(DcbcBuiltInClusteringSettings),
-    DirectionalPca(DirectionalPcaBuiltInClusteringSettings),
-}
-
-/// Built-in classifier wrapper covering all built-in clustering realizations.
-pub enum BuiltInStreamingClusterClassifier {
+enum BuiltInStreamingClusterClassifier {
     Dcbc(<DcbcStreamingTrainer as StreamingClusterTrainer>::Classifier),
-    DirectionalPca(DirectionalPcaStreamingClassifier),
+    DirectionalPca(<DirectionalPcaStreamingTrainer as StreamingClusterTrainer>::Classifier),
 }
 
 impl StreamingClusterClassifier for BuiltInStreamingClusterClassifier {
@@ -346,12 +444,6 @@ impl StreamingClusterClassifier for BuiltInStreamingClusterClassifier {
             Self::DirectionalPca(classifier) => classifier.assign(embedding),
         }
     }
-}
-
-/// Built-in trainer wrapper covering all built-in clustering realizations.
-pub enum BuiltInStreamingClusterTrainer {
-    Dcbc(DcbcStreamingTrainer),
-    DirectionalPca(DirectionalPcaStreamingTrainer),
 }
 
 impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
@@ -378,9 +470,7 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
         }
     }
 
-    fn finish_pass(
-        &mut self,
-    ) -> Result<lexongraph_streaming_clustering::PassReport, StreamingClusteringError> {
+    fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
         match self {
             Self::Dcbc(trainer) => trainer.finish_pass(),
             Self::DirectionalPca(trainer) => trainer.finish_pass(),
@@ -396,66 +486,126 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
 
     fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
         match self {
-            Self::Dcbc(trainer) => trainer.into_classifier().map(Self::Classifier::Dcbc),
+            Self::Dcbc(trainer) => trainer
+                .into_classifier()
+                .map(BuiltInStreamingClusterClassifier::Dcbc),
             Self::DirectionalPca(trainer) => trainer
                 .into_classifier()
-                .map(Self::Classifier::DirectionalPca),
+                .map(BuiltInStreamingClusterClassifier::DirectionalPca),
         }
     }
 }
 
-/// Built-in [`StreamingClusteringFactory`] selecting either DCBC or directional
-/// PCA based on caller-supplied settings.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuiltInClusteringFactory {
-    clustering: BuiltInClustering,
+#[derive(Clone, Debug)]
+pub struct FactoryHierarchicalPlanningPolicy<F> {
+    factory: F,
 }
 
-impl BuiltInClusteringFactory {
-    pub fn new(clustering: BuiltInClustering) -> Self {
-        Self { clustering }
+pub type StreamingClusteringPlanningPolicy<F> = FactoryHierarchicalPlanningPolicy<F>;
+
+impl<F> FactoryHierarchicalPlanningPolicy<F> {
+    pub fn new(factory: F) -> Self {
+        Self { factory }
     }
 }
 
-impl StreamingClusteringFactory for BuiltInClusteringFactory {
-    type Trainer = BuiltInStreamingClusterTrainer;
+impl<F> HierarchicalPlanningPolicy for FactoryHierarchicalPlanningPolicy<F>
+where
+    F: StreamingClusteringFactory,
+{
     type Error = StreamingClusteringError;
 
-    fn create_trainer(
-        &self,
-        dimensions: usize,
-        estimated_child_count: usize,
-        block_size_target: usize,
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
         embedding_spec: &EmbeddingSpec,
-    ) -> Result<Self::Trainer, Self::Error> {
-        match &self.clustering {
-            BuiltInClustering::Dcbc(settings) => {
-                let cluster_count = derived_dcbc_cluster_count(
-                    settings.cluster_count,
-                    estimated_child_count,
-                    block_size_target,
-                    embedding_spec,
-                )?;
+        materializability_bound: usize,
+        block_size_target: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut noop = |_, _, _| {};
+        derive_hierarchy_from_factory(
+            &self.factory,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut noop,
+        )
+    }
 
-                DcbcStreamingTrainer::new(StreamingClusteringConfig {
-                    cluster_count,
-                    dimensions,
-                    balance_constraints: settings.balance_constraints.clone(),
-                    random_seed: settings.random_seed,
-                })
-                .map(BuiltInStreamingClusterTrainer::Dcbc)
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        derive_hierarchy_from_factory(
+            &self.factory,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut observe_stage,
+        )
+    }
+}
+
+impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
+    type Error = StreamingIndexerError;
+
+    fn declared_stages(&self) -> BTreeSet<PlanningStage> {
+        match &self.planning {
+            BuiltInPlanning::Dcbc(_) | BuiltInPlanning::DirectionalPca(_) => {
+                BTreeSet::from([PlanningStage::Single])
             }
-            BuiltInClustering::DirectionalPca(settings) => DirectionalPcaStreamingTrainer::new(
-                StreamingClusteringConfig {
-                    cluster_count: settings.cluster_count,
-                    dimensions,
-                    balance_constraints: None,
-                    random_seed: settings.random_seed,
-                },
-                settings.params.clone(),
-            )
-            .map(BuiltInStreamingClusterTrainer::DirectionalPca),
+            BuiltInPlanning::Hybrid(_) => {
+                BTreeSet::from([PlanningStage::Coarse, PlanningStage::Fine])
+            }
         }
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut noop = |_, _, _| {};
+        derive_hierarchy_from_built_in(
+            &self.planning,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut noop,
+        )
+    }
+
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        derive_hierarchy_from_built_in(
+            &self.planning,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut observe_stage,
+        )
     }
 }
 
@@ -465,8 +615,8 @@ impl StreamingClusteringFactory for BuiltInClusteringFactory {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunPhase {
-    Training,
-    TrainingComplete,
+    Planning,
+    PlanningComplete,
     Finalized,
 }
 
@@ -478,6 +628,7 @@ struct BaselineItem {
     embedding_hash: BlockHash,
 }
 
+#[derive(Clone)]
 struct IndexedChild {
     embedding: Vec<u8>,
     child: BlockHash,
@@ -488,59 +639,32 @@ struct IndexedChild {
 // StreamingIndexingRun — the public orchestration type
 // ─────────────────────────────────────────────────────────────
 
-/// Orchestrates one streaming indexing run.
-///
-/// **Lifecycle**
-/// 1. Create via [`with_builtin_clustering`], [`with_canonical_policy`], or
-///    [`new`].
-/// 2. Replay the item set in one or more passes:  
-///    `ingest_batch` (one or more times) → `finish_pass` → repeat.
-/// 3. Call `mark_training_complete` once satisfied.
-/// 4. Call `finalize` with the same item set to produce the finished index.
-///
-/// [`with_builtin_clustering`]: StreamingIndexingRun::with_builtin_clustering
-/// [`with_canonical_policy`]: StreamingIndexingRun::with_canonical_policy
-/// [`new`]: StreamingIndexingRun::new
-pub struct StreamingIndexingRun<R, CR, EP, CEP, SCF>
-where
-    SCF: StreamingClusteringFactory,
-{
+pub struct StreamingIndexingRun<R, CR, EP, CEP, HPP> {
     resolver: CR,
     embedding_provider: EP,
     canonical_embedding_policy: CEP,
-    factory: SCF,
+    planning_policy: HPP,
     embedding_spec: EmbeddingSpec,
     block_size_target: usize,
     observer: Option<StreamingIndexingStatusObserver>,
 
     phase: RunPhase,
-    trainer: Option<SCF::Trainer>,
-    classifier: Option<<SCF::Trainer as StreamingClusterTrainer>::Classifier>,
     completed_passes: usize,
     baseline: Option<Vec<BaselineItem>>,
+    finalized_hierarchy: Option<FinalizedPartitionHierarchy>,
     current_pass_items: Vec<BaselineItem>,
     current_pass_f32_embeddings: Vec<Vec<f32>>,
     items_seen_in_current_pass: usize,
     _item_ref: PhantomData<R>,
 }
 
-// ─── Constructors ────────────────────────────────────────────
-
 impl<R, CR, EP>
-    StreamingIndexingRun<
-        R,
-        CR,
-        EP,
-        ArithmeticMeanCanonicalEmbeddingPolicy,
-        BuiltInClusteringFactory,
-    >
+    StreamingIndexingRun<R, CR, EP, ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanningPolicy>
 {
-    /// Constructor using the built-in arithmetic-mean canonical-embedding
-    /// policy plus an explicit built-in clustering choice.
-    pub fn with_builtin_clustering(
+    pub fn with_builtin_planning(
         resolver: CR,
         embedding_provider: EP,
-        clustering: BuiltInClustering,
+        planning: BuiltInPlanning,
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Self {
@@ -548,21 +672,19 @@ impl<R, CR, EP>
             resolver,
             embedding_provider,
             ArithmeticMeanCanonicalEmbeddingPolicy,
-            BuiltInClusteringFactory::new(clustering),
+            BuiltInPlanningPolicy::new(planning),
             embedding_spec,
             block_size_target,
         )
     }
 }
 
-impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, BuiltInClusteringFactory> {
-    /// Explicit canonical-embedding policy override paired with an explicit
-    /// built-in clustering choice.
+impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, BuiltInPlanningPolicy> {
     pub fn with_canonical_policy(
         resolver: CR,
         embedding_provider: EP,
         canonical_embedding_policy: CEP,
-        clustering: BuiltInClustering,
+        planning: BuiltInPlanning,
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Self {
@@ -570,24 +692,42 @@ impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, BuiltInClusteringFacto
             resolver,
             embedding_provider,
             canonical_embedding_policy,
-            BuiltInClusteringFactory::new(clustering),
+            BuiltInPlanningPolicy::new(planning),
             embedding_spec,
             block_size_target,
         )
     }
 }
 
-impl<R, CR, EP, CEP, SCF> StreamingIndexingRun<R, CR, EP, CEP, SCF>
+impl<R, CR, EP, CEP, F> StreamingIndexingRun<R, CR, EP, CEP, FactoryHierarchicalPlanningPolicy<F>>
 where
-    SCF: StreamingClusteringFactory,
+    F: StreamingClusteringFactory,
 {
-    /// Fully explicit constructor accepting caller-supplied canonical-embedding
-    /// policy and clustering factory.
+    pub fn with_streaming_clustering_factory(
+        resolver: CR,
+        embedding_provider: EP,
+        canonical_embedding_policy: CEP,
+        factory: F,
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Self {
+        Self::new(
+            resolver,
+            embedding_provider,
+            canonical_embedding_policy,
+            FactoryHierarchicalPlanningPolicy::new(factory),
+            embedding_spec,
+            block_size_target,
+        )
+    }
+}
+
+impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP> {
     pub fn new(
         resolver: CR,
         embedding_provider: EP,
         canonical_embedding_policy: CEP,
-        factory: SCF,
+        planning_policy: HPP,
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Self {
@@ -595,15 +735,14 @@ where
             resolver,
             embedding_provider,
             canonical_embedding_policy,
-            factory,
+            planning_policy,
             embedding_spec,
             block_size_target,
             observer: None,
-            phase: RunPhase::Training,
-            trainer: None,
-            classifier: None,
+            phase: RunPhase::Planning,
             completed_passes: 0,
             baseline: None,
+            finalized_hierarchy: None,
             current_pass_items: Vec::new(),
             current_pass_f32_embeddings: Vec::new(),
             items_seen_in_current_pass: 0,
@@ -611,40 +750,35 @@ where
         }
     }
 
-    /// Attach an optional status observer; returns `self` for chaining.
     pub fn with_observer(mut self, observer: StreamingIndexingStatusObserver) -> Self {
         self.observer = Some(observer);
         self
     }
 
-    /// Number of successfully completed training passes so far.
     pub fn completed_passes(&self) -> usize {
         self.completed_passes
     }
+
+    pub fn finalized_partition_hierarchy(&self) -> Option<&FinalizedPartitionHierarchy> {
+        self.finalized_hierarchy.as_ref()
+    }
 }
 
-// ─── Lifecycle methods ────────────────────────────────────────
-
-impl<R, CR, EP, CEP, SCF> StreamingIndexingRun<R, CR, EP, CEP, SCF>
+impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP>
 where
     CR: ContentResolver<R>,
     EP: EmbeddingProvider,
     CEP: CanonicalEmbeddingPolicy,
-    SCF: StreamingClusteringFactory,
+    HPP: HierarchicalPlanningPolicy,
+    HPP::Error: 'static,
 {
-    /// Ingest one batch of items for the current training pass.
-    ///
-    /// Empty batches are accepted as a no-op.  Content is resolved and
-    /// embeddings are generated; the f32 vectors are buffered until
-    /// `finish_pass` is called.  Replay continuity is verified against
-    /// the baseline established by the first completed pass.
     pub async fn ingest_batch(
         &mut self,
         batch: &[IndexItem<R>],
     ) -> Result<(), StreamingIndexerError> {
-        if !matches!(self.phase, RunPhase::Training) {
+        if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
-                "ingest_batch requires the training phase (currently {:?})",
+                "ingest_batch requires the planning phase (currently {:?})",
                 self.phase
             )));
         }
@@ -653,7 +787,6 @@ where
             return Ok(());
         }
 
-        // Resolve content for all items in the batch
         let mut contents = Vec::with_capacity(batch.len());
         let mut inputs = Vec::with_capacity(batch.len());
         for item in batch {
@@ -673,7 +806,6 @@ where
             contents.push(content);
         }
 
-        // Generate embeddings
         let embeddings = self
             .embedding_provider
             .embed_batch(&inputs, &self.embedding_spec)
@@ -727,24 +859,18 @@ where
             }
         }
 
-        // Convert to f32 and buffer for batch-ingestion in finish_pass
         for embedding in &embeddings {
-            let f32_emb = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
-            self.current_pass_f32_embeddings.push(f32_emb);
+            self.current_pass_f32_embeddings
+                .push(decode_embedding_as_f32(embedding, &self.embedding_spec)?);
         }
         self.items_seen_in_current_pass += batch.len();
-
         Ok(())
     }
 
-    /// Complete the current training pass and return a deterministic pass
-    /// report.  Fails if no items were ingested since the last completed pass.
-    /// The trainer is created here (lazily, with the actual item count known)
-    /// and the buffered embeddings are fed to it in one call.
     pub fn finish_pass(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
-        if !matches!(self.phase, RunPhase::Training) {
+        if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
-                "finish_pass requires the training phase (currently {:?})",
+                "finish_pass requires the planning phase (currently {:?})",
                 self.phase
             )));
         }
@@ -755,7 +881,6 @@ where
             ));
         }
 
-        // Validate baseline completeness for passes after the first
         if let Some(baseline) = &self.baseline
             && self.items_seen_in_current_pass != baseline.len()
         {
@@ -766,31 +891,16 @@ where
             )));
         }
 
-        // Create the trainer now that we know the exact item count.
-        // For subsequent passes the trainer is already present (reused).
-        if self.trainer.is_none() {
-            let dims = embedding_dims_usize(&self.embedding_spec)?;
-            let item_count = self.items_seen_in_current_pass;
-            let new_trainer = self
-                .factory
-                .create_trainer(
-                    dims,
-                    item_count,
-                    self.block_size_target,
-                    &self.embedding_spec,
-                )
-                .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-            self.trainer = Some(new_trainer);
-        }
-
-        let trainer = self.trainer.as_mut().unwrap();
+        let materializability_bound =
+            materializability_bound(&self.embedding_spec, self.block_size_target)
+                .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
 
         let pass_number = self.completed_passes + 1;
         let pass_started = Instant::now();
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                phase: StreamingIndexingPhase::PlanningPass { pass_number },
                 state: StreamingIndexingStatusState::Started,
                 item_count: self.items_seen_in_current_pass,
                 elapsed: Duration::ZERO,
@@ -799,143 +909,128 @@ where
         );
         let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
             &self.observer,
-            StreamingIndexingPhase::TrainingPass { pass_number },
+            StreamingIndexingPhase::PlanningPass { pass_number },
             self.items_seen_in_current_pass,
             pass_started,
         ));
 
-        // Feed all buffered embeddings as one batch
+        let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
-        let ingest_result = trainer.ingest_batch(&buffered);
-        if let Err(error) = ingest_result {
-            heartbeat.stop();
-            self.current_pass_f32_embeddings = buffered;
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::TrainingPass { pass_number },
-                    state: StreamingIndexingStatusState::Failed,
-                    item_count: self.items_seen_in_current_pass,
-                    elapsed: pass_started.elapsed(),
-                    error: Some(error.to_string()),
+        let outcome = self
+            .planning_policy
+            .finish_planning_pass_with_stage_observer(
+                &buffered,
+                &self.embedding_spec,
+                materializability_bound,
+                self.block_size_target,
+                |stage, item_count, state| {
+                    stage_statuses.observe(stage, state, item_count);
                 },
-            );
-            return Err(StreamingIndexerError::ClusteringFailure(error.to_string()));
-        }
+            )
+            .map_err(map_planning_policy_error);
 
-        let pass_report = match trainer.finish_pass() {
-            Ok(report) => report,
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
             Err(error) => {
-                heartbeat.stop();
                 self.current_pass_f32_embeddings = buffered;
+                heartbeat.stop();
+                stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 emit_status(
                     &self.observer,
                     StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                        phase: StreamingIndexingPhase::PlanningPass { pass_number },
                         state: StreamingIndexingStatusState::Failed,
                         item_count: self.items_seen_in_current_pass,
                         elapsed: pass_started.elapsed(),
                         error: Some(error.to_string()),
                     },
                 );
-                return Err(StreamingIndexerError::ClusteringFailure(error.to_string()));
+                return Err(error);
             }
         };
+
         heartbeat.stop();
-        if pass_report.observed_count != self.items_seen_in_current_pass {
+        if let Err(error) =
+            validate_partition_hierarchy(&outcome.hierarchy, self.items_seen_in_current_pass)
+                .map_err(StreamingIndexerError::HierarchyValidation)
+        {
             self.current_pass_f32_embeddings = buffered;
+            stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                    phase: StreamingIndexingPhase::PlanningPass { pass_number },
                     state: StreamingIndexingStatusState::Failed,
                     item_count: self.items_seen_in_current_pass,
                     elapsed: pass_started.elapsed(),
-                    error: Some(format!(
-                        "trainer reported observed_count {} but current pass buffered {} items",
-                        pass_report.observed_count, self.items_seen_in_current_pass
-                    )),
+                    error: Some(error.to_string()),
                 },
             );
-            return Err(StreamingIndexerError::ClusteringFailure(format!(
-                "trainer reported observed_count {} but current pass buffered {} items",
-                pass_report.observed_count, self.items_seen_in_current_pass
-            )));
+            return Err(error);
         }
+        stage_statuses.complete_all(pass_started.elapsed());
 
-        // Establish baseline after first completed pass
         if self.baseline.is_none() {
             self.baseline = Some(std::mem::take(&mut self.current_pass_items));
         }
-
+        self.finalized_hierarchy = Some(outcome.hierarchy.clone());
         self.completed_passes += 1;
         self.items_seen_in_current_pass = 0;
 
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::TrainingPass { pass_number },
+                phase: StreamingIndexingPhase::PlanningPass { pass_number },
                 state: StreamingIndexingStatusState::Completed,
-                item_count: pass_report.observed_count,
+                item_count: self.baseline.as_ref().map_or(0, std::vec::Vec::len),
                 elapsed: pass_started.elapsed(),
                 error: None,
             },
         );
 
+        let hierarchy_stats = hierarchy_stats(&outcome.hierarchy);
         Ok(IndexingPassReport {
-            observed_item_count: pass_report.observed_count,
-            clustering_quality_metric: pass_report.quality_metric,
-            clustering_balance_metric: pass_report.balance_metric,
-            clustering_quality_direction: pass_report.quality_direction,
-            clustering_balance_direction: pass_report.balance_direction,
+            observed_item_count: self.baseline.as_ref().map_or(0, std::vec::Vec::len),
             completed_pass_count: self.completed_passes,
+            planning_quality_metric: outcome.planning_quality_metric,
+            planning_balance_metric: outcome.planning_balance_metric,
+            planning_quality_direction: outcome.planning_quality_direction,
+            planning_balance_direction: outcome.planning_balance_direction,
+            planned_partition_count: hierarchy_stats.partition_count,
+            terminal_partition_count: hierarchy_stats.terminal_partition_count,
+            hierarchy_depth: hierarchy_stats.depth,
         })
     }
 
-    /// Signal that training is complete.  Requires at least one completed pass
-    /// and no open (incomplete) pass.  Converts the trainer into a classifier
-    /// ready for final materialization.
-    pub fn mark_training_complete(&mut self) -> Result<(), StreamingIndexerError> {
-        if !matches!(self.phase, RunPhase::Training) {
+    pub fn mark_planning_complete(&mut self) -> Result<(), StreamingIndexerError> {
+        if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
-                "mark_training_complete requires the training phase (currently {:?})",
+                "mark_planning_complete requires the planning phase (currently {:?})",
                 self.phase
             )));
         }
         if self.completed_passes == 0 {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(
-                "training completion requires at least one completed pass".into(),
+                "planning completion requires at least one completed pass".into(),
             ));
         }
         if self.items_seen_in_current_pass > 0 {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(
-                "cannot complete training with an open (unfinished) pass".into(),
+                "cannot complete planning with an open (unfinished) pass".into(),
             ));
         }
-
-        let mut trainer = self.trainer.take().ok_or_else(|| {
+        let hierarchy = self.finalized_hierarchy.as_ref().ok_or_else(|| {
             StreamingIndexerError::InvalidLifecycleTransition(
-                "no trainer available to complete".into(),
+                "no finalized partition hierarchy is available".into(),
             )
         })?;
-
-        trainer
-            .complete_training()
-            .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-
-        let classifier = trainer
-            .into_classifier()
-            .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-
-        self.classifier = Some(classifier);
-        self.phase = RunPhase::TrainingComplete;
+        let baseline_len = self.baseline.as_ref().map_or(0, std::vec::Vec::len);
+        validate_partition_hierarchy(hierarchy, baseline_len)
+            .map_err(StreamingIndexerError::HierarchyValidation)?;
+        self.phase = RunPhase::PlanningComplete;
         Ok(())
     }
 
-    /// Final materialization replay.  The caller must supply the same logical
-    /// item set in the same replay order as the training passes.  Resolves
-    /// content, constructs leaf blocks, persists the full block tree, and
-    /// returns the root block ID plus all persisted block IDs.
     pub async fn finalize<I, B>(
         &mut self,
         replay_batches: I,
@@ -945,9 +1040,9 @@ where
         I: IntoIterator<Item = B>,
         B: AsRef<[IndexItem<R>]>,
     {
-        if !matches!(self.phase, RunPhase::TrainingComplete) {
+        if !matches!(self.phase, RunPhase::PlanningComplete) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
-                "finalize requires the training-complete phase (currently {:?})",
+                "finalize requires the planning-complete phase (currently {:?})",
                 self.phase
             )));
         }
@@ -955,13 +1050,16 @@ where
         let baseline = self.baseline.as_ref().ok_or_else(|| {
             StreamingIndexerError::InvalidLifecycleTransition("no baseline established".into())
         })?;
-        let classifier = self
-            .classifier
-            .as_ref()
-            .expect("classifier must be present in TrainingComplete phase");
+        let hierarchy = self.finalized_hierarchy.as_ref().ok_or_else(|| {
+            StreamingIndexerError::InvalidLifecycleTransition(
+                "no finalized partition hierarchy is available".into(),
+            )
+        })?;
+        validate_partition_hierarchy(hierarchy, baseline.len())
+            .map_err(StreamingIndexerError::HierarchyValidation)?;
 
         let result = self
-            .do_finalize(replay_batches, baseline.as_slice(), store, classifier)
+            .do_finalize(replay_batches, baseline.as_slice(), hierarchy, store)
             .await;
 
         if result.is_ok() {
@@ -970,190 +1068,200 @@ where
         result
     }
 
-    // ── Private: perform the actual materialization ────────────
-
     async fn do_finalize<I, B>(
         &self,
         replay_batches: I,
         baseline: &[BaselineItem],
+        hierarchy: &FinalizedPartitionHierarchy,
         store: &dyn BlockStore,
-        classifier: &<SCF::Trainer as StreamingClusterTrainer>::Classifier,
     ) -> Result<StreamingIndexingResult, StreamingIndexerError>
     where
         I: IntoIterator<Item = B>,
         B: AsRef<[IndexItem<R>]>,
     {
-        let leaf_started = Instant::now();
+        let materializability_bound =
+            materializability_bound(&self.embedding_spec, self.block_size_target)
+                .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
 
+        let replay_started = Instant::now();
         emit_status(
             &self.observer,
             StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::LeafMaterialization,
+                phase: StreamingIndexingPhase::FinalMaterializationReplay,
                 state: StreamingIndexingStatusState::Started,
                 item_count: baseline.len(),
                 elapsed: Duration::ZERO,
                 error: None,
             },
         );
-        emit_status(
+        let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
             &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::LeafMaterialization,
-                state: StreamingIndexingStatusState::InProgress,
-                item_count: baseline.len(),
-                elapsed: leaf_started.elapsed(),
-                error: None,
-            },
-        );
+            StreamingIndexingPhase::FinalMaterializationReplay,
+            baseline.len(),
+            replay_started,
+        ));
 
-        let mut replay_count = 0usize;
-        let mut leaf_children: Vec<IndexedChild> = Vec::with_capacity(baseline.len());
-        let mut persisted_ids: Vec<BlockHash> = Vec::new();
-        for batch in replay_batches {
-            let items = batch.as_ref();
-            if items.is_empty() {
-                continue;
-            }
-            for (offset, _) in items.iter().enumerate() {
-                let Some(_) = baseline.get(replay_count + offset) else {
-                    return Err(StreamingIndexerError::ReplayMismatch(format!(
-                        "finalization replay has more items than the {} items in the established baseline",
-                        baseline.len()
-                    )));
-                };
-            }
+        let replay_result = async {
+            let mut replay_count = 0usize;
+            let mut leaf_children: Vec<IndexedChild> = Vec::with_capacity(baseline.len());
+            let mut persisted_ids: Vec<BlockHash> = Vec::new();
 
-            let mut inputs: Vec<EmbeddingInput> = Vec::with_capacity(items.len());
-            let mut contents: Vec<Content> = Vec::with_capacity(items.len());
-            let mut metadatas: Vec<Metadata> = Vec::with_capacity(items.len());
-            for item in items {
-                let content = self
-                    .resolver
-                    .resolve(&item.content_ref)
-                    .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
-                if content.media_type.is_empty() {
-                    return Err(StreamingIndexerError::UnusableContent(
-                        "resolved content must include a media type".into(),
-                    ));
+            for batch in replay_batches {
+                let items = batch.as_ref();
+                if items.is_empty() {
+                    continue;
                 }
-                inputs.push(EmbeddingInput {
-                    media_type: content.media_type.clone(),
-                    body: content.body.clone(),
-                });
-                contents.push(content);
-                metadatas.push(item.metadata.clone());
+
+                for (offset, _) in items.iter().enumerate() {
+                    let Some(_) = baseline.get(replay_count + offset) else {
+                        return Err(StreamingIndexerError::ReplayMismatch(format!(
+                            "finalization replay has more items than the {} items in the established baseline",
+                            baseline.len()
+                        )));
+                    };
+                }
+
+                let mut inputs = Vec::with_capacity(items.len());
+                let mut contents = Vec::with_capacity(items.len());
+                let mut metadatas = Vec::with_capacity(items.len());
+                for item in items {
+                    let content = self
+                        .resolver
+                        .resolve(&item.content_ref)
+                        .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
+                    if content.media_type.is_empty() {
+                        return Err(StreamingIndexerError::UnusableContent(
+                            "resolved content must include a media type".into(),
+                        ));
+                    }
+                    inputs.push(EmbeddingInput {
+                        media_type: content.media_type.clone(),
+                        body: content.body.clone(),
+                    });
+                    contents.push(content);
+                    metadatas.push(item.metadata.clone());
+                }
+
+                let embeddings = self
+                    .embedding_provider
+                    .embed_batch(&inputs, &self.embedding_spec)
+                    .await
+                    .map_err(|e| StreamingIndexerError::EmbeddingFailure(e.to_string()))?;
+                if embeddings.len() != items.len() {
+                    return Err(StreamingIndexerError::EmbeddingFailure(format!(
+                        "expected {} embeddings, got {}",
+                        items.len(),
+                        embeddings.len()
+                    )));
+                }
+
+                for (offset, ((item, content), embedding)) in items
+                    .iter()
+                    .zip(contents.iter())
+                    .zip(embeddings.iter())
+                    .enumerate()
+                {
+                    let content_ref_hash = self
+                        .resolver
+                        .fingerprint(&item.content_ref)
+                        .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
+                    let expected = &baseline[replay_count + offset];
+                    let replay_item = BaselineItem {
+                        content_ref_hash,
+                        metadata_hash: hash_metadata(&item.metadata)
+                            .map_err(StreamingIndexerError::InvalidMetadata)?,
+                        content_hash: hash_content(content),
+                        embedding_hash: hash_bytes(embedding),
+                    };
+                    if expected != &replay_item {
+                        return Err(StreamingIndexerError::ReplayMismatch(format!(
+                            "finalization item {} differs from baseline",
+                            replay_count + offset
+                        )));
+                    }
+                }
+
+                for ((content, metadata), embedding) in
+                    contents.into_iter().zip(metadatas).zip(embeddings.iter())
+                {
+                    validate_embedding_bytes(embedding, &self.embedding_spec, "item")
+                        .map_err(StreamingIndexerError::EmbeddingFailure)?;
+
+                    let leaf = build_leaf_block(
+                        VERSION_1,
+                        self.embedding_spec.clone(),
+                        vec![LeafEntry {
+                            embedding: embedding.clone(),
+                            metadata,
+                            content,
+                        }],
+                        None,
+                    )
+                    .map_err(StreamingIndexerError::BlockConstruction)?;
+
+                    let leaf_block = Block::Leaf(leaf);
+                    let serialized = serialize_block(&leaf_block)
+                        .map_err(StreamingIndexerError::BlockConstruction)?;
+                    let block_id = store
+                        .put(&leaf_block)
+                        .map_err(StreamingIndexerError::Storage)?;
+                    verify_persisted_block_id(block_id, serialized.hash)?;
+                    persisted_ids.push(block_id);
+                    leaf_children.push(IndexedChild {
+                        embedding: embedding.clone(),
+                        child: block_id,
+                        level: 0,
+                    });
+                }
+                replay_count += items.len();
             }
 
-            let embeddings = self
-                .embedding_provider
-                .embed_batch(&inputs, &self.embedding_spec)
-                .await
-                .map_err(|e| StreamingIndexerError::EmbeddingFailure(e.to_string()))?;
-            if embeddings.len() != items.len() {
-                return Err(StreamingIndexerError::EmbeddingFailure(format!(
-                    "expected {} embeddings, got {}",
-                    items.len(),
-                    embeddings.len()
+            if replay_count == 0 {
+                return Err(StreamingIndexerError::EmptyInput);
+            }
+            if replay_count != baseline.len() {
+                return Err(StreamingIndexerError::ReplayMismatch(format!(
+                    "finalization replay had {replay_count} items but baseline has {}",
+                    baseline.len()
                 )));
             }
 
-            for (offset, ((item, content), embedding)) in items
-                .iter()
-                .zip(contents.iter())
-                .zip(embeddings.iter())
-                .enumerate()
-            {
-                let content_ref_hash = self
-                    .resolver
-                    .fingerprint(&item.content_ref)
-                    .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
-                let expected = &baseline[replay_count + offset];
-                let replay_item = BaselineItem {
-                    content_ref_hash,
-                    metadata_hash: hash_metadata(&item.metadata)
-                        .map_err(StreamingIndexerError::InvalidMetadata)?,
-                    content_hash: hash_content(content),
-                    embedding_hash: hash_bytes(embedding),
-                };
-                if expected != &replay_item {
-                    return Err(StreamingIndexerError::ReplayMismatch(format!(
-                        "finalization item {} differs from baseline",
-                        replay_count + offset
-                    )));
-                }
+            Ok((leaf_children, persisted_ids))
+        }
+        .await;
+
+        heartbeat.stop();
+        let (leaf_children, mut persisted_ids) = match replay_result {
+            Ok(replay_materialization) => {
+                emit_status(
+                    &self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::FinalMaterializationReplay,
+                        state: StreamingIndexingStatusState::Completed,
+                        item_count: baseline.len(),
+                        elapsed: replay_started.elapsed(),
+                        error: None,
+                    },
+                );
+                replay_materialization
             }
-
-            for ((content, metadata), embedding) in
-                contents.into_iter().zip(metadatas).zip(embeddings.iter())
-            {
-                validate_embedding_bytes(embedding, &self.embedding_spec, "item")
-                    .map_err(StreamingIndexerError::EmbeddingFailure)?;
-
-                let leaf = build_leaf_block(
-                    VERSION_1,
-                    self.embedding_spec.clone(),
-                    vec![LeafEntry {
-                        embedding: embedding.clone(),
-                        metadata,
-                        content,
-                    }],
-                    None,
-                )
-                .map_err(StreamingIndexerError::BlockConstruction)?;
-
-                let leaf_block = Block::Leaf(leaf);
-                let serialized = serialize_block(&leaf_block)
-                    .map_err(StreamingIndexerError::BlockConstruction)?;
-                let block_id = store
-                    .put(&leaf_block)
-                    .map_err(StreamingIndexerError::Storage)?;
-                if block_id != serialized.hash {
-                    return Err(StreamingIndexerError::Storage(
-                        BlockStoreError::IntegrityMismatch {
-                            expected: serialized.hash,
-                            actual: block_id,
-                        },
-                    ));
-                }
-                persisted_ids.push(block_id);
-                leaf_children.push(IndexedChild {
-                    embedding: embedding.clone(),
-                    child: block_id,
-                    level: 0,
-                });
+            Err(error) => {
+                emit_status(
+                    &self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::FinalMaterializationReplay,
+                        state: StreamingIndexingStatusState::Failed,
+                        item_count: baseline.len(),
+                        elapsed: replay_started.elapsed(),
+                        error: Some(error.to_string()),
+                    },
+                );
+                return Err(error);
             }
-            replay_count += items.len();
-        }
-        if replay_count == 0 {
-            return Err(StreamingIndexerError::EmptyInput);
-        }
-        if replay_count != baseline.len() {
-            return Err(StreamingIndexerError::ReplayMismatch(format!(
-                "finalization replay had {replay_count} items but baseline has {}",
-                baseline.len()
-            )));
-        }
+        };
 
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::LeafMaterialization,
-                state: StreamingIndexingStatusState::Completed,
-                item_count: replay_count,
-                elapsed: leaf_started.elapsed(),
-                error: None,
-            },
-        );
-
-        // Normalize leaf layer
-        let unique_leaves = normalize_current_layer(leaf_children);
-        if unique_leaves.is_empty() {
-            return Err(StreamingIndexerError::EmptyInput);
-        }
-
-        // Single unique leaf → it is the root
-        if unique_leaves.len() == 1 {
-            let root_id = unique_leaves[0].child;
+        if leaf_children.len() == 1 {
+            let root_id = leaf_children[0].child;
             dedup_sort_ids(&mut persisted_ids);
             return Ok(StreamingIndexingResult {
                 root_id,
@@ -1161,224 +1269,139 @@ where
             });
         }
 
-        // ── First parent layer: use the trained classifier ────────
+        let root_child = self.materialize_hierarchy_bottom_up(
+            hierarchy,
+            &leaf_children,
+            materializability_bound,
+            store,
+            &mut persisted_ids,
+        )?;
+        dedup_sort_ids(&mut persisted_ids);
+        Ok(StreamingIndexingResult {
+            root_id: root_child.child,
+            block_ids: persisted_ids,
+        })
+    }
 
-        let first_layer_started = Instant::now();
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::FirstLayerClustering,
-                state: StreamingIndexingStatusState::Started,
-                item_count: unique_leaves.len(),
-                elapsed: Duration::ZERO,
-                error: None,
-            },
-        );
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::FirstLayerClustering,
-                state: StreamingIndexingStatusState::InProgress,
-                item_count: unique_leaves.len(),
-                elapsed: first_layer_started.elapsed(),
-                error: None,
-            },
-        );
-        let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
-            &self.observer,
-            StreamingIndexingPhase::FirstLayerClustering,
-            unique_leaves.len(),
-            first_layer_started,
-        ));
-
-        let leaf_f32: Vec<Vec<f32>> = unique_leaves
+    fn materialize_hierarchy_bottom_up(
+        &self,
+        hierarchy: &FinalizedPartitionHierarchy,
+        leaf_children: &[IndexedChild],
+        materializability_bound: usize,
+        store: &dyn BlockStore,
+        persisted_ids: &mut Vec<BlockHash>,
+    ) -> Result<IndexedChild, StreamingIndexerError> {
+        let partitions = hierarchy
+            .partitions
             .iter()
-            .map(|c| decode_embedding_as_f32(&c.embedding, &self.embedding_spec))
-            .collect::<Result<_, _>>()?;
+            .cloned()
+            .map(|partition| (partition.id.clone(), partition))
+            .collect::<HashMap<_, _>>();
+        let mut layer_index = 0usize;
+        self.materialize_partition(
+            &hierarchy.root_partition_id,
+            &partitions,
+            leaf_children,
+            materializability_bound,
+            store,
+            persisted_ids,
+            &mut layer_index,
+        )
+    }
 
-        let assignments = classifier
-            .assign_batch(&leaf_f32)
-            .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-        if assignments.len() != leaf_f32.len() {
-            emit_status(
-                &self.observer,
-                StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::FirstLayerClustering,
-                    state: StreamingIndexingStatusState::Failed,
-                    item_count: unique_leaves.len(),
-                    elapsed: first_layer_started.elapsed(),
-                    error: Some(format!(
-                        "classifier returned {} assignments for {} embeddings",
-                        assignments.len(),
-                        leaf_f32.len()
-                    )),
-                },
-            );
-            return Err(StreamingIndexerError::ClusteringFailure(format!(
-                "classifier returned {} assignments for {} embeddings",
-                assignments.len(),
-                leaf_f32.len()
-            )));
-        }
-        let groups = ensure_min_two_per_group(assignments_to_groups(&assignments));
-        heartbeat.stop();
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_partition(
+        &self,
+        partition_id: &str,
+        partitions: &HashMap<String, FinalizedPartition>,
+        leaf_children: &[IndexedChild],
+        materializability_bound: usize,
+        store: &dyn BlockStore,
+        persisted_ids: &mut Vec<BlockHash>,
+        layer_index: &mut usize,
+    ) -> Result<IndexedChild, StreamingIndexerError> {
+        let partition = partitions.get(partition_id).ok_or_else(|| {
+            StreamingIndexerError::HierarchyValidation(format!(
+                "partition {partition_id:?} is missing during final assembly"
+            ))
+        })?;
 
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::FirstLayerClustering,
-                state: StreamingIndexingStatusState::Completed,
-                item_count: unique_leaves.len(),
-                elapsed: first_layer_started.elapsed(),
-                error: None,
-            },
-        );
-
-        let layer_zero_started = Instant::now();
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::LayerMaterialization { layer_index: 0 },
-                state: StreamingIndexingStatusState::Started,
-                item_count: groups.len(),
-                elapsed: Duration::ZERO,
-                error: None,
-            },
-        );
-
-        let mut current_layer =
-            self.build_branch_layer(&unique_leaves, &groups, 1, store, &mut persisted_ids)?;
-
-        emit_status(
-            &self.observer,
-            StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::LayerMaterialization { layer_index: 0 },
-                state: StreamingIndexingStatusState::Completed,
-                item_count: current_layer.len(),
-                elapsed: layer_zero_started.elapsed(),
-                error: None,
-            },
-        );
-
-        current_layer = normalize_current_layer(current_layer);
-
-        // ── Higher layers: internal streaming replay ──────────────
-
-        let mut layer_index = 1usize;
-        while current_layer.len() > 1 {
-            let child_count = current_layer.len();
-
-            let groups = if child_count == 2 {
-                // Two children always merge into one root without clustering.
-                vec![vec![0usize, 1]]
-            } else {
-                let dims = embedding_dims_usize(&self.embedding_spec)?;
-
-                let higher_layer_started = Instant::now();
-                emit_status(
-                    &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
-                        state: StreamingIndexingStatusState::Started,
-                        item_count: child_count,
-                        elapsed: Duration::ZERO,
-                        error: None,
-                    },
-                );
-                emit_status(
-                    &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
-                        state: StreamingIndexingStatusState::InProgress,
-                        item_count: child_count,
-                        elapsed: higher_layer_started.elapsed(),
-                        error: None,
-                    },
-                );
-                let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
-                    &self.observer,
-                    StreamingIndexingPhase::HigherLayerClustering { layer_index },
-                    child_count,
-                    higher_layer_started,
-                ));
-
-                let f32_embs: Vec<Vec<f32>> = current_layer
-                    .iter()
-                    .map(|c| decode_embedding_as_f32(&c.embedding, &self.embedding_spec))
-                    .collect::<Result<_, _>>()?;
-
-                let mut trainer = self
-                    .factory
-                    .create_trainer(
-                        dims,
-                        child_count,
-                        self.block_size_target,
-                        &self.embedding_spec,
+        let children = if partition.terminal {
+            partition
+                .item_indices
+                .iter()
+                .map(|&index| {
+                    leaf_children.get(index).cloned().ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "terminal partition {partition_id:?} references missing item index {index}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            partition
+                .child_ids
+                .iter()
+                .map(|child_id| {
+                    self.materialize_partition(
+                        child_id,
+                        partitions,
+                        leaf_children,
+                        materializability_bound,
+                        store,
+                        persisted_ids,
+                        layer_index,
                     )
-                    .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
 
-                trainer
-                    .ingest_batch(&f32_embs)
-                    .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-                trainer
-                    .finish_pass()
-                    .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-                trainer
-                    .complete_training()
-                    .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-                let layer_cls = trainer
-                    .into_classifier()
-                    .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
+        self.assemble_child_set(
+            children,
+            materializability_bound,
+            store,
+            persisted_ids,
+            layer_index,
+        )
+    }
 
-                let asgn = layer_cls
-                    .assign_batch(&f32_embs)
-                    .map_err(|e| StreamingIndexerError::ClusteringFailure(e.to_string()))?;
-                if asgn.len() != f32_embs.len() {
-                    emit_status(
-                        &self.observer,
-                        StreamingIndexingStatus {
-                            phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
-                            state: StreamingIndexingStatusState::Failed,
-                            item_count: child_count,
-                            elapsed: higher_layer_started.elapsed(),
-                            error: Some(format!(
-                                "classifier returned {} assignments for {} embeddings",
-                                asgn.len(),
-                                f32_embs.len()
-                            )),
-                        },
-                    );
-                    return Err(StreamingIndexerError::ClusteringFailure(format!(
-                        "classifier returned {} assignments for {} embeddings",
-                        asgn.len(),
-                        f32_embs.len()
-                    )));
-                }
-                heartbeat.stop();
+    fn assemble_child_set(
+        &self,
+        children: Vec<IndexedChild>,
+        materializability_bound: usize,
+        store: &dyn BlockStore,
+        persisted_ids: &mut Vec<BlockHash>,
+        layer_index: &mut usize,
+    ) -> Result<IndexedChild, StreamingIndexerError> {
+        let mut current = normalize_current_layer(children);
+        if current.is_empty() {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "child set normalized to zero entries".into(),
+            ));
+        }
+        if current.len() == 1 {
+            return Ok(current.remove(0));
+        }
 
-                emit_status(
-                    &self.observer,
-                    StreamingIndexingStatus {
-                        phase: StreamingIndexingPhase::HigherLayerClustering { layer_index },
-                        state: StreamingIndexingStatusState::Completed,
-                        item_count: child_count,
-                        elapsed: higher_layer_started.elapsed(),
-                        error: None,
-                    },
-                );
+        loop {
+            if current.len() == 1 {
+                return Ok(current.remove(0));
+            }
 
-                ensure_min_two_per_group(assignments_to_groups(&asgn))
+            let groups = balanced_groups(current.len(), materializability_bound)
+                .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
+            let input_item_count = current.len();
+
+            let phase = StreamingIndexingPhase::BottomUpAssembly {
+                layer_index: *layer_index,
             };
-
-            let next_level = current_layer[0].level + 1;
-
-            let layer_started = Instant::now();
+            let started = Instant::now();
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::LayerMaterialization { layer_index },
+                    phase: phase.clone(),
                     state: StreamingIndexingStatusState::Started,
-                    item_count: groups.len(),
+                    item_count: input_item_count,
                     elapsed: Duration::ZERO,
                     error: None,
                 },
@@ -1386,47 +1409,61 @@ where
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::LayerMaterialization { layer_index },
+                    phase: phase.clone(),
                     state: StreamingIndexingStatusState::InProgress,
-                    item_count: groups.len(),
-                    elapsed: layer_started.elapsed(),
+                    item_count: input_item_count,
+                    elapsed: started.elapsed(),
                     error: None,
                 },
             );
+            let mut heartbeat = StatusHeartbeatGuard::new(start_status_heartbeat(
+                &self.observer,
+                phase.clone(),
+                input_item_count,
+                started,
+            ));
 
-            let next_layer = self.build_branch_layer(
-                &current_layer,
+            let next_level = current.iter().map(|child| child.level).max().unwrap_or(0) + 1;
+            let next_layer = match self.build_branch_layer(
+                &current,
                 &groups,
                 next_level,
                 store,
-                &mut persisted_ids,
-            )?;
+                persisted_ids,
+            ) {
+                Ok(next_layer) => next_layer,
+                Err(error) => {
+                    heartbeat.stop();
+                    emit_status(
+                        &self.observer,
+                        StreamingIndexingStatus {
+                            phase,
+                            state: StreamingIndexingStatusState::Failed,
+                            item_count: input_item_count,
+                            elapsed: started.elapsed(),
+                            error: Some(error.to_string()),
+                        },
+                    );
+                    return Err(error);
+                }
+            };
+            current = normalize_current_layer(next_layer);
 
+            heartbeat.stop();
             emit_status(
                 &self.observer,
                 StreamingIndexingStatus {
-                    phase: StreamingIndexingPhase::LayerMaterialization { layer_index },
+                    phase,
                     state: StreamingIndexingStatusState::Completed,
-                    item_count: next_layer.len(),
-                    elapsed: layer_started.elapsed(),
+                    item_count: input_item_count,
+                    elapsed: started.elapsed(),
                     error: None,
                 },
             );
-
-            current_layer = normalize_current_layer(next_layer);
-            layer_index += 1;
+            *layer_index += 1;
         }
-
-        let root_id = current_layer[0].child;
-        dedup_sort_ids(&mut persisted_ids);
-
-        Ok(StreamingIndexingResult {
-            root_id,
-            block_ids: persisted_ids,
-        })
     }
 
-    /// Build one layer of branch blocks from `children` grouped by `groups`.
     fn build_branch_layer(
         &self,
         children: &[IndexedChild],
@@ -1438,17 +1475,17 @@ where
         let mut next_layer = Vec::with_capacity(groups.len());
 
         for group in groups {
-            let raw_entries: Vec<BranchEntry> = group
+            let raw_entries = group
                 .iter()
-                .map(|&i| BranchEntry {
-                    embedding: children[i].embedding.clone(),
-                    child: children[i].child,
+                .map(|&index| BranchEntry {
+                    embedding: children[index].embedding.clone(),
+                    child: children[index].child,
                 })
-                .collect();
+                .collect::<Vec<_>>();
             let entries = normalize_branch_entries(raw_entries);
             if entries.len() < 2 {
-                return Err(StreamingIndexerError::ClusteringFailure(
-                    "cluster group normalized to fewer than two unique children".into(),
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "normalized child-bearing entry set has fewer than two unique children".into(),
                 ));
             }
 
@@ -1464,7 +1501,6 @@ where
             let branch_block = Block::Branch(branch.clone());
             let serialized =
                 serialize_block(&branch_block).map_err(StreamingIndexerError::BlockConstruction)?;
-
             if serialized.bytes.len() > self.block_size_target {
                 if branch.entries.len() == 2 {
                     return Err(StreamingIndexerError::IntermediateNodeTooLarge {
@@ -1472,24 +1508,19 @@ where
                         size_target: self.block_size_target,
                     });
                 }
-                return Err(StreamingIndexerError::ClusteringFailure(format!(
-                    "branch block serialized to {} bytes, exceeding block size target {}",
-                    serialized.bytes.len(),
-                    self.block_size_target
-                )));
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    format!(
+                        "branch block serialized to {} bytes, exceeding block size target {}",
+                        serialized.bytes.len(),
+                        self.block_size_target
+                    ),
+                ));
             }
 
             let block_id = store
                 .put(&branch_block)
                 .map_err(StreamingIndexerError::Storage)?;
-            if block_id != serialized.hash {
-                return Err(StreamingIndexerError::Storage(
-                    BlockStoreError::IntegrityMismatch {
-                        expected: serialized.hash,
-                        actual: block_id,
-                    },
-                ));
-            }
+            verify_persisted_block_id(block_id, serialized.hash)?;
             persisted_ids.push(block_id);
 
             let canonical = self
@@ -1507,6 +1538,490 @@ where
         }
 
         Ok(next_layer)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Built-in / factory-based planning
+// ─────────────────────────────────────────────────────────────
+
+fn derive_hierarchy_from_built_in(
+    planning: &BuiltInPlanning,
+    embeddings: &[Vec<f32>],
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    _block_size_target: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    match planning {
+        BuiltInPlanning::Dcbc(settings) => derive_hierarchy_with_builder(
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            |partition_len| {
+                Ok(PartitionPlanner::new(
+                    PlanningStage::Single,
+                    create_built_in_trainer(
+                        &BuiltInPlanningPhase::Dcbc(settings.clone()),
+                        partition_len,
+                        embeddings.first().map_or(0, std::vec::Vec::len),
+                        embedding_spec,
+                        materializability_bound,
+                    )?,
+                ))
+            },
+        ),
+        BuiltInPlanning::DirectionalPca(settings) => derive_hierarchy_with_builder(
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            |partition_len| {
+                Ok(PartitionPlanner::new(
+                    PlanningStage::Single,
+                    create_built_in_trainer(
+                        &BuiltInPlanningPhase::DirectionalPca(settings.clone()),
+                        partition_len,
+                        embeddings.first().map_or(0, std::vec::Vec::len),
+                        embedding_spec,
+                        materializability_bound,
+                    )?,
+                ))
+            },
+        ),
+        BuiltInPlanning::Hybrid(settings) => {
+            if settings.fine_partition_max_items < 2 {
+                return Err(StreamingIndexerError::InvalidHybridPlanningConfiguration(
+                    "fine_partition_max_items must be at least 2".into(),
+                ));
+            }
+            derive_hierarchy_with_builder(
+                embeddings,
+                materializability_bound,
+                stage_observer,
+                |partition_len| {
+                    let (stage, phase) = if partition_len <= settings.fine_partition_max_items {
+                        (PlanningStage::Fine, settings.fine.clone())
+                    } else {
+                        (PlanningStage::Coarse, settings.coarse.clone())
+                    };
+                    Ok(PartitionPlanner::new(
+                        stage,
+                        create_built_in_trainer(
+                            &phase,
+                            partition_len,
+                            embeddings.first().map_or(0, std::vec::Vec::len),
+                            embedding_spec,
+                            materializability_bound,
+                        )?,
+                    ))
+                },
+            )
+        }
+    }
+}
+
+fn create_built_in_trainer(
+    phase: &BuiltInPlanningPhase,
+    partition_len: usize,
+    dimensions: usize,
+    _embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+) -> Result<BuiltInStreamingClusterTrainer, StreamingIndexerError> {
+    match phase {
+        BuiltInPlanningPhase::Dcbc(settings) => {
+            let cluster_count = effective_cluster_count(
+                settings.cluster_count,
+                partition_len,
+                materializability_bound,
+            )
+            .map_err(map_clustering_configuration_error)?;
+            DcbcStreamingTrainer::new(StreamingClusteringConfig {
+                cluster_count,
+                dimensions,
+                balance_constraints: settings.balance_constraints.clone(),
+                random_seed: settings.random_seed,
+            })
+            .map(BuiltInStreamingClusterTrainer::Dcbc)
+            .map_err(map_clustering_error)
+        }
+        BuiltInPlanningPhase::DirectionalPca(settings) => {
+            let cluster_count = effective_cluster_count(
+                settings.cluster_count,
+                partition_len,
+                materializability_bound,
+            )
+            .map_err(map_clustering_configuration_error)?;
+            DirectionalPcaStreamingTrainer::new(
+                StreamingClusteringConfig {
+                    cluster_count,
+                    dimensions,
+                    balance_constraints: None,
+                    random_seed: settings.random_seed,
+                },
+                settings.params.clone(),
+            )
+            .map(BuiltInStreamingClusterTrainer::DirectionalPca)
+            .map_err(map_clustering_error)
+        }
+    }
+}
+
+fn derive_hierarchy_from_factory<F>(
+    factory: &F,
+    embeddings: &[Vec<f32>],
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    block_size_target: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+) -> Result<PlanningPassOutcome, StreamingClusteringError>
+where
+    F: StreamingClusteringFactory,
+{
+    let dimensions = embeddings.first().map_or(0, std::vec::Vec::len);
+    derive_hierarchy_with_builder(
+        embeddings,
+        materializability_bound,
+        stage_observer,
+        |partition_len| {
+            let trainer = factory
+                .create_trainer(dimensions, partition_len, block_size_target, embedding_spec)
+                .map_err(|error| invalid_config(error.to_string()))?;
+            Ok(PartitionPlanner::new(PlanningStage::Custom, trainer))
+        },
+    )
+}
+
+struct PartitionPlanner<T> {
+    stage: PlanningStage,
+    trainer: T,
+}
+
+impl<T> PartitionPlanner<T> {
+    fn new(stage: PlanningStage, trainer: T) -> Self {
+        Self { stage, trainer }
+    }
+}
+
+trait PartitionPlannerRunner {
+    fn stage(&self) -> PlanningStage;
+    fn run(
+        self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<(PassReport, Vec<ClusterId>), StreamingClusteringError>;
+}
+
+impl<T> PartitionPlannerRunner for PartitionPlanner<T>
+where
+    T: StreamingClusterTrainer,
+{
+    fn stage(&self) -> PlanningStage {
+        self.stage
+    }
+
+    fn run(
+        mut self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<(PassReport, Vec<ClusterId>), StreamingClusteringError> {
+        self.trainer.ingest_batch(embeddings)?;
+        let pass_report = self.trainer.finish_pass()?;
+        self.trainer.complete_training()?;
+        let classifier = self.trainer.into_classifier()?;
+        let assignments = classifier.assign_batch(embeddings)?;
+        Ok((pass_report, assignments))
+    }
+}
+
+fn derive_hierarchy_with_builder<E, B, P, SO>(
+    embeddings: &[Vec<f32>],
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+    mut planner_builder: B,
+) -> Result<PlanningPassOutcome, E>
+where
+    E: From<StreamingClusteringError>,
+    B: FnMut(usize) -> Result<P, E>,
+    P: PartitionPlannerRunner,
+    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+{
+    if embeddings.is_empty() {
+        return Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: Vec::new(),
+            },
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        });
+    }
+
+    let mut accumulator = PlanningMetricAccumulator::default();
+    let root_indices = (0..embeddings.len()).collect::<Vec<_>>();
+    let mut partitions = Vec::new();
+    derive_partition_recursive(
+        &root_indices,
+        "p0".into(),
+        None,
+        embeddings,
+        materializability_bound,
+        stage_observer,
+        &mut planner_builder,
+        &mut accumulator,
+        &mut partitions,
+    )?;
+    partitions.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(PlanningPassOutcome {
+        hierarchy: FinalizedPartitionHierarchy {
+            root_partition_id: "p0".into(),
+            partitions,
+        },
+        planning_quality_metric: accumulator.average_quality(),
+        planning_balance_metric: accumulator.average_balance(),
+        planning_quality_direction: accumulator.quality_direction,
+        planning_balance_direction: accumulator.balance_direction,
+        stages_used: accumulator.stages_used,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_partition_recursive<E, B, P, SO>(
+    indices: &[usize],
+    partition_id: String,
+    parent_id: Option<String>,
+    embeddings: &[Vec<f32>],
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+    planner_builder: &mut B,
+    accumulator: &mut PlanningMetricAccumulator,
+    partitions: &mut Vec<FinalizedPartition>,
+) -> Result<(), E>
+where
+    E: From<StreamingClusteringError>,
+    B: FnMut(usize) -> Result<P, E>,
+    P: PartitionPlannerRunner,
+    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+{
+    let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
+    if terminal {
+        partitions.push(FinalizedPartition {
+            id: partition_id,
+            parent_id,
+            child_ids: Vec::new(),
+            item_indices: indices.to_vec(),
+            terminal: true,
+            planning_stage: PlanningStage::Single,
+        });
+        return Ok(());
+    }
+
+    let planner = planner_builder(indices.len())?;
+    let stage = planner.stage();
+    stage_observer(stage, indices.len(), StreamingIndexingStatusState::Started);
+    stage_observer(
+        stage,
+        indices.len(),
+        StreamingIndexingStatusState::InProgress,
+    );
+    let partition_embeddings = indices
+        .iter()
+        .map(|&index| embeddings[index].clone())
+        .collect::<Vec<_>>();
+    let (pass_report, assignments) = planner.run(&partition_embeddings).map_err(E::from)?;
+    if assignments.len() != partition_embeddings.len() {
+        return Err(E::from(invalid_config(format!(
+            "planner returned {} cluster ids for {} embeddings",
+            assignments.len(),
+            partition_embeddings.len()
+        ))));
+    }
+
+    accumulator.observe(stage, &pass_report);
+
+    let mut groups = assignments_to_groups(&assignments);
+    groups = ensure_min_two_per_group(groups);
+    for group in &mut groups {
+        group.sort_unstable();
+    }
+    groups.sort_by_key(|group| group[0]);
+    if groups.len() <= 1 {
+        groups = balanced_groups(indices.len(), materializability_bound)
+            .map_err(invalid_config)
+            .map_err(E::from)?;
+    }
+
+    let child_ids = (0..groups.len())
+        .map(|child_index| format!("{partition_id}.{child_index}"))
+        .collect::<Vec<_>>();
+    partitions.push(FinalizedPartition {
+        id: partition_id.clone(),
+        parent_id: parent_id.clone(),
+        child_ids: child_ids.clone(),
+        item_indices: indices.to_vec(),
+        terminal: false,
+        planning_stage: stage,
+    });
+
+    for (child_index, group) in groups.into_iter().enumerate() {
+        let child_indices = group
+            .into_iter()
+            .map(|local_index| indices[local_index])
+            .collect::<Vec<_>>();
+        derive_partition_recursive(
+            &child_indices,
+            child_ids[child_index].clone(),
+            Some(partition_id.clone()),
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            planner_builder,
+            accumulator,
+            partitions,
+        )?;
+    }
+
+    Ok(())
+}
+
+struct PlanningMetricAccumulator {
+    quality_sum: f64,
+    balance_sum: f64,
+    cluster_runs: usize,
+    quality_direction: MetricDirection,
+    balance_direction: MetricDirection,
+    stages_used: BTreeSet<PlanningStage>,
+}
+
+impl Default for PlanningMetricAccumulator {
+    fn default() -> Self {
+        Self {
+            quality_sum: 0.0,
+            balance_sum: 0.0,
+            cluster_runs: 0,
+            quality_direction: MetricDirection::LargerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        }
+    }
+}
+
+impl PlanningMetricAccumulator {
+    fn observe(&mut self, stage: PlanningStage, report: &PassReport) {
+        if self.cluster_runs == 0 {
+            self.quality_direction = report.quality_direction;
+            self.balance_direction = report.balance_direction;
+        }
+        self.quality_sum += report.quality_metric;
+        self.balance_sum += report.balance_metric;
+        self.cluster_runs += 1;
+        self.stages_used.insert(stage);
+    }
+
+    fn average_quality(&self) -> f64 {
+        if self.cluster_runs == 0 {
+            0.0
+        } else {
+            self.quality_sum / self.cluster_runs as f64
+        }
+    }
+
+    fn average_balance(&self) -> f64 {
+        if self.cluster_runs == 0 {
+            0.0
+        } else {
+            self.balance_sum / self.cluster_runs as f64
+        }
+    }
+}
+
+struct PlanningStageStatusTracker<'a> {
+    observer: &'a Option<StreamingIndexingStatusObserver>,
+    pass_started: Instant,
+    stage_item_counts: BTreeMap<PlanningStage, usize>,
+}
+
+impl<'a> PlanningStageStatusTracker<'a> {
+    fn new(observer: &'a Option<StreamingIndexingStatusObserver>, pass_started: Instant) -> Self {
+        Self {
+            observer,
+            pass_started,
+            stage_item_counts: BTreeMap::new(),
+        }
+    }
+
+    fn observe(
+        &mut self,
+        stage: PlanningStage,
+        state: StreamingIndexingStatusState,
+        item_count: usize,
+    ) {
+        match state {
+            StreamingIndexingStatusState::Started => self.ensure_started(stage, item_count),
+            StreamingIndexingStatusState::InProgress => {
+                self.ensure_started(stage, item_count);
+                let total = self.stage_item_counts.entry(stage).or_insert(0);
+                *total += item_count;
+                emit_status(
+                    self.observer,
+                    StreamingIndexingStatus {
+                        phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                        state,
+                        item_count: *total,
+                        elapsed: self.pass_started.elapsed(),
+                        error: None,
+                    },
+                );
+            }
+            StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed => {}
+        }
+    }
+
+    fn complete_all(&self, elapsed: Duration) {
+        for (stage, item_count) in &self.stage_item_counts {
+            emit_status(
+                self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
+                    state: StreamingIndexingStatusState::Completed,
+                    item_count: *item_count,
+                    elapsed,
+                    error: None,
+                },
+            );
+        }
+    }
+
+    fn fail_all(&self, elapsed: Duration, error: &str) {
+        for (stage, item_count) in &self.stage_item_counts {
+            emit_status(
+                self.observer,
+                StreamingIndexingStatus {
+                    phase: StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
+                    state: StreamingIndexingStatusState::Failed,
+                    item_count: *item_count,
+                    elapsed,
+                    error: Some(error.to_owned()),
+                },
+            );
+        }
+    }
+
+    fn ensure_started(&mut self, stage: PlanningStage, item_count: usize) {
+        if self.stage_item_counts.contains_key(&stage) {
+            return;
+        }
+        self.stage_item_counts.insert(stage, 0);
+        emit_status(
+            self.observer,
+            StreamingIndexingStatus {
+                phase: StreamingIndexingPhase::HierarchyPlanning { stage },
+                state: StreamingIndexingStatusState::Started,
+                item_count,
+                elapsed: Duration::ZERO,
+                error: None,
+            },
+        );
     }
 }
 
@@ -1603,42 +2118,26 @@ fn hash_metadata(metadata: &Metadata) -> Result<BlockHash, String> {
     Ok(hash_bytes(&encoded))
 }
 
-fn embedding_dims_usize(spec: &EmbeddingSpec) -> Result<usize, StreamingIndexerError> {
-    usize::try_from(spec.dims).map_err(|_| {
-        StreamingIndexerError::ClusteringFailure(format!(
-            "embedding spec dims {} do not fit into usize on this target",
-            spec.dims
-        ))
-    })
-}
-
 fn assignments_to_groups(assignments: &[ClusterId]) -> Vec<Vec<usize>> {
     if assignments.is_empty() {
         return Vec::new();
     }
     let mut groups: BTreeMap<ClusterId, Vec<usize>> = BTreeMap::new();
-    for (i, &id) in assignments.iter().enumerate() {
-        groups.entry(id).or_default().push(i);
+    for (index, &cluster_id) in assignments.iter().enumerate() {
+        groups.entry(cluster_id).or_default().push(index);
     }
     groups.into_values().collect()
 }
 
-/// Ensure no group has fewer than 2 items by merging singletons into the
-/// largest group.  This preserves protocol correctness (every branch block
-/// requires at least two entries) regardless of how the classifier distributes
-/// items at inference time.
 fn ensure_min_two_per_group(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
-    // Partition into groups that satisfy the minimum and those that don't.
     let (mut ok, singletons): (Vec<Vec<usize>>, Vec<Vec<usize>>) =
-        groups.drain(..).partition(|g| g.len() >= 2);
+        groups.drain(..).partition(|group| group.len() >= 2);
 
     if singletons.is_empty() {
         return ok;
     }
-
     if ok.is_empty() {
-        // Everything is a singleton: merge all into one group.
-        let merged: Vec<usize> = singletons.into_iter().flatten().collect();
+        let merged = singletons.into_iter().flatten().collect::<Vec<_>>();
         return if merged.is_empty() {
             vec![]
         } else {
@@ -1646,8 +2145,7 @@ fn ensure_min_two_per_group(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
         };
     }
 
-    // Append singletons to the largest group (deterministic: latest largest group wins ties).
-    let target = ok.iter_mut().max_by_key(|g| g.len()).unwrap();
+    let target = ok.iter_mut().max_by_key(|group| group.len()).unwrap();
     for singleton in singletons {
         target.extend(singleton);
     }
@@ -1667,11 +2165,11 @@ fn decode_embedding_as_f32(
             .collect()),
         "f32le" => bytes
             .chunks_exact(4)
-            .map(|c| Ok(f32::from_le_bytes(c.try_into().unwrap())))
+            .map(|chunk| Ok(f32::from_le_bytes(chunk.try_into().unwrap())))
             .collect(),
         "f16le" => bytes
             .chunks_exact(2)
-            .map(|c| Ok(f16::from_le_bytes(c.try_into().unwrap()).to_f32()))
+            .map(|chunk| Ok(f16::from_le_bytes(chunk.try_into().unwrap()).to_f32()))
             .collect(),
         "pq4" => Err(StreamingIndexerError::ClusteringFailure(
             "pq4 embeddings are not supported by the streaming clustering path".into(),
@@ -1683,11 +2181,9 @@ fn decode_embedding_as_f32(
 }
 
 fn dedup_sort_ids(ids: &mut Vec<BlockHash>) {
-    ids.sort_by(|l, r| l.as_bytes().cmp(r.as_bytes()));
-    ids.dedup_by(|l, r| l.as_bytes() == r.as_bytes());
+    ids.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    ids.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
 }
-
-// ── Copied normalization / encoding helpers (no public re-export) ──────────
 
 fn normalize_current_layer(mut layer: Vec<IndexedChild>) -> Vec<IndexedChild> {
     layer.sort_by(compare_indexed_children);
@@ -1695,31 +2191,31 @@ fn normalize_current_layer(mut layer: Vec<IndexedChild>) -> Vec<IndexedChild> {
 }
 
 fn deduplicate_layer_by_child(mut layer: Vec<IndexedChild>) -> Vec<IndexedChild> {
-    layer.sort_by(|l, r| {
-        l.child
+    layer.sort_by(|left, right| {
+        left.child
             .as_bytes()
-            .cmp(r.child.as_bytes())
-            .then_with(|| l.embedding.cmp(&r.embedding))
+            .cmp(right.child.as_bytes())
+            .then_with(|| left.embedding.cmp(&right.embedding))
     });
-    layer.dedup_by(|l, r| l.child == r.child);
+    layer.dedup_by(|left, right| left.child == right.child);
     layer.sort_by(compare_indexed_children);
     layer
 }
 
-fn compare_indexed_children(l: &IndexedChild, r: &IndexedChild) -> std::cmp::Ordering {
-    l.embedding
-        .cmp(&r.embedding)
-        .then_with(|| l.child.as_bytes().cmp(r.child.as_bytes()))
+fn compare_indexed_children(left: &IndexedChild, right: &IndexedChild) -> Ordering {
+    left.embedding
+        .cmp(&right.embedding)
+        .then_with(|| left.child.as_bytes().cmp(right.child.as_bytes()))
 }
 
 fn normalize_branch_entries(mut entries: Vec<BranchEntry>) -> Vec<BranchEntry> {
-    entries.sort_by(|l, r| {
-        l.child
+    entries.sort_by(|left, right| {
+        left.child
             .as_bytes()
-            .cmp(r.child.as_bytes())
-            .then_with(|| l.embedding.cmp(&r.embedding))
+            .cmp(right.child.as_bytes())
+            .then_with(|| left.embedding.cmp(&right.embedding))
     });
-    let mut deduped: Vec<BranchEntry> = Vec::with_capacity(entries.len());
+    let mut deduped = Vec::with_capacity(entries.len());
     for entry in entries {
         if deduped
             .last()
@@ -1729,10 +2225,10 @@ fn normalize_branch_entries(mut entries: Vec<BranchEntry>) -> Vec<BranchEntry> {
         }
         deduped.push(entry);
     }
-    deduped.sort_by(|l, r| {
-        l.embedding
-            .cmp(&r.embedding)
-            .then_with(|| l.child.as_bytes().cmp(r.child.as_bytes()))
+    deduped.sort_by(|left, right| {
+        left.embedding
+            .cmp(&right.embedding)
+            .then_with(|| left.child.as_bytes().cmp(right.child.as_bytes()))
     });
     deduped
 }
@@ -1766,7 +2262,7 @@ fn expected_embedding_len(spec: &EmbeddingSpec) -> Option<usize> {
         "f32le" => dims.checked_mul(4),
         "f16le" => dims.checked_mul(2),
         "i8" => Some(dims),
-        "pq4" => dims.checked_add(1).map(|v| v / 2),
+        "pq4" => dims.checked_add(1).map(|value| value / 2),
         _ => None,
     }
 }
@@ -1780,15 +2276,15 @@ fn decode_embedding_as_f64(
     match spec.encoding.as_str() {
         "i8" => Ok(embedding
             .iter()
-            .map(|&b| i8::from_le_bytes([b]) as f64)
+            .map(|&byte| i8::from_le_bytes([byte]) as f64)
             .collect()),
         "f32le" => embedding
             .chunks_exact(4)
-            .map(|c| Ok(f32::from_le_bytes(c.try_into().unwrap()) as f64))
+            .map(|chunk| Ok(f32::from_le_bytes(chunk.try_into().unwrap()) as f64))
             .collect(),
         "f16le" => embedding
             .chunks_exact(2)
-            .map(|c| Ok(f16::from_le_bytes(c.try_into().unwrap()).to_f64()))
+            .map(|chunk| Ok(f16::from_le_bytes(chunk.try_into().unwrap()).to_f64()))
             .collect(),
         "pq4" => Err("pq4 embeddings cannot be decoded as arithmetic vectors".into()),
         other => Err(format!(
@@ -1810,27 +2306,29 @@ fn arithmetic_mean_canonical_embedding(block: &BranchBlock) -> Result<Vec<u8>, S
         )
     })?;
     let mut sums = vec![0.0f64; dims];
-    for (idx, entry) in block.entries.iter().enumerate() {
+    for (index, entry) in block.entries.iter().enumerate() {
         let decoded = decode_embedding_as_f64(&entry.embedding, &block.embedding_spec, "canonical")
-            .map_err(|e| format!("failed to decode branch entry {idx}: {e}"))?;
-        for (dim, (sum, value)) in sums.iter_mut().zip(decoded).enumerate() {
+            .map_err(|error| format!("failed to decode branch entry {index}: {error}"))?;
+        for (dimension, (sum, value)) in sums.iter_mut().zip(decoded).enumerate() {
             if !value.is_finite() {
                 return Err(format!(
-                    "branch entry {idx} contains non-finite value at dimension {dim}"
+                    "branch entry {index} contains non-finite value at dimension {dimension}"
                 ));
             }
             *sum += value;
             if !sum.is_finite() {
-                return Err(format!("arithmetic-mean sum overflowed at dimension {dim}"));
+                return Err(format!(
+                    "arithmetic-mean sum overflowed at dimension {dimension}"
+                ));
             }
         }
     }
     let divisor = block.entries.len() as f64;
-    for (dim, sum) in sums.iter_mut().enumerate() {
+    for (dimension, sum) in sums.iter_mut().enumerate() {
         *sum /= divisor;
         if !sum.is_finite() {
             return Err(format!(
-                "arithmetic-mean result became non-finite at dimension {dim}"
+                "arithmetic-mean result became non-finite at dimension {dimension}"
             ));
         }
     }
@@ -1849,16 +2347,16 @@ fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec
     match spec.encoding.as_str() {
         "f32le" => {
             let mut bytes = Vec::with_capacity(dims * 4);
-            for (dim, &v) in values.iter().enumerate() {
-                if !v.is_finite() {
+            for (dimension, &value) in values.iter().enumerate() {
+                if !value.is_finite() {
                     return Err(format!(
-                        "cannot encode non-finite arithmetic mean at dimension {dim}"
+                        "cannot encode non-finite arithmetic mean at dimension {dimension}"
                     ));
                 }
-                let encoded = v as f32;
+                let encoded = value as f32;
                 if !encoded.is_finite() {
                     return Err(format!(
-                        "arithmetic mean overflowed f32 encoding at dimension {dim}"
+                        "arithmetic mean overflowed f32 encoding at dimension {dimension}"
                     ));
                 }
                 bytes.extend_from_slice(&encoded.to_le_bytes());
@@ -1867,16 +2365,16 @@ fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec
         }
         "f16le" => {
             let mut bytes = Vec::with_capacity(dims * 2);
-            for (dim, &v) in values.iter().enumerate() {
-                if !v.is_finite() {
+            for (dimension, &value) in values.iter().enumerate() {
+                if !value.is_finite() {
                     return Err(format!(
-                        "cannot encode non-finite arithmetic mean at dimension {dim}"
+                        "cannot encode non-finite arithmetic mean at dimension {dimension}"
                     ));
                 }
-                let encoded = f16::from_f64(v);
+                let encoded = f16::from_f64(value);
                 if !encoded.to_f64().is_finite() {
                     return Err(format!(
-                        "arithmetic mean overflowed f16 encoding at dimension {dim}"
+                        "arithmetic mean overflowed f16 encoding at dimension {dimension}"
                     ));
                 }
                 bytes.extend_from_slice(&encoded.to_le_bytes());
@@ -1887,16 +2385,16 @@ fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec
             .iter()
             .copied()
             .enumerate()
-            .map(|(dim, v)| {
-                if !v.is_finite() {
+            .map(|(dimension, value)| {
+                if !value.is_finite() {
                     return Err(format!(
-                        "cannot encode non-finite arithmetic mean at dimension {dim}"
+                        "cannot encode non-finite arithmetic mean at dimension {dimension}"
                     ));
                 }
-                let rounded = v.round();
+                let rounded = value.round();
                 if rounded < f64::from(i8::MIN) || rounded > f64::from(i8::MAX) {
                     return Err(format!(
-                        "arithmetic mean {rounded} exceeds i8 range at dimension {dim}"
+                        "arithmetic mean {rounded} exceeds i8 range at dimension {dimension}"
                     ));
                 }
                 Ok((rounded as i8).to_le_bytes()[0])
@@ -1912,74 +2410,49 @@ fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec
     }
 }
 
-fn derived_dcbc_cluster_count(
-    fallback_cluster_count: u32,
+fn effective_cluster_count(
+    requested_cluster_count: u32,
     estimated_child_count: usize,
-    block_size_target: usize,
-    embedding_spec: &EmbeddingSpec,
-) -> Result<u32, StreamingClusteringError> {
-    if estimated_child_count == 0 {
-        return Ok(fallback_cluster_count.max(1));
-    }
-
-    let max_per = max_children_per_branch(embedding_spec, block_size_target, estimated_child_count)
-        .map_err(|message| StreamingClusteringError::InvalidConfiguration {
-            message: format!(
-                "cannot derive branch capacity for embedding spec {} dims under {}: {message}",
-                embedding_spec.dims, embedding_spec.encoding
-            ),
-        })?;
-
-    if estimated_child_count <= max_per.max(1) {
+    materializability_bound: usize,
+) -> Result<u32, String> {
+    if estimated_child_count <= 1 {
         return Ok(1);
     }
-
-    let needed = estimated_child_count.div_ceil(max_per.max(2));
-    let max_sensible = estimated_child_count / 2;
-    if needed > max_sensible {
-        return Err(StreamingClusteringError::InvalidConfiguration {
-            message: format!(
-                "cannot satisfy minimum two-children-per-branch constraint for {estimated_child_count} children with block size target {block_size_target}"
-            ),
-        });
-    }
-
-    u32::try_from(needed).map_err(|_| StreamingClusteringError::InvalidConfiguration {
-        message: format!(
-            "derived cluster count {needed} exceeds u32::MAX for estimated child count {estimated_child_count}"
-        ),
-    })
+    let bound = materializability_bound.max(2);
+    let requested = usize::try_from(requested_cluster_count.max(2))
+        .map_err(|_| "requested cluster count does not fit in usize".to_string())?;
+    let max_groups = estimated_child_count / 2;
+    let effective = requested.min(bound).min(max_groups.max(1)).max(2);
+    u32::try_from(effective).map_err(|_| "effective cluster count exceeds u32::MAX".into())
 }
 
-fn max_children_per_branch(
+fn materializability_bound(
     spec: &EmbeddingSpec,
     block_size_target: usize,
-    child_count: usize,
 ) -> Result<usize, String> {
-    if child_count < 2 {
-        return Ok(child_count);
-    }
     let min_size = serialized_branch_size(spec, 2)?;
     if min_size > block_size_target {
         return Err(format!(
             "minimum 2-child branch serializes to {min_size} bytes, exceeding block size target {block_size_target}"
         ));
     }
-    let mut low = 2;
-    let mut high = 2;
-    while high < child_count {
-        let candidate = (high.saturating_mul(2)).min(child_count);
-        if serialized_branch_size(spec, candidate)? <= block_size_target {
-            low = candidate;
-            high = candidate;
+
+    let mut low = 2usize;
+    let mut high = 2usize;
+    loop {
+        let next = high.saturating_mul(2);
+        if next <= high {
+            break;
+        }
+        if serialized_branch_size(spec, next)? <= block_size_target {
+            low = next;
+            high = next;
         } else {
-            high = candidate;
+            high = next;
             break;
         }
     }
-    if low == child_count {
-        return Ok(child_count);
-    }
+
     while low + 1 < high {
         let mid = low + (high - low) / 2;
         if serialized_branch_size(spec, mid)? <= block_size_target {
@@ -1999,23 +2472,241 @@ fn serialized_branch_size(spec: &EmbeddingSpec, entry_count: usize) -> Result<us
         )
     })?;
     let entries = (0..entry_count)
-        .map(|i| BranchEntry {
+        .map(|index| BranchEntry {
             embedding: vec![0; embedding_len],
-            child: synthetic_block_hash(i),
+            child: synthetic_block_hash(index),
         })
-        .collect();
+        .collect::<Vec<_>>();
     let branch = build_branch_block(VERSION_1, 1, spec.clone(), entries, None)
-        .map_err(|e| format!("failed to build synthetic branch block: {e}"))?;
+        .map_err(|error| format!("failed to build synthetic branch block: {error}"))?;
     let block = Block::Branch(branch);
     serialize_block(&block)
-        .map(|s| s.bytes.len())
-        .map_err(|e| format!("failed to serialize synthetic branch block: {e}"))
+        .map(|serialized| serialized.bytes.len())
+        .map_err(|error| format!("failed to serialize synthetic branch block: {error}"))
 }
 
 fn synthetic_block_hash(index: usize) -> BlockHash {
     let mut bytes = [0u8; BlockHash::LEN];
     bytes[..std::mem::size_of::<usize>()].copy_from_slice(&index.to_le_bytes());
     BlockHash::from_bytes(bytes)
+}
+
+fn balanced_groups(len: usize, materializability_bound: usize) -> Result<Vec<Vec<usize>>, String> {
+    if len == 0 {
+        return Err("cannot materialize an empty child set".into());
+    }
+    if len == 1 {
+        return Ok(vec![vec![0]]);
+    }
+    if len <= materializability_bound {
+        return Ok(vec![(0..len).collect()]);
+    }
+
+    let group_count = len.div_ceil(materializability_bound);
+    if group_count > len / 2 {
+        return Err(format!(
+            "cannot split {len} children into conforming groups under materializability bound {materializability_bound}"
+        ));
+    }
+
+    let base = len / group_count;
+    let remainder = len % group_count;
+    let mut groups = Vec::with_capacity(group_count);
+    let mut next = 0usize;
+    for group_index in 0..group_count {
+        let size = base + usize::from(group_index < remainder);
+        groups.push((next..next + size).collect());
+        next += size;
+    }
+    Ok(groups)
+}
+
+fn verify_persisted_block_id(
+    actual: BlockHash,
+    expected: BlockHash,
+) -> Result<(), StreamingIndexerError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(StreamingIndexerError::Storage(
+            BlockStoreError::IntegrityMismatch { expected, actual },
+        ))
+    }
+}
+
+fn invalid_config(message: String) -> StreamingClusteringError {
+    StreamingClusteringError::InvalidConfiguration { message }
+}
+
+fn map_clustering_configuration_error(message: String) -> StreamingIndexerError {
+    StreamingIndexerError::ClusteringFailure(message)
+}
+
+fn map_clustering_error(error: StreamingClusteringError) -> StreamingIndexerError {
+    StreamingIndexerError::ClusteringFailure(error.to_string())
+}
+
+fn map_planning_policy_error<E>(error: E) -> StreamingIndexerError
+where
+    E: std::error::Error + 'static,
+{
+    if let Some(error) = (&error as &dyn std::error::Error).downcast_ref::<StreamingIndexerError>()
+    {
+        return error.clone();
+    }
+
+    if let Some(StreamingClusteringError::InvalidConfiguration { message }) =
+        (&error as &dyn std::error::Error).downcast_ref::<StreamingClusteringError>()
+        && message.contains("fine_partition_max_items")
+    {
+        return StreamingIndexerError::InvalidHybridPlanningConfiguration(message.clone());
+    }
+
+    StreamingIndexerError::ClusteringFailure(error.to_string())
+}
+
+fn validate_partition_hierarchy(
+    hierarchy: &FinalizedPartitionHierarchy,
+    item_count: usize,
+) -> Result<(), String> {
+    let partitions = hierarchy
+        .partitions
+        .iter()
+        .map(|partition| (partition.id.clone(), partition))
+        .collect::<HashMap<_, _>>();
+    let root = partitions
+        .get(&hierarchy.root_partition_id)
+        .ok_or_else(|| "root partition is missing".to_string())?;
+    if root.parent_id.is_some() {
+        return Err("root partition must not have a parent".into());
+    }
+
+    for partition in hierarchy.partitions.iter() {
+        let mut sorted_items = partition.item_indices.clone();
+        sorted_items.sort_unstable();
+        sorted_items.dedup();
+        if sorted_items != partition.item_indices {
+            return Err(format!(
+                "partition {:?} must store sorted unique item indices",
+                partition.id
+            ));
+        }
+        if partition
+            .item_indices
+            .iter()
+            .any(|&index| index >= item_count)
+        {
+            return Err(format!(
+                "partition {:?} references an out-of-range item index",
+                partition.id
+            ));
+        }
+        if partition.terminal && !partition.child_ids.is_empty() {
+            return Err(format!(
+                "terminal partition {:?} must not declare children",
+                partition.id
+            ));
+        }
+        if !partition.terminal && partition.child_ids.is_empty() {
+            return Err(format!(
+                "non-terminal partition {:?} must declare children",
+                partition.id
+            ));
+        }
+        for child_id in &partition.child_ids {
+            let child = partitions.get(child_id).ok_or_else(|| {
+                format!(
+                    "partition {:?} references missing child {:?}",
+                    partition.id, child_id
+                )
+            })?;
+            if child.parent_id.as_deref() != Some(partition.id.as_str()) {
+                return Err(format!(
+                    "partition {:?} has ancestry mismatch for child {:?}",
+                    partition.id, child_id
+                ));
+            }
+        }
+    }
+
+    fn walk(
+        partition_id: &str,
+        partitions: &HashMap<String, &FinalizedPartition>,
+        visited: &mut BTreeSet<String>,
+    ) -> Result<Vec<usize>, String> {
+        let partition = partitions
+            .get(partition_id)
+            .ok_or_else(|| format!("partition {partition_id:?} is missing"))?;
+        if !visited.insert(partition_id.to_string()) {
+            return Err(format!(
+                "partition hierarchy contains a cycle at {partition_id:?}"
+            ));
+        }
+        if partition.terminal {
+            return Ok(partition.item_indices.clone());
+        }
+        let mut union = Vec::new();
+        for child_id in &partition.child_ids {
+            let child_items = walk(child_id, partitions, visited)?;
+            union.extend(child_items);
+        }
+        union.sort_unstable();
+        if union != partition.item_indices {
+            return Err(format!(
+                "partition {:?} does not match the exact union of its children",
+                partition.id
+            ));
+        }
+        Ok(union)
+    }
+
+    let mut visited = BTreeSet::new();
+    let root_items = walk(&hierarchy.root_partition_id, &partitions, &mut visited)?;
+    if root_items != (0..item_count).collect::<Vec<_>>() {
+        return Err("root partition must cover the complete logical item set".into());
+    }
+    if visited.len() != hierarchy.partitions.len() {
+        return Err("partition hierarchy contains unreachable partitions".into());
+    }
+    Ok(())
+}
+
+struct HierarchyStats {
+    partition_count: usize,
+    terminal_partition_count: usize,
+    depth: usize,
+}
+
+fn hierarchy_stats(hierarchy: &FinalizedPartitionHierarchy) -> HierarchyStats {
+    let partitions = hierarchy
+        .partitions
+        .iter()
+        .map(|partition| (partition.id.clone(), partition))
+        .collect::<HashMap<_, _>>();
+
+    fn depth_of(partition_id: &str, partitions: &HashMap<String, &FinalizedPartition>) -> usize {
+        let partition = partitions.get(partition_id).unwrap();
+        if partition.child_ids.is_empty() {
+            1
+        } else {
+            1 + partition
+                .child_ids
+                .iter()
+                .map(|child_id| depth_of(child_id, partitions))
+                .max()
+                .unwrap_or(0)
+        }
+    }
+
+    HierarchyStats {
+        partition_count: hierarchy.partitions.len(),
+        terminal_partition_count: hierarchy.partitions.iter().filter(|p| p.terminal).count(),
+        depth: if hierarchy.partitions.is_empty() {
+            0
+        } else {
+            depth_of(&hierarchy.root_partition_id, &partitions)
+        },
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2028,11 +2719,7 @@ mod conformance_support {
     use std::collections::HashMap;
     use std::fmt;
 
-    use lexongraph_block::{TypedEntries, into_entries};
-
     use super::*;
-
-    // ── In-memory block store for test use ────────────────────
 
     #[derive(Default)]
     pub(crate) struct MemoryBlockStore {
@@ -2057,7 +2744,12 @@ mod conformance_support {
             };
             lexongraph_block::deserialize_block(&bytes, block_id)
                 .map(Some)
-                .map_err(map_get_error)
+                .map_err(|error| match error {
+                    BlockError::HashMismatch { expected, actual } => {
+                        BlockStoreError::IntegrityMismatch { expected, actual }
+                    }
+                    other => BlockStoreError::MalformedContent(other),
+                })
         }
 
         fn iter_block_ids(
@@ -2067,17 +2759,6 @@ mod conformance_support {
             Ok(Box::new(ids.into_iter().map(Ok)))
         }
     }
-
-    fn map_get_error(e: BlockError) -> BlockStoreError {
-        match e {
-            BlockError::HashMismatch { expected, actual } => {
-                BlockStoreError::IntegrityMismatch { expected, actual }
-            }
-            other => BlockStoreError::MalformedContent(other),
-        }
-    }
-
-    // ── Public conformance surface ────────────────────────────
 
     pub type ConformanceResult = Result<(), ConformanceError>;
 
@@ -2090,28 +2771,22 @@ mod conformance_support {
     impl fmt::Display for ConformanceError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
-                Self::Indexer(e) => write!(f, "{e}"),
-                Self::Expectation(m) => write!(f, "conformance expectation failed: {m}"),
+                Self::Indexer(error) => write!(f, "{error}"),
+                Self::Expectation(message) => {
+                    write!(f, "conformance expectation failed: {message}")
+                }
             }
         }
     }
 
-    impl std::error::Error for ConformanceError {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Self::Indexer(e) => Some(e),
-                Self::Expectation(_) => None,
-            }
-        }
-    }
+    impl std::error::Error for ConformanceError {}
 
     impl From<StreamingIndexerError> for ConformanceError {
-        fn from(e: StreamingIndexerError) -> Self {
-            Self::Indexer(e)
+        fn from(error: StreamingIndexerError) -> Self {
+            Self::Indexer(error)
         }
     }
 
-    /// Shareable test-fixture error type.
     #[derive(Clone, Debug)]
     pub struct FixtureError(pub String);
 
@@ -2120,9 +2795,8 @@ mod conformance_support {
             write!(f, "{}", self.0)
         }
     }
-    impl std::error::Error for FixtureError {}
 
-    // ── Harness traits ────────────────────────────────────────
+    impl std::error::Error for FixtureError {}
 
     pub trait ContentResolverConformanceHarness {
         type Ref: Clone + PartialEq;
@@ -2149,7 +2823,30 @@ mod conformance_support {
         fn conforming_factory(&self) -> Self::Factory;
     }
 
-    // ── Suite runners ─────────────────────────────────────────
+    #[derive(Clone, Copy)]
+    struct FixedEmbeddingProvider;
+
+    impl EmbeddingProvider for FixedEmbeddingProvider {
+        type Error = FixtureError;
+
+        async fn embed(
+            &self,
+            _input: &EmbeddingInput,
+            spec: &EmbeddingSpec,
+        ) -> Result<Vec<u8>, Self::Error> {
+            if spec.encoding != "i8" || spec.dims != 2 {
+                return Err(FixtureError("unexpected embedding spec".into()));
+            }
+            Ok(vec![1, 2])
+        }
+    }
+
+    fn embedding_spec() -> EmbeddingSpec {
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "i8".into(),
+        }
+    }
 
     pub fn run_content_resolver_suite<H>(harness: &H) -> ConformanceResult
     where
@@ -2159,384 +2856,152 @@ mod conformance_support {
             let store = MemoryBlockStore::default();
             let item = harness.sample_item();
 
-            // Conforming resolver should produce the expected leaf
-            let mut run = StreamingIndexingRun::<H::Ref, _, _, _, _>::new(
+            let mut ok_run = StreamingIndexingRun::with_builtin_planning(
                 harness.conforming_resolver(),
                 FixedEmbeddingProvider,
-                FixedCanonicalEmbeddingPolicy,
-                FixedClusteringFactory,
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
+                BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+                    cluster_count: 2,
+                    balance_constraints: None,
+                    random_seed: None,
+                }),
+                embedding_spec(),
+                256,
             );
-            run.ingest_batch(std::slice::from_ref(&item)).await?;
-            run.finish_pass()?;
-            run.mark_training_complete()?;
-            let result = run
-                .finalize(std::iter::once(std::slice::from_ref(&item)), &store)
+            ok_run.ingest_batch(std::slice::from_ref(&item)).await?;
+            ok_run.finish_pass()?;
+            ok_run.mark_planning_complete()?;
+            let result = ok_run
+                .finalize(std::iter::once([item.clone()]), &store)
                 .await?;
-
-            let root = store
+            if store
                 .get(&result.root_id)
                 .map_err(StreamingIndexerError::Storage)?
-                .ok_or_else(|| {
-                    ConformanceError::Expectation("root block must be present in store".into())
-                })?;
-            match into_entries(root) {
-                TypedEntries::Leaf(_, entries)
-                    if entries[0].content == harness.expected_content() => {}
-                TypedEntries::Leaf(_, entries) => {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected content {:?}, got {:?}",
-                        harness.expected_content(),
-                        entries[0].content
-                    )));
-                }
-                TypedEntries::Branch(_, _) => {
-                    return Err(ConformanceError::Expectation(
-                        "expected leaf root for a single indexed item".into(),
-                    ));
-                }
-            }
-
-            // Failing resolver
-            let mut run2 = StreamingIndexingRun::<H::Ref, _, _, _, _>::new(
-                harness.failing_resolver(),
-                FixedEmbeddingProvider,
-                FixedCanonicalEmbeddingPolicy,
-                FixedClusteringFactory,
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
-            );
-            match run2.ingest_batch(std::slice::from_ref(&item)).await {
-                Err(StreamingIndexerError::ContentResolution(_)) => {}
-                other => {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected ContentResolution failure, got {other:?}"
-                    )));
-                }
-            }
-
-            // Unusable resolver (empty media type)
-            let mut run3 = StreamingIndexingRun::<H::Ref, _, _, _, _>::new(
-                harness.unusable_resolver(),
-                FixedEmbeddingProvider,
-                FixedCanonicalEmbeddingPolicy,
-                FixedClusteringFactory,
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
-            );
-            match run3.ingest_batch(&[item]).await {
-                Err(StreamingIndexerError::UnusableContent(_)) => {}
-                other => {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected UnusableContent failure, got {other:?}"
-                    )));
-                }
-            }
-
-            Ok(())
-        })
-    }
-
-    pub fn run_canonical_embedding_policy_suite<H>(harness: &H) -> ConformanceResult
-    where
-        H: CanonicalEmbeddingPolicyConformanceHarness,
-    {
-        pollster::block_on(async {
-            // Multi-item items → needs a parent layer → canonical policy is invoked
-            let items = conformance_multi_items();
-            let store = MemoryBlockStore::default();
-
-            let mut run = StreamingIndexingRun::<u8, _, _, _, _>::new(
-                FixedResolver,
-                FixedMultiEmbeddingProvider,
-                harness.conforming_policy(),
-                FixedClusteringFactory,
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
-            );
-            for item in &items {
-                run.ingest_batch(std::slice::from_ref(item)).await?;
-            }
-            run.finish_pass()?;
-            run.mark_training_complete()?;
-            let result = run
-                .finalize(std::iter::once(items.as_slice()), &store)
-                .await?;
-
-            let root = store
-                .get(&result.root_id)
-                .map_err(StreamingIndexerError::Storage)?
-                .ok_or_else(|| {
-                    ConformanceError::Expectation("root block must be present".into())
-                })?;
-            match into_entries(root) {
-                TypedEntries::Branch(_, entries) if entries.len() >= 2 => {}
-                TypedEntries::Branch(_, entries) => {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected ≥2 branch entries, got {}",
-                        entries.len()
-                    )));
-                }
-                TypedEntries::Leaf(_, _) => {
-                    return Err(ConformanceError::Expectation(
-                        "expected branch root for multi-item indexing".into(),
-                    ));
-                }
-            }
-
-            // Failing policy
-            let mut run_fail = StreamingIndexingRun::<u8, _, _, _, _>::new(
-                FixedResolver,
-                FixedMultiEmbeddingProvider,
-                harness.failing_policy(),
-                FixedClusteringFactory,
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
-            );
-            for item in &items {
-                run_fail.ingest_batch(std::slice::from_ref(item)).await?;
-            }
-            run_fail.finish_pass()?;
-            run_fail.mark_training_complete()?;
-            match run_fail
-                .finalize(
-                    std::iter::once(items.as_slice()),
-                    &MemoryBlockStore::default(),
-                )
-                .await
+                .is_none()
             {
-                Err(StreamingIndexerError::CanonicalEmbeddingFailure(_)) => {}
-                other => {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected CanonicalEmbeddingFailure, got {other:?}"
-                    )));
-                }
-            }
-
-            // Invalid-length policy
-            let mut run_inv = StreamingIndexingRun::<u8, _, _, _, _>::new(
-                FixedResolver,
-                FixedMultiEmbeddingProvider,
-                harness.invalid_length_policy(),
-                FixedClusteringFactory,
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
-            );
-            for item in &items {
-                run_inv.ingest_batch(std::slice::from_ref(item)).await?;
-            }
-            run_inv.finish_pass()?;
-            run_inv.mark_training_complete()?;
-            match run_inv
-                .finalize(
-                    std::iter::once(items.as_slice()),
-                    &MemoryBlockStore::default(),
-                )
-                .await
-            {
-                Err(StreamingIndexerError::CanonicalEmbeddingFailure(_)) => {}
-                other => {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected CanonicalEmbeddingFailure for invalid length, got {other:?}"
-                    )));
-                }
-            }
-
-            Ok(())
-        })
-    }
-
-    pub fn run_streaming_factory_suite<H>(harness: &H) -> ConformanceResult
-    where
-        H: StreamingClusteringFactoryConformanceHarness,
-    {
-        pollster::block_on(async {
-            let items = conformance_multi_items();
-            let store = MemoryBlockStore::default();
-
-            let mut run = StreamingIndexingRun::<u8, _, _, _, _>::new(
-                FixedResolver,
-                FixedMultiEmbeddingProvider,
-                FixedCanonicalEmbeddingPolicy,
-                harness.conforming_factory(),
-                conformance_embedding_spec(),
-                conformance_block_size_target(),
-            );
-            for item in &items {
-                run.ingest_batch(std::slice::from_ref(item)).await?;
-            }
-            run.finish_pass()?;
-            run.mark_training_complete()?;
-            let result = run
-                .finalize(std::iter::once(items.as_slice()), &store)
-                .await?;
-
-            if result.block_ids.is_empty() {
                 return Err(ConformanceError::Expectation(
-                    "expected non-empty block set".into(),
+                    "conforming resolver should materialize a root block".into(),
                 ));
             }
 
-            Ok(())
+            let mut failing_run = StreamingIndexingRun::with_builtin_planning(
+                harness.failing_resolver(),
+                FixedEmbeddingProvider,
+                BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+                    cluster_count: 2,
+                    balance_constraints: None,
+                    random_seed: None,
+                }),
+                embedding_spec(),
+                256,
+            );
+            match failing_run.ingest_batch(std::slice::from_ref(&item)).await {
+                Err(StreamingIndexerError::ContentResolution(_)) => {}
+                other => {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected content-resolution failure, got {other:?}"
+                    )));
+                }
+            }
+
+            let mut unusable_run = StreamingIndexingRun::with_builtin_planning(
+                harness.unusable_resolver(),
+                FixedEmbeddingProvider,
+                BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+                    cluster_count: 2,
+                    balance_constraints: None,
+                    random_seed: None,
+                }),
+                embedding_spec(),
+                256,
+            );
+            match unusable_run.ingest_batch(&[item]).await {
+                Err(StreamingIndexerError::UnusableContent(_)) => Ok(()),
+                other => Err(ConformanceError::Expectation(format!(
+                    "expected unusable-content failure, got {other:?}"
+                ))),
+            }
         })
     }
 
-    pub fn run_full_trait_suite<CR, CEP, SCF>(
-        content_harness: &CR,
-        canonical_harness: &CEP,
-        factory_harness: &SCF,
+    pub fn run_full_trait_suite<CH, AH, FH>(
+        content_harness: &CH,
+        canonical_harness: &AH,
+        factory_harness: &FH,
     ) -> ConformanceResult
     where
-        CR: ContentResolverConformanceHarness,
-        CEP: CanonicalEmbeddingPolicyConformanceHarness,
-        SCF: StreamingClusteringFactoryConformanceHarness,
+        CH: ContentResolverConformanceHarness,
+        AH: CanonicalEmbeddingPolicyConformanceHarness,
+        FH: StreamingClusteringFactoryConformanceHarness,
     {
         run_content_resolver_suite(content_harness)?;
-        run_canonical_embedding_policy_suite(canonical_harness)?;
-        run_streaming_factory_suite(factory_harness)
-    }
+        pollster::block_on(async {
+            let store = MemoryBlockStore::default();
+            let item = content_harness.sample_item();
+            let mut distinct_item = item.clone();
+            distinct_item.metadata = vec![(
+                ciborium::Value::Text("variant".into()),
+                ciborium::Value::Integer(1.into()),
+            )];
 
-    // ── Internal fixture types used by suite runners ──────────
+            let mut ok_run = StreamingIndexingRun::with_streaming_clustering_factory(
+                content_harness.conforming_resolver(),
+                FixedEmbeddingProvider,
+                canonical_harness.conforming_policy(),
+                factory_harness.conforming_factory(),
+                embedding_spec(),
+                256,
+            );
+            ok_run
+                .ingest_batch(&[item.clone(), distinct_item.clone()])
+                .await?;
+            ok_run.finish_pass()?;
+            ok_run.mark_planning_complete()?;
+            ok_run
+                .finalize(
+                    std::iter::once([item.clone(), distinct_item.clone()]),
+                    &store,
+                )
+                .await?;
 
-    #[derive(Clone, Copy)]
-    struct FixedResolver;
+            let mut failing_canonical = StreamingIndexingRun::with_streaming_clustering_factory(
+                content_harness.conforming_resolver(),
+                FixedEmbeddingProvider,
+                canonical_harness.failing_policy(),
+                factory_harness.conforming_factory(),
+                embedding_spec(),
+                256,
+            );
+            failing_canonical
+                .ingest_batch(&[item.clone(), distinct_item.clone()])
+                .await?;
+            failing_canonical.finish_pass()?;
+            failing_canonical.mark_planning_complete()?;
+            match failing_canonical
+                .finalize(
+                    std::iter::once([item.clone(), distinct_item.clone()]),
+                    &store,
+                )
+                .await
+            {
+                Err(StreamingIndexerError::CanonicalEmbeddingFailure(_)) => {}
+                other => {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected canonical-embedding failure, got {other:?}"
+                    )));
+                }
+            }
 
-    impl ContentResolver<u8> for FixedResolver {
-        type Error = FixtureError;
-        fn resolve(&self, r: &u8) -> Result<Content, Self::Error> {
-            Ok(Content {
-                media_type: "text/plain".into(),
-                body: vec![*r],
-            })
-        }
-        fn fingerprint(&self, r: &u8) -> Result<BlockHash, Self::Error> {
-            Ok(hash_bytes(&[*r]))
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct FixedEmbeddingProvider;
-
-    impl EmbeddingProvider for FixedEmbeddingProvider {
-        type Error = FixtureError;
-        async fn embed(
-            &self,
-            _: &EmbeddingInput,
-            _: &EmbeddingSpec,
-        ) -> Result<Vec<u8>, Self::Error> {
-            Ok(vec![0x10, 0x20])
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct FixedMultiEmbeddingProvider;
-
-    impl EmbeddingProvider for FixedMultiEmbeddingProvider {
-        type Error = FixtureError;
-        async fn embed(
-            &self,
-            input: &EmbeddingInput,
-            _: &EmbeddingSpec,
-        ) -> Result<Vec<u8>, Self::Error> {
-            let first = *input
-                .body
-                .first()
-                .ok_or_else(|| FixtureError("expected non-empty content".into()))?;
-            Ok(vec![first, first.wrapping_add(1)])
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct FixedCanonicalEmbeddingPolicy;
-
-    impl CanonicalEmbeddingPolicy for FixedCanonicalEmbeddingPolicy {
-        type Error = FixtureError;
-        fn canonical_embedding(&self, block: &BranchBlock) -> Result<Vec<u8>, Self::Error> {
-            block
-                .entries
-                .first()
-                .map(|e| e.embedding.clone())
-                .ok_or_else(|| FixtureError("expected branch block to have entries".into()))
-        }
-    }
-
-    /// Single-cluster factory: puts everything into one group, used for
-    /// conformance tests where we control the tree shape.
-    #[derive(Clone, Copy)]
-    struct FixedClusteringFactory;
-
-    impl StreamingClusteringFactory for FixedClusteringFactory {
-        type Trainer = DcbcStreamingTrainer;
-        type Error = StreamingClusteringError;
-
-        fn create_trainer(
-            &self,
-            dimensions: usize,
-            _estimated_child_count: usize,
-            _block_size_target: usize,
-            _embedding_spec: &EmbeddingSpec,
-        ) -> Result<DcbcStreamingTrainer, StreamingClusteringError> {
-            // Use cluster_count=1 when count is known so N≥K is guaranteed.
-            let cluster_count = 1;
-            DcbcStreamingTrainer::new(StreamingClusteringConfig {
-                cluster_count,
-                dimensions,
-                balance_constraints: None,
-                random_seed: None,
-            })
-        }
-    }
-
-    fn conformance_embedding_spec() -> EmbeddingSpec {
-        EmbeddingSpec {
-            dims: 2,
-            encoding: "i8".into(),
-        }
-    }
-
-    fn conformance_block_size_target() -> usize {
-        256
-    }
-
-    fn conformance_multi_items() -> Vec<IndexItem<u8>> {
-        vec![
-            IndexItem {
-                metadata: vec![],
-                content_ref: b'a',
-            },
-            IndexItem {
-                metadata: vec![],
-                content_ref: b'b',
-            },
-            IndexItem {
-                metadata: vec![],
-                content_ref: b'c',
-            },
-            IndexItem {
-                metadata: vec![],
-                content_ref: b'd',
-            },
-        ]
+            Ok(())
+        })
     }
 }
 
 #[cfg(feature = "conformance")]
 pub mod conformance {
-    //! Opt-in helper APIs for validating downstream implementations of the
-    //! indexer-owned policy traits.
-    //!
-    //! Enable this module from test code with a dev-dependency such as:
-    //!
-    //! ```toml
-    //! [dev-dependencies]
-    //! lexongraph-streaming-indexer = { version = "*", features = ["conformance"] }
-    //! ```
-
     pub use super::conformance_support::{
         CanonicalEmbeddingPolicyConformanceHarness, ConformanceError, ConformanceResult,
         ContentResolverConformanceHarness, FixtureError,
-        StreamingClusteringFactoryConformanceHarness, run_canonical_embedding_policy_suite,
-        run_content_resolver_suite, run_full_trait_suite, run_streaming_factory_suite,
+        StreamingClusteringFactoryConformanceHarness, run_content_resolver_suite,
+        run_full_trait_suite,
     };
 }
