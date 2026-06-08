@@ -95,8 +95,10 @@ index rather than the working tree.
 
 ### REQ-CI-013
 
-The repository shall document how contributors install and use the
-repository-managed Git hooks.
+The repository README shall serve as the contributor-facing entrypoint for
+repository operation by documenting how contributors install and use the
+repository-managed Git hooks, how they run the repository's local quality-gate
+commands, and where they navigate to the current repository surfaces.
 
 ### REQ-CI-014
 
@@ -120,6 +122,32 @@ GitHub Actions.
 The repository README shall display badges for the current repository quality
 and status surfaces by linking to the main-branch CI workflow status, the
 main-branch Coveralls coverage status, and the repository MIT license.
+
+### REQ-CI-018
+
+The repository README shall accurately summarize the current active repository
+surface, including implemented workspace crates, maintained specification
+packages, active protocol documents, and repository automation or
+configuration surfaces that contributors are expected to navigate.
+
+### REQ-CI-019
+
+When the repository README references tracked artifacts that are not part of
+the active governed or implemented surface, it shall label or group them so
+readers can distinguish supporting, reference, or future-facing material from
+active protocol, specification, implementation, and maintenance surfaces.
+
+### REQ-CI-020
+
+The repository README shall include newly added top-level navigational surfaces
+that materially affect repository use or maintenance when those surfaces are
+tracked and intended for contributor use.
+
+### REQ-CI-021
+
+The repository README shall remain a concise orientation document and shall
+link to authoritative protocol and specification artifacts rather than
+duplicating their normative behavior in full.
 
 ## Out of Scope
 

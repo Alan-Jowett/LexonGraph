@@ -16,15 +16,26 @@ the core repository surface, and CI that enforces the workspace quality gates.
 LexonGraph is still evolving, but the repository is no longer just an
 architecture sketch. It currently contains:
 
-- canonical protocol documents for blocks, search, indexing, and DCBC
-- requirements/design/validation spec packages for the current Rust workspace
-- implemented Rust crates for blocks, storage contracts, filesystem storage,
-  deterministic clustering, indexing, search, and embedding-provider
-  integration
-- GitHub Actions CI for formatting, linting, tests, and coverage reporting
+- **Active governed and implemented surface**
+  - canonical protocol documents for blocks, search, indexing, and DCBC
+  - requirements/design/validation spec packages for the current Rust workspace
+    and repository automation
+  - implemented Rust crates for blocks, storage contracts, filesystem storage,
+    deterministic clustering, indexing, search, and embedding-provider
+    integration
+- **Active repository maintenance surface**
+  - GitHub Actions CI for formatting, linting, tests, and coverage reporting
+  - Dependabot configuration for Cargo and GitHub Actions dependency updates
+  - repository maintenance skills under `.github/skills/`
+- **Supporting, reference, and future-facing material**
+  - architecture notes, audits, and RCA documents under `docs/arch/`,
+    `docs/audits/`, and `docs/rca/`
+  - `docs/protocol/ebcp.md` as reference or future protocol work rather than
+    part of the active governed implementation surface
 
-The README is a summary. The protocol documents in `docs/protocol/` are the
-authoritative source for wire format and protocol behavior.
+The README is a summary. The protocol documents in `docs/protocol/` and the
+traceable packages in `docs/specs/` are the authoritative sources for protocol
+and specification behavior.
 
 ## Architecture at a glance
 
@@ -40,15 +51,19 @@ authoritative source for wire format and protocol behavior.
 - **DCBC** provides deterministic capacity-constrained balanced clustering for
   clustering and packing workflows.
 
-## Core documents
+## Document map
 
-| Area | Document | Purpose |
-| --- | --- | --- |
-| Vision | `docs/vision.md` | High-level architecture summary and design direction |
-| Block protocol | `docs/protocol/blocks.md` | Canonical block encoding, invariants, and block identity |
-| Search protocol | `docs/protocol/search.md` | Deterministic traversal, ranking, and termination semantics |
-| Indexing protocol | `docs/protocol/indexing.md` | Deterministic index-construction inputs, invariants, and outputs |
-| DCBC protocol | `docs/protocol/dcbc.md` | Deterministic capacity-constrained balanced clustering rules |
+| Area | Status | Document or path | Purpose |
+| --- | --- | --- | --- |
+| Vision | Supporting | `docs/vision.md` | High-level architecture summary and design direction |
+| Block protocol | Active governed | `docs/protocol/blocks.md` | Canonical block encoding, invariants, and block identity |
+| Search protocol | Active governed | `docs/protocol/search.md` | Deterministic traversal, ranking, and termination semantics |
+| Indexing protocol | Active governed | `docs/protocol/indexing.md` | Deterministic index-construction inputs, invariants, and outputs |
+| DCBC protocol | Active governed | `docs/protocol/dcbc.md` | Deterministic capacity-constrained balanced clustering rules |
+| EBCP | Reference / future-facing | `docs/protocol/ebcp.md` | Embedding block compression protocol work that is not part of the active governed implementation surface in this pass |
+| Architecture notes | Supporting | `docs/arch/` | Design explorations and deeper technical background |
+| Audits | Supporting | `docs/audits/` | Cross-artifact drift and traceability audit records |
+| Root cause analyses | Supporting | `docs/rca/` | Focused follow-up analyses for specific drift or implementation issues |
 
 ## Specification packages
 
@@ -61,14 +76,15 @@ same structure:
 
 Current packages cover:
 
+- `repository-dependabot`
 - `rust-block-crate`
+- `rust-block-inspect-cli`
 - `rust-block-storage-trait`
 - `rust-dcbc-streaming-crate`
 - `rust-directional-pca-crate`
 - `rust-embeddings-openai-crate`
 - `rust-embeddings-trait`
 - `rust-filesystem-block-store`
-- `rust-block-inspect-cli`
 - `rust-pca-crate`
 - `rust-search-crate`
 - `rust-streaming-clustering-crate`
@@ -113,6 +129,9 @@ The CI workflow lives in `.github/workflows/ci.yml` and currently runs on:
 - pushes to `main`
 - pull requests targeting `main` (filtered via `paths:` to repository-quality-relevant files including Rust workspace files, docs, hooks, `.gitignore`, `.gitattributes`, and workflow configuration)
 
+The repository also defines `.github/dependabot.yml` for weekly Cargo and
+GitHub Actions dependency update proposals.
+
 To enable the repository-managed local checks, configure Git to use the
 versioned hook directory:
 
@@ -122,6 +141,9 @@ git config core.hooksPath hooks
 
 The `pre-commit` hook enforces SPDX headers on staged governed files, and CI
 re-checks the full tracked repository surface.
+
+Repository maintenance skills live under `.github/skills/` and support
+specification and maintenance workflows for this repository.
 
 ## Repository layout
 
@@ -141,10 +163,16 @@ re-checks the full tracked repository surface.
 |  |- lexongraph-streaming-clustering
 |  `- lexongraph-streaming-indexer
 |- docs/
+|  |- arch/
+|  |- audits/
 |  |- protocol/
+|  |- rca/
 |  |- specs/
 |  `- vision.md
-|- .github/workflows/ci.yml
+|- .github/
+|  |- dependabot.yml
+|  |- skills/
+|  `- workflows/ci.yml
 |- hooks/
 |- Cargo.toml
 `- README.md
