@@ -327,9 +327,9 @@ REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
 Inspect the repository verification artifacts for algorithm-agnostic built-in
 planning behavior.
 
-**Pass condition:** algorithm-agnostic built-in-path planning and assembly cases
-whose
-fixtures are compatible with both built-in algorithms' caller-supplied settings
+**Pass condition:** algorithm-agnostic built-in-path planning and assembly
+cases whose fixtures are compatible with both built-in algorithms'
+caller-supplied settings
 are realized as a matrix over both built-in planning realizations rather than
 favoring one built-in algorithm, while unsupported or algorithm-specific
 behavior remains covered by separate targeted tests.
