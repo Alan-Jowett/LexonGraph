@@ -120,8 +120,13 @@ over the embeddings observed in that pass:
    scores
 4. derive per-axis resolution from the hard cluster target `K`
 5. quantile-bin retained PCA coordinates
-6. materialize exactly `K` stable, non-empty clusters or fail explicitly
-7. compute pass metrics and expose the pass report
+6. materialize populated cells from the quantized PCA grid
+7. if the populated cells already realize exactly `K` stable, non-empty
+   clusters, expose them directly
+8. otherwise, if the shortfall is attributable to duplicate-collapse, refine the
+   collapsed duplicate members deterministically
+9. otherwise fail explicitly
+10. compute pass metrics and expose the pass report
 
 The crate does not perform hidden extra passes.
 
@@ -159,10 +164,13 @@ Equal-width binning is outside the conformant default path for this crate.
 The crate's observable contract requires exact `K` stable, non-empty clusters.
 
 If the realized directional-PCA partition yields fewer populated cells than `K`,
-more than `K` populated cells without a documented deterministic collapse rule,
-or otherwise cannot satisfy exact-K without changing the documented semantics,
-the trainer fails explicitly through the shared unsatisfiable-constraint or
-invalid-configuration surface as appropriate.
+the crate first checks whether duplicate-collapse recovery is applicable.
+
+If recovery is not applicable, if recovery still cannot realize exact `K`, if
+the partition yields more than `K` populated cells without a documented
+deterministic collapse rule, or if exact-K otherwise cannot be satisfied without
+changing the documented semantics, the trainer fails explicitly through the
+shared unsatisfiable-constraint or invalid-configuration surface as appropriate.
 
 ### DSG-DPCA-STREAM-013 `Stable cluster identity`
 
@@ -192,6 +200,10 @@ assign valid embeddings deterministically into `[0, K)`.
 
 The classifier reuses the shared malformed-input surface.
 
+If multiple refined clusters remain geometrically indistinguishable to the
+classifier surface, assignment breaks ties deterministically by the stable
+externally visible cluster-ID order.
+
 ### DSG-DPCA-STREAM-016 `Error mapping`
 
 The observable boundary maps failures into the shared error categories:
@@ -220,6 +232,38 @@ artifacts whose only purpose was supporting the retired block-store-backed API.
 The retained implementation is intentionally the minimal code needed for the
 scaled-down native streaming directional-PCA boundary.
 
+### DSG-DPCA-STREAM-019 `Duplicate-collapse detection`
+
+After populated cells are materialized from quantile-bin tuples and before exact
+`K` failure is emitted, the crate checks whether the shortfall is attributable
+to duplicate-collapse.
+
+The conformant duplicate-collapse detection identifies populated cells that can
+only grow additional clusters by subdividing members that remain
+indistinguishable in retained PCA coordinates.
+
+### DSG-DPCA-STREAM-020 `Stable duplicate refinement`
+
+When duplicate-collapse detection succeeds and first-pass `Observed N >= K`, the
+crate preserves the primary PCA-plus-quantile partition and deterministically
+refines only the collapsed duplicate members.
+
+The refinement tie-break is non-geometric and stable for the same pass dataset
+order.
+
+### DSG-DPCA-STREAM-021 `Narrow fallback scope`
+
+Duplicate refinement is a narrow post-partition repair step. It does not replace
+PCA fitting, directional scoring, temperature-controlled allocation, quantile
+binning, malformed-input validation, or ordinary exact-K failure behavior.
+
+### DSG-DPCA-STREAM-022 `Refined identity continuity`
+
+Stable externally visible cluster IDs, pass reports, and classifier assignments
+are derived from the final refined partition state. Replaying the same ordered
+dataset across passes therefore reproduces the same observable cluster-ID
+surface.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -240,3 +284,7 @@ scaled-down native streaming directional-PCA boundary.
 | DSG-DPCA-STREAM-016 | REQ-DPCA-STREAM-019 |
 | DSG-DPCA-STREAM-017 | REQ-DPCA-STREAM-021 |
 | DSG-DPCA-STREAM-018 | REQ-DPCA-STREAM-020 |
+| DSG-DPCA-STREAM-019 | REQ-DPCA-STREAM-022 |
+| DSG-DPCA-STREAM-020 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-023 |
+| DSG-DPCA-STREAM-021 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-024 |
+| DSG-DPCA-STREAM-022 | REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018 |

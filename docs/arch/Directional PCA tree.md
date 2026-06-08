@@ -223,6 +223,27 @@ The default binning policy should be quantile binning.
 
 Equal-width bins should be treated as diagnostic-only or deprecated behavior. They assume projection ranges are informative and reasonably well behaved, which is usually false in deeper layers.
 
+### 6.2 Deterministic duplicate refinement
+
+Some datasets contain exact duplicate embeddings, including the degenerate case
+where an entire layer is identical. Quantile binning can still under-realize the
+requested bucket count when those duplicates collapse into fewer populated cells
+than the hard target.
+
+When that shortfall is caused by indistinguishable members rather than by an
+ordinary allocation failure, the implementation may apply a narrow deterministic
+fallback after the primary PCA-plus-quantile partition is formed:
+
+1. detect that the shortfall is attributable to duplicate-collapse rather than a
+   generic exact-K failure
+2. preserve the primary geometric partition unchanged
+3. refine only the collapsed duplicate members with a stable non-geometric
+   tie-break derived from the layer's observed point order
+
+This fallback is intentionally narrow. It is not a general license to force
+exact-K for arbitrary infeasible partitions, and it should not replace the
+documented PCA, allocation, and quantile-binning path.
+
 ---
 
 ## 7. Expected Benefits and Design Intuition
@@ -280,6 +301,12 @@ As layers get smaller, centroids become noisier and PCA bases become less stable
 
 In deep layers, the hierarchy may converge to partitions that reflect discretization history more than embedding geometry. At that point the tree behaves more like a recursively induced taxonomy than a faithful geometric summary.
 
+### 8.6 Duplicate-collapse degeneracy
+
+Exact duplicate embeddings can survive projection as indistinguishable retained
+coordinates. When many such points land in the same populated cell, the layer
+can under-realize the requested bucket count even when $$N \ge K$$.
+
 ---
 
 ## 9. Minimal Stabilizers
@@ -306,6 +333,13 @@ Use at least one stability constraint between layers, such as:
 ### 9.4 Optional stochastic smoothing
 
 Small stochastic tie-breaking or jitter can reduce brittle boundary artifacts and hard discontinuities in assignment. This is optional, but useful when deterministic boundaries create unstable occupancies.
+
+### 9.5 Deterministic duplicate refinement
+
+When exact-K failure is caused specifically by duplicate-collapse, prefer a
+deterministic refinement of the collapsed duplicate members over random jitter.
+The tie-break should be stable for the same observed layer order and should be
+used only to recover missing buckets trapped inside duplicate cells.
 
 ---
 

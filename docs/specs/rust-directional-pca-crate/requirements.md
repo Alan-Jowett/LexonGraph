@@ -185,6 +185,12 @@ minimum:
 The crate shall not silently adapt the partitioning behavior merely to force an
 exact-K outcome.
 
+The only conformant exception is duplicate-collapse recovery: if the realized
+directional-PCA partition under-realizes `K` solely because duplicate or
+otherwise indistinguishable members collapse into too few populated cells, the
+crate shall apply the documented deterministic duplicate-refinement rule rather
+than fail.
+
 ### REQ-DPCA-STREAM-016
 
 Each completed pass shall return a deterministic `PassReport` containing:
@@ -197,6 +203,9 @@ Each completed pass shall return a deterministic `PassReport` containing:
 
 The balance metric shall be zero when no explicit balance constraints are
 configured.
+
+This determinism requirement includes completed passes that exercised the
+duplicate-refinement fallback.
 
 ### REQ-DPCA-STREAM-017
 
@@ -212,6 +221,9 @@ deterministic classifier that:
 - rejects malformed embeddings through the shared malformed-input error category
 - does not require the original dataset after classifier production
 
+If training completed through duplicate refinement, classifier assignment shall
+remain deterministic for the resulting stable cluster IDs.
+
 ### REQ-DPCA-STREAM-019
 
 Invalid configuration, invalid state transitions, unsatisfiable exact-K
@@ -226,6 +238,32 @@ realize the native streaming directional-PCA contract.
 
 Helpers, types, and tests that only support the retired block-store boundary
 shall not remain as dead compatibility ballast.
+
+### REQ-DPCA-STREAM-022
+
+The crate shall detect when populated-cell shortfall arises from
+duplicate-collapse, including the all-identical-embedding case and later stages
+where retained PCA coordinates remain indistinguishable for the collapsed
+members.
+
+### REQ-DPCA-STREAM-023
+
+When duplicate-collapse detection triggers and first-pass `Observed N >= K`, the
+crate shall refine only the collapsed duplicate members with a deterministic
+non-geometric tie-break that is stable for the same pass dataset order, thereby
+realizing exactly `K` stable non-empty clusters without randomness.
+
+### REQ-DPCA-STREAM-024
+
+The duplicate-refinement fallback shall not be used for:
+
+- invalid or infeasible configuration
+- first-pass `Observed N < K`
+- malformed input
+- exact-K failures not attributable to duplicate-collapse
+
+Those cases shall continue to fail explicitly through the existing shared error
+categories.
 
 ### REQ-DPCA-STREAM-021
 

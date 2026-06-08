@@ -3,7 +3,7 @@
 
 //! Streaming directional-PCA clustering for LexonGraph.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lexongraph_pca::{PcaError, PcaTransform, fit};
 use lexongraph_streaming_clustering::{
@@ -57,6 +57,9 @@ struct Cluster {
     centroid: Embedding,
     members: Vec<usize>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CoordinateKey(Vec<u32>);
 
 impl DirectionalPcaStreamingTrainer {
     pub fn new(
@@ -232,9 +235,10 @@ fn fit_pass_model(
     config: &StreamingClusteringConfig,
     params: &DirectionalPcaParams,
 ) -> Result<DirectionalPcaModel, StreamingClusteringError> {
+    let allow_duplicate_refinement = embeddings_are_identical(embeddings);
     let transform = fit(embeddings).map_err(map_pca_error)?;
     let effective_rank = transform.diagnostics().rank_estimate;
-    if effective_rank < params.min_effective_rank {
+    if !allow_duplicate_refinement && effective_rank < params.min_effective_rank {
         return Err(unsatisfiable_constraint(format!(
             "effective rank {effective_rank} is smaller than the required minimum {}",
             params.min_effective_rank
@@ -249,7 +253,7 @@ fn fit_pass_model(
                 .copied()
         })
         .unwrap_or(0.0);
-    if cumulative_variance < params.min_cumulative_variance {
+    if !allow_duplicate_refinement && cumulative_variance < params.min_cumulative_variance {
         return Err(unsatisfiable_constraint(format!(
             "cumulative variance {cumulative_variance} is smaller than the required minimum {}",
             params.min_cumulative_variance
@@ -272,6 +276,7 @@ fn fit_pass_model(
     let point_bins = assign_quantile_bins(coordinates.as_slice(), axis_bin_counts.as_slice());
     let clusters = materialize_clusters(
         embeddings,
+        coordinates.as_slice(),
         point_bins.as_slice(),
         config.cluster_count as usize,
     )?;
@@ -527,6 +532,7 @@ fn assign_quantile_bins(coordinates: &[Embedding], axis_bin_counts: &[usize]) ->
 
 fn materialize_clusters(
     embeddings: &[Embedding],
+    coordinates: &[Embedding],
     point_bins: &[Vec<usize>],
     cluster_count: usize,
 ) -> Result<Vec<Cluster>, StreamingClusteringError> {
@@ -534,20 +540,117 @@ fn materialize_clusters(
     for (point_index, key) in point_bins.iter().cloned().enumerate() {
         buckets.entry(key).or_default().push(point_index);
     }
-    if buckets.len() != cluster_count {
+
+    let member_groups = if buckets.len() == cluster_count {
+        buckets.into_values().collect::<Vec<_>>()
+    } else if buckets.len() > cluster_count {
         return Err(unsatisfiable_constraint(format!(
             "directional-PCA partition realized {} populated cells instead of the required {cluster_count}",
             buckets.len()
         )));
-    }
+    } else {
+        refine_duplicate_collapse(coordinates, &buckets, cluster_count).ok_or_else(|| {
+            unsatisfiable_constraint(format!(
+                "directional-PCA partition realized {} populated cells and duplicate refinement could not realize the required {cluster_count}",
+                buckets.len()
+            ))
+        })?
+    };
 
-    buckets
-        .into_values()
+    member_groups
+        .into_iter()
         .map(|members| {
             let centroid = compute_centroid_from_indexes(embeddings, members.as_slice())?;
             Ok(Cluster { centroid, members })
         })
         .collect()
+}
+
+fn refine_duplicate_collapse(
+    coordinates: &[Embedding],
+    buckets: &BTreeMap<Vec<usize>, Vec<usize>>,
+    cluster_count: usize,
+) -> Option<Vec<Vec<usize>>> {
+    let mut remaining_extra_clusters = cluster_count.checked_sub(buckets.len())?;
+    let mut planned_splits = Vec::with_capacity(buckets.len());
+
+    for members in buckets.values() {
+        let duplicate_groups = duplicate_coordinate_groups(coordinates, members);
+        let mut allocated_extras = vec![0_usize; duplicate_groups.len()];
+        for (slot, group) in allocated_extras.iter_mut().zip(duplicate_groups.iter()) {
+            if remaining_extra_clusters == 0 {
+                break;
+            }
+            let extras_for_group = remaining_extra_clusters.min(group.len().saturating_sub(1));
+            *slot = extras_for_group;
+            remaining_extra_clusters -= extras_for_group;
+        }
+        planned_splits.push((members.clone(), duplicate_groups, allocated_extras));
+    }
+
+    if remaining_extra_clusters != 0 {
+        return None;
+    }
+
+    let mut refined = Vec::with_capacity(cluster_count);
+    for (members, duplicate_groups, allocated_extras) in planned_splits {
+        let mut peeled_members = BTreeSet::new();
+        let mut extra_clusters = Vec::new();
+        for (group, extras_for_group) in duplicate_groups.iter().zip(allocated_extras) {
+            if extras_for_group == 0 {
+                continue;
+            }
+            for &member_index in &group[group.len() - extras_for_group..] {
+                peeled_members.insert(member_index);
+                extra_clusters.push(vec![member_index]);
+            }
+        }
+
+        let base_cluster = members
+            .into_iter()
+            .filter(|member_index| !peeled_members.contains(member_index))
+            .collect::<Vec<_>>();
+        if base_cluster.is_empty() {
+            return None;
+        }
+
+        refined.push(base_cluster);
+        refined.extend(extra_clusters);
+    }
+
+    Some(refined)
+}
+
+fn duplicate_coordinate_groups(coordinates: &[Embedding], members: &[usize]) -> Vec<Vec<usize>> {
+    let mut grouped = BTreeMap::<CoordinateKey, Vec<usize>>::new();
+    for &member_index in members {
+        grouped
+            .entry(coordinate_key(coordinates[member_index].as_slice()))
+            .or_default()
+            .push(member_index);
+    }
+
+    let mut duplicate_groups = grouped
+        .into_values()
+        .filter(|group| group.len() > 1)
+        .collect::<Vec<_>>();
+    duplicate_groups.sort_by_key(|group| group[0]);
+    duplicate_groups
+}
+
+fn coordinate_key(coordinates: &[f32]) -> CoordinateKey {
+    CoordinateKey(coordinates.iter().map(|value| value.to_bits()).collect())
+}
+
+fn embeddings_are_identical(embeddings: &[Embedding]) -> bool {
+    let Some(first) = embeddings.first() else {
+        return false;
+    };
+    let first_key = coordinate_key(first.as_slice());
+    embeddings
+        .iter()
+        .skip(1)
+        .all(|embedding| coordinate_key(embedding.as_slice()) == first_key)
 }
 
 fn compute_quality_metric(
@@ -736,5 +839,44 @@ mod tests {
         let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
         let bins = assign_quantile_bins(&coordinates, &[2]);
         assert_eq!(bins, vec![vec![0], vec![0], vec![1], vec![1]]);
+    }
+
+    #[test]
+    fn duplicate_refinement_peels_duplicate_members_deterministically() {
+        let coordinates = vec![vec![0.0], vec![0.0], vec![10.0]];
+        let buckets = BTreeMap::from([(vec![0], vec![0, 1, 2])]);
+
+        let refined = refine_duplicate_collapse(&coordinates, &buckets, 2).unwrap();
+
+        assert_eq!(refined, vec![vec![0, 2], vec![1]]);
+    }
+
+    #[test]
+    fn identical_embeddings_bypass_rank_guard_and_realize_exact_k() {
+        let config = StreamingClusteringConfig {
+            cluster_count: 3,
+            dimensions: 2,
+            balance_constraints: None,
+            random_seed: None,
+        };
+        let params = DirectionalPcaParams {
+            retained_dimension_count: 2,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.5,
+        };
+        let embeddings = vec![
+            vec![5.0, 5.0],
+            vec![5.0, 5.0],
+            vec![5.0, 5.0],
+            vec![5.0, 5.0],
+        ];
+
+        let model = fit_pass_model(&embeddings, &config, &params).unwrap();
+
+        assert_eq!(model.centroids.len(), 3);
+        assert_eq!(model.quality_metric, 0.0);
     }
 }

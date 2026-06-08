@@ -218,3 +218,46 @@ stable cluster IDs, classifier assignment, and dead-code cleanup of the retired
 block-store boundary.
 
 **Traces to:** REQ-DPCA-STREAM-021
+
+### VAL-DPCA-STREAM-020
+
+Use a fixture where all embeddings in the completed pass are identical and
+`Observed N >= K`.
+
+**Pass condition:** the crate does not fail exact-K solely because geometric
+partitioning collapsed the pass; instead it deterministically realizes exactly
+`K` non-empty clusters through duplicate refinement.
+
+**Traces to:** REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-022, REQ-DPCA-STREAM-023
+
+### VAL-DPCA-STREAM-021
+
+Use a fixture where one populated cell contains duplicate members and the pass
+under-realizes `K` only because of that collapsed duplicate cell.
+
+**Pass condition:** the crate refines only the collapsed duplicate members,
+preserves the rest of the primary partition, and realizes exactly `K`
+non-empty clusters.
+
+**Traces to:** REQ-DPCA-STREAM-023, REQ-DPCA-STREAM-024
+
+### VAL-DPCA-STREAM-022
+
+Repeat duplicate-collapse fixtures across at least two passes with identical
+ordered input.
+
+**Pass condition:** pass reports and classifier assignments preserve stable
+cluster IDs and deterministic assignments across passes that exercise duplicate
+refinement.
+
+**Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018
+
+### VAL-DPCA-STREAM-023
+
+Use a fixture where exact-K remains infeasible for a reason other than
+duplicate-collapse.
+
+**Pass condition:** the crate still fails explicitly and does not invoke the
+duplicate-refinement fallback.
+
+**Traces to:** REQ-DPCA-STREAM-024

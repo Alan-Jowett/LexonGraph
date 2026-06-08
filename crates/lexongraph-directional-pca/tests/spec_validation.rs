@@ -12,9 +12,11 @@ use lexongraph_streaming_clustering::{
     TrainerState,
 };
 use support::{
-    config, conforming_trainer, exact_k_failure_config, exact_k_failure_params,
-    exact_k_failure_pass, expected_assignments, expected_pass_reports, nan_embedding, params,
-    sample_passes, underfull_first_pass, unsupported_balance_config, wrong_dimension_embedding,
+    config, conforming_trainer, duplicate_refinement_config, duplicate_refinement_params,
+    exact_k_failure_config, exact_k_failure_params, exact_k_failure_pass, expected_assignments,
+    expected_pass_reports, identical_embedding_passes, nan_embedding, params,
+    partially_collapsed_duplicate_pass, sample_passes, underfull_first_pass,
+    unsupported_balance_config, wrong_dimension_embedding,
 };
 
 #[test]
@@ -246,4 +248,75 @@ fn val_dpca_stream_017_dead_block_store_surface_is_removed() {
 fn val_dpca_stream_018_shared_conformance_helpers_pass() {
     let harness = support::Harness;
     lexongraph_streaming_clustering::conformance::run_streaming_clustering_suite(&harness).unwrap();
+}
+
+#[test]
+fn val_dpca_stream_020_all_identical_embeddings_are_split_deterministically() {
+    let mut trainer = DirectionalPcaStreamingTrainer::new(
+        duplicate_refinement_config(),
+        duplicate_refinement_params(),
+    )
+    .unwrap();
+    for batch in identical_embedding_passes().into_iter().next().unwrap() {
+        trainer.ingest_batch(batch.as_slice()).unwrap();
+    }
+
+    let report = trainer.finish_pass().unwrap();
+    assert_eq!(report.observed_count, 4);
+    assert_eq!(report.quality_metric, 0.0);
+    assert_eq!(report.cluster_ids, vec![0, 1, 2]);
+}
+
+#[test]
+fn val_dpca_stream_021_duplicate_refinement_recovers_a_partially_collapsed_fixture() {
+    let mut trainer = DirectionalPcaStreamingTrainer::new(
+        duplicate_refinement_config(),
+        duplicate_refinement_params(),
+    )
+    .unwrap();
+    for batch in partially_collapsed_duplicate_pass() {
+        trainer.ingest_batch(batch.as_slice()).unwrap();
+    }
+
+    let report = trainer.finish_pass().unwrap();
+    assert_eq!(report.observed_count, 4);
+    assert_eq!(report.cluster_ids, vec![0, 1, 2]);
+}
+
+#[test]
+fn val_dpca_stream_022_duplicate_refinement_is_stable_across_passes() {
+    let mut trainer = DirectionalPcaStreamingTrainer::new(
+        duplicate_refinement_config(),
+        duplicate_refinement_params(),
+    )
+    .unwrap();
+    let passes = identical_embedding_passes();
+    let mut reports = Vec::new();
+    for pass in passes {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        reports.push(trainer.finish_pass().unwrap());
+    }
+    assert_eq!(reports[0], reports[1]);
+
+    trainer.complete_training().unwrap();
+    let classifier = trainer.into_classifier().unwrap();
+    assert_eq!(classifier.assign([5.0, 5.0].as_slice()).unwrap(), 0);
+    assert_eq!(classifier.assign([5.0, 5.0].as_slice()).unwrap(), 0);
+}
+
+#[test]
+fn val_dpca_stream_023_non_duplicate_exact_k_failure_still_fails() {
+    let mut trainer =
+        DirectionalPcaStreamingTrainer::new(exact_k_failure_config(), exact_k_failure_params())
+            .unwrap();
+    for batch in exact_k_failure_pass() {
+        trainer.ingest_batch(batch.as_slice()).unwrap();
+    }
+
+    assert!(matches!(
+        trainer.finish_pass(),
+        Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
+    ));
 }
