@@ -232,6 +232,21 @@ structured progress updates for:
 - final materialization progress
 - bottom-up assembly progress
 
+Each status update includes:
+
+- phase identity
+- lifecycle state
+- elapsed time
+- `phase_total_unit_count: Option<usize>`
+- `completed_unit_count: usize`
+- `remaining_unit_count: Option<usize>`
+
+For `InProgress` updates, the observer receives the latest measured completion
+state for the phase rather than a heartbeat carrying only a fixed total. If a
+quantity is not knowable for a phase at a given moment, the observer represents
+that explicitly as unavailable rather than by reusing another field with
+ambiguous meaning.
+
 The observer surface is sink-agnostic and does not require console output,
 tracing integration, or repository-specific telemetry.
 
@@ -327,6 +342,34 @@ Independent subpartitions may be planned or assembled concurrently, but the
 crate normalizes work ordering and output ordering so observable results remain
 schedule-independent.
 
+### DSG-STREAM-INDEXER-029 `Phase-specific status progress semantics`
+
+The observer contract defines phase-native work-unit semantics as follows:
+
+- `PlanningPass { pass_number }`: units are logical input items in the current
+  replayed planning pass; the total is the established pass item count; the
+  completed count is an envelope count that remains zero for non-terminal
+  planning-pass status updates and advances to the pass total only when the
+  planning pass completes. Measurable intra-pass work is surfaced through the
+  stage-specific `HierarchyPlanning { stage }` updates rather than by
+  aggregating overlapping recursive planning units into one misleading pass-wide
+  partial count.
+- `HierarchyPlanning { stage }`: units are logical items covered by the
+  caller-visible planning-stage callbacks for that stage; the total may be
+  unavailable because recursive stage work is not known up front; the completed
+  count advances as stage callbacks report work units for that stage.
+- `FinalMaterializationReplay`: units are replayed logical items materialized
+  into leaf blocks; the total is the baseline logical item count; the completed
+  count advances as replay-verified items are persisted as leaf blocks.
+- `BottomUpAssembly { layer_index }`: units are planned parent groups for that
+  bottom-up layer; the total is the number of groups scheduled for
+  materialization in that layer; the completed count advances as branch blocks
+  for those groups are materialized.
+
+When a total is known, the remaining count is derived as `total - completed`.
+Within one execution of a phase, the completed count is monotonic
+non-decreasing and shall not exceed the phase total.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -351,3 +394,4 @@ schedule-independent.
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
+| DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039 |

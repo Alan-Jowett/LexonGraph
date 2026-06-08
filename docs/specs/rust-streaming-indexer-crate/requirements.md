@@ -237,11 +237,23 @@ assembly progress.
 Status updates shall be emitted as structured data suitable for arbitrary
 caller-owned handling and shall not require any particular sink.
 
+For each reported phase, the observer contract shall expose:
+
+- the total planned work units for that phase when knowable
+- the completed work units observed so far for that phase
+- the remaining work units for that phase when derivable from total and
+  completed counts
+- explicit phase-local semantics for those work units
+
 ### REQ-STREAM-INDEXER-023
 
 When planning, final materialization, or higher-layer assembly work remains
 active long enough to be non-trivial, the crate shall emit periodic in-progress
 status updates rather than only terminal state.
+
+Those periodic updates shall report the latest available phase progress counts
+so a caller can distinguish forward progress within the current phase from mere
+elapsed time.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -361,6 +373,28 @@ Terminal planning units shall be reconciled against a deterministic
 materializability bound derived from the block size target and
 `embedding_spec` before or during final assembly, or fail explicitly before
 claiming a conformant result.
+
+### REQ-STREAM-INDEXER-039
+
+For each caller-visible status phase, the crate shall define explicit semantics
+for the progress-count fields exposed to the status observer, including:
+
+- the work unit represented by the phase counts
+- whether the reported total is the planned work for that phase
+- what event advances the completed count for that phase
+- how the remaining count is derived when the total is known
+- whether any quantity may be unavailable because it is not yet knowable
+
+These semantics shall be phase-specific for at least:
+
+- `PlanningPass`
+- `HierarchyPlanning`
+- `FinalMaterializationReplay`
+- `BottomUpAssembly`
+
+If a quantity is unavailable for a phase at a given moment, the observer
+contract shall represent that explicitly rather than overloading another count
+with ambiguous meaning.
 
 ## Out of Scope
 

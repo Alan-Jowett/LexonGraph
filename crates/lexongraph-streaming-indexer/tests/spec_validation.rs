@@ -1073,6 +1073,9 @@ async fn val_stream_indexer_014_bottom_up_assembly_returns_complete_block_set() 
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phases() {
+    use lexongraph_streaming_indexer::StreamingIndexingPhase;
+    use lexongraph_streaming_indexer::StreamingIndexingStatusState;
+
     let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let observer: StreamingIndexingStatusObserver = {
         let statuses = Arc::clone(&statuses);
@@ -1126,8 +1129,51 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
             StreamingIndexingPhase::BottomUpAssembly { .. }
         ) && status.state == StreamingIndexingStatusState::Completed
     }));
+    assert!(statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress && status.completed_unit_count > 0
+    }));
+    assert!(
+        statuses
+            .iter()
+            .filter(|status| status.state == StreamingIndexingStatusState::Started)
+            .all(|status| status.elapsed.is_zero() && status.completed_unit_count == 0)
+    );
+    assert!(statuses.iter().all(|status| {
+        match status.phase_total_unit_count {
+            Some(total) => {
+                total >= status.completed_unit_count
+                    && status.remaining_unit_count == Some(total - status.completed_unit_count)
+            }
+            None => status.remaining_unit_count.is_none(),
+        }
+    }));
+    let monotonic_within_phase = statuses
+        .iter()
+        .try_fold(
+            Vec::<(StreamingIndexingPhase, usize)>::new(),
+            |mut seen, status| {
+                if let Some((_, previous_completed)) =
+                    seen.iter_mut().find(|(phase, _)| *phase == status.phase)
+                {
+                    if status.state == StreamingIndexingStatusState::Started {
+                        *previous_completed = status.completed_unit_count;
+                        return Some(seen);
+                    }
+                    if status.completed_unit_count < *previous_completed {
+                        return None;
+                    }
+                    *previous_completed = status.completed_unit_count;
+                    Some(seen)
+                } else {
+                    seen.push((status.phase.clone(), status.completed_unit_count));
+                    Some(seen)
+                }
+            },
+        )
+        .is_some();
+    assert!(monotonic_within_phase);
+
     let mut bottom_up_in_progress_counts = HashMap::<usize, usize>::new();
-    let mut bottom_up_completed_counts = HashMap::<usize, usize>::new();
     for status in statuses.iter().filter(|status| {
         matches!(
             status.phase,
@@ -1139,17 +1185,6 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
         };
         *bottom_up_in_progress_counts.entry(layer_index).or_default() += 1;
     }
-    for status in statuses.iter().filter(|status| {
-        matches!(
-            status.phase,
-            StreamingIndexingPhase::BottomUpAssembly { .. }
-        ) && status.state == StreamingIndexingStatusState::Completed
-    }) {
-        let StreamingIndexingPhase::BottomUpAssembly { layer_index } = status.phase else {
-            unreachable!("filtered to bottom-up assembly statuses")
-        };
-        bottom_up_completed_counts.insert(layer_index, status.item_count);
-    }
     assert!(
         bottom_up_in_progress_counts
             .values()
@@ -1159,15 +1194,145 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
         matches!(
             status.phase,
             StreamingIndexingPhase::BottomUpAssembly { .. }
-        ) && status.state == StreamingIndexingStatusState::Started
+        ) && status.state == StreamingIndexingStatusState::Completed
     }) {
-        let StreamingIndexingPhase::BottomUpAssembly { layer_index } = status.phase else {
-            unreachable!("filtered to bottom-up assembly statuses")
-        };
         assert_eq!(
-            bottom_up_completed_counts.get(&layer_index),
-            Some(&status.item_count)
+            status.phase_total_unit_count,
+            Some(status.completed_unit_count)
         );
+        assert_eq!(status.remaining_unit_count, Some(0));
+        assert!(
+            status.item_count > status.completed_unit_count,
+            "BottomUpAssembly should preserve the legacy item_count input cardinality"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_036_status_progress_counts_have_phase_semantics() {
+    use lexongraph_streaming_indexer::StreamingIndexingPhase;
+    use lexongraph_streaming_indexer::StreamingIndexingStatusState;
+
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+    let store = SlowBranchStore::default();
+    let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    run.finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    let planning_statuses: Vec<_> = statuses
+        .iter()
+        .filter(|status| matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. }))
+        .collect();
+    assert!(!planning_statuses.is_empty());
+    assert!(
+        planning_statuses
+            .iter()
+            .all(|status| status.phase_total_unit_count == Some(items.len()))
+    );
+    assert!(planning_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress
+            && status.completed_unit_count == 0
+            && status.remaining_unit_count == Some(items.len())
+    }));
+    assert!(planning_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::Completed
+            && status.completed_unit_count == items.len()
+            && status.remaining_unit_count == Some(0)
+    }));
+
+    let replay_statuses: Vec<_> = statuses
+        .iter()
+        .filter(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::FinalMaterializationReplay
+            )
+        })
+        .collect();
+    assert!(!replay_statuses.is_empty());
+    assert!(
+        replay_statuses
+            .iter()
+            .all(|status| status.phase_total_unit_count == Some(items.len()))
+    );
+    assert!(replay_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::Completed
+            && status.completed_unit_count == items.len()
+            && status.remaining_unit_count == Some(0)
+    }));
+
+    let hierarchy_statuses: Vec<_> = statuses
+        .iter()
+        .filter(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning { .. }
+            )
+        })
+        .collect();
+    assert!(!hierarchy_statuses.is_empty());
+    assert!(
+        hierarchy_statuses
+            .iter()
+            .all(|status| status.phase_total_unit_count.is_none())
+    );
+    assert!(hierarchy_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress
+            && status.completed_unit_count > 0
+            && status.remaining_unit_count.is_none()
+    }));
+
+    let bottom_up_layers = statuses
+        .iter()
+        .filter_map(|status| match status.phase {
+            StreamingIndexingPhase::BottomUpAssembly { layer_index } => Some(layer_index),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!bottom_up_layers.is_empty());
+    for layer_index in bottom_up_layers {
+        let layer_statuses: Vec<_> = statuses
+            .iter()
+            .filter(|status| {
+                status.phase == StreamingIndexingPhase::BottomUpAssembly { layer_index }
+            })
+            .collect();
+        assert!(layer_statuses.iter().all(|status| {
+            status.phase_total_unit_count == layer_statuses[0].phase_total_unit_count
+        }));
+        assert!(
+            layer_statuses
+                .iter()
+                .all(|status| status.item_count == layer_statuses[0].item_count)
+        );
+        assert!(layer_statuses.iter().all(|status| {
+            layer_statuses[0]
+                .phase_total_unit_count
+                .is_some_and(|total| status.item_count > total)
+        }));
+        assert!(layer_statuses.iter().any(|status| {
+            status.state == StreamingIndexingStatusState::Completed
+                && status.phase_total_unit_count == Some(status.completed_unit_count)
+                && status.remaining_unit_count == Some(0)
+        }));
     }
 }
 
