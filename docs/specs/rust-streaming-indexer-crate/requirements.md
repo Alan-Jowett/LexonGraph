@@ -37,9 +37,10 @@ normative boundary.
 
 ## Terminology
 
-In this spec package, `streaming indexing pass` means one caller-driven replay
-of the logical item set consisting of one or more streamed batches followed by a
-pass-completion operation.
+In this spec package, `planning pass` (also referred to as a `streaming
+indexing pass`) means one caller-driven replay of the logical item set
+consisting of one or more streamed batches followed by a pass-completion
+operation.
 
 `Final materialization replay` means one additional caller-driven replay of the
 same logical item set after planning completion, used to construct the finished
@@ -92,8 +93,8 @@ The crate shall define a caller-visible streaming indexing API whose lifecycle
 includes:
 
 - starting a streaming indexing run for one indexing context
-- ingesting one or more batches of indexing items for the current pass
-- completing the current pass and obtaining a deterministic pass report
+- ingesting one or more batches of indexing items for the current planning pass
+- completing the current planning pass and obtaining a deterministic pass report
 - caller-directed planning continuation or completion
 - final materialization through a final materialization replay that assembles the
   finished block tree bottom-up from the finalized partition hierarchy
@@ -142,8 +143,8 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 
 ### REQ-STREAM-INDEXER-011
 
-The crate shall provide built-in streaming clustering realizations for
-hierarchical planning that depend on both `lexongraph-dcbc-streaming` and
+The crate shall provide built-in planning realizations for hierarchical planning
+that depend on both `lexongraph-dcbc-streaming` and
 `lexongraph-directional-pca` rather than reimplementing either clustering
 algorithm locally.
 
