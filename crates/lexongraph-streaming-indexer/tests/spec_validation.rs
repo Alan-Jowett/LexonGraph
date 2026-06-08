@@ -1139,13 +1139,13 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
             .all(|status| status.elapsed.is_zero() && status.completed_unit_count == 0)
     );
     assert!(statuses.iter().all(|status| {
-        status
-            .phase_total_unit_count
-            .zip(status.remaining_unit_count)
-            .is_none_or(|(total, remaining)| {
+        match status.phase_total_unit_count {
+            Some(total) => {
                 total >= status.completed_unit_count
-                    && remaining == total - status.completed_unit_count
-            })
+                    && status.remaining_unit_count == Some(total - status.completed_unit_count)
+            }
+            None => status.remaining_unit_count.is_none(),
+        }
     }));
     let monotonic_within_phase = statuses
         .iter()
