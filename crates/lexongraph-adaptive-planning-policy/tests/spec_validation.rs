@@ -97,6 +97,47 @@ fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
 }
 
 #[test]
+fn regression_adaptive_policy_caps_diagnostic_cluster_count_to_available_embeddings() {
+    let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
+        direction: AdaptivePlanningDirection::Divisive,
+        directional_pca: AdaptiveDirectionalPcaSettings {
+            cluster_count: 8,
+            random_seed: Some(7),
+            params: DirectionalPcaParams {
+                retained_dimension_count: 1,
+                variance_exponent: 1.0,
+                temperature: 1.0,
+                min_input_count: 2,
+                min_effective_rank: 1,
+                min_cumulative_variance: 0.0,
+            },
+        },
+        dcbc: dcbc_settings(),
+        switch_criteria: AdaptiveSwitchCriteria {
+            mean_cluster_radius_threshold: DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        },
+    })
+    .unwrap();
+    let fixture = diffuse_cluster_embeddings();
+    assert_eq!(
+        selector.select_algorithm(fixture.len(), &fixture).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
+    );
+    let algorithm = selector.select_algorithm(fixture.len(), &fixture).unwrap();
+    assert!(matches!(
+        algorithm,
+        ActivePlanningAlgorithm::DirectionalPca | ActivePlanningAlgorithm::Dcbc
+    ));
+    assert!(
+        selector
+            .decision_records()
+            .last()
+            .and_then(|record| record.collapse_diagnostics.as_ref())
+            .is_some()
+    );
+}
+
+#[test]
 fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
     let mut selector = AdaptivePlanningSelector::new(settings(
         AdaptivePlanningDirection::Divisive,

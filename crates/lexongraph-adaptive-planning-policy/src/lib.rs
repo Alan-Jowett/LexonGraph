@@ -278,9 +278,10 @@ fn evaluate_collapse_diagnostics(
             "adaptive diagnostics require non-empty embeddings".into(),
         ));
     }
+    let cluster_count = diagnostic_cluster_count(settings.cluster_count, embeddings.len())?;
 
     let config = StreamingClusteringConfig {
-        cluster_count: settings.cluster_count,
+        cluster_count,
         dimensions,
         balance_constraints: None,
         random_seed: settings.random_seed,
@@ -311,7 +312,34 @@ fn evaluate_collapse_diagnostics(
 }
 
 fn map_streaming_clustering_error(error: StreamingClusteringError) -> AdaptivePlanningError {
-    AdaptivePlanningError::DiagnosticComputation(error.to_string())
+    match error {
+        StreamingClusteringError::InvalidConfiguration { message } => {
+            AdaptivePlanningError::InvalidConfiguration(message)
+        }
+        StreamingClusteringError::InvalidTransition { .. }
+        | StreamingClusteringError::UnsatisfiableConstraint { .. }
+        | StreamingClusteringError::MalformedInput { .. } => {
+            AdaptivePlanningError::DiagnosticComputation(error.to_string())
+        }
+    }
+}
+
+fn diagnostic_cluster_count(
+    configured_cluster_count: u32,
+    embedding_count: usize,
+) -> Result<u32, AdaptivePlanningError> {
+    let capped = usize::try_from(configured_cluster_count)
+        .map_err(|_| {
+            AdaptivePlanningError::InvalidConfiguration(
+                "directional-PCA cluster_count does not fit in usize".into(),
+            )
+        })?
+        .min(embedding_count.max(1));
+    u32::try_from(capped).map_err(|_| {
+        AdaptivePlanningError::InvalidConfiguration(
+            "diagnostic cluster_count exceeds u32::MAX".into(),
+        )
+    })
 }
 
 fn compute_mean_cluster_radius(
