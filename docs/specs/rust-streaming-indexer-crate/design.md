@@ -45,8 +45,8 @@ The crate does not own:
 The crate depends on the indexing and block protocol documents plus the block
 crate, block-storage trait crate, embeddings-trait crate, streaming clustering
 trait crate, streaming DCBC crate specification package, and directional-PCA
-crate specification package for their owned concerns. The crate does not
-redefine those sources.
+crate specification package, and adaptive planning-policy crate specification
+package for their owned concerns. The crate does not redefine those sources.
 
 ### DSG-STREAM-INDEXER-002 `Direct protocol-anchored line`
 
@@ -101,7 +101,8 @@ The crate exposes:
 
 - a built-in arithmetic-mean canonical-embedding policy
 - built-in hierarchical planning choices backed by
-  `lexongraph-directional-pca` and `lexongraph-dcbc-streaming`
+  `lexongraph-directional-pca`, `lexongraph-dcbc-streaming`, and the adaptive
+  planning-policy crate that composes them for one built-in aggregate option
 - a caller-visible built-in planning-selection surface that requires explicit
   selection of one supported realization-and-direction combination or hybrid
   coarse/fine combination without requiring a caller-implemented factory
@@ -160,7 +161,10 @@ replay order:
    partitions replayed original-item embeddings from coarser units to finer ones
    and built-in `Agglomerative` mode groups lower-layer planning units bottom-up
    into the same finalized partition-hierarchy abstraction, using selected
-   shared streaming clustering realizations wherever clustering is required
+   shared streaming clustering realizations wherever clustering is required; an
+   adaptive built-in realization may begin with directional-PCA-backed planning
+   work and then switch one-way to DCBC-backed planning work while preserving
+   that selected direction
 5. pass completion on each clustering realization used in that planning work
 6. construction of the public `IndexingPassReport`
 
@@ -280,6 +284,7 @@ The crate defines an explicit error surface covering at least:
 - clustering failure
 - hierarchy-validation failure
 - invalid hybrid-planning configuration
+- invalid adaptive-planning configuration
 - canonical-embedding failure
 - block-construction failure
 - terminal-partition materialization failure
@@ -358,6 +363,10 @@ caller-visible configuration that selects the coarse-phase algorithm, the
 fine-phase algorithm, the phase boundary, any phase-local built-in direction
 policy, and the settings for each phase explicitly.
 
+This caller-configured hybrid surface remains distinct from adaptive built-in
+switching, whose phase transition is owned internally by the selected adaptive
+realization rather than by a caller-specified coarse/fine boundary.
+
 ### DSG-STREAM-INDEXER-028 `Concurrent subpartition execution`
 
 Independent subpartitions may be planned or assembled concurrently, but the
@@ -426,6 +435,46 @@ direction.
 Adding built-in `Agglomerative` support does not retire the existing conforming
 built-in `Divisive` path.
 
+### DSG-STREAM-INDEXER-034 `Adaptive built-in realization`
+
+The built-in planning surface includes one adaptive aggregate realization backed
+by the dedicated adaptive planning-policy crate.
+
+That realization composes the existing directional-PCA and streaming DCBC
+implementations behind the existing built-in planning-selection surface rather
+than introducing a caller-interactive per-layer planning protocol or a new
+shared clustering contract.
+
+### DSG-STREAM-INDEXER-035 `Deterministic adaptive switch boundary`
+
+Within one planning flow, the adaptive realization starts with directional PCA
+and evaluates deterministic diagnostics plus configured thresholds to determine
+whether PCA remains eligible for the current planning work.
+
+Given the same replayed inputs, settings, and deterministic dependency
+behavior, the realization chooses the same PCA-to-DCBC switch boundary.
+
+### DSG-STREAM-INDEXER-036 `Adaptive direction continuity and one-way switch`
+
+The adaptive realization supports both built-in directions:
+
+- in `Divisive` mode, the internal algorithm switch changes the clustering
+  realization used for top-down partition refinement without changing the
+  top-down direction policy
+- in `Agglomerative` mode, the internal algorithm switch changes the clustering
+  realization used for bottom-up grouping without changing the bottom-up
+  direction policy
+
+Once the realization switches from directional PCA to DCBC within one planning
+flow, it does not switch back to directional PCA later in that same flow.
+
+### DSG-STREAM-INDEXER-037 `Adaptive normalization compatibility`
+
+The adaptive realization normalizes both its pre-switch directional-PCA output
+and its post-switch DCBC output into the same finalized partition-hierarchy
+abstraction used by the rest of the indexer design, so final materialization
+and bottom-up assembly remain unchanged.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -434,9 +483,9 @@ built-in `Divisive` path.
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
 | DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
-| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043 |
+| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043, REQ-STREAM-INDEXER-044 |
 | DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017 |
-| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034 |
+| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
 | DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023 |
@@ -455,3 +504,7 @@ built-in `Divisive` path.
 | DSG-STREAM-INDEXER-031 | REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-032 | REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-042 |
 | DSG-STREAM-INDEXER-033 | REQ-STREAM-INDEXER-043 |
+| DSG-STREAM-INDEXER-034 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-044 |
+| DSG-STREAM-INDEXER-035 | REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046 |
+| DSG-STREAM-INDEXER-036 | REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-047 |
+| DSG-STREAM-INDEXER-037 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-045 |

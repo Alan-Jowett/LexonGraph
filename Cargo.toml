@@ -2,6 +2,7 @@
 # Copyright (c) 2026 LexonGraph contributors
 [workspace]
 members = [
+    "crates/lexongraph-adaptive-planning-policy",
     "crates/lexongraph-block",
     "crates/lexongraph-block-inspect",
     "crates/lexongraph-block-store",

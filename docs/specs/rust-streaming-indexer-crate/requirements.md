@@ -29,6 +29,8 @@ This document is layered on top of:
   realization
 - `docs/specs/rust-directional-pca-crate/` for one built-in clustering
   realization
+- `docs/specs/rust-adaptive-planning-policy-crate/` for one built-in adaptive
+  aggregate planning realization
 
 This document defines the streaming indexer line directly against the protocol
 documents and owned subordinate specifications listed above. Legacy
@@ -83,6 +85,8 @@ The new crate shall remain subordinate to:
 - `docs/specs/rust-dcbc-streaming-crate/` and
   `docs/specs/rust-directional-pca-crate/` for the built-in clustering
   realizations owned outside this crate
+- `docs/specs/rust-adaptive-planning-policy-crate/` for the adaptive aggregate
+  built-in planning realization owned outside this crate
 
 ### REQ-STREAM-INDEXER-003
 
@@ -153,8 +157,9 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 
 The crate shall provide built-in planning realizations for hierarchical planning
 that depend on both `lexongraph-dcbc-streaming` and
-`lexongraph-directional-pca` rather than reimplementing either clustering
-algorithm locally.
+`lexongraph-directional-pca`, whether consumed directly or through a dedicated
+adaptive aggregate planning-policy crate, rather than reimplementing either
+clustering algorithm locally.
 
 Across those built-in realizations, the caller-visible built-in planning path
 shall support at least one conforming `Divisive` option and at least one
@@ -293,6 +298,7 @@ The crate shall surface explicit failure when:
 - the finalized partition hierarchy is invalid, overlapping, non-covering, or
   otherwise inconsistent with the replayed logical item set
 - hybrid planning configuration is invalid
+- adaptive planning configuration is invalid
 - a selected built-in planning realization does not support the requested
   hierarchy construction direction
 - a terminal partition cannot be normalized or assembled into
@@ -351,8 +357,9 @@ validation surface defined in
 The crate shall provide a caller-visible built-in planning-selection surface
 that requires callers to choose a supported built-in planning
 realization-and-direction combination backed by either the built-in streaming
-directional-PCA realization or the built-in streaming DCBC realization without
-implementing a custom planning factory.
+directional-PCA realization, the built-in streaming DCBC realization, or the
+built-in adaptive aggregate realization without implementing a custom planning
+factory.
 
 ### REQ-STREAM-INDEXER-032
 
@@ -371,8 +378,9 @@ realization-and-direction combinations' caller-supplied settings shall realize
 the corresponding validation coverage as a matrix over those supported
 combinations.
 
-Algorithm-specific behavior may be validated through separate targeted cases
-rather than forced into that symmetric matrix.
+Algorithm-specific behavior, including adaptive switch-trigger coverage, may be
+validated through separate targeted cases rather than forced into that
+symmetric matrix.
 
 ### REQ-STREAM-INDEXER-034
 
@@ -382,7 +390,8 @@ final block materialization.
 
 This boundary shall remain expressed as a finalized partition hierarchy
 regardless of whether the built-in planning path derives that hierarchy
-divisively or agglomeratively.
+divisively, agglomeratively, or through an adaptive aggregate realization that
+preserves the selected built-in direction while switching internal algorithms.
 
 ### REQ-STREAM-INDEXER-035
 
@@ -393,11 +402,20 @@ explicit failure for singleton, undersized, or oversized terminal partitions.
 Built-in `Divisive` and `Agglomerative` planning modes shall both normalize into
 that finalized partition hierarchy before this mapping is applied.
 
+Any adaptive built-in planning realization shall also normalize its pre-switch
+directional-PCA output and post-switch DCBC output into that same finalized
+partition hierarchy before final assembly.
+
 ### REQ-STREAM-INDEXER-036
 
 The crate shall support hybrid coarse/fine algorithm selection and require
 explicit caller-visible configuration for the phase boundary, any phase-local
 hierarchy construction direction policy, and algorithm-specific settings.
+
+This caller-configured hybrid coarse/fine capability is distinct from any
+adaptive built-in realization whose PCA-to-DCBC switch decisions are made
+internally from deterministic diagnostics rather than from a caller-selected
+coarse/fine phase boundary.
 
 ### REQ-STREAM-INDEXER-041
 
@@ -416,6 +434,35 @@ different direction.
 
 This revision shall retain a conforming built-in `Divisive` planning path after
 adding built-in `Agglomerative` support.
+
+### REQ-STREAM-INDEXER-044
+
+The built-in planning path shall support an adaptive aggregate realization,
+backed by the dedicated adaptive planning-policy crate, that begins planning
+with directional PCA and may switch internally to streaming DCBC without
+introducing a caller-interactive per-layer planning protocol.
+
+### REQ-STREAM-INDEXER-045
+
+The adaptive aggregate built-in realization shall support both `Divisive` and
+`Agglomerative` hierarchy-construction directions.
+
+Across any internal algorithm switch, the selected built-in direction shall
+remain unchanged.
+
+### REQ-STREAM-INDEXER-046
+
+The adaptive aggregate built-in realization shall derive its PCA-to-DCBC switch
+decisions from explicit deterministic diagnostics and configured thresholds.
+
+Given the same logical item set, replay order, planning settings, and
+deterministic dependency behavior, the same switch boundary shall be selected.
+
+### REQ-STREAM-INDEXER-047
+
+Within one adaptive planning flow, once the built-in realization switches from
+directional PCA to DCBC, it shall not switch back to directional PCA later in
+that same flow.
 
 ### REQ-STREAM-INDEXER-037
 
@@ -473,7 +520,8 @@ This crate does not define or own:
 - the shared streaming clustering trait definitions
 - legacy batch-oriented implementation lines or their repository lifecycle
 - any concrete clustering algorithm beyond the built-in directional-PCA and
-  DCBC planning options exposed by this crate
+  DCBC planning options exposed by this crate or the adaptive aggregate option
+  that composes them
 
 ## Relationship to Other Specifications
 
@@ -481,5 +529,5 @@ This document is subordinate to `docs/protocol/indexing.md` and
 `docs/protocol/blocks.md`.
 
 This document is also subordinate to the block crate, block-storage trait,
-embeddings-trait, streaming clustering, streaming DCBC, and directional-PCA
-specification packages for their owned concerns.
+embeddings-trait, streaming clustering, streaming DCBC, directional-PCA, and
+adaptive planning-policy specification packages for their owned concerns.

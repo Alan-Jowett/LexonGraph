@@ -249,7 +249,8 @@ REQ-STREAM-INDEXER-037
 
 Invoke the streaming indexing API with content-resolution failure, unusable
 resolved content, embedding failure, clustering failure, invalid hierarchy,
-invalid hybrid-planning configuration, canonical-embedding failure,
+invalid hybrid-planning configuration, invalid adaptive-planning
+configuration, canonical-embedding failure,
 block-construction failure, terminal-partition materialization failure, and
 storage failure fixtures.
 
@@ -330,11 +331,12 @@ through the indexer API without implementing a custom planning factory, each
 selection requires caller-supplied settings for the chosen algorithm and
 direction, attempts to omit the required algorithm choice, required direction,
 or required settings fail explicitly, and the rest of the streaming runtime
-contract remains unchanged.
+contract remains unchanged. Supported selections include the adaptive aggregate
+built-in realization when its required settings are supplied.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-014,
 REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032,
-REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042
+REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-044
 
 ### VAL-STREAM-INDEXER-029
 
@@ -389,7 +391,8 @@ coarse phase and another for the fine phase.
 
 **Pass condition:** the coarse/fine phase boundary and the settings for each
 algorithm are explicit, any phase-local direction policy is explicit, and the
-resulting planning behavior is deterministic.
+resulting planning behavior is deterministic. This validation remains about the
+caller-configured hybrid coarse/fine surface rather than adaptive switching.
 
 **Traces to:** REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041
 
@@ -473,3 +476,69 @@ another planning direction.
 
 **Traces to:** REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031,
 REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-042
+
+### VAL-STREAM-INDEXER-040
+
+Construct the built-in planning path using the adaptive aggregate realization
+with explicit adaptive settings, once in a supported `Divisive` configuration
+and once in a supported `Agglomerative` configuration.
+
+**Pass condition:** both constructions succeed without a caller-implemented
+planning factory, both require explicit adaptive settings, and neither silently
+substitutes another built-in direction or non-adaptive realization.
+
+**Traces to:** REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-031,
+REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042,
+REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045
+
+### VAL-STREAM-INDEXER-041
+
+Run a deterministic adaptive-planning fixture whose configured switch criteria
+are never met.
+
+**Pass condition:** the adaptive realization remains on its directional-PCA path
+throughout the exercised planning flow, does not spuriously switch to DCBC, and
+still produces a deterministic finalized partition hierarchy compatible with the
+existing final-materialization contract.
+
+**Traces to:** REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-035,
+REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-042
+
+Run a deterministic adaptive-planning fixture whose configured switch criteria
+are met during planning.
+
+**Pass condition:** the adaptive realization begins with directional PCA,
+switches deterministically to DCBC at a reproducible boundary, preserves the
+selected built-in direction across that switch, and continues through the same
+finalized partition-hierarchy abstraction without caller-interactive algorithm
+selection.
+
+**Traces to:** REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-035,
+REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-043
+
+Repeat the same adaptive switch-triggering fixture twice with identical logical
+input, replay order, settings, and deterministic dependency behavior.
+
+**Pass condition:** both runs choose the same PCA-to-DCBC switch boundary and,
+after switching, do not revert from DCBC back to directional PCA later in the
+same planning flow.
+
+**Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046,
+REQ-STREAM-INDEXER-047
+
+### VAL-STREAM-INDEXER-044
+
+Inspect the repository verification artifacts for the built-in planning matrix
+and adaptive targeted cases.
+
+**Pass condition:** algorithm-agnostic fixtures continue to cover supported
+built-in realization-and-direction combinations as a matrix where compatible,
+while the adaptive no-switch and switch-trigger behaviors are covered by
+separate targeted cases rather than being omitted.
+
+**Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033,
+REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046
