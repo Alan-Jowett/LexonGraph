@@ -359,17 +359,28 @@ fn compute_mean_cluster_radius(
         );
     }
 
+    let mut cluster_radius_sums = BTreeMap::<u32, (f64, usize)>::new();
+    for (embedding, &cluster_id) in embeddings.iter().zip(assignments.iter()) {
+        let centroid = centroids.get(&cluster_id).ok_or_else(|| {
+            AdaptivePlanningError::DiagnosticComputation(format!(
+                "cluster {cluster_id} did not have a computed centroid"
+            ))
+        })?;
+        let entry = cluster_radius_sums.entry(cluster_id).or_insert((0.0, 0));
+        entry.0 += euclidean_distance(embedding, centroid)?;
+        entry.1 += 1;
+    }
+
     let mut total_cluster_radius = 0.0f64;
-    for (&cluster_id, centroid) in &centroids {
-        let mut member_radius_sum = 0.0f64;
-        let mut member_count = 0usize;
-        for (embedding, &assigned_cluster_id) in embeddings.iter().zip(assignments.iter()) {
-            if assigned_cluster_id != cluster_id {
-                continue;
-            }
-            member_radius_sum += euclidean_distance(embedding, centroid)?;
-            member_count += 1;
-        }
+    for &cluster_id in centroids.keys() {
+        let (member_radius_sum, member_count) = cluster_radius_sums
+            .get(&cluster_id)
+            .copied()
+            .ok_or_else(|| {
+                AdaptivePlanningError::DiagnosticComputation(format!(
+                    "cluster {cluster_id} did not retain any members"
+                ))
+            })?;
         if member_count == 0 {
             return Err(AdaptivePlanningError::DiagnosticComputation(format!(
                 "cluster {cluster_id} did not retain any members"

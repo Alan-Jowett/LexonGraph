@@ -1968,7 +1968,7 @@ async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions(
 async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible() {
     let items = [item("a"), item("m"), item("x"), item("z")];
     let mut run = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, 10.0),
+        adaptive_planning(BuiltInPlanningDirection::Divisive, f32::MAX),
         160,
     );
     run.ingest_batch(&items).await.unwrap();

@@ -66,7 +66,7 @@ fn diffuse_cluster_embeddings() -> Vec<Vec<f32>> {
 }
 
 #[test]
-fn val_adaptive_policy_003_rejects_invalid_switch_configuration() {
+fn val_adaptive_policy_011_rejects_invalid_switch_configuration() {
     let err = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
         direction: AdaptivePlanningDirection::Divisive,
         directional_pca: directional_pca_settings(),
@@ -83,7 +83,7 @@ fn val_adaptive_policy_003_rejects_invalid_switch_configuration() {
 }
 
 #[test]
-fn val_adaptive_policy_007_rejects_invalid_directional_pca_configuration() {
+fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
     let mut invalid = settings(
         AdaptivePlanningDirection::Divisive,
         DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
@@ -235,7 +235,7 @@ fn val_adaptive_policy_012_repeats_the_same_switch_boundary() {
 }
 
 #[test]
-fn val_adaptive_policy_010_requires_threshold_exceedance_instead_of_switching_at_equality() {
+fn regression_adaptive_policy_requires_threshold_exceedance_instead_of_switching_at_equality() {
     let fixture = compact_cluster_embeddings();
     let mut selector = AdaptivePlanningSelector::new(settings(
         AdaptivePlanningDirection::Divisive,
