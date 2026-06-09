@@ -261,8 +261,9 @@ pass report that includes:
   structured adaptive-switch telemetry sufficient to identify whether a
   directional-PCA-to-DCBC switch occurred during the completed pass, which
   adaptive algorithm remained active after the most recent evaluated adaptive
-  boundary, and the adaptive boundary position of the first switch when one
-  occurred
+  boundary, the measured `mean_cluster_radius` and configured
+  `mean_cluster_radius_threshold` for that boundary when diagnostics exist, and
+  the adaptive boundary position of the first switch when one occurred
 - enough structured state for the caller to decide whether to continue or stop
 
 ### REQ-STREAM-INDEXER-022
@@ -284,8 +285,10 @@ For each reported phase, the observer contract shall expose:
 - when adaptive aggregate built-in planning is active for hierarchy planning,
   structured adaptive telemetry sufficient to identify the currently active
   adaptive algorithm, whether the reported adaptive boundary was the PCA-to-DCBC
-  switch boundary, and the adaptive boundary position when that boundary has
-  been evaluated
+  switch boundary, the measured `mean_cluster_radius` and configured
+  `mean_cluster_radius_threshold` for the reported boundary when diagnostics
+  exist, and the adaptive boundary position when that boundary has been
+  evaluated
 
 ### REQ-STREAM-INDEXER-023
 
@@ -301,6 +304,10 @@ When adaptive aggregate built-in planning is active, hierarchy-planning status
 updates shall also report newly observed adaptive-boundary telemetry as soon as
 that boundary has been evaluated rather than delaying switch visibility until
 the pass-completion report alone.
+
+For boundaries whose diagnostics have not yet been computed, surfaced
+`mean_cluster_radius` and `mean_cluster_radius_threshold` telemetry shall be
+explicitly unavailable rather than synthesized.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -342,7 +349,8 @@ root block ID, and the same persisted block set.
 This determinism requirement includes any surfaced adaptive-switch telemetry in
 pass reports or status updates, including whether a switch occurred, which
 adaptive algorithm was active at each evaluated boundary, and any reported
-adaptive boundary positions.
+adaptive boundary positions, measured `mean_cluster_radius` values, configured
+`mean_cluster_radius_threshold` values, and their availability semantics.
 
 ### REQ-STREAM-INDEXER-027
 

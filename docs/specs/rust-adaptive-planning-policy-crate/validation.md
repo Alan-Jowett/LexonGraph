@@ -74,8 +74,10 @@ decision boundary.
 
 **Pass condition:** the recorded diagnostics are structured, deterministic, and
 sufficient to decide whether directional PCA remained eligible at that
-boundary, including the measured mean cluster radius and a caller-usable
-adaptive boundary position.
+boundary, including the measured mean cluster radius, the configured mean
+cluster radius threshold when diagnostics exist, a caller-usable adaptive
+boundary position, and explicit unavailability semantics where diagnostics do
+not yet exist.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-007, REQ-ADAPTIVE-POLICY-012
 
@@ -138,6 +140,7 @@ the same switch-triggering fixture twice.
 behavior, switch-trigger behavior, both directions, and hierarchy
 compatibility, including coverage for a current threshold assumption of `0.25`,
 and both repeated runs select the same switch boundary and surface the same
-adaptive boundary position for that switch.
+adaptive boundary position, measured mean cluster radius, configured threshold,
+and availability semantics for that switch.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-014

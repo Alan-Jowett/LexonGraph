@@ -90,14 +90,16 @@ pub struct IndexingPassReport {
     pub adaptive_planning: Option<AdaptivePlanningPassTelemetry>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdaptivePlanningDecisionTelemetry {
     pub boundary_position: usize,
     pub active_algorithm: ActivePlanningAlgorithm,
     pub switch_boundary_occurred: bool,
+    pub mean_cluster_radius: Option<f32>,
+    pub mean_cluster_radius_threshold: Option<f32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdaptivePlanningPassTelemetry {
     pub pass_number: usize,
     pub switch_occurred: bool,
@@ -105,7 +107,7 @@ pub struct AdaptivePlanningPassTelemetry {
     pub first_switch_boundary_position: Option<usize>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AdaptivePlanningStatusTelemetry {
     pub pass_number: usize,
     pub decision: AdaptivePlanningDecisionTelemetry,
@@ -2716,6 +2718,11 @@ fn adaptive_decision_telemetry(
         boundary_position: record.boundary_position,
         active_algorithm: record.active_algorithm,
         switch_boundary_occurred: record.switch_boundary_occurred,
+        mean_cluster_radius: record
+            .collapse_diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.mean_cluster_radius),
+        mean_cluster_radius_threshold: record.mean_cluster_radius_threshold,
     }
 }
 
@@ -2723,7 +2730,13 @@ fn adaptive_pass_telemetry(
     pass_number: usize,
     decision_records: &[AdaptiveSwitchDecisionRecord],
 ) -> Option<AdaptivePlanningPassTelemetry> {
-    let latest_decision = adaptive_decision_telemetry(decision_records.last()?);
+    let latest_decision = adaptive_decision_telemetry(
+        decision_records
+            .iter()
+            .rev()
+            .find(|record| record.collapse_diagnostics.is_some())
+            .unwrap_or(decision_records.last()?),
+    );
     Some(AdaptivePlanningPassTelemetry {
         pass_number,
         switch_occurred: decision_records

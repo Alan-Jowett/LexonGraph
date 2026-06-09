@@ -158,6 +158,7 @@ fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
         AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     );
     assert!(!decision.switch_boundary_occurred);
+    assert_eq!(decision.mean_cluster_radius_threshold, None);
     assert!(decision.collapse_diagnostics.is_none());
 }
 
@@ -186,13 +187,18 @@ fn val_adaptive_policy_006_records_structured_diagnostics() {
     .unwrap();
     selector.select_algorithm(fixture.len(), &fixture).unwrap();
     selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    let diagnostics = selector
-        .decision_records()
-        .last()
-        .and_then(|record| record.collapse_diagnostics.as_ref())
-        .unwrap();
+    let diagnostics = selector.decision_records().last().unwrap();
+    let diagnostics = diagnostics.collapse_diagnostics.as_ref().unwrap();
     assert_eq!(diagnostics.represented_item_count, 4);
     assert!((diagnostics.mean_cluster_radius - 0.1).abs() < 1e-5);
+    assert_eq!(
+        selector
+            .decision_records()
+            .last()
+            .unwrap()
+            .mean_cluster_radius_threshold,
+        Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD)
+    );
 }
 
 #[test]
@@ -231,6 +237,14 @@ fn val_adaptive_policy_008_switches_to_dcbc_when_mean_cluster_radius_exceeds_thr
             .unwrap()
             .switch_boundary_occurred
     );
+    assert_eq!(
+        selector
+            .decision_records()
+            .last()
+            .unwrap()
+            .mean_cluster_radius_threshold,
+        Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD)
+    );
 }
 
 #[test]
@@ -252,6 +266,7 @@ fn val_adaptive_policy_009_does_not_switch_back_after_dcbc_boundary() {
         AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc
     );
     assert!(!last.switch_boundary_occurred);
+    assert_eq!(last.mean_cluster_radius_threshold, None);
     assert!(last.collapse_diagnostics.is_none());
 }
 

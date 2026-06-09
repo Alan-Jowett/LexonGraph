@@ -527,8 +527,11 @@ caller-visible status observer stream for hierarchy-planning updates.
 **Pass condition:** the pass report and observer stream both surface
 deterministic adaptive telemetry showing that no PCA-to-DCBC switch occurred,
 that directional PCA remained the active adaptive algorithm throughout the
-exercised flow, and that no switch boundary position is falsely reported as if
-a switch had occurred.
+exercised flow, that no switch boundary position is falsely reported as if a
+switch had occurred, and that evaluated boundaries with diagnostics expose the
+measured `mean_cluster_radius` plus configured
+`mean_cluster_radius_threshold` while boundaries without diagnostics report
+those fields as unavailable.
 
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
 REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
@@ -544,7 +547,9 @@ updates.
 deterministic adaptive telemetry showing that a PCA-to-DCBC switch occurred,
 that DCBC became the active adaptive algorithm after the switch, and that the
 reported switch boundary position identifies the same adaptive boundary in both
-caller-visible telemetry surfaces.
+caller-visible telemetry surfaces while also surfacing the measured
+`mean_cluster_radius` and configured `mean_cluster_radius_threshold` whose
+comparison explains why the switch occurred.
 
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
 REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
@@ -558,7 +563,8 @@ status observer streams.
 **Pass condition:** both runs surface the same adaptive switch occurrence, the
 same active adaptive algorithm sequence at evaluated boundaries, and the same
 reported switch boundary position across both pass reports and observer
-streams.
+streams, along with the same surfaced `mean_cluster_radius` and
+`mean_cluster_radius_threshold` values and availability semantics.
 
 **Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046
 

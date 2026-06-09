@@ -2011,9 +2011,34 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
                 pass_number: 1,
                 switch_occurred: false,
                 latest_decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry {
-                    boundary_position: decision_records.last().unwrap().boundary_position,
-                    active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
-                    switch_boundary_occurred: false,
+                    boundary_position: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .boundary_position,
+                    active_algorithm: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .active_algorithm,
+                    switch_boundary_occurred: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .switch_boundary_occurred,
+                    mean_cluster_radius: decision_records.iter().rev().find_map(|record| {
+                        record
+                            .collapse_diagnostics
+                            .as_ref()
+                            .map(|diagnostics| diagnostics.mean_cluster_radius)
+                    }),
+                    mean_cluster_radius_threshold: decision_records
+                        .iter()
+                        .rev()
+                        .find_map(|record| record.mean_cluster_radius_threshold),
                 },
                 first_switch_boundary_position: None,
             }
@@ -2064,17 +2089,34 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
             telemetry.pass_number,
             telemetry.switch_occurred,
             telemetry.latest_decision.active_algorithm,
-            telemetry.first_switch_boundary_position
+            telemetry.first_switch_boundary_position,
+            telemetry.latest_decision.mean_cluster_radius_threshold
         )),
         Some((
             1,
             true,
-            ActivePlanningAlgorithm::Dcbc,
+            decision_records
+                .iter()
+                .rev()
+                .find(|record| record.collapse_diagnostics.is_some())
+                .unwrap_or(decision_records.last().unwrap())
+                .active_algorithm,
             decision_records
                 .iter()
                 .find(|record| record.switch_boundary_occurred)
-                .map(|record| record.boundary_position)
+                .map(|record| record.boundary_position),
+            decision_records
+                .iter()
+                .rev()
+                .find_map(|record| record.mean_cluster_radius_threshold)
         ))
+    );
+    assert!(
+        report
+            .adaptive_planning
+            .as_ref()
+            .and_then(|telemetry| telemetry.latest_decision.mean_cluster_radius)
+            .is_some()
     );
     run.mark_planning_complete().unwrap();
     let store = MemoryBlockStore::default();
@@ -2112,6 +2154,10 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
         telemetry.decision.active_algorithm == ActivePlanningAlgorithm::DirectionalPca
             && !telemetry.decision.switch_boundary_occurred
     }));
+    assert!(status_telemetry.iter().all(|telemetry| {
+        telemetry.decision.mean_cluster_radius.is_none()
+            && telemetry.decision.mean_cluster_radius_threshold.is_none()
+    }));
     assert_eq!(
         status_telemetry
             .iter()
@@ -2121,16 +2167,33 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
     );
 
     let pass_telemetry = report.adaptive_planning.unwrap();
+    let expected_report_decision = run
+        .adaptive_decision_records()
+        .iter()
+        .rev()
+        .find(|record| record.collapse_diagnostics.is_some())
+        .unwrap_or(run.adaptive_decision_records().last().unwrap());
     assert_eq!(pass_telemetry.pass_number, 1);
     assert!(!pass_telemetry.switch_occurred);
     assert_eq!(
         pass_telemetry.latest_decision.active_algorithm,
-        ActivePlanningAlgorithm::DirectionalPca
+        expected_report_decision.active_algorithm
     );
     assert_eq!(pass_telemetry.first_switch_boundary_position, None);
     assert_eq!(
         pass_telemetry.latest_decision.boundary_position,
-        status_telemetry.last().unwrap().decision.boundary_position
+        expected_report_decision.boundary_position
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius,
+        expected_report_decision
+            .collapse_diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.mean_cluster_radius)
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius_threshold,
+        expected_report_decision.mean_cluster_radius_threshold
     );
 }
 
@@ -2163,7 +2226,7 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
     let switch_boundary = status_telemetry
         .iter()
         .find(|telemetry| telemetry.decision.switch_boundary_occurred)
-        .map(|telemetry| telemetry.decision.boundary_position);
+        .map(|telemetry| telemetry.decision);
     assert!(switch_boundary.is_some());
     assert_eq!(
         status_telemetry.last().unwrap().decision.active_algorithm,
@@ -2171,15 +2234,36 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
     );
 
     let pass_telemetry = report.adaptive_planning.unwrap();
+    let expected_report_decision = run
+        .adaptive_decision_records()
+        .iter()
+        .rev()
+        .find(|record| record.collapse_diagnostics.is_some())
+        .unwrap_or(run.adaptive_decision_records().last().unwrap());
     assert_eq!(pass_telemetry.pass_number, 1);
     assert!(pass_telemetry.switch_occurred);
     assert_eq!(
         pass_telemetry.latest_decision.active_algorithm,
-        ActivePlanningAlgorithm::Dcbc
+        expected_report_decision.active_algorithm
     );
     assert_eq!(
         pass_telemetry.first_switch_boundary_position,
-        switch_boundary
+        switch_boundary.map(|decision| decision.boundary_position)
+    );
+    let switch_boundary = switch_boundary.unwrap();
+    let measured = switch_boundary.mean_cluster_radius.unwrap();
+    let threshold = switch_boundary.mean_cluster_radius_threshold.unwrap();
+    assert!(measured > threshold);
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius,
+        expected_report_decision
+            .collapse_diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.mean_cluster_radius)
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius_threshold,
+        expected_report_decision.mean_cluster_radius_threshold
     );
 }
 
@@ -2226,6 +2310,10 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
 
     assert_eq!(first_report, second_report);
     assert_eq!(first_telemetry, second_telemetry);
+    assert!(first_telemetry.iter().any(|telemetry| {
+        telemetry.decision.mean_cluster_radius.is_some()
+            && telemetry.decision.mean_cluster_radius_threshold.is_some()
+    }));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2261,6 +2349,9 @@ async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
             .skip_while(|record| !record.switch_boundary_occurred)
             .all(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
     );
+    assert!(first_decisions.iter().any(|record| {
+        record.collapse_diagnostics.is_some() && record.mean_cluster_radius_threshold.is_some()
+    }));
 }
 
 #[test]
@@ -2322,5 +2413,13 @@ fn regression_adaptive_selector_keeps_one_way_switch_records() {
             .map(|record| record.boundary_position)
             .collect::<Vec<_>>(),
         vec![0, 1, 2]
+    );
+    assert_eq!(
+        selector
+            .decision_records()
+            .iter()
+            .map(|record| record.mean_cluster_radius_threshold)
+            .collect::<Vec<_>>(),
+        vec![None, Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD), None]
     );
 }

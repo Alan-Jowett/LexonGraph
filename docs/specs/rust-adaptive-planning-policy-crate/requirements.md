@@ -148,8 +148,9 @@ sufficient to explain and validate:
 - the caller-usable adaptive boundary position associated with each evaluated
   planning boundary
 - which algorithm realization was active for a given planning segment
-- the measured mean cluster radius and its comparison with the configured
-  threshold
+- the measured mean cluster radius and the configured mean cluster radius
+  threshold for each evaluated boundary whose diagnostics were computed, plus
+  explicit unavailability when those diagnostics do not yet exist
 
 If any of those diagnostics are surfaced beyond internal crate state, they shall
 remain deterministic for identical inputs and configuration.

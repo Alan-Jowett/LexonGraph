@@ -71,6 +71,7 @@ pub struct AdaptiveSwitchDecisionRecord {
     pub boundary_position: usize,
     pub active_algorithm: ActivePlanningAlgorithm,
     pub switch_boundary_occurred: bool,
+    pub mean_cluster_radius_threshold: Option<f32>,
     pub reason: AdaptivePlanningDecisionReason,
     pub collapse_diagnostics: Option<AdaptivePlanningDiagnostics>,
 }
@@ -139,6 +140,7 @@ impl AdaptivePlanningSelector {
                 boundary_position,
                 active_algorithm: ActivePlanningAlgorithm::Dcbc,
                 switch_boundary_occurred: false,
+                mean_cluster_radius_threshold: None,
                 reason: AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc,
                 collapse_diagnostics: None,
             });
@@ -150,6 +152,7 @@ impl AdaptivePlanningSelector {
                 boundary_position,
                 active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
                 switch_boundary_occurred: false,
+                mean_cluster_radius_threshold: None,
                 reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
                 collapse_diagnostics: None,
             });
@@ -173,6 +176,9 @@ impl AdaptivePlanningSelector {
             boundary_position,
             active_algorithm,
             switch_boundary_occurred,
+            mean_cluster_radius_threshold: Some(
+                self.settings.switch_criteria.mean_cluster_radius_threshold,
+            ),
             reason: AdaptivePlanningDecisionReason::EvaluatedDirectionalPca,
             collapse_diagnostics: Some(diagnostics),
         });

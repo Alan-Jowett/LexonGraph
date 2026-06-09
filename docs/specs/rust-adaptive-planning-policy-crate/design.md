@@ -124,13 +124,15 @@ For each evaluated boundary, the crate retains a structured record identifying:
 - the deterministic zero-based adaptive boundary position for that evaluated
   planning boundary
 - the deterministic inputs to the switch decision, including the measured mean
-  cluster radius
+  cluster radius and the configured mean cluster radius threshold when
+  diagnostics exist
 - whether the switch criteria were satisfied
 - whether the switch boundary occurred at that boundary
 
 If surfaced publicly, these diagnostics remain deterministic and suitable for
 validation without requiring parsing of free-form messages or inference from
-record ordering alone.
+record ordering alone. Boundaries that have not yet computed diagnostics expose
+those numeric values as explicitly unavailable rather than synthesized.
 
 ### DSG-ADAPTIVE-POLICY-010 `Hierarchy normalization compatibility`
 
