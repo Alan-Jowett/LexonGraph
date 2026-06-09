@@ -1753,7 +1753,7 @@ fn derive_hierarchy_for_single_built_in_phase(
             embeddings,
             materializability_bound,
             stage_observer,
-            |layer_len, _represented_item_count| {
+            |layer_len, _max_unit_item_count| {
                 Ok(PartitionPlanner::new(
                     PlanningStage::Single,
                     create_built_in_trainer(
