@@ -2083,9 +2083,15 @@ where
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(E::from)?;
-            let representative_embedding =
-                mean_f32_embeddings(child_representative_embeddings.iter().map(Vec::as_slice))
-                    .map_err(E::from)?;
+            let representative_embedding = weighted_mean_f32_embeddings(
+                child_node_indices
+                    .iter()
+                    .zip(child_representative_embeddings.iter())
+                    .map(|(&node_index, embedding)| {
+                        (embedding.as_slice(), nodes[node_index].item_indices.len())
+                    }),
+            )
+            .map_err(E::from)?;
             let next_index = nodes.len();
             nodes.push(AgglomerativeHierarchyNode {
                 child_node_indices,
@@ -2763,18 +2769,23 @@ fn arithmetic_mean_canonical_embedding(block: &BranchBlock) -> Result<Vec<u8>, S
     encode_embedding_from_f64(&sums, &block.embedding_spec)
 }
 
-fn mean_f32_embeddings<'a>(
-    embeddings: impl IntoIterator<Item = &'a [f32]>,
+fn weighted_mean_f32_embeddings<'a>(
+    embeddings: impl IntoIterator<Item = (&'a [f32], usize)>,
 ) -> Result<Vec<f32>, StreamingClusteringError> {
     let mut embeddings = embeddings.into_iter();
-    let Some(first) = embeddings.next() else {
+    let Some((first, first_weight)) = embeddings.next() else {
         return Err(invalid_config(
             "cannot compute representative embedding from an empty planning group".into(),
         ));
     };
+    if first_weight == 0 {
+        return Err(invalid_config(
+            "representative embedding weight must be positive".into(),
+        ));
+    }
     let mut sums = first
         .iter()
-        .map(|&value| f64::from(value))
+        .map(|&value| f64::from(value) * first_weight as f64)
         .collect::<Vec<_>>();
     for (dimension, value) in sums.iter().enumerate() {
         if !value.is_finite() {
@@ -2783,8 +2794,13 @@ fn mean_f32_embeddings<'a>(
             )));
         }
     }
-    let mut count = 1usize;
-    for embedding in embeddings {
+    let mut total_weight = first_weight;
+    for (embedding, weight) in embeddings {
+        if weight == 0 {
+            return Err(invalid_config(
+                "representative embedding weight must be positive".into(),
+            ));
+        }
         if embedding.len() != sums.len() {
             return Err(invalid_config(format!(
                 "representative embedding dimension {} does not match expected {}",
@@ -2798,20 +2814,20 @@ fn mean_f32_embeddings<'a>(
                     "non-finite representative embedding value at dimension {dimension}"
                 )));
             }
-            *sum += f64::from(value);
+            *sum += f64::from(value) * weight as f64;
             if !sum.is_finite() {
                 return Err(invalid_config(format!(
                     "representative embedding sum overflowed at dimension {dimension}"
                 )));
             }
         }
-        count += 1;
+        total_weight += weight;
     }
 
     sums.into_iter()
         .enumerate()
         .map(|(dimension, sum)| {
-            let mean = sum / count as f64;
+            let mean = sum / total_weight as f64;
             if !mean.is_finite() {
                 return Err(invalid_config(format!(
                     "representative embedding mean became non-finite at dimension {dimension}"
@@ -2826,6 +2842,18 @@ fn mean_f32_embeddings<'a>(
             Ok(encoded)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::weighted_mean_f32_embeddings;
+
+    #[test]
+    fn weighted_representative_embedding_uses_item_counts() {
+        let mean = weighted_mean_f32_embeddings([(&[0.0f32, 2.0][..], 1), (&[6.0f32, 8.0][..], 3)])
+            .expect("weighted mean should succeed");
+        assert_eq!(mean, vec![4.5, 6.5]);
+    }
 }
 
 fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec<u8>, String> {
