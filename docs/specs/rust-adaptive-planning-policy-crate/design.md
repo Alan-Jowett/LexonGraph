@@ -88,6 +88,10 @@ mean distances from represented items to their realized cluster centroids.
 The adaptive realization compares that mean cluster radius with the configured
 switch threshold to determine whether directional PCA remains eligible.
 
+The diagnostic path preserves enough realized-cluster information that a
+reported radius of `0.0` remains auditable as either a legitimate zero-radius
+outcome or a defect in computation, rather than an unexplained collapsed value.
+
 ### DSG-ADAPTIVE-POLICY-006 `Deterministic switch execution`
 
 When the measured mean cluster radius is greater than the configured switch
@@ -133,6 +137,10 @@ If surfaced publicly, these diagnostics remain deterministic and suitable for
 validation without requiring parsing of free-form messages or inference from
 record ordering alone. Boundaries that have not yet computed diagnostics expose
 those numeric values as explicitly unavailable rather than synthesized.
+
+Publicly surfaced diagnostics do not round, clamp, or otherwise transform a
+non-zero measured radius into `0.0`, and they do not omit diagnostic state
+needed to explain a surfaced zero-radius result.
 
 ### DSG-ADAPTIVE-POLICY-010 `Hierarchy normalization compatibility`
 

@@ -111,6 +111,11 @@ free-form human intervention.
 The recorded diagnostics shall include the mean cluster radius measured for the
 current directional-PCA realization at that boundary.
 
+If a boundary reports a measured mean cluster radius of `0.0`, the
+implementation shall preserve enough faithful diagnostic state to determine
+whether that value arose from legitimately zero-radius realized clusters or
+from a defect in the diagnostic path.
+
 ### REQ-ADAPTIVE-POLICY-008
 
 When the measured mean cluster radius exceeds the configured switch threshold,
@@ -151,6 +156,10 @@ sufficient to explain and validate:
 - the measured mean cluster radius and the configured mean cluster radius
   threshold for each evaluated boundary whose diagnostics were computed, plus
   explicit unavailability when those diagnostics do not yet exist
+
+If a measured mean cluster radius of `0.0` is surfaced, those diagnostics and
+switch-decision records shall remain sufficient to audit that reported value
+without requiring inference from lossy formatting or omitted diagnostic state.
 
 If any of those diagnostics are surfaced beyond internal crate state, they shall
 remain deterministic for identical inputs and configuration.

@@ -533,6 +533,10 @@ measured `mean_cluster_radius` plus configured
 `mean_cluster_radius_threshold` while boundaries without diagnostics report
 those fields as unavailable.
 
+For fixtures expected to produce a non-zero measured radius, this validation
+also confirms that neither caller-visible surface reports `0.0` unless the
+underlying adaptive decision records justify that exact value.
+
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
 REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
 
@@ -551,6 +555,9 @@ caller-visible telemetry surfaces while also surfacing the measured
 `mean_cluster_radius` and configured `mean_cluster_radius_threshold` whose
 comparison explains why the switch occurred.
 
+This validation also checks that the surfaced radius and threshold exactly match
+the underlying adaptive decision records rather than a lossy reformatted value.
+
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
 REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
 
@@ -565,6 +572,10 @@ same active adaptive algorithm sequence at evaluated boundaries, and the same
 reported switch boundary position across both pass reports and observer
 streams, along with the same surfaced `mean_cluster_radius` and
 `mean_cluster_radius_threshold` values and availability semantics.
+
+Repeated runs also preserve equality between the caller-visible telemetry and
+the underlying adaptive decision records for suspicious values such as a
+reported `mean_cluster_radius` of `0.0`.
 
 **Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046
 

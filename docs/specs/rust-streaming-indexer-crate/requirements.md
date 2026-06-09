@@ -264,6 +264,10 @@ pass report that includes:
   boundary, the measured `mean_cluster_radius` and configured
   `mean_cluster_radius_threshold` for that boundary when diagnostics exist, and
   the adaptive boundary position of the first switch when one occurred
+
+That surfaced telemetry shall faithfully reflect the adaptive-policy
+diagnostics without lossy transformation, truncation-to-zero, or omission of
+diagnostic state needed to explain a reported `mean_cluster_radius` of `0.0`.
 - enough structured state for the caller to decide whether to continue or stop
 
 ### REQ-STREAM-INDEXER-022
@@ -289,6 +293,10 @@ For each reported phase, the observer contract shall expose:
   `mean_cluster_radius_threshold` for the reported boundary when diagnostics
   exist, and the adaptive boundary position when that boundary has been
   evaluated
+
+The observer contract shall preserve those surfaced numeric values exactly from
+the adaptive-policy diagnostic source rather than reformatting them into a less
+informative value.
 
 ### REQ-STREAM-INDEXER-023
 

@@ -556,6 +556,14 @@ fn adaptive_planning(
     direction: BuiltInPlanningDirection,
     mean_cluster_radius_threshold: f32,
 ) -> BuiltInPlanning {
+    adaptive_planning_with_cluster_count(direction, mean_cluster_radius_threshold, 2)
+}
+
+fn adaptive_planning_with_cluster_count(
+    direction: BuiltInPlanningDirection,
+    mean_cluster_radius_threshold: f32,
+    cluster_count: u32,
+) -> BuiltInPlanning {
     let adaptive_direction = match direction {
         BuiltInPlanningDirection::Divisive => AdaptivePlanningDirection::Divisive,
         BuiltInPlanningDirection::Agglomerative => AdaptivePlanningDirection::Agglomerative,
@@ -563,7 +571,7 @@ fn adaptive_planning(
     BuiltInPlanning::Adaptive(AdaptivePlanningSettings {
         direction: adaptive_direction,
         directional_pca: AdaptiveDirectionalPcaSettings {
-            cluster_count: 2,
+            cluster_count,
             random_seed: Some(17),
             params: DirectionalPcaParams {
                 retained_dimension_count: 1,
@@ -2352,6 +2360,48 @@ async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
     assert!(first_decisions.iter().any(|record| {
         record.collapse_diagnostics.is_some() && record.mean_cluster_radius_threshold.is_some()
     }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_adaptive_diagnostics_use_realized_cluster_count_from_planner() {
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
+        adaptive_planning_with_cluster_count(BuiltInPlanningDirection::Divisive, 0.0, 8),
+        160,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    let report = run.finish_pass().unwrap();
+    let decision_records = run.adaptive_decision_records();
+    let diagnostic_decision = decision_records
+        .iter()
+        .find(|record| record.collapse_diagnostics.is_some())
+        .unwrap();
+    let diagnostics = diagnostic_decision.collapse_diagnostics.as_ref().unwrap();
+    assert_eq!(diagnostics.realized_cluster_count, 2);
+    assert_eq!(
+        diagnostics.cluster_member_counts.iter().sum::<usize>(),
+        diagnostics.represented_item_count
+    );
+    assert_eq!(diagnostics.cluster_member_counts.len(), 2);
+    assert!(
+        diagnostics
+            .cluster_mean_radii
+            .iter()
+            .all(|radius| *radius > 0.0)
+    );
+    assert!(diagnostics.mean_cluster_radius > 0.0);
+    assert!(diagnostic_decision.switch_boundary_occurred);
+    assert_eq!(
+        diagnostic_decision.active_algorithm,
+        ActivePlanningAlgorithm::Dcbc
+    );
+    assert_eq!(
+        report
+            .adaptive_planning
+            .as_ref()
+            .and_then(|telemetry| telemetry.latest_decision.mean_cluster_radius),
+        Some(diagnostics.mean_cluster_radius)
+    );
 }
 
 #[test]

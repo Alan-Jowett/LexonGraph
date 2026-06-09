@@ -187,6 +187,10 @@ materialized parent layer.
   configured `mean_cluster_radius_threshold` for that boundary when diagnostics
   exist, and the adaptive boundary position of the first switch when one
   occurred
+
+This pass-report surface forwards the adaptive-policy diagnostic values without
+lossy transformation, so a reported radius of `0.0` remains traceable to the
+underlying adaptive decision state rather than to formatting or summarization.
 - structured state sufficient for caller stop/continue decisions
 
 The report remains deterministic for a fixed indexing context and replay order.
@@ -275,6 +279,10 @@ Each status update includes:
   the measured `mean_cluster_radius` and configured
   `mean_cluster_radius_threshold` for the reported boundary when diagnostics
   exist
+
+Those surfaced numeric fields remain faithful to the adaptive-policy diagnostic
+source and do not collapse a non-zero measured radius into `0.0` through
+rounding, truncation, or formatting-only presentation.
 
 For `InProgress` updates, the observer receives the latest measured completion
 state for the phase rather than a heartbeat carrying only a fixed total. If a

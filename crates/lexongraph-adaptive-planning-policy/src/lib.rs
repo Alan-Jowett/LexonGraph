@@ -63,6 +63,9 @@ pub enum AdaptivePlanningDecisionReason {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdaptivePlanningDiagnostics {
     pub represented_item_count: usize,
+    pub realized_cluster_count: u32,
+    pub cluster_member_counts: Vec<usize>,
+    pub cluster_mean_radii: Vec<f32>,
     pub mean_cluster_radius: f32,
 }
 
@@ -134,6 +137,23 @@ impl AdaptivePlanningSelector {
         represented_item_count: usize,
         embeddings: &[Vec<f32>],
     ) -> Result<ActivePlanningAlgorithm, AdaptivePlanningError> {
+        let realized_cluster_count = default_diagnostic_cluster_count(
+            self.settings.directional_pca.cluster_count,
+            embeddings.len(),
+        )?;
+        self.select_algorithm_with_realized_cluster_count(
+            represented_item_count,
+            embeddings,
+            realized_cluster_count,
+        )
+    }
+
+    pub fn select_algorithm_with_realized_cluster_count(
+        &mut self,
+        represented_item_count: usize,
+        embeddings: &[Vec<f32>],
+        realized_cluster_count: u32,
+    ) -> Result<ActivePlanningAlgorithm, AdaptivePlanningError> {
         let boundary_position = self.decision_records.len();
         if self.switched_to_dcbc {
             self.decision_records.push(AdaptiveSwitchDecisionRecord {
@@ -162,6 +182,7 @@ impl AdaptivePlanningSelector {
         let diagnostics = evaluate_collapse_diagnostics(
             represented_item_count,
             embeddings,
+            realized_cluster_count,
             &self.settings.directional_pca,
         )?;
         let switch_boundary_occurred = diagnostics.mean_cluster_radius
@@ -265,6 +286,7 @@ fn validate_directional_pca_params(
 fn evaluate_collapse_diagnostics(
     represented_item_count: usize,
     embeddings: &[Vec<f32>],
+    realized_cluster_count: u32,
     settings: &AdaptiveDirectionalPcaSettings,
 ) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError> {
     if represented_item_count == 0 {
@@ -289,7 +311,7 @@ fn evaluate_collapse_diagnostics(
             "adaptive diagnostics require non-empty embeddings".into(),
         ));
     }
-    let cluster_count = diagnostic_cluster_count(settings.cluster_count, embeddings.len())?;
+    let cluster_count = validate_realized_cluster_count(realized_cluster_count, embeddings.len())?;
 
     let config = StreamingClusteringConfig {
         cluster_count,
@@ -314,11 +336,14 @@ fn evaluate_collapse_diagnostics(
     let assignments = classifier
         .assign_batch(embeddings)
         .map_err(map_streaming_clustering_error)?;
-    let mean_cluster_radius = compute_mean_cluster_radius(embeddings, &assignments)?;
+    let cluster_radius_diagnostics = compute_cluster_radius_diagnostics(embeddings, &assignments)?;
 
     Ok(AdaptivePlanningDiagnostics {
         represented_item_count,
-        mean_cluster_radius,
+        realized_cluster_count: cluster_count,
+        cluster_member_counts: cluster_radius_diagnostics.cluster_member_counts,
+        cluster_mean_radii: cluster_radius_diagnostics.cluster_mean_radii,
+        mean_cluster_radius: cluster_radius_diagnostics.mean_cluster_radius,
     })
 }
 
@@ -335,14 +360,35 @@ fn map_streaming_clustering_error(error: StreamingClusteringError) -> AdaptivePl
     }
 }
 
-fn diagnostic_cluster_count(
+fn default_diagnostic_cluster_count(
     configured_cluster_count: u32,
     embedding_count: usize,
 ) -> Result<u32, AdaptivePlanningError> {
-    let capped = usize::try_from(configured_cluster_count)
+    if embedding_count <= 1 {
+        return Ok(1);
+    }
+    let requested = usize::try_from(configured_cluster_count.max(2))
         .map_err(|_| {
             AdaptivePlanningError::InvalidConfiguration(
                 "directional-PCA cluster_count does not fit in usize".into(),
+            )
+        })?
+        .min((embedding_count / 2).max(2));
+    u32::try_from(requested).map_err(|_| {
+        AdaptivePlanningError::InvalidConfiguration(
+            "diagnostic cluster_count exceeds u32::MAX".into(),
+        )
+    })
+}
+
+fn validate_realized_cluster_count(
+    realized_cluster_count: u32,
+    embedding_count: usize,
+) -> Result<u32, AdaptivePlanningError> {
+    let capped = usize::try_from(realized_cluster_count)
+        .map_err(|_| {
+            AdaptivePlanningError::InvalidConfiguration(
+                "diagnostic cluster_count does not fit in usize".into(),
             )
         })?
         .min(embedding_count.max(1));
@@ -353,10 +399,17 @@ fn diagnostic_cluster_count(
     })
 }
 
-fn compute_mean_cluster_radius(
+#[derive(Debug)]
+struct ClusterRadiusDiagnostics {
+    mean_cluster_radius: f32,
+    cluster_member_counts: Vec<usize>,
+    cluster_mean_radii: Vec<f32>,
+}
+
+fn compute_cluster_radius_diagnostics(
     embeddings: &[Vec<f32>],
     assignments: &[u32],
-) -> Result<f32, AdaptivePlanningError> {
+) -> Result<ClusterRadiusDiagnostics, AdaptivePlanningError> {
     if assignments.len() != embeddings.len() {
         return Err(AdaptivePlanningError::DiagnosticComputation(format!(
             "assignment count {} did not match embedding count {}",
@@ -462,6 +515,32 @@ fn compute_mean_cluster_radius(
         }
     }
 
+    let mut cluster_member_counts = Vec::with_capacity(centroids.len());
+    let mut cluster_mean_radii = Vec::with_capacity(centroids.len());
+    for &cluster_id in centroids.keys() {
+        let (member_radius_sum, member_count) = cluster_radius_sums
+            .get(&cluster_id)
+            .copied()
+            .ok_or_else(|| {
+                AdaptivePlanningError::DiagnosticComputation(format!(
+                    "cluster {cluster_id} did not retain any members"
+                ))
+            })?;
+        if member_count == 0 {
+            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                "cluster {cluster_id} did not retain any members"
+            )));
+        }
+        let mean_cluster_radius = member_radius_sum / member_count as f64;
+        if !mean_cluster_radius.is_finite() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "per-cluster mean radius became non-finite".into(),
+            ));
+        }
+        cluster_member_counts.push(member_count);
+        cluster_mean_radii.push(mean_cluster_radius as f32);
+    }
+
     let mean_cluster_radius = total_cluster_radius / centroids.len() as f64;
     if !mean_cluster_radius.is_finite() {
         return Err(AdaptivePlanningError::DiagnosticComputation(
@@ -469,7 +548,11 @@ fn compute_mean_cluster_radius(
         ));
     }
 
-    Ok(mean_cluster_radius as f32)
+    Ok(ClusterRadiusDiagnostics {
+        mean_cluster_radius: mean_cluster_radius as f32,
+        cluster_member_counts,
+        cluster_mean_radii,
+    })
 }
 
 fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanningError> {

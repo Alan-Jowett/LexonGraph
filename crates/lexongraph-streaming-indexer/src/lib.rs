@@ -1975,8 +1975,18 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |partition_embeddings| {
+                let realized_cluster_count = effective_cluster_count(
+                    settings.directional_pca.cluster_count,
+                    partition_embeddings.len(),
+                    materializability_bound,
+                )
+                .map_err(StreamingIndexerError::InvalidAdaptivePlanningConfiguration)?;
                 let algorithm = selector
-                    .select_algorithm(partition_embeddings.len(), partition_embeddings)
+                    .select_algorithm_with_realized_cluster_count(
+                        partition_embeddings.len(),
+                        partition_embeddings,
+                        realized_cluster_count,
+                    )
                     .map_err(map_adaptive_planning_error)?;
                 let adaptive_decision = selector
                     .decision_records()
@@ -2003,8 +2013,18 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |layer_embeddings, represented_item_count, _max_unit_item_count| {
+                let realized_cluster_count = effective_cluster_count(
+                    settings.directional_pca.cluster_count,
+                    layer_embeddings.len(),
+                    materializability_bound,
+                )
+                .map_err(StreamingIndexerError::InvalidAdaptivePlanningConfiguration)?;
                 let algorithm = selector
-                    .select_algorithm(represented_item_count, layer_embeddings)
+                    .select_algorithm_with_realized_cluster_count(
+                        represented_item_count,
+                        layer_embeddings,
+                        realized_cluster_count,
+                    )
                     .map_err(map_adaptive_planning_error)?;
                 let adaptive_decision = selector
                     .decision_records()
