@@ -180,6 +180,11 @@ materialized parent layer.
   hierarchy-building work for the selected planning direction, derived from the
   shared streaming clustering pass-report surface wherever clustering
   participates in that work
+- when adaptive aggregate built-in planning is active, deterministic structured
+  adaptive-switch telemetry stating whether a PCA-to-DCBC switch occurred in
+  the completed pass, which adaptive algorithm was active after the most recent
+  evaluated adaptive boundary, and the adaptive boundary position of the first
+  switch when one occurred
 - structured state sufficient for caller stop/continue decisions
 
 The report remains deterministic for a fixed indexing context and replay order.
@@ -250,6 +255,8 @@ structured progress updates for:
 - caller-visible replay-pass planning progress
 - hierarchy-planning start, in-progress, completion, and failure for coarse and
   fine partition work
+- adaptive planning-boundary telemetry for the built-in adaptive realization
+  during hierarchy-planning work
 - final materialization progress
 - bottom-up assembly progress
 
@@ -261,6 +268,8 @@ Each status update includes:
 - `phase_total_unit_count: Option<usize>`
 - `completed_unit_count: usize`
 - `remaining_unit_count: Option<usize>`
+- optional deterministic adaptive-switch telemetry for hierarchy-planning
+  updates emitted while the adaptive built-in realization is active
 
 For `InProgress` updates, the observer receives the latest measured completion
 state for the phase rather than a heartbeat carrying only a fixed total. If a
@@ -475,6 +484,25 @@ and its post-switch DCBC output into the same finalized partition-hierarchy
 abstraction used by the rest of the indexer design, so final materialization
 and bottom-up assembly remain unchanged.
 
+### DSG-STREAM-INDEXER-038 `Adaptive switch telemetry surface`
+
+When the built-in adaptive realization is active, the indexer surfaces the same
+deterministic adaptive decision state through both pass reports and
+hierarchy-planning status updates rather than requiring callers to inspect
+internal-only records.
+
+That surfaced telemetry identifies at least:
+
+- the adaptive algorithm active after the evaluated boundary
+- whether that boundary was the first PCA-to-DCBC switch boundary in the pass
+- the deterministic zero-based adaptive boundary position for the evaluated
+  planning segment
+
+No-switch executions therefore surface deterministic adaptive telemetry that
+continues to identify the active directional-PCA path without falsely claiming
+a switch boundary, and repeated deterministic runs surface the same switch
+occurrence and boundary position.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -508,3 +536,4 @@ and bottom-up assembly remain unchanged.
 | DSG-STREAM-INDEXER-035 | REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046 |
 | DSG-STREAM-INDEXER-036 | REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-037 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-045 |
+| DSG-STREAM-INDEXER-038 | REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046 |

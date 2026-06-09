@@ -68,6 +68,7 @@ pub struct AdaptivePlanningDiagnostics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdaptiveSwitchDecisionRecord {
+    pub boundary_position: usize,
     pub active_algorithm: ActivePlanningAlgorithm,
     pub switch_boundary_occurred: bool,
     pub reason: AdaptivePlanningDecisionReason,
@@ -132,8 +133,10 @@ impl AdaptivePlanningSelector {
         represented_item_count: usize,
         embeddings: &[Vec<f32>],
     ) -> Result<ActivePlanningAlgorithm, AdaptivePlanningError> {
+        let boundary_position = self.decision_records.len();
         if self.switched_to_dcbc {
             self.decision_records.push(AdaptiveSwitchDecisionRecord {
+                boundary_position,
                 active_algorithm: ActivePlanningAlgorithm::Dcbc,
                 switch_boundary_occurred: false,
                 reason: AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc,
@@ -144,6 +147,7 @@ impl AdaptivePlanningSelector {
 
         if self.decision_records.is_empty() {
             self.decision_records.push(AdaptiveSwitchDecisionRecord {
+                boundary_position,
                 active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
                 switch_boundary_occurred: false,
                 reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
@@ -166,6 +170,7 @@ impl AdaptivePlanningSelector {
             ActivePlanningAlgorithm::DirectionalPca
         };
         self.decision_records.push(AdaptiveSwitchDecisionRecord {
+            boundary_position,
             active_algorithm,
             switch_boundary_occurred,
             reason: AdaptivePlanningDecisionReason::EvaluatedDirectionalPca,

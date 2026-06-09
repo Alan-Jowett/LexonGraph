@@ -35,6 +35,9 @@ realization may use directional PCA first and later switch to DCBC.
 the adaptive realization no longer uses directional PCA for the remainder of the
 same adaptive planning flow.
 
+`Adaptive boundary position` means the deterministic zero-based position of an
+evaluated adaptive planning boundary within one adaptive planning flow.
+
 `Collapse diagnostics` means the explicit deterministic measurements and
 threshold comparisons used to decide whether directional PCA remains eligible
 for the current planning work.
@@ -142,6 +145,8 @@ sufficient to explain and validate:
 
 - why directional PCA remained eligible or became ineligible
 - where the switch boundary occurred
+- the caller-usable adaptive boundary position associated with each evaluated
+  planning boundary
 - which algorithm realization was active for a given planning segment
 - the measured mean cluster radius and its comparison with the configured
   threshold

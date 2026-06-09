@@ -121,13 +121,16 @@ back to directional PCA.
 For each evaluated boundary, the crate retains a structured record identifying:
 
 - the active algorithm realization
+- the deterministic zero-based adaptive boundary position for that evaluated
+  planning boundary
 - the deterministic inputs to the switch decision, including the measured mean
   cluster radius
 - whether the switch criteria were satisfied
 - whether the switch boundary occurred at that boundary
 
 If surfaced publicly, these diagnostics remain deterministic and suitable for
-validation without requiring parsing of free-form messages.
+validation without requiring parsing of free-form messages or inference from
+record ordering alone.
 
 ### DSG-ADAPTIVE-POLICY-010 `Hierarchy normalization compatibility`
 
