@@ -213,10 +213,57 @@ fn validate_settings(settings: &AdaptivePlanningSettings) -> Result<(), Adaptive
             "min_cumulative_variance must be finite and in [0.0, 1.0]".into(),
         ));
     }
-    if settings.directional_pca.params.retained_dimension_count == 0 {
+    validate_directional_pca_params(&settings.directional_pca)?;
+    Ok(())
+}
+
+fn validate_directional_pca_params(
+    settings: &AdaptiveDirectionalPcaSettings,
+) -> Result<(), AdaptivePlanningError> {
+    let params = &settings.params;
+    if params.retained_dimension_count == 0 {
         return Err(AdaptivePlanningError::InvalidConfiguration(
             "retained_dimension_count must be greater than zero".into(),
         ));
+    }
+    if params.retained_dimension_count > settings.cluster_count as usize {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "retained_dimension_count {} cannot exceed directional-PCA cluster_count {}",
+            params.retained_dimension_count, settings.cluster_count
+        )));
+    }
+    if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "variance_exponent must be finite and non-negative, got {}",
+            params.variance_exponent
+        )));
+    }
+    if !params.temperature.is_finite() || params.temperature <= 0.0 {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "temperature must be finite and positive, got {}",
+            params.temperature
+        )));
+    }
+    if params.min_input_count < 2 {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "min_input_count must be at least 2, got {}",
+            params.min_input_count
+        )));
+    }
+    if params.min_effective_rank == 0 || params.min_effective_rank > params.retained_dimension_count
+    {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "min_effective_rank must be in [1, {}], got {}",
+            params.retained_dimension_count, params.min_effective_rank
+        )));
+    }
+    if !params.min_cumulative_variance.is_finite()
+        || !(0.0..=1.0).contains(&params.min_cumulative_variance)
+    {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "directional-PCA min_cumulative_variance must be finite and in [0.0, 1.0], got {}",
+            params.min_cumulative_variance
+        )));
     }
     Ok(())
 }

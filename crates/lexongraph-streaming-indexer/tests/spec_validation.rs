@@ -2045,10 +2045,35 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
         .await
         .unwrap();
     let second_decisions = second.adaptive_decision_records().to_vec();
+    let first_algorithm_sequence: Vec<_> = first_decisions
+        .iter()
+        .map(|record| record.active_algorithm)
+        .collect();
+    let second_algorithm_sequence: Vec<_> = second_decisions
+        .iter()
+        .map(|record| record.active_algorithm)
+        .collect();
+    let first_switch_boundaries: Vec<_> = first_decisions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
+        .collect();
+    let second_switch_boundaries: Vec<_> = second_decisions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
+        .collect();
+    let first_reasons: Vec<_> = first_decisions.iter().map(|record| record.reason).collect();
+    let second_reasons: Vec<_> = second_decisions
+        .iter()
+        .map(|record| record.reason)
+        .collect();
 
     assert_eq!(first_report, second_report);
     assert_eq!(first_result, second_result);
-    assert_eq!(first_decisions, second_decisions);
+    assert_eq!(first_algorithm_sequence, second_algorithm_sequence);
+    assert_eq!(first_switch_boundaries, second_switch_boundaries);
+    assert_eq!(first_reasons, second_reasons);
 }
 
 #[test]

@@ -87,6 +87,17 @@ fn val_adaptive_policy_003_rejects_invalid_switch_configuration() {
 }
 
 #[test]
+fn val_adaptive_policy_007_rejects_invalid_directional_pca_configuration() {
+    let mut invalid = settings(AdaptivePlanningDirection::Divisive, 0.5);
+    invalid.directional_pca.params.temperature = 0.0;
+    let err = AdaptivePlanningSelector::new(invalid).unwrap_err();
+    assert!(matches!(
+        err,
+        AdaptivePlanningError::InvalidConfiguration(_)
+    ));
+}
+
+#[test]
 fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
     let mut selector =
         AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.8)).unwrap();
