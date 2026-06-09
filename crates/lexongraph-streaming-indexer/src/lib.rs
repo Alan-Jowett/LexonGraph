@@ -2844,18 +2844,6 @@ fn weighted_mean_f32_embeddings<'a>(
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::weighted_mean_f32_embeddings;
-
-    #[test]
-    fn weighted_representative_embedding_uses_item_counts() {
-        let mean = weighted_mean_f32_embeddings([(&[0.0f32, 2.0][..], 1), (&[6.0f32, 8.0][..], 3)])
-            .expect("weighted mean should succeed");
-        assert_eq!(mean, vec![4.5, 6.5]);
-    }
-}
-
 fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec<u8>, String> {
     let dims = usize::try_from(spec.dims)
         .map_err(|_| format!("embedding dims {} do not fit in usize", spec.dims))?;
@@ -3528,4 +3516,16 @@ pub mod conformance {
         StreamingClusteringFactoryConformanceHarness, run_content_resolver_suite,
         run_full_trait_suite,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::weighted_mean_f32_embeddings;
+
+    #[test]
+    fn weighted_representative_embedding_uses_item_counts() {
+        let mean = weighted_mean_f32_embeddings([(&[0.0f32, 2.0][..], 1), (&[6.0f32, 8.0][..], 3)])
+            .expect("weighted mean should succeed");
+        assert_eq!(mean, vec![4.5, 6.5]);
+    }
 }
