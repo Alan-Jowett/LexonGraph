@@ -39,6 +39,10 @@ same adaptive planning flow.
 threshold comparisons used to decide whether directional PCA remains eligible
 for the current planning work.
 
+`Mean cluster radius` means the arithmetic mean of the realized per-cluster
+mean distances from represented items to their deterministic cluster centroids
+at one adaptive decision boundary.
+
 ## Requirements
 
 ### REQ-ADAPTIVE-POLICY-001
@@ -76,9 +80,7 @@ The adaptive policy configuration shall accept, at minimum:
 - a built-in hierarchy-construction direction
 - directional-PCA settings
 - DCBC settings
-- explicit deterministic switch criteria or thresholds
-- deterministic tie-breaking behavior where multiple switch-eligible outcomes
-  would otherwise be possible
+- an explicit deterministic mean-cluster-radius switch threshold
 
 ### REQ-ADAPTIVE-POLICY-005
 
@@ -103,10 +105,14 @@ planning outputs available at the adaptive boundary and shall be sufficient to
 decide whether directional PCA remains eligible without relying on randomness or
 free-form human intervention.
 
+The recorded diagnostics shall include the mean cluster radius measured for the
+current directional-PCA realization at that boundary.
+
 ### REQ-ADAPTIVE-POLICY-008
 
-When the configured collapse criteria are met, the adaptive realization shall
-switch deterministically from directional PCA to DCBC.
+When the measured mean cluster radius exceeds the configured switch threshold,
+the adaptive realization shall switch deterministically from directional PCA to
+DCBC.
 
 ### REQ-ADAPTIVE-POLICY-009
 
@@ -116,9 +122,10 @@ that same flow.
 
 ### REQ-ADAPTIVE-POLICY-010
 
-If the configured collapse criteria are not met, the adaptive realization shall
-remain on the directional-PCA path and shall not switch merely because DCBC
-would also be a valid planning realization.
+If the measured mean cluster radius does not exceed the configured switch
+threshold, the adaptive realization shall remain on the directional-PCA path
+and shall not switch merely because DCBC would also be a valid planning
+realization.
 
 ### REQ-ADAPTIVE-POLICY-011
 
@@ -136,13 +143,16 @@ sufficient to explain and validate:
 - why directional PCA remained eligible or became ineligible
 - where the switch boundary occurred
 - which algorithm realization was active for a given planning segment
+- the measured mean cluster radius and its comparison with the configured
+  threshold
 
 If any of those diagnostics are surfaced beyond internal crate state, they shall
 remain deterministic for identical inputs and configuration.
 
 ### REQ-ADAPTIVE-POLICY-013
 
-Invalid adaptive configuration, contradictory switch criteria, and unsupported
+Invalid adaptive configuration, invalid mean-cluster-radius thresholds, failure
+to compute deterministic mean-cluster-radius diagnostics, and unsupported
 direction or realization combinations shall fail explicitly rather than silently
 substituting a different algorithm, threshold interpretation, or direction.
 
@@ -154,6 +164,8 @@ The repository shall include automated verification artifacts covering:
 - deterministic no-switch directional-PCA behavior
 - deterministic PCA-to-DCBC switch behavior
 - deterministic switch-boundary reproduction
+- deterministic below-threshold and above-threshold mean-cluster-radius
+  behavior using a current threshold assumption of `0.25`
 - support for both `Divisive` and `Agglomerative` direction modes
 - compatibility with the existing finalized partition hierarchy abstraction
 

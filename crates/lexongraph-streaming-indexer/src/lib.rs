@@ -35,7 +35,7 @@ pub use lexongraph_adaptive_planning_policy::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
     AdaptivePlanningDecisionReason, AdaptivePlanningDiagnostics, AdaptivePlanningDirection,
     AdaptivePlanningError, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-    AdaptiveSwitchDecisionRecord, AdaptiveSwitchTieBreak,
+    AdaptiveSwitchDecisionRecord, DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
 };
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
