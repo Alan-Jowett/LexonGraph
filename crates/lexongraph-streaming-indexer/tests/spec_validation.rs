@@ -690,8 +690,17 @@ fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
     ]
 }
 
-fn square_items() -> [IndexItem<&'static str>; 4] {
-    [item("aba"), item("bab"), item("cdc"), item("dcd")]
+fn switch_trigger_items() -> [IndexItem<&'static str>; 8] {
+    [
+        item("a"),
+        item("aa"),
+        item("b"),
+        item("bb"),
+        item("x"),
+        item("xx"),
+        item("y"),
+        item("yy"),
+    ]
 }
 
 fn run_with_builtin(
@@ -1955,31 +1964,60 @@ async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions(
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible() {
-    let (_, result) = one_shot(
+    let items = [item("a"), item("m"), item("x"), item("z")];
+    let mut run = run_with_builtin(
         adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
-        &[item("alpha"), item("bravo"), item("charlie"), item("delta")],
         160,
-    )
-    .await
-    .unwrap();
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    assert!(
+        run.adaptive_decision_records()
+            .iter()
+            .all(|record| record.active_algorithm == ActivePlanningAlgorithm::DirectionalPca)
+    );
+    run.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
     assert!(!result.block_ids.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
-    let (_, result) = one_shot(
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
         adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
-        &square_items(),
         160,
-    )
-    .await
-    .unwrap();
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    let decision_records = run.adaptive_decision_records();
+    assert_eq!(
+        decision_records
+            .first()
+            .map(|record| record.active_algorithm),
+        Some(ActivePlanningAlgorithm::DirectionalPca)
+    );
+    assert!(
+        decision_records
+            .iter()
+            .any(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
+    );
+    run.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
     assert!(!result.block_ids.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
-    let items = square_items();
+    let items = switch_trigger_items();
     let mut first = run_with_builtin(
         adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
         160,
@@ -1992,6 +2030,7 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
         .finalize(std::iter::once(items.as_slice()), &first_store)
         .await
         .unwrap();
+    let first_decisions = first.adaptive_decision_records().to_vec();
 
     let mut second = run_with_builtin(
         adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
@@ -2005,9 +2044,11 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
         .finalize(std::iter::once(items.as_slice()), &second_store)
         .await
         .unwrap();
+    let second_decisions = second.adaptive_decision_records().to_vec();
 
     assert_eq!(first_report, second_report);
     assert_eq!(first_result, second_result);
+    assert_eq!(first_decisions, second_decisions);
 }
 
 #[test]
@@ -2052,6 +2093,10 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
         vec![1.0, 0.0],
         vec![3.0, 0.0],
     ];
+    assert_eq!(
+        selector.select_algorithm(square.len(), &square).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
+    );
     assert_eq!(
         selector.select_algorithm(square.len(), &square).unwrap(),
         ActivePlanningAlgorithm::Dcbc

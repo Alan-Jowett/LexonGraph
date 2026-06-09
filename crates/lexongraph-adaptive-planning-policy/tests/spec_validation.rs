@@ -98,9 +98,10 @@ fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
     let decision = selector.decision_records().last().unwrap();
     assert_eq!(
         decision.reason,
-        AdaptivePlanningDecisionReason::EvaluatedDirectionalPca
+        AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     );
     assert!(!decision.switch_boundary_occurred);
+    assert!(decision.collapse_diagnostics.is_none());
 }
 
 #[test]
@@ -121,6 +122,9 @@ fn val_adaptive_policy_006_records_structured_diagnostics() {
     selector
         .select_algorithm(line_embeddings().len(), &line_embeddings())
         .unwrap();
+    selector
+        .select_algorithm(line_embeddings().len(), &line_embeddings())
+        .unwrap();
     let diagnostics = selector
         .decision_records()
         .last()
@@ -135,6 +139,10 @@ fn val_adaptive_policy_006_records_structured_diagnostics() {
 fn val_adaptive_policy_008_switches_to_dcbc_when_pca_signal_collapses() {
     let mut selector =
         AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.8)).unwrap();
+    let algorithm = selector
+        .select_algorithm(square_embeddings().len(), &square_embeddings())
+        .unwrap();
+    assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
     let algorithm = selector
         .select_algorithm(square_embeddings().len(), &square_embeddings())
         .unwrap();
@@ -154,6 +162,9 @@ fn val_adaptive_policy_009_does_not_switch_back_after_dcbc_boundary() {
     let mut selector =
         AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Agglomerative, 0.8))
             .unwrap();
+    selector
+        .select_algorithm(square_embeddings().len(), &square_embeddings())
+        .unwrap();
     selector
         .select_algorithm(square_embeddings().len(), &square_embeddings())
         .unwrap();
@@ -178,6 +189,8 @@ fn val_adaptive_policy_012_repeats_the_same_switch_boundary() {
     let mut second =
         AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.8)).unwrap();
     first.select_algorithm(fixture.len(), &fixture).unwrap();
+    first.select_algorithm(fixture.len(), &fixture).unwrap();
+    second.select_algorithm(fixture.len(), &fixture).unwrap();
     second.select_algorithm(fixture.len(), &fixture).unwrap();
     assert_eq!(first.decision_records(), second.decision_records());
 }
@@ -196,6 +209,10 @@ fn val_adaptive_policy_003_tie_break_can_prefer_dcbc_at_exact_threshold() {
         },
     })
     .unwrap();
+    assert_eq!(
+        selector.select_algorithm(fixture.len(), &fixture).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
+    );
     assert_eq!(
         selector.select_algorithm(fixture.len(), &fixture).unwrap(),
         ActivePlanningAlgorithm::Dcbc

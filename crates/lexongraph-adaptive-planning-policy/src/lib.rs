@@ -58,6 +58,7 @@ pub enum ActivePlanningAlgorithm {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdaptivePlanningDecisionReason {
+    InitialDirectionalPcaSegment,
     EvaluatedDirectionalPca,
     PreviouslySwitchedToDcbc,
 }
@@ -145,21 +146,34 @@ impl AdaptivePlanningSelector {
             return Ok(ActivePlanningAlgorithm::Dcbc);
         }
 
+        if self.decision_records.is_empty() {
+            self.decision_records.push(AdaptiveSwitchDecisionRecord {
+                active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
+                switch_boundary_occurred: false,
+                reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
+                collapse_diagnostics: None,
+            });
+            return Ok(ActivePlanningAlgorithm::DirectionalPca);
+        }
+
         let diagnostics = evaluate_collapse_diagnostics(
             represented_item_count,
             embeddings,
             &self.settings.directional_pca.params,
         )?;
+        let variance_triggers_switch = match self.settings.switch_criteria.tie_break {
+            AdaptiveSwitchTieBreak::PreferDirectionalPca => {
+                diagnostics.retained_cumulative_variance
+                    < self.settings.switch_criteria.min_cumulative_variance
+            }
+            AdaptiveSwitchTieBreak::PreferDcbc => {
+                diagnostics.retained_cumulative_variance
+                    <= self.settings.switch_criteria.min_cumulative_variance
+            }
+        };
         let switch_boundary_occurred = diagnostics.effective_rank
             < self.settings.switch_criteria.min_effective_rank
-            || diagnostics.retained_cumulative_variance
-                < self.settings.switch_criteria.min_cumulative_variance
-            || (diagnostics.retained_cumulative_variance
-                == self.settings.switch_criteria.min_cumulative_variance
-                && matches!(
-                    self.settings.switch_criteria.tie_break,
-                    AdaptiveSwitchTieBreak::PreferDcbc
-                ));
+            || variance_triggers_switch;
         let active_algorithm = if switch_boundary_occurred {
             self.switched_to_dcbc = true;
             ActivePlanningAlgorithm::Dcbc
@@ -232,15 +246,27 @@ fn evaluate_collapse_diagnostics(
     let transform = fit(embeddings)
         .map_err(|error| AdaptivePlanningError::DiagnosticComputation(error.to_string()))?;
     let diagnostics = transform.diagnostics();
-    let retained_cumulative_variance = diagnostics
-        .cumulative_variance
-        .as_ref()
-        .and_then(|values| {
-            values
-                .get(params.retained_dimension_count.saturating_sub(1))
-                .copied()
-        })
-        .unwrap_or(0.0);
+    let cumulative_variance = diagnostics.cumulative_variance.as_ref().ok_or_else(|| {
+        AdaptivePlanningError::DiagnosticComputation(
+            "PCA diagnostics did not include cumulative variance".into(),
+        )
+    })?;
+    let retained_index = params
+        .retained_dimension_count
+        .checked_sub(1)
+        .ok_or_else(|| {
+            AdaptivePlanningError::DiagnosticComputation(
+                "retained_dimension_count must be at least 1".into(),
+            )
+        })?;
+    let retained_cumulative_variance = cumulative_variance
+        .get(retained_index)
+        .copied()
+        .ok_or_else(|| {
+            AdaptivePlanningError::DiagnosticComputation(format!(
+                "cumulative variance is missing retained dimension index {retained_index}"
+            ))
+        })?;
     Ok(AdaptivePlanningDiagnostics {
         represented_item_count,
         effective_rank: diagnostics.rank_estimate,
