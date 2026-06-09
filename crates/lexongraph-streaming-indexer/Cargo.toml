@@ -13,6 +13,7 @@ conformance = ["dep:pollster"]
 [dependencies]
 ciborium = "0.2.2"
 half = "2.7.1"
+lexongraph-adaptive-planning-policy = { path = "../lexongraph-adaptive-planning-policy" }
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
 lexongraph-dcbc-streaming = { path = "../lexongraph-dcbc-streaming" }

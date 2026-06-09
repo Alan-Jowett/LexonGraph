@@ -20,6 +20,11 @@ use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusteringConfig, StreamingClusteringError,
 };
 use lexongraph_streaming_indexer::{
+    ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
+    AdaptivePlanningDirection, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
+    AdaptiveSwitchTieBreak,
+};
+use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, FinalizedPartition, FinalizedPartitionHierarchy,
@@ -547,6 +552,69 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
     )
 }
 
+fn adaptive_planning(
+    direction: BuiltInPlanningDirection,
+    min_cumulative_variance: f32,
+) -> BuiltInPlanning {
+    let adaptive_direction = match direction {
+        BuiltInPlanningDirection::Divisive => AdaptivePlanningDirection::Divisive,
+        BuiltInPlanningDirection::Agglomerative => AdaptivePlanningDirection::Agglomerative,
+    };
+    BuiltInPlanning::Adaptive(AdaptivePlanningSettings {
+        direction: adaptive_direction,
+        directional_pca: AdaptiveDirectionalPcaSettings {
+            cluster_count: 2,
+            random_seed: Some(17),
+            params: DirectionalPcaParams {
+                retained_dimension_count: 1,
+                variance_exponent: 1.0,
+                temperature: 1.0,
+                min_input_count: 2,
+                min_effective_rank: 1,
+                min_cumulative_variance,
+            },
+        },
+        dcbc: AdaptiveDcbcSettings {
+            cluster_count: 2,
+            balance_constraints: None,
+            random_seed: Some(19),
+        },
+        switch_criteria: AdaptiveSwitchCriteria {
+            min_effective_rank: 1,
+            min_cumulative_variance,
+            tie_break: AdaptiveSwitchTieBreak::PreferDirectionalPca,
+        },
+    })
+}
+
+fn invalid_adaptive_planning() -> BuiltInPlanning {
+    BuiltInPlanning::Adaptive(AdaptivePlanningSettings {
+        direction: AdaptivePlanningDirection::Divisive,
+        directional_pca: AdaptiveDirectionalPcaSettings {
+            cluster_count: 2,
+            random_seed: None,
+            params: DirectionalPcaParams {
+                retained_dimension_count: 1,
+                variance_exponent: 1.0,
+                temperature: 1.0,
+                min_input_count: 2,
+                min_effective_rank: 1,
+                min_cumulative_variance: 0.0,
+            },
+        },
+        dcbc: AdaptiveDcbcSettings {
+            cluster_count: 2,
+            balance_constraints: None,
+            random_seed: None,
+        },
+        switch_criteria: AdaptiveSwitchCriteria {
+            min_effective_rank: 1,
+            min_cumulative_variance: f32::NAN,
+            tie_break: AdaptiveSwitchTieBreak::PreferDirectionalPca,
+        },
+    })
+}
+
 fn invalid_hybrid_planning() -> BuiltInPlanning {
     BuiltInPlanning::Hybrid(
         lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
@@ -619,6 +687,19 @@ fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
             name: "directional-pca-agglomerative",
             planning: directional_pca_planning(BuiltInPlanningDirection::Agglomerative),
         },
+    ]
+}
+
+fn switch_trigger_items() -> [IndexItem<&'static str>; 8] {
+    [
+        item("a"),
+        item("aa"),
+        item("b"),
+        item("bb"),
+        item("x"),
+        item("xx"),
+        item("y"),
+        item("yy"),
     ]
 }
 
@@ -706,6 +787,10 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
     assert!(src.contains("mark_planning_complete"));
     assert!(src.contains("HierarchyPlanning"));
     assert!(src.contains("BottomUpAssembly"));
+    assert!(src.contains("AdaptivePlanningSettings"));
+    assert!(src.contains("InvalidAdaptivePlanningConfiguration"));
+    assert!(src.contains("BuiltInPlanning::Adaptive"));
+    assert!(manifest.contains("lexongraph-adaptive-planning-policy"));
     assert!(manifest.contains("lexongraph-dcbc-streaming"));
     assert!(manifest.contains("lexongraph-directional-pca"));
     assert!(manifest.contains("lexongraph-streaming-clustering"));
@@ -1066,6 +1151,22 @@ async fn val_stream_indexer_022_invalid_hybrid_configuration_is_explicit() {
             StreamingIndexingPhase::HierarchyPlanning { .. }
         )
     }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_022_invalid_adaptive_configuration_fails_explicitly() {
+    let err = one_shot(
+        invalid_adaptive_planning(),
+        &[item("alpha"), item("bravo")],
+        160,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(matches!(
+        err,
+        StreamingIndexerError::InvalidAdaptivePlanningConfiguration(_)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1846,4 +1947,187 @@ async fn val_stream_indexer_039_mixed_direction_hybrid_is_rejected_explicitly() 
         run.finish_pass().unwrap_err(),
         StreamingIndexerError::InvalidHybridPlanningConfiguration(_)
     ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions() {
+    for planning in [
+        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        adaptive_planning(BuiltInPlanningDirection::Agglomerative, 0.8),
+    ] {
+        let (_, result) = one_shot(planning, &[item("alpha"), item("bravo")], 256)
+            .await
+            .unwrap();
+        assert!(!result.block_ids.is_empty());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible() {
+    let items = [item("a"), item("m"), item("x"), item("z")];
+    let mut run = run_with_builtin(
+        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        160,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    assert!(
+        run.adaptive_decision_records()
+            .iter()
+            .all(|record| record.active_algorithm == ActivePlanningAlgorithm::DirectionalPca)
+    );
+    run.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(!result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
+        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        160,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    let decision_records = run.adaptive_decision_records();
+    assert_eq!(
+        decision_records
+            .first()
+            .map(|record| record.active_algorithm),
+        Some(ActivePlanningAlgorithm::DirectionalPca)
+    );
+    assert!(
+        decision_records
+            .iter()
+            .any(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
+    );
+    run.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(!result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
+    let items = switch_trigger_items();
+    let mut first = run_with_builtin(
+        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        160,
+    );
+    first.ingest_batch(&items).await.unwrap();
+    let first_report = first.finish_pass().unwrap();
+    first.mark_planning_complete().unwrap();
+    let first_store = MemoryBlockStore::default();
+    let first_result = first
+        .finalize(std::iter::once(items.as_slice()), &first_store)
+        .await
+        .unwrap();
+    let first_decisions = first.adaptive_decision_records().to_vec();
+
+    let mut second = run_with_builtin(
+        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        160,
+    );
+    second.ingest_batch(&items).await.unwrap();
+    let second_report = second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let second_store = MemoryBlockStore::default();
+    let second_result = second
+        .finalize(std::iter::once(items.as_slice()), &second_store)
+        .await
+        .unwrap();
+    let second_decisions = second.adaptive_decision_records().to_vec();
+    let first_algorithm_sequence: Vec<_> = first_decisions
+        .iter()
+        .map(|record| record.active_algorithm)
+        .collect();
+    let second_algorithm_sequence: Vec<_> = second_decisions
+        .iter()
+        .map(|record| record.active_algorithm)
+        .collect();
+    let first_switch_boundaries: Vec<_> = first_decisions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
+        .collect();
+    let second_switch_boundaries: Vec<_> = second_decisions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
+        .collect();
+    let first_reasons: Vec<_> = first_decisions.iter().map(|record| record.reason).collect();
+    let second_reasons: Vec<_> = second_decisions
+        .iter()
+        .map(|record| record.reason)
+        .collect();
+
+    assert_eq!(first_report, second_report);
+    assert_eq!(first_result, second_result);
+    assert_eq!(first_algorithm_sequence, second_algorithm_sequence);
+    assert_eq!(first_switch_boundaries, second_switch_boundaries);
+    assert_eq!(first_reasons, second_reasons);
+}
+
+#[test]
+fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
+    let mut selector = lexongraph_adaptive_planning_policy::AdaptivePlanningSelector::new(
+        AdaptivePlanningSettings {
+            direction: AdaptivePlanningDirection::Divisive,
+            directional_pca: AdaptiveDirectionalPcaSettings {
+                cluster_count: 2,
+                random_seed: Some(17),
+                params: DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.8,
+                },
+            },
+            dcbc: AdaptiveDcbcSettings {
+                cluster_count: 2,
+                balance_constraints: None,
+                random_seed: Some(19),
+            },
+            switch_criteria: AdaptiveSwitchCriteria {
+                min_effective_rank: 1,
+                min_cumulative_variance: 0.8,
+                tie_break: AdaptiveSwitchTieBreak::PreferDirectionalPca,
+            },
+        },
+    )
+    .unwrap();
+    let square = vec![
+        vec![-1.0, -1.0],
+        vec![-1.0, 1.0],
+        vec![1.0, -1.0],
+        vec![1.0, 1.0],
+    ];
+    let line = vec![
+        vec![-3.0, 0.0],
+        vec![-1.0, 0.0],
+        vec![1.0, 0.0],
+        vec![3.0, 0.0],
+    ];
+    assert_eq!(
+        selector.select_algorithm(square.len(), &square).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
+    );
+    assert_eq!(
+        selector.select_algorithm(square.len(), &square).unwrap(),
+        ActivePlanningAlgorithm::Dcbc
+    );
+    assert_eq!(
+        selector.select_algorithm(line.len(), &line).unwrap(),
+        ActivePlanningAlgorithm::Dcbc
+    );
 }
