@@ -338,6 +338,11 @@ fn compute_mean_cluster_radius(
         }
         for (sum, value) in entry.0.iter_mut().zip(embedding.iter().copied()) {
             *sum += f64::from(value);
+            if !sum.is_finite() {
+                return Err(AdaptivePlanningError::DiagnosticComputation(
+                    "mean cluster radius centroid accumulation became non-finite".into(),
+                ));
+            }
         }
         entry.1 += 1;
     }
@@ -351,11 +356,24 @@ fn compute_mean_cluster_radius(
     let mut centroids = BTreeMap::new();
     for (&cluster_id, (sum, count)) in &centroid_sums {
         let count = *count as f64;
+        if !count.is_finite() || count <= 0.0 {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "mean cluster radius centroid normalization became invalid".into(),
+            ));
+        }
         centroids.insert(
             cluster_id,
             sum.iter()
-                .map(|value| (*value / count) as f32)
-                .collect::<Vec<_>>(),
+                .map(|value| {
+                    let normalized = *value / count;
+                    if !normalized.is_finite() {
+                        return Err(AdaptivePlanningError::DiagnosticComputation(
+                            "mean cluster radius centroid normalization became non-finite".into(),
+                        ));
+                    }
+                    Ok(normalized as f32)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         );
     }
 
@@ -368,6 +386,11 @@ fn compute_mean_cluster_radius(
         })?;
         let entry = cluster_radius_sums.entry(cluster_id).or_insert((0.0, 0));
         entry.0 += euclidean_distance(embedding, centroid)?;
+        if !entry.0.is_finite() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "mean cluster radius accumulation became non-finite".into(),
+            ));
+        }
         entry.1 += 1;
     }
 
@@ -386,10 +409,28 @@ fn compute_mean_cluster_radius(
                 "cluster {cluster_id} did not retain any members"
             )));
         }
-        total_cluster_radius += member_radius_sum / member_count as f64;
+        let mean_cluster_radius = member_radius_sum / member_count as f64;
+        if !mean_cluster_radius.is_finite() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "per-cluster mean radius became non-finite".into(),
+            ));
+        }
+        total_cluster_radius += mean_cluster_radius;
+        if !total_cluster_radius.is_finite() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "mean cluster radius total became non-finite".into(),
+            ));
+        }
     }
 
-    Ok((total_cluster_radius / centroids.len() as f64) as f32)
+    let mean_cluster_radius = total_cluster_radius / centroids.len() as f64;
+    if !mean_cluster_radius.is_finite() {
+        return Err(AdaptivePlanningError::DiagnosticComputation(
+            "mean cluster radius became non-finite".into(),
+        ));
+    }
+
+    Ok(mean_cluster_radius as f32)
 }
 
 fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanningError> {
@@ -404,7 +445,23 @@ fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanni
     let mut squared_distance = 0.0f64;
     for (&lhs, &rhs) in left.iter().zip(right.iter()) {
         let delta = f64::from(lhs) - f64::from(rhs);
+        if !delta.is_finite() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "distance computation produced a non-finite delta".into(),
+            ));
+        }
         squared_distance += delta * delta;
+        if !squared_distance.is_finite() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "distance computation produced a non-finite squared distance".into(),
+            ));
+        }
     }
-    Ok(squared_distance.sqrt())
+    let distance = squared_distance.sqrt();
+    if !distance.is_finite() {
+        return Err(AdaptivePlanningError::DiagnosticComputation(
+            "distance computation produced a non-finite radius".into(),
+        ));
+    }
+    Ok(distance)
 }
