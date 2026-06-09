@@ -21,8 +21,8 @@ use lexongraph_streaming_clustering::{
 };
 use lexongraph_streaming_indexer::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
-    AdaptivePlanningDirection, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-    DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    AdaptivePlanningDecisionReason, AdaptivePlanningDirection, AdaptivePlanningSettings,
+    DEFAULT_EMBEDDING_COUNT_CUTOFF,
 };
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
@@ -552,16 +552,12 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
     )
 }
 
-fn adaptive_planning(
-    direction: BuiltInPlanningDirection,
-    mean_cluster_radius_threshold: f32,
-) -> BuiltInPlanning {
-    adaptive_planning_with_cluster_count(direction, mean_cluster_radius_threshold, 2)
+fn adaptive_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
+    adaptive_planning_with_cluster_count(direction, 2)
 }
 
 fn adaptive_planning_with_cluster_count(
     direction: BuiltInPlanningDirection,
-    mean_cluster_radius_threshold: f32,
     cluster_count: u32,
 ) -> BuiltInPlanning {
     let adaptive_direction = match direction {
@@ -587,9 +583,6 @@ fn adaptive_planning_with_cluster_count(
             balance_constraints: None,
             random_seed: Some(19),
         },
-        switch_criteria: AdaptiveSwitchCriteria {
-            mean_cluster_radius_threshold,
-        },
     })
 }
 
@@ -597,7 +590,7 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
     BuiltInPlanning::Adaptive(AdaptivePlanningSettings {
         direction: AdaptivePlanningDirection::Divisive,
         directional_pca: AdaptiveDirectionalPcaSettings {
-            cluster_count: 2,
+            cluster_count: 0,
             random_seed: None,
             params: DirectionalPcaParams {
                 retained_dimension_count: 1,
@@ -612,9 +605,6 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
             cluster_count: 2,
             balance_constraints: None,
             random_seed: None,
-        },
-        switch_criteria: AdaptiveSwitchCriteria {
-            mean_cluster_radius_threshold: f32::NAN,
         },
     })
 }
@@ -1974,14 +1964,8 @@ async fn val_stream_indexer_039_mixed_direction_hybrid_is_rejected_explicitly() 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions() {
     for planning in [
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        adaptive_planning(
-            BuiltInPlanningDirection::Agglomerative,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
+        adaptive_planning(BuiltInPlanningDirection::Divisive),
+        adaptive_planning(BuiltInPlanningDirection::Agglomerative),
     ] {
         let (_, result) = one_shot(planning, &[item("alpha"), item("bravo")], 256)
             .await
@@ -1993,10 +1977,7 @@ async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions(
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible() {
     let items = [item("a"), item("m"), item("x"), item("z")];
-    let mut run = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, f32::MAX),
-        160,
-    );
+    let mut run = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
     run.ingest_batch(&items).await.unwrap();
     let report = run.finish_pass().unwrap();
     let decision_records = run.adaptive_decision_records();
@@ -2037,16 +2018,22 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
                         .find(|record| record.collapse_diagnostics.is_some())
                         .unwrap_or(decision_records.last().unwrap())
                         .switch_boundary_occurred,
-                    mean_cluster_radius: decision_records.iter().rev().find_map(|record| {
+                    embedding_count: decision_records.iter().rev().find_map(|record| {
                         record
                             .collapse_diagnostics
                             .as_ref()
-                            .map(|diagnostics| diagnostics.mean_cluster_radius)
+                            .map(|diagnostics| diagnostics.embedding_count)
                     }),
-                    mean_cluster_radius_threshold: decision_records
+                    embedding_count_cutoff: decision_records
                         .iter()
                         .rev()
-                        .find_map(|record| record.mean_cluster_radius_threshold),
+                        .find_map(|record| record.embedding_count_cutoff),
+                    reason: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .reason,
                 },
                 first_switch_boundary_position: None,
             }
@@ -2064,13 +2051,7 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
     let items = switch_trigger_items();
-    let mut run = run_with_builtin(
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        160,
-    );
+    let mut run = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
     run.ingest_batch(&items).await.unwrap();
     let report = run.finish_pass().unwrap();
     let decision_records = run.adaptive_decision_records();
@@ -2098,7 +2079,8 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
             telemetry.switch_occurred,
             telemetry.latest_decision.active_algorithm,
             telemetry.first_switch_boundary_position,
-            telemetry.latest_decision.mean_cluster_radius_threshold
+            telemetry.latest_decision.embedding_count_cutoff,
+            telemetry.latest_decision.reason,
         )),
         Some((
             1,
@@ -2116,15 +2098,21 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
             decision_records
                 .iter()
                 .rev()
-                .find_map(|record| record.mean_cluster_radius_threshold)
+                .find_map(|record| record.embedding_count_cutoff),
+            decision_records
+                .iter()
+                .rev()
+                .find(|record| record.collapse_diagnostics.is_some())
+                .unwrap_or(decision_records.last().unwrap())
+                .reason,
         ))
     );
     assert!(
         report
             .adaptive_planning
             .as_ref()
-            .and_then(|telemetry| telemetry.latest_decision.mean_cluster_radius)
-            .is_some()
+            .and_then(|telemetry| telemetry.latest_decision.embedding_count)
+            .is_some_and(|embedding_count| embedding_count < DEFAULT_EMBEDDING_COUNT_CUTOFF)
     );
     run.mark_planning_complete().unwrap();
     let store = MemoryBlockStore::default();
@@ -2143,11 +2131,8 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
     let items = [item("a"), item("m"), item("x"), item("z")];
-    let mut run = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, f32::MAX),
-        160,
-    )
-    .with_observer(observer);
+    let mut run = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     let report = run.finish_pass().unwrap();
 
@@ -2163,8 +2148,10 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
             && !telemetry.decision.switch_boundary_occurred
     }));
     assert!(status_telemetry.iter().all(|telemetry| {
-        telemetry.decision.mean_cluster_radius.is_none()
-            && telemetry.decision.mean_cluster_radius_threshold.is_none()
+        telemetry.decision.embedding_count.is_none()
+            && telemetry.decision.embedding_count_cutoff.is_none()
+            && telemetry.decision.reason
+                == AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     }));
     assert_eq!(
         status_telemetry
@@ -2193,15 +2180,19 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
         expected_report_decision.boundary_position
     );
     assert_eq!(
-        pass_telemetry.latest_decision.mean_cluster_radius,
+        pass_telemetry.latest_decision.embedding_count,
         expected_report_decision
             .collapse_diagnostics
             .as_ref()
-            .map(|diagnostics| diagnostics.mean_cluster_radius)
+            .map(|diagnostics| diagnostics.embedding_count)
     );
     assert_eq!(
-        pass_telemetry.latest_decision.mean_cluster_radius_threshold,
-        expected_report_decision.mean_cluster_radius_threshold
+        pass_telemetry.latest_decision.embedding_count_cutoff,
+        expected_report_decision.embedding_count_cutoff
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.reason,
+        expected_report_decision.reason
     );
 }
 
@@ -2213,14 +2204,8 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
     let items = switch_trigger_items();
-    let mut run = run_with_builtin(
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        160,
-    )
-    .with_observer(observer);
+    let mut run = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     let report = run.finish_pass().unwrap();
 
@@ -2259,19 +2244,27 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
         switch_boundary.map(|decision| decision.boundary_position)
     );
     let switch_boundary = switch_boundary.unwrap();
-    let measured = switch_boundary.mean_cluster_radius.unwrap();
-    let threshold = switch_boundary.mean_cluster_radius_threshold.unwrap();
-    assert!(measured > threshold);
+    let embedding_count = switch_boundary.embedding_count.unwrap();
+    let cutoff = switch_boundary.embedding_count_cutoff.unwrap();
+    assert!(embedding_count < cutoff);
     assert_eq!(
-        pass_telemetry.latest_decision.mean_cluster_radius,
+        switch_boundary.reason,
+        AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.embedding_count,
         expected_report_decision
             .collapse_diagnostics
             .as_ref()
-            .map(|diagnostics| diagnostics.mean_cluster_radius)
+            .map(|diagnostics| diagnostics.embedding_count)
     );
     assert_eq!(
-        pass_telemetry.latest_decision.mean_cluster_radius_threshold,
-        expected_report_decision.mean_cluster_radius_threshold
+        pass_telemetry.latest_decision.embedding_count_cutoff,
+        expected_report_decision.embedding_count_cutoff
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.reason,
+        expected_report_decision.reason
     );
 }
 
@@ -2284,14 +2277,8 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
         let statuses = Arc::clone(&first_statuses);
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
-    let mut first = run_with_builtin(
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        160,
-    )
-    .with_observer(first_observer);
+    let mut first = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(first_observer);
     first.ingest_batch(&items).await.unwrap();
     let first_report = first.finish_pass().unwrap();
     let first_telemetry =
@@ -2303,14 +2290,8 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
         let statuses = Arc::clone(&second_statuses);
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
-    let mut second = run_with_builtin(
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        160,
-    )
-    .with_observer(second_observer);
+    let mut second = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(second_observer);
     second.ingest_batch(&items).await.unwrap();
     let second_report = second.finish_pass().unwrap();
     let second_telemetry =
@@ -2319,32 +2300,20 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
     assert_eq!(first_report, second_report);
     assert_eq!(first_telemetry, second_telemetry);
     assert!(first_telemetry.iter().any(|telemetry| {
-        telemetry.decision.mean_cluster_radius.is_some()
-            && telemetry.decision.mean_cluster_radius_threshold.is_some()
+        telemetry.decision.embedding_count.is_some()
+            && telemetry.decision.embedding_count_cutoff == Some(DEFAULT_EMBEDDING_COUNT_CUTOFF)
     }));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
     let items = switch_trigger_items();
-    let mut first = run_with_builtin(
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        160,
-    );
+    let mut first = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
     first.ingest_batch(&items).await.unwrap();
     let first_report = first.finish_pass().unwrap();
     let first_decisions = first.adaptive_decision_records().to_vec();
 
-    let mut second = run_with_builtin(
-        adaptive_planning(
-            BuiltInPlanningDirection::Divisive,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ),
-        160,
-    );
+    let mut second = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
     second.ingest_batch(&items).await.unwrap();
     let second_report = second.finish_pass().unwrap();
     let second_decisions = second.adaptive_decision_records().to_vec();
@@ -2358,50 +2327,8 @@ async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
             .all(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
     );
     assert!(first_decisions.iter().any(|record| {
-        record.collapse_diagnostics.is_some() && record.mean_cluster_radius_threshold.is_some()
+        record.collapse_diagnostics.is_some() && record.embedding_count_cutoff.is_some()
     }));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn regression_adaptive_diagnostics_use_realized_cluster_count_from_planner() {
-    let items = switch_trigger_items();
-    let mut run = run_with_builtin(
-        adaptive_planning_with_cluster_count(BuiltInPlanningDirection::Divisive, 0.0, 8),
-        160,
-    );
-    run.ingest_batch(&items).await.unwrap();
-    let report = run.finish_pass().unwrap();
-    let decision_records = run.adaptive_decision_records();
-    let diagnostic_decision = decision_records
-        .iter()
-        .find(|record| record.collapse_diagnostics.is_some())
-        .unwrap();
-    let diagnostics = diagnostic_decision.collapse_diagnostics.as_ref().unwrap();
-    assert_eq!(diagnostics.realized_cluster_count, 2);
-    assert_eq!(
-        diagnostics.cluster_member_counts.iter().sum::<usize>(),
-        diagnostics.represented_item_count
-    );
-    assert_eq!(diagnostics.cluster_member_counts.len(), 2);
-    assert!(
-        diagnostics
-            .cluster_mean_radii
-            .iter()
-            .all(|radius| *radius > 0.0)
-    );
-    assert!(diagnostics.mean_cluster_radius > 0.0);
-    assert!(diagnostic_decision.switch_boundary_occurred);
-    assert_eq!(
-        diagnostic_decision.active_algorithm,
-        ActivePlanningAlgorithm::Dcbc
-    );
-    assert_eq!(
-        report
-            .adaptive_planning
-            .as_ref()
-            .and_then(|telemetry| telemetry.latest_decision.mean_cluster_radius),
-        Some(diagnostics.mean_cluster_radius)
-    );
 }
 
 #[test]
@@ -2426,34 +2353,25 @@ fn regression_adaptive_selector_keeps_one_way_switch_records() {
                 balance_constraints: None,
                 random_seed: Some(19),
             },
-            switch_criteria: AdaptiveSwitchCriteria {
-                mean_cluster_radius_threshold: DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-            },
         },
     )
     .unwrap();
-    let square = vec![
-        vec![-1.0, -1.0],
-        vec![-1.0, 1.0],
-        vec![1.0, -1.0],
-        vec![1.0, 1.0],
-    ];
-    let line = vec![
-        vec![-3.0, 0.0],
-        vec![-1.0, 0.0],
-        vec![1.0, 0.0],
-        vec![3.0, 0.0],
-    ];
+    let switch_fixture = (0..(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1))
+        .map(|index| vec![index as f32, 0.0])
+        .collect::<Vec<_>>();
+    let stay_fixture = (0..DEFAULT_EMBEDDING_COUNT_CUTOFF)
+        .map(|index| vec![index as f32, 1.0])
+        .collect::<Vec<_>>();
     assert_eq!(
-        selector.select_algorithm(square.len(), &square).unwrap(),
+        selector.select_algorithm(&switch_fixture).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector.select_algorithm(square.len(), &square).unwrap(),
+        selector.select_algorithm(&switch_fixture).unwrap(),
         ActivePlanningAlgorithm::Dcbc
     );
     assert_eq!(
-        selector.select_algorithm(line.len(), &line).unwrap(),
+        selector.select_algorithm(&stay_fixture).unwrap(),
         ActivePlanningAlgorithm::Dcbc
     );
     assert_eq!(
@@ -2468,8 +2386,8 @@ fn regression_adaptive_selector_keeps_one_way_switch_records() {
         selector
             .decision_records()
             .iter()
-            .map(|record| record.mean_cluster_radius_threshold)
+            .map(|record| record.embedding_count_cutoff)
             .collect::<Vec<_>>(),
-        vec![None, Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD), None]
+        vec![None, Some(DEFAULT_EMBEDDING_COUNT_CUTOFF), None]
     );
 }

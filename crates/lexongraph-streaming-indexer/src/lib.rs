@@ -34,8 +34,8 @@ use lexongraph_adaptive_planning_policy::AdaptivePlanningSelector;
 pub use lexongraph_adaptive_planning_policy::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
     AdaptivePlanningDecisionReason, AdaptivePlanningDiagnostics, AdaptivePlanningDirection,
-    AdaptivePlanningError, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-    AdaptiveSwitchDecisionRecord, DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    AdaptivePlanningError, AdaptivePlanningSettings, AdaptiveSwitchDecisionRecord,
+    DEFAULT_EMBEDDING_COUNT_CUTOFF,
 };
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
@@ -95,8 +95,9 @@ pub struct AdaptivePlanningDecisionTelemetry {
     pub boundary_position: usize,
     pub active_algorithm: ActivePlanningAlgorithm,
     pub switch_boundary_occurred: bool,
-    pub mean_cluster_radius: Option<f32>,
-    pub mean_cluster_radius_threshold: Option<f32>,
+    pub embedding_count: Option<usize>,
+    pub embedding_count_cutoff: Option<usize>,
+    pub reason: AdaptivePlanningDecisionReason,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1975,18 +1976,8 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |partition_embeddings| {
-                let realized_cluster_count = effective_cluster_count(
-                    settings.directional_pca.cluster_count,
-                    partition_embeddings.len(),
-                    materializability_bound,
-                )
-                .map_err(StreamingIndexerError::InvalidAdaptivePlanningConfiguration)?;
                 let algorithm = selector
-                    .select_algorithm_with_realized_cluster_count(
-                        partition_embeddings.len(),
-                        partition_embeddings,
-                        realized_cluster_count,
-                    )
+                    .select_algorithm(partition_embeddings)
                     .map_err(map_adaptive_planning_error)?;
                 let adaptive_decision = selector
                     .decision_records()
@@ -2012,19 +2003,9 @@ fn derive_hierarchy_for_adaptive_built_in(
             embeddings,
             materializability_bound,
             stage_observer,
-            |layer_embeddings, represented_item_count, _max_unit_item_count| {
-                let realized_cluster_count = effective_cluster_count(
-                    settings.directional_pca.cluster_count,
-                    layer_embeddings.len(),
-                    materializability_bound,
-                )
-                .map_err(StreamingIndexerError::InvalidAdaptivePlanningConfiguration)?;
+            |layer_embeddings, _represented_item_count, _max_unit_item_count| {
                 let algorithm = selector
-                    .select_algorithm_with_realized_cluster_count(
-                        represented_item_count,
-                        layer_embeddings,
-                        realized_cluster_count,
-                    )
+                    .select_algorithm(layer_embeddings)
                     .map_err(map_adaptive_planning_error)?;
                 let adaptive_decision = selector
                     .decision_records()
@@ -2738,11 +2719,12 @@ fn adaptive_decision_telemetry(
         boundary_position: record.boundary_position,
         active_algorithm: record.active_algorithm,
         switch_boundary_occurred: record.switch_boundary_occurred,
-        mean_cluster_radius: record
+        embedding_count: record
             .collapse_diagnostics
             .as_ref()
-            .map(|diagnostics| diagnostics.mean_cluster_radius),
-        mean_cluster_radius_threshold: record.mean_cluster_radius_threshold,
+            .map(|diagnostics| diagnostics.embedding_count),
+        embedding_count_cutoff: record.embedding_count_cutoff,
+        reason: record.reason,
     }
 }
 

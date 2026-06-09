@@ -38,13 +38,9 @@ same adaptive planning flow.
 `Adaptive boundary position` means the deterministic zero-based position of an
 evaluated adaptive planning boundary within one adaptive planning flow.
 
-`Collapse diagnostics` means the explicit deterministic measurements and
-threshold comparisons used to decide whether directional PCA remains eligible
-for the current planning work.
-
-`Mean cluster radius` means the arithmetic mean of the realized per-cluster
-mean distances from represented items to their deterministic cluster centroids
-at one adaptive decision boundary.
+`Collapse diagnostics` means the explicit deterministic measurements and cutoff
+comparisons used to decide whether directional PCA remains eligible for the
+current planning work.
 
 ## Requirements
 
@@ -83,7 +79,6 @@ The adaptive policy configuration shall accept, at minimum:
 - a built-in hierarchy-construction direction
 - directional-PCA settings
 - DCBC settings
-- an explicit deterministic mean-cluster-radius switch threshold
 
 ### REQ-ADAPTIVE-POLICY-005
 
@@ -108,19 +103,14 @@ planning outputs available at the adaptive boundary and shall be sufficient to
 decide whether directional PCA remains eligible without relying on randomness or
 free-form human intervention.
 
-The recorded diagnostics shall include the mean cluster radius measured for the
-current directional-PCA realization at that boundary.
-
-If a boundary reports a measured mean cluster radius of `0.0`, the
-implementation shall preserve enough faithful diagnostic state to determine
-whether that value arose from legitimately zero-radius realized clusters or
-from a defect in the diagnostic path.
+The recorded diagnostics shall include the represented embedding count observed
+at that boundary.
 
 ### REQ-ADAPTIVE-POLICY-008
 
-When the measured mean cluster radius exceeds the configured switch threshold,
-the adaptive realization shall switch deterministically from directional PCA to
-DCBC.
+When the represented embedding count at an evaluated boundary is less than the
+experimental hardcoded cutoff of `1000`, the adaptive realization shall switch
+deterministically from directional PCA to DCBC.
 
 ### REQ-ADAPTIVE-POLICY-009
 
@@ -130,10 +120,10 @@ that same flow.
 
 ### REQ-ADAPTIVE-POLICY-010
 
-If the measured mean cluster radius does not exceed the configured switch
-threshold, the adaptive realization shall remain on the directional-PCA path
-and shall not switch merely because DCBC would also be a valid planning
-realization.
+If the represented embedding count at an evaluated boundary is greater than or
+equal to the experimental hardcoded cutoff of `1000`, the adaptive realization
+shall remain on the directional-PCA path and shall not switch merely because
+DCBC would also be a valid planning realization.
 
 ### REQ-ADAPTIVE-POLICY-011
 
@@ -153,23 +143,22 @@ sufficient to explain and validate:
 - the caller-usable adaptive boundary position associated with each evaluated
   planning boundary
 - which algorithm realization was active for a given planning segment
-- the measured mean cluster radius and the configured mean cluster radius
-  threshold for each evaluated boundary whose diagnostics were computed, plus
-  explicit unavailability when those diagnostics do not yet exist
-
-If a measured mean cluster radius of `0.0` is surfaced, those diagnostics and
-switch-decision records shall remain sufficient to audit that reported value
-without requiring inference from lossy formatting or omitted diagnostic state.
+- the represented embedding count and the experimental hardcoded embedding-count
+  cutoff of `1000` for each evaluated boundary whose diagnostics were computed,
+  plus explicit unavailability when those diagnostics do not yet exist
+- an explicit structured reason identifying whether a given boundary stayed on
+  directional PCA because the embedding count remained at or above the cutoff,
+  or switched to DCBC because the embedding count fell below the cutoff
 
 If any of those diagnostics are surfaced beyond internal crate state, they shall
 remain deterministic for identical inputs and configuration.
 
 ### REQ-ADAPTIVE-POLICY-013
 
-Invalid adaptive configuration, invalid mean-cluster-radius thresholds, failure
-to compute deterministic mean-cluster-radius diagnostics, and unsupported
-direction or realization combinations shall fail explicitly rather than silently
-substituting a different algorithm, threshold interpretation, or direction.
+Invalid adaptive configuration, failure to compute deterministic embedding-count
+diagnostics, and unsupported direction or realization combinations shall fail
+explicitly rather than silently substituting a different algorithm, cutoff
+interpretation, or direction.
 
 ### REQ-ADAPTIVE-POLICY-014
 
@@ -179,8 +168,8 @@ The repository shall include automated verification artifacts covering:
 - deterministic no-switch directional-PCA behavior
 - deterministic PCA-to-DCBC switch behavior
 - deterministic switch-boundary reproduction
-- deterministic below-threshold and above-threshold mean-cluster-radius
-  behavior using a current threshold assumption of `0.25`
+- deterministic at-or-above-cutoff and below-cutoff embedding-count behavior
+  using the current hardcoded cutoff of `1000`
 - support for both `Divisive` and `Agglomerative` direction modes
 - compatibility with the existing finalized partition hierarchy abstraction
 

@@ -183,14 +183,15 @@ materialized parent layer.
 - when adaptive aggregate built-in planning is active, deterministic structured
   adaptive-switch telemetry stating whether a PCA-to-DCBC switch occurred in
   the completed pass, which adaptive algorithm was active after the most recent
-  evaluated adaptive boundary, the measured `mean_cluster_radius` and
-  configured `mean_cluster_radius_threshold` for that boundary when diagnostics
-  exist, and the adaptive boundary position of the first switch when one
-  occurred
+  evaluated adaptive boundary, the represented `embedding_count`, the
+  experimental hardcoded `embedding_count_cutoff` of `1000`, and the explicit
+  count-based decision reason for that boundary when diagnostics exist, and the
+  adaptive boundary position of the first switch when one occurred
 
 This pass-report surface forwards the adaptive-policy diagnostic values without
-lossy transformation, so a reported radius of `0.0` remains traceable to the
-underlying adaptive decision state rather than to formatting or summarization.
+lossy transformation, so the surfaced count-based adaptive decision remains
+traceable to the underlying adaptive decision state rather than to formatting
+or summarization.
 - structured state sufficient for caller stop/continue decisions
 
 The report remains deterministic for a fixed indexing context and replay order.
@@ -276,13 +277,13 @@ Each status update includes:
 - `remaining_unit_count: Option<usize>`
 - optional deterministic adaptive-switch telemetry for hierarchy-planning
   updates emitted while the adaptive built-in realization is active, including
-  the measured `mean_cluster_radius` and configured
-  `mean_cluster_radius_threshold` for the reported boundary when diagnostics
-  exist
+  the represented `embedding_count`, the experimental hardcoded
+  `embedding_count_cutoff` of `1000`, and the count-based decision reason for
+  the reported boundary when diagnostics exist
 
 Those surfaced numeric fields remain faithful to the adaptive-policy diagnostic
-source and do not collapse a non-zero measured radius into `0.0` through
-rounding, truncation, or formatting-only presentation.
+source and do not rewrite or synthesize a different count-based adaptive
+decision through formatting-only presentation.
 
 For `InProgress` updates, the observer receives the latest measured completion
 state for the phase rather than a heartbeat carrying only a fixed total. If a
@@ -510,15 +511,16 @@ That surfaced telemetry identifies at least:
 - whether that boundary was the first PCA-to-DCBC switch boundary in the pass
 - the deterministic zero-based adaptive boundary position for the evaluated
   planning segment
-- the measured `mean_cluster_radius` and configured
-  `mean_cluster_radius_threshold` for that boundary when diagnostics exist
+- the represented `embedding_count`, the hardcoded
+  `embedding_count_cutoff` of `1000`, and the explicit count-based decision
+  reason for that boundary when diagnostics exist
 
 No-switch executions therefore surface deterministic adaptive telemetry that
 continues to identify the active directional-PCA path without falsely claiming
 a switch boundary. For boundaries that have not yet computed diagnostics, the
-surface reports those numeric fields as unavailable rather than synthesizing
-values. Repeated deterministic runs surface the same switch occurrence,
-boundary position, and compared numeric values.
+surface reports those fields as unavailable rather than synthesizing values.
+Repeated deterministic runs surface the same switch occurrence, boundary
+position, and compared diagnostic values.
 
 ## Traceability
 

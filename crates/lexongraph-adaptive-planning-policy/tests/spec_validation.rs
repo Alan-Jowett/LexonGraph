@@ -5,8 +5,7 @@
 use lexongraph_adaptive_planning_policy::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
     AdaptivePlanningDecisionReason, AdaptivePlanningDirection, AdaptivePlanningError,
-    AdaptivePlanningSelector, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-    DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    AdaptivePlanningSelector, AdaptivePlanningSettings, DEFAULT_EMBEDDING_COUNT_CUTOFF,
 };
 use lexongraph_directional_pca::DirectionalPcaParams;
 
@@ -33,70 +32,23 @@ fn dcbc_settings() -> AdaptiveDcbcSettings {
     }
 }
 
-fn settings(
-    direction: AdaptivePlanningDirection,
-    mean_cluster_radius_threshold: f32,
-) -> AdaptivePlanningSettings {
+fn settings(direction: AdaptivePlanningDirection) -> AdaptivePlanningSettings {
     AdaptivePlanningSettings {
         direction,
         directional_pca: directional_pca_settings(),
         dcbc: dcbc_settings(),
-        switch_criteria: AdaptiveSwitchCriteria {
-            mean_cluster_radius_threshold,
-        },
     }
 }
 
-fn high_cluster_count_settings(
-    direction: AdaptivePlanningDirection,
-    mean_cluster_radius_threshold: f32,
-) -> AdaptivePlanningSettings {
-    let mut settings = settings(direction, mean_cluster_radius_threshold);
-    settings.directional_pca.cluster_count = 4;
-    settings
-}
-
-fn compact_cluster_embeddings() -> Vec<Vec<f32>> {
-    vec![
-        vec![-0.1, 0.0],
-        vec![0.1, 0.0],
-        vec![1.9, 0.0],
-        vec![2.1, 0.0],
-    ]
-}
-
-fn diffuse_cluster_embeddings() -> Vec<Vec<f32>> {
-    vec![
-        vec![-0.4, 0.0],
-        vec![0.4, 0.0],
-        vec![1.6, 0.0],
-        vec![2.4, 0.0],
-    ]
-}
-
-#[test]
-fn val_adaptive_policy_011_rejects_invalid_switch_configuration() {
-    let err = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
-        direction: AdaptivePlanningDirection::Divisive,
-        directional_pca: directional_pca_settings(),
-        dcbc: dcbc_settings(),
-        switch_criteria: AdaptiveSwitchCriteria {
-            mean_cluster_radius_threshold: f32::NAN,
-        },
-    })
-    .unwrap_err();
-    assert!(matches!(
-        err,
-        AdaptivePlanningError::InvalidConfiguration(_)
-    ));
+fn embeddings(count: usize) -> Vec<Vec<f32>> {
+    (0..count)
+        .map(|index| vec![index as f32, (index % 17) as f32])
+        .collect()
 }
 
 #[test]
 fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
-    let mut invalid = settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    );
+    let mut invalid = settings(AdaptivePlanningDirection::Divisive);
     invalid.directional_pca.params.temperature = 0.0;
     let err = AdaptivePlanningSelector::new(invalid).unwrap_err();
     assert!(matches!(
@@ -107,17 +59,10 @@ fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
 
 #[test]
 fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
-    let mut selector = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    let algorithm = selector
-        .select_algorithm(
-            compact_cluster_embeddings().len(),
-            &compact_cluster_embeddings(),
-        )
-        .unwrap();
+    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+    let algorithm = selector.select_algorithm(&fixture).unwrap();
     assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
     assert!(!selector.switched_to_dcbc());
     let decision = selector.decision_records().last().unwrap();
@@ -126,7 +71,7 @@ fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
         AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     );
     assert!(!decision.switch_boundary_occurred);
-    assert_eq!(decision.mean_cluster_radius_threshold, None);
+    assert_eq!(decision.embedding_count_cutoff, None);
     assert!(decision.collapse_diagnostics.is_none());
 }
 
@@ -136,235 +81,124 @@ fn val_adaptive_policy_005_supports_both_direction_modes() {
         AdaptivePlanningDirection::Divisive,
         AdaptivePlanningDirection::Agglomerative,
     ] {
-        let selector = AdaptivePlanningSelector::new(settings(
-            direction,
-            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-        ))
-        .unwrap();
+        let selector = AdaptivePlanningSelector::new(settings(direction)).unwrap();
         assert_eq!(selector.settings().direction, direction);
     }
 }
 
 #[test]
 fn val_adaptive_policy_006_records_structured_diagnostics() {
-    let fixture = compact_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    let diagnostics = selector.decision_records().last().unwrap();
-    let diagnostics = diagnostics.collapse_diagnostics.as_ref().unwrap();
-    assert_eq!(diagnostics.represented_item_count, 4);
-    assert_eq!(diagnostics.realized_cluster_count, 2);
-    assert_eq!(diagnostics.cluster_member_counts, vec![2, 2]);
-    assert_eq!(diagnostics.cluster_mean_radii.len(), 2);
-    assert!(
-        diagnostics
-            .cluster_mean_radii
-            .iter()
-            .all(|radius| (*radius - 0.1).abs() < 1e-5)
-    );
-    assert!((diagnostics.mean_cluster_radius - 0.1).abs() < 1e-5);
+    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+    selector.select_algorithm(&fixture).unwrap();
+    selector.select_algorithm(&fixture).unwrap();
+    let decision = selector.decision_records().last().unwrap();
+    let diagnostics = decision.collapse_diagnostics.as_ref().unwrap();
+    assert_eq!(diagnostics.embedding_count, DEFAULT_EMBEDDING_COUNT_CUTOFF);
     assert_eq!(
-        selector
-            .decision_records()
-            .last()
-            .unwrap()
-            .mean_cluster_radius_threshold,
-        Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD)
+        decision.embedding_count_cutoff,
+        Some(DEFAULT_EMBEDDING_COUNT_CUTOFF)
+    );
+    assert_eq!(
+        decision.reason,
+        AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff
     );
 }
 
 #[test]
-fn val_adaptive_policy_007_stays_on_directional_pca_when_mean_cluster_radius_is_at_or_below_threshold()
- {
-    let fixture = compact_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    let algorithm = selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
-    let algorithm = selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
+fn val_adaptive_policy_007_stays_on_directional_pca_when_embedding_count_is_at_or_above_cutoff() {
+    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+    assert_eq!(
+        selector.select_algorithm(&fixture).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
+    );
+    assert_eq!(
+        selector.select_algorithm(&fixture).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
+    );
     assert!(!selector.switched_to_dcbc());
 }
 
 #[test]
-fn val_adaptive_policy_008_switches_to_dcbc_when_mean_cluster_radius_exceeds_threshold() {
-    let fixture = diffuse_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    let algorithm = selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
-    let algorithm = selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    assert_eq!(algorithm, ActivePlanningAlgorithm::Dcbc);
-    assert!(selector.switched_to_dcbc());
-    assert!(
-        selector
-            .decision_records()
-            .last()
-            .unwrap()
-            .switch_boundary_occurred
+fn val_adaptive_policy_008_switches_to_dcbc_when_embedding_count_drops_below_cutoff() {
+    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1);
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+    assert_eq!(
+        selector.select_algorithm(&fixture).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector
-            .decision_records()
-            .last()
-            .unwrap()
-            .mean_cluster_radius_threshold,
-        Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD)
+        selector.select_algorithm(&fixture).unwrap(),
+        ActivePlanningAlgorithm::Dcbc
+    );
+    assert!(selector.switched_to_dcbc());
+    let decision = selector.decision_records().last().unwrap();
+    assert!(decision.switch_boundary_occurred);
+    assert_eq!(
+        decision.embedding_count_cutoff,
+        Some(DEFAULT_EMBEDDING_COUNT_CUTOFF)
+    );
+    assert_eq!(
+        decision.reason,
+        AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff
     );
 }
 
 #[test]
 fn val_adaptive_policy_009_does_not_switch_back_after_dcbc_boundary() {
-    let diffuse = diffuse_cluster_embeddings();
-    let compact = compact_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Agglomerative,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    selector.select_algorithm(diffuse.len(), &diffuse).unwrap();
-    selector.select_algorithm(diffuse.len(), &diffuse).unwrap();
-    let second = selector.select_algorithm(compact.len(), &compact).unwrap();
-    assert_eq!(second, ActivePlanningAlgorithm::Dcbc);
+    let switch_fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1);
+    let stay_fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Agglomerative)).unwrap();
+    selector.select_algorithm(&switch_fixture).unwrap();
+    selector.select_algorithm(&switch_fixture).unwrap();
+    let third = selector.select_algorithm(&stay_fixture).unwrap();
+    assert_eq!(third, ActivePlanningAlgorithm::Dcbc);
     let last = selector.decision_records().last().unwrap();
     assert_eq!(
         last.reason,
         AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc
     );
     assert!(!last.switch_boundary_occurred);
-    assert_eq!(last.mean_cluster_radius_threshold, None);
+    assert_eq!(last.embedding_count_cutoff, None);
     assert!(last.collapse_diagnostics.is_none());
 }
 
 #[test]
 fn val_adaptive_policy_012_repeats_the_same_switch_boundary() {
-    let fixture = diffuse_cluster_embeddings();
-    let mut first = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    let mut second = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    first.select_algorithm(fixture.len(), &fixture).unwrap();
-    first.select_algorithm(fixture.len(), &fixture).unwrap();
-    second.select_algorithm(fixture.len(), &fixture).unwrap();
-    second.select_algorithm(fixture.len(), &fixture).unwrap();
+    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1);
+    let mut first =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+    let mut second =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+    first.select_algorithm(&fixture).unwrap();
+    first.select_algorithm(&fixture).unwrap();
+    second.select_algorithm(&fixture).unwrap();
+    second.select_algorithm(&fixture).unwrap();
     assert_eq!(first.decision_records(), second.decision_records());
 }
 
 #[test]
-fn regression_adaptive_policy_defaults_to_non_singleton_diagnostic_cluster_counts() {
-    let fixture = diffuse_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(high_cluster_count_settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
+fn regression_adaptive_policy_switches_only_below_cutoff() {
+    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
     assert_eq!(
-        selector.select_algorithm(fixture.len(), &fixture).unwrap(),
-        ActivePlanningAlgorithm::DirectionalPca
-    );
-    let algorithm = selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    assert_eq!(algorithm, ActivePlanningAlgorithm::Dcbc);
-    let diagnostics = selector
-        .decision_records()
-        .last()
-        .and_then(|record| record.collapse_diagnostics.as_ref())
-        .unwrap();
-    assert_eq!(diagnostics.realized_cluster_count, 2);
-    assert_eq!(diagnostics.cluster_member_counts, vec![2, 2]);
-    assert!(
-        diagnostics
-            .cluster_mean_radii
-            .iter()
-            .all(|radius| *radius > 0.0)
-    );
-    assert!(diagnostics.mean_cluster_radius > 0.0);
-}
-
-#[test]
-fn regression_adaptive_policy_uses_caller_supplied_realized_cluster_count_for_diagnostics() {
-    let fixture = compact_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(high_cluster_count_settings(
-        AdaptivePlanningDirection::Divisive,
-        0.05,
-    ))
-    .unwrap();
-    assert_eq!(
-        selector
-            .select_algorithm_with_realized_cluster_count(fixture.len(), &fixture, 2)
-            .unwrap(),
+        selector.select_algorithm(&fixture).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector
-            .select_algorithm_with_realized_cluster_count(fixture.len(), &fixture, 2)
-            .unwrap(),
-        ActivePlanningAlgorithm::Dcbc
+        selector.select_algorithm(&fixture).unwrap(),
+        ActivePlanningAlgorithm::DirectionalPca
     );
     let diagnostics = selector
         .decision_records()
         .last()
         .and_then(|record| record.collapse_diagnostics.as_ref())
         .unwrap();
-    assert_eq!(diagnostics.realized_cluster_count, 2);
-    assert_eq!(diagnostics.cluster_member_counts, vec![2, 2]);
-    assert_eq!(diagnostics.cluster_mean_radii.len(), 2);
-    assert!(
-        diagnostics
-            .cluster_mean_radii
-            .iter()
-            .all(|radius| (*radius - 0.1).abs() < 1e-5)
-    );
-    assert!((diagnostics.mean_cluster_radius - 0.1).abs() < 1e-5);
-}
-
-#[test]
-fn regression_adaptive_policy_requires_threshold_exceedance_instead_of_switching_at_equality() {
-    let fixture = compact_cluster_embeddings();
-    let mut selector = AdaptivePlanningSelector::new(settings(
-        AdaptivePlanningDirection::Divisive,
-        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
-    ))
-    .unwrap();
-    selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    selector.select_algorithm(fixture.len(), &fixture).unwrap();
-    let measured_radius = selector
-        .decision_records()
-        .last()
-        .and_then(|record| record.collapse_diagnostics.as_ref())
-        .map(|diagnostics| diagnostics.mean_cluster_radius)
-        .unwrap();
-    let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
-        direction: AdaptivePlanningDirection::Divisive,
-        directional_pca: directional_pca_settings(),
-        dcbc: dcbc_settings(),
-        switch_criteria: AdaptiveSwitchCriteria {
-            mean_cluster_radius_threshold: measured_radius,
-        },
-    })
-    .unwrap();
-    assert_eq!(
-        selector.select_algorithm(fixture.len(), &fixture).unwrap(),
-        ActivePlanningAlgorithm::DirectionalPca
-    );
-    assert_eq!(
-        selector.select_algorithm(fixture.len(), &fixture).unwrap(),
-        ActivePlanningAlgorithm::DirectionalPca
-    );
+    assert_eq!(diagnostics.embedding_count, DEFAULT_EMBEDDING_COUNT_CUTOFF);
 }

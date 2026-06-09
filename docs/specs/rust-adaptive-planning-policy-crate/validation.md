@@ -43,8 +43,7 @@ packages, and does not redefine the shared streaming clustering contract.
 Construct the adaptive realization with valid explicit settings.
 
 **Pass condition:** construction succeeds only when direction, directional-PCA
-settings, DCBC settings, and a finite non-negative mean-cluster-radius switch
-threshold are all provided in supported combinations.
+settings, and DCBC settings are all provided in supported combinations.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-004, REQ-ADAPTIVE-POLICY-013
 
@@ -74,21 +73,17 @@ decision boundary.
 
 **Pass condition:** the recorded diagnostics are structured, deterministic, and
 sufficient to decide whether directional PCA remained eligible at that
-boundary, including the measured mean cluster radius, the configured mean
-cluster radius threshold when diagnostics exist, a caller-usable adaptive
-boundary position, and explicit unavailability semantics where diagnostics do
-not yet exist.
-
-This validation also confirms that a fixture expected to produce a non-zero
-mean cluster radius does not surface `0.0` unless the realized diagnostic state
-actually justifies that exact value.
+boundary, including the represented embedding count, the hardcoded embedding
+count cutoff of `1000` when diagnostics exist, an explicit structured
+count-based decision reason, a caller-usable adaptive boundary position, and
+explicit unavailability semantics where diagnostics do not yet exist.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-007, REQ-ADAPTIVE-POLICY-012
 
 ### VAL-ADAPTIVE-POLICY-007
 
-Run a deterministic fixture whose measured mean cluster radius stays at or
-below the configured threshold.
+Run a deterministic fixture whose evaluated adaptive boundaries all retain
+embedding counts greater than or equal to `1000`.
 
 **Pass condition:** the adaptive realization does not switch to DCBC and
 remains on the directional-PCA path throughout the exercised flow.
@@ -97,8 +92,8 @@ remains on the directional-PCA path throughout the exercised flow.
 
 ### VAL-ADAPTIVE-POLICY-008
 
-Run a deterministic fixture whose measured mean cluster radius exceeds the
-configured threshold.
+Run a deterministic fixture whose evaluated adaptive boundary drops below
+`1000` embeddings.
 
 **Pass condition:** the adaptive realization switches from directional PCA to
 DCBC at a deterministic boundary.
@@ -127,8 +122,8 @@ materialization contract.
 
 ### VAL-ADAPTIVE-POLICY-011
 
-Exercise invalid adaptive configuration, invalid mean-cluster-radius threshold
-configuration, and an unsupported direction or realization combination.
+Exercise invalid adaptive configuration and an unsupported direction or
+realization combination.
 
 **Pass condition:** each case fails explicitly rather than silently
 substituting another algorithm, threshold interpretation, or direction.
@@ -142,13 +137,9 @@ the same switch-triggering fixture twice.
 
 **Pass condition:** automated coverage exists for construction, no-switch
 behavior, switch-trigger behavior, both directions, and hierarchy
-compatibility, including coverage for a current threshold assumption of `0.25`,
+compatibility, including coverage for the current hardcoded cutoff of `1000`,
 and both repeated runs select the same switch boundary and surface the same
-adaptive boundary position, measured mean cluster radius, configured threshold,
-and availability semantics for that switch.
-
-Coverage also includes a check that surfaced adaptive diagnostics match the
-underlying decision records exactly for suspicious values such as a reported
-mean cluster radius of `0.0`.
+adaptive boundary position, represented embedding count, hardcoded cutoff, and
+availability semantics for that switch.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-014
