@@ -7,7 +7,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lexongraph-dcbc-streaming = { path = "../lexongraph-dcbc-streaming" }
 lexongraph-directional-pca = { path = "../lexongraph-directional-pca" }
 lexongraph-pca = { path = "../lexongraph-pca" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }

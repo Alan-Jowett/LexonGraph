@@ -1968,7 +1968,9 @@ fn map_adaptive_planning_error(error: AdaptivePlanningError) -> StreamingIndexer
             StreamingIndexerError::InvalidAdaptivePlanningConfiguration(message)
         }
         AdaptivePlanningError::DiagnosticComputation(message) => {
-            StreamingIndexerError::ClusteringFailure(message)
+            StreamingIndexerError::ClusteringFailure(format!(
+                "adaptive planning diagnostics failed: {message}"
+            ))
         }
     }
 }
