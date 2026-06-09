@@ -1790,11 +1790,18 @@ async fn val_stream_indexer_038_divisive_and_agglomerative_built_in_paths_are_av
         item("foxtrot"),
     ];
 
+    let divisive_store = MemoryBlockStore::default();
     let mut divisive = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160);
     divisive.ingest_batch(&items).await.unwrap();
     let divisive_report = divisive.finish_pass().unwrap();
     let divisive_hierarchy = divisive.finalized_partition_hierarchy().unwrap().clone();
+    divisive.mark_planning_complete().unwrap();
+    let divisive_result = divisive
+        .finalize(std::iter::once(items.as_slice()), &divisive_store)
+        .await
+        .unwrap();
 
+    let agglomerative_store = MemoryBlockStore::default();
     let mut agglomerative =
         run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Agglomerative), 160);
     agglomerative.ingest_batch(&items).await.unwrap();
@@ -1803,11 +1810,30 @@ async fn val_stream_indexer_038_divisive_and_agglomerative_built_in_paths_are_av
         .finalized_partition_hierarchy()
         .unwrap()
         .clone();
+    agglomerative.mark_planning_complete().unwrap();
+    let agglomerative_result = agglomerative
+        .finalize(std::iter::once(items.as_slice()), &agglomerative_store)
+        .await
+        .unwrap();
 
     assert!(divisive_report.planned_partition_count > 0);
     assert!(agglomerative_report.planned_partition_count > 0);
     assert_eq!(divisive_hierarchy.root_partition_id, "p0");
     assert_eq!(agglomerative_hierarchy.root_partition_id, "p0");
+    assert!(
+        divisive_store
+            .get(&divisive_result.root_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        agglomerative_store
+            .get(&agglomerative_result.root_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(!divisive_result.block_ids.is_empty());
+    assert!(!agglomerative_result.block_ids.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
