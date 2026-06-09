@@ -1102,6 +1102,60 @@ async fn val_stream_indexer_013_hybrid_planning_is_explicit_and_deterministic() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn regression_hybrid_agglomerative_planning_is_explicit_and_deterministic() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+        item("golf"),
+        item("hotel"),
+    ];
+    let mut first = run_with_builtin(
+        hybrid_planning(BuiltInPlanningDirection::Agglomerative),
+        160,
+    );
+    first.ingest_batch(&items).await.unwrap();
+    let report1 = first.finish_pass().unwrap();
+    let hierarchy1 = first.finalized_partition_hierarchy().unwrap().clone();
+    assert!(
+        hierarchy1
+            .partitions
+            .iter()
+            .any(|partition| partition.planning_stage == PlanningStage::Fine)
+    );
+    first.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result1 = first
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(store.get(&result1.root_id).unwrap().is_some());
+
+    let mut second = run_with_builtin(
+        hybrid_planning(BuiltInPlanningDirection::Agglomerative),
+        160,
+    );
+    second.ingest_batch(&items).await.unwrap();
+    let report2 = second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let store2 = MemoryBlockStore::default();
+    let result2 = second
+        .finalize(std::iter::once(items.as_slice()), &store2)
+        .await
+        .unwrap();
+    assert_eq!(report1, report2);
+    assert_eq!(
+        hierarchy1,
+        second.finalized_partition_hierarchy().unwrap().clone()
+    );
+    assert_eq!(result1.root_id, result2.root_id);
+    assert_eq!(result1.block_ids, result2.block_ids);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_014_bottom_up_assembly_returns_complete_block_set() {
     let items = [
         item("alpha"),

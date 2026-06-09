@@ -1704,8 +1704,8 @@ fn derive_hierarchy_from_built_in(
                         embeddings,
                         materializability_bound,
                         stage_observer,
-                        |layer_len| {
-                            let (stage, phase) = select_hybrid_phase(settings, layer_len);
+                        |layer_len, max_unit_item_count| {
+                            let (stage, phase) = select_hybrid_phase(settings, max_unit_item_count);
                             Ok(PartitionPlanner::new(
                                 stage,
                                 create_built_in_trainer(
@@ -1753,7 +1753,7 @@ fn derive_hierarchy_for_single_built_in_phase(
             embeddings,
             materializability_bound,
             stage_observer,
-            |layer_len| {
+            |layer_len, _represented_item_count| {
                 Ok(PartitionPlanner::new(
                     PlanningStage::Single,
                     create_built_in_trainer(
@@ -1771,9 +1771,9 @@ fn derive_hierarchy_for_single_built_in_phase(
 
 fn select_hybrid_phase(
     settings: &HybridBuiltInPlanningSettings,
-    planning_unit_count: usize,
+    represented_item_count: usize,
 ) -> (PlanningStage, BuiltInPlanningPhase) {
-    if planning_unit_count <= settings.fine_partition_max_items {
+    if represented_item_count <= settings.fine_partition_max_items {
         (PlanningStage::Fine, settings.fine.clone())
     } else {
         (PlanningStage::Coarse, settings.coarse.clone())
@@ -1901,7 +1901,7 @@ where
 struct AgglomerativeHierarchyNode {
     child_node_indices: Vec<usize>,
     item_indices: Vec<usize>,
-    representative_embedding: Vec<f32>,
+    representative_embedding: Option<Vec<f32>>,
     planning_stage: PlanningStage,
 }
 
@@ -1967,7 +1967,7 @@ fn derive_hierarchy_agglomeratively_with_builder<E, B, P, SO>(
 ) -> Result<PlanningPassOutcome, E>
 where
     E: From<StreamingClusteringError>,
-    B: FnMut(usize) -> Result<P, E>,
+    B: FnMut(usize, usize) -> Result<P, E>,
     P: PartitionPlannerRunner,
     SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 {
@@ -1992,19 +1992,24 @@ where
         .map(|(index, embedding)| AgglomerativeHierarchyNode {
             child_node_indices: Vec::new(),
             item_indices: vec![index],
-            representative_embedding: embedding.clone(),
+            representative_embedding: Some(embedding.clone()),
             planning_stage: PlanningStage::Single,
         })
         .collect::<Vec<_>>();
     let mut current_layer = (0..nodes.len()).collect::<Vec<_>>();
 
     while current_layer.len() > 1 {
-        let planner = planner_builder(current_layer.len())?;
-        let stage = planner.stage();
         let represented_item_count = current_layer
             .iter()
             .map(|&node_index| nodes[node_index].item_indices.len())
             .sum();
+        let max_unit_item_count = current_layer
+            .iter()
+            .map(|&node_index| nodes[node_index].item_indices.len())
+            .max()
+            .unwrap_or(0);
+        let planner = planner_builder(current_layer.len(), max_unit_item_count)?;
+        let stage = planner.stage();
         stage_observer(
             stage,
             represented_item_count,
@@ -2018,8 +2023,18 @@ where
 
         let layer_embeddings = current_layer
             .iter()
-            .map(|&node_index| nodes[node_index].representative_embedding.clone())
-            .collect::<Vec<_>>();
+            .map(|&node_index| {
+                nodes[node_index]
+                    .representative_embedding
+                    .clone()
+                    .ok_or_else(|| {
+                        invalid_config(format!(
+                            "planning unit {node_index} is missing its representative embedding"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(E::from)?;
         let (pass_report, assignments) = planner.run(&layer_embeddings).map_err(E::from)?;
         if assignments.len() != layer_embeddings.len() {
             return Err(E::from(invalid_config(format!(
@@ -2054,17 +2069,28 @@ where
                 .flat_map(|&node_index| nodes[node_index].item_indices.iter().copied())
                 .collect::<Vec<_>>();
             item_indices.sort_unstable();
-            let representative_embedding = mean_f32_embeddings(
-                child_node_indices
-                    .iter()
-                    .map(|&node_index| nodes[node_index].representative_embedding.as_slice()),
-            )
-            .map_err(E::from)?;
+            let child_representative_embeddings = child_node_indices
+                .iter()
+                .map(|&node_index| {
+                    nodes[node_index]
+                        .representative_embedding
+                        .take()
+                        .ok_or_else(|| {
+                            invalid_config(format!(
+                                "planning unit {node_index} is missing its representative embedding"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(E::from)?;
+            let representative_embedding =
+                mean_f32_embeddings(child_representative_embeddings.iter().map(Vec::as_slice))
+                    .map_err(E::from)?;
             let next_index = nodes.len();
             nodes.push(AgglomerativeHierarchyNode {
                 child_node_indices,
                 item_indices,
-                representative_embedding,
+                representative_embedding: Some(representative_embedding),
                 planning_stage: stage,
             });
             next_layer.push(next_index);
