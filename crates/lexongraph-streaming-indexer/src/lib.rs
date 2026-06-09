@@ -339,8 +339,15 @@ impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
 // Built-in planning configuration
 // ─────────────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuiltInPlanningDirection {
+    Divisive,
+    Agglomerative,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DcbcBuiltInPlanningSettings {
+    pub direction: BuiltInPlanningDirection,
     pub cluster_count: u32,
     pub balance_constraints: Option<BalanceConstraints>,
     pub random_seed: Option<u64>,
@@ -348,6 +355,7 @@ pub struct DcbcBuiltInPlanningSettings {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaBuiltInPlanningSettings {
+    pub direction: BuiltInPlanningDirection,
     pub cluster_count: u32,
     pub random_seed: Option<u64>,
     pub params: DirectionalPcaParams,
@@ -357,6 +365,15 @@ pub struct DirectionalPcaBuiltInPlanningSettings {
 pub enum BuiltInPlanningPhase {
     Dcbc(DcbcBuiltInPlanningSettings),
     DirectionalPca(DirectionalPcaBuiltInPlanningSettings),
+}
+
+impl BuiltInPlanningPhase {
+    fn direction(&self) -> BuiltInPlanningDirection {
+        match self {
+            Self::Dcbc(settings) => settings.direction,
+            Self::DirectionalPca(settings) => settings.direction,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1638,39 +1655,19 @@ fn derive_hierarchy_from_built_in(
     stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match planning {
-        BuiltInPlanning::Dcbc(settings) => derive_hierarchy_with_builder(
+        BuiltInPlanning::Dcbc(settings) => derive_hierarchy_for_single_built_in_phase(
+            BuiltInPlanningPhase::Dcbc(settings.clone()),
             embeddings,
+            embedding_spec,
             materializability_bound,
             stage_observer,
-            |partition_len| {
-                Ok(PartitionPlanner::new(
-                    PlanningStage::Single,
-                    create_built_in_trainer(
-                        &BuiltInPlanningPhase::Dcbc(settings.clone()),
-                        partition_len,
-                        embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
-                ))
-            },
         ),
-        BuiltInPlanning::DirectionalPca(settings) => derive_hierarchy_with_builder(
+        BuiltInPlanning::DirectionalPca(settings) => derive_hierarchy_for_single_built_in_phase(
+            BuiltInPlanningPhase::DirectionalPca(settings.clone()),
             embeddings,
+            embedding_spec,
             materializability_bound,
             stage_observer,
-            |partition_len| {
-                Ok(PartitionPlanner::new(
-                    PlanningStage::Single,
-                    create_built_in_trainer(
-                        &BuiltInPlanningPhase::DirectionalPca(settings.clone()),
-                        partition_len,
-                        embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
-                ))
-            },
         ),
         BuiltInPlanning::Hybrid(settings) => {
             if settings.fine_partition_max_items < 2 {
@@ -1678,30 +1675,115 @@ fn derive_hierarchy_from_built_in(
                     "fine_partition_max_items must be at least 2".into(),
                 ));
             }
-            derive_hierarchy_with_builder(
-                embeddings,
-                materializability_bound,
-                stage_observer,
-                |partition_len| {
-                    let (stage, phase) = if partition_len <= settings.fine_partition_max_items {
-                        (PlanningStage::Fine, settings.fine.clone())
-                    } else {
-                        (PlanningStage::Coarse, settings.coarse.clone())
-                    };
-                    Ok(PartitionPlanner::new(
-                        stage,
-                        create_built_in_trainer(
-                            &phase,
-                            partition_len,
-                            embeddings.first().map_or(0, std::vec::Vec::len),
-                            embedding_spec,
-                            materializability_bound,
-                        )?,
-                    ))
-                },
-            )
+            let Some(direction) = hybrid_direction(settings) else {
+                return Err(StreamingIndexerError::InvalidHybridPlanningConfiguration(
+                    "hybrid built-in planning requires coarse and fine phases to use the same direction".into(),
+                ));
+            };
+            match direction {
+                BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder(
+                    embeddings,
+                    materializability_bound,
+                    stage_observer,
+                    |partition_len| {
+                        let (stage, phase) = select_hybrid_phase(settings, partition_len);
+                        Ok(PartitionPlanner::new(
+                            stage,
+                            create_built_in_trainer(
+                                &phase,
+                                partition_len,
+                                embeddings.first().map_or(0, std::vec::Vec::len),
+                                embedding_spec,
+                                materializability_bound,
+                            )?,
+                        ))
+                    },
+                ),
+                BuiltInPlanningDirection::Agglomerative => {
+                    derive_hierarchy_agglomeratively_with_builder(
+                        embeddings,
+                        materializability_bound,
+                        stage_observer,
+                        |layer_len| {
+                            let (stage, phase) = select_hybrid_phase(settings, layer_len);
+                            Ok(PartitionPlanner::new(
+                                stage,
+                                create_built_in_trainer(
+                                    &phase,
+                                    layer_len,
+                                    embeddings.first().map_or(0, std::vec::Vec::len),
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ))
+                        },
+                    )
+                }
+            }
         }
     }
+}
+
+fn derive_hierarchy_for_single_built_in_phase(
+    phase: BuiltInPlanningPhase,
+    embeddings: &[Vec<f32>],
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    match phase.direction() {
+        BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder(
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            |partition_len| {
+                Ok(PartitionPlanner::new(
+                    PlanningStage::Single,
+                    create_built_in_trainer(
+                        &phase,
+                        partition_len,
+                        embeddings.first().map_or(0, std::vec::Vec::len),
+                        embedding_spec,
+                        materializability_bound,
+                    )?,
+                ))
+            },
+        ),
+        BuiltInPlanningDirection::Agglomerative => derive_hierarchy_agglomeratively_with_builder(
+            embeddings,
+            materializability_bound,
+            stage_observer,
+            |layer_len| {
+                Ok(PartitionPlanner::new(
+                    PlanningStage::Single,
+                    create_built_in_trainer(
+                        &phase,
+                        layer_len,
+                        embeddings.first().map_or(0, std::vec::Vec::len),
+                        embedding_spec,
+                        materializability_bound,
+                    )?,
+                ))
+            },
+        ),
+    }
+}
+
+fn select_hybrid_phase(
+    settings: &HybridBuiltInPlanningSettings,
+    planning_unit_count: usize,
+) -> (PlanningStage, BuiltInPlanningPhase) {
+    if planning_unit_count <= settings.fine_partition_max_items {
+        (PlanningStage::Fine, settings.fine.clone())
+    } else {
+        (PlanningStage::Coarse, settings.coarse.clone())
+    }
+}
+
+fn hybrid_direction(settings: &HybridBuiltInPlanningSettings) -> Option<BuiltInPlanningDirection> {
+    let coarse = settings.coarse.direction();
+    let fine = settings.fine.direction();
+    (coarse == fine).then_some(coarse)
 }
 
 fn create_built_in_trainer(
@@ -1815,6 +1897,14 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
+struct AgglomerativeHierarchyNode {
+    child_node_indices: Vec<usize>,
+    item_indices: Vec<usize>,
+    representative_embedding: Vec<f32>,
+    planning_stage: PlanningStage,
+}
+
 fn derive_hierarchy_with_builder<E, B, P, SO>(
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
@@ -1867,6 +1957,169 @@ where
         planning_balance_direction: accumulator.balance_direction,
         stages_used: accumulator.stages_used,
     })
+}
+
+fn derive_hierarchy_agglomeratively_with_builder<E, B, P, SO>(
+    embeddings: &[Vec<f32>],
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+    mut planner_builder: B,
+) -> Result<PlanningPassOutcome, E>
+where
+    E: From<StreamingClusteringError>,
+    B: FnMut(usize) -> Result<P, E>,
+    P: PartitionPlannerRunner,
+    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+{
+    if embeddings.is_empty() {
+        return Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: Vec::new(),
+            },
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        });
+    }
+
+    let mut accumulator = PlanningMetricAccumulator::default();
+    let mut nodes = embeddings
+        .iter()
+        .enumerate()
+        .map(|(index, embedding)| AgglomerativeHierarchyNode {
+            child_node_indices: Vec::new(),
+            item_indices: vec![index],
+            representative_embedding: embedding.clone(),
+            planning_stage: PlanningStage::Single,
+        })
+        .collect::<Vec<_>>();
+    let mut current_layer = (0..nodes.len()).collect::<Vec<_>>();
+
+    while current_layer.len() > 1 {
+        let planner = planner_builder(current_layer.len())?;
+        let stage = planner.stage();
+        let represented_item_count = current_layer
+            .iter()
+            .map(|&node_index| nodes[node_index].item_indices.len())
+            .sum();
+        stage_observer(
+            stage,
+            represented_item_count,
+            StreamingIndexingStatusState::Started,
+        );
+        stage_observer(
+            stage,
+            represented_item_count,
+            StreamingIndexingStatusState::InProgress,
+        );
+
+        let layer_embeddings = current_layer
+            .iter()
+            .map(|&node_index| nodes[node_index].representative_embedding.clone())
+            .collect::<Vec<_>>();
+        let (pass_report, assignments) = planner.run(&layer_embeddings).map_err(E::from)?;
+        if assignments.len() != layer_embeddings.len() {
+            return Err(E::from(invalid_config(format!(
+                "planner returned {} cluster ids for {} planning units",
+                assignments.len(),
+                layer_embeddings.len()
+            ))));
+        }
+
+        accumulator.observe(stage, &pass_report);
+
+        let mut groups = assignments_to_groups(&assignments);
+        groups = ensure_min_two_per_group(groups);
+        for group in &mut groups {
+            group.sort_unstable();
+        }
+        groups.sort_by_key(|group| group[0]);
+        if groups.len() <= 1 || groups.len() >= current_layer.len() {
+            groups = balanced_groups(current_layer.len(), materializability_bound)
+                .map_err(invalid_config)
+                .map_err(E::from)?;
+        }
+
+        let mut next_layer = Vec::with_capacity(groups.len());
+        for group in groups {
+            let child_node_indices = group
+                .into_iter()
+                .map(|local_index| current_layer[local_index])
+                .collect::<Vec<_>>();
+            let mut item_indices = child_node_indices
+                .iter()
+                .flat_map(|&node_index| nodes[node_index].item_indices.iter().copied())
+                .collect::<Vec<_>>();
+            item_indices.sort_unstable();
+            let representative_embedding = mean_f32_embeddings(
+                child_node_indices
+                    .iter()
+                    .map(|&node_index| nodes[node_index].representative_embedding.as_slice()),
+            )
+            .map_err(E::from)?;
+            let next_index = nodes.len();
+            nodes.push(AgglomerativeHierarchyNode {
+                child_node_indices,
+                item_indices,
+                representative_embedding,
+                planning_stage: stage,
+            });
+            next_layer.push(next_index);
+        }
+        current_layer = next_layer;
+    }
+
+    let mut partitions = Vec::new();
+    build_agglomerative_partitions(&nodes, current_layer[0], "p0".into(), None, &mut partitions);
+    partitions.sort_by(|left, right| left.id.cmp(&right.id));
+
+    Ok(PlanningPassOutcome {
+        hierarchy: FinalizedPartitionHierarchy {
+            root_partition_id: "p0".into(),
+            partitions,
+        },
+        planning_quality_metric: accumulator.average_quality(),
+        planning_balance_metric: accumulator.average_balance(),
+        planning_quality_direction: accumulator.quality_direction,
+        planning_balance_direction: accumulator.balance_direction,
+        stages_used: accumulator.stages_used,
+    })
+}
+
+fn build_agglomerative_partitions(
+    nodes: &[AgglomerativeHierarchyNode],
+    node_index: usize,
+    partition_id: String,
+    parent_id: Option<String>,
+    partitions: &mut Vec<FinalizedPartition>,
+) {
+    let node = &nodes[node_index];
+    let terminal = node.child_node_indices.is_empty();
+    let child_ids = (0..node.child_node_indices.len())
+        .map(|child_index| format!("{partition_id}.{child_index}"))
+        .collect::<Vec<_>>();
+
+    partitions.push(FinalizedPartition {
+        id: partition_id.clone(),
+        parent_id: parent_id.clone(),
+        child_ids: child_ids.clone(),
+        item_indices: node.item_indices.clone(),
+        terminal,
+        planning_stage: node.planning_stage,
+    });
+
+    for (child_index, &child_node_index) in node.child_node_indices.iter().enumerate() {
+        build_agglomerative_partitions(
+            nodes,
+            child_node_index,
+            child_ids[child_index].clone(),
+            Some(partition_id.clone()),
+            partitions,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2484,6 +2737,71 @@ fn arithmetic_mean_canonical_embedding(block: &BranchBlock) -> Result<Vec<u8>, S
     encode_embedding_from_f64(&sums, &block.embedding_spec)
 }
 
+fn mean_f32_embeddings<'a>(
+    embeddings: impl IntoIterator<Item = &'a [f32]>,
+) -> Result<Vec<f32>, StreamingClusteringError> {
+    let mut embeddings = embeddings.into_iter();
+    let Some(first) = embeddings.next() else {
+        return Err(invalid_config(
+            "cannot compute representative embedding from an empty planning group".into(),
+        ));
+    };
+    let mut sums = first
+        .iter()
+        .map(|&value| f64::from(value))
+        .collect::<Vec<_>>();
+    for (dimension, value) in sums.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(invalid_config(format!(
+                "non-finite representative embedding value at dimension {dimension}"
+            )));
+        }
+    }
+    let mut count = 1usize;
+    for embedding in embeddings {
+        if embedding.len() != sums.len() {
+            return Err(invalid_config(format!(
+                "representative embedding dimension {} does not match expected {}",
+                embedding.len(),
+                sums.len()
+            )));
+        }
+        for (dimension, (sum, &value)) in sums.iter_mut().zip(embedding.iter()).enumerate() {
+            if !value.is_finite() {
+                return Err(invalid_config(format!(
+                    "non-finite representative embedding value at dimension {dimension}"
+                )));
+            }
+            *sum += f64::from(value);
+            if !sum.is_finite() {
+                return Err(invalid_config(format!(
+                    "representative embedding sum overflowed at dimension {dimension}"
+                )));
+            }
+        }
+        count += 1;
+    }
+
+    sums.into_iter()
+        .enumerate()
+        .map(|(dimension, sum)| {
+            let mean = sum / count as f64;
+            if !mean.is_finite() {
+                return Err(invalid_config(format!(
+                    "representative embedding mean became non-finite at dimension {dimension}"
+                )));
+            }
+            let encoded = mean as f32;
+            if !encoded.is_finite() {
+                return Err(invalid_config(format!(
+                    "representative embedding mean overflowed f32 at dimension {dimension}"
+                )));
+            }
+            Ok(encoded)
+        })
+        .collect()
+}
+
 fn encode_embedding_from_f64(values: &[f64], spec: &EmbeddingSpec) -> Result<Vec<u8>, String> {
     let dims = usize::try_from(spec.dims)
         .map_err(|_| format!("embedding dims {} do not fit in usize", spec.dims))?;
@@ -3009,6 +3327,7 @@ mod conformance_support {
                 harness.conforming_resolver(),
                 FixedEmbeddingProvider,
                 BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+                    direction: BuiltInPlanningDirection::Divisive,
                     cluster_count: 2,
                     balance_constraints: None,
                     random_seed: None,
@@ -3036,6 +3355,7 @@ mod conformance_support {
                 harness.failing_resolver(),
                 FixedEmbeddingProvider,
                 BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+                    direction: BuiltInPlanningDirection::Divisive,
                     cluster_count: 2,
                     balance_constraints: None,
                     random_seed: None,
@@ -3056,6 +3376,7 @@ mod conformance_support {
                 harness.unusable_resolver(),
                 FixedEmbeddingProvider,
                 BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+                    direction: BuiltInPlanningDirection::Divisive,
                     cluster_count: 2,
                     balance_constraints: None,
                     random_seed: None,

@@ -84,17 +84,19 @@ shared contract without redefining embedding-provider behavior locally.
 ### VAL-STREAM-INDEXER-007
 
 Construct the streaming indexer through its built-in planning-selection path,
-selecting directional PCA and supplying caller-provided directional-PCA
-settings supported by that realization.
+selecting directional PCA, selecting a supported built-in hierarchy
+construction direction, and supplying caller-provided directional-PCA settings
+supported by that realization-and-direction combination.
 
 **Pass condition:** the runtime can be created without a caller-implemented
 factory, uses the built-in arithmetic-mean canonical policy unless another
-canonical policy is explicitly supplied, requires explicit built-in algorithm
-selection, and consumes the caller-provided directional-PCA settings supported
-by that realization.
+canonical policy is explicitly supplied, requires explicit selection of a
+supported built-in realization-and-direction combination, and consumes the
+caller-provided directional-PCA settings supported by that combination.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013,
-REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
+REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032,
+REQ-STREAM-INDEXER-041
 
 ### VAL-STREAM-INDEXER-008
 
@@ -113,7 +115,7 @@ Complete one successful planning pass with multiple caller-chosen batches.
 
 **Pass condition:** the pass report is deterministic and includes the observed
 item count plus deterministic planning progress or quality information for the
-caller-visible replayed hierarchy-building work.
+caller-visible hierarchy-building work of the selected planning direction.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-021
 
@@ -152,7 +154,8 @@ the established logical item set and replay order.
 
 **Pass condition:** final materialization succeeds without requiring the crate's
 public API to have retained the full logical dataset between passes, while
-using the finalized partition hierarchy to drive bottom-up assembly.
+using the finalized partition hierarchy to drive bottom-up assembly regardless
+of whether that hierarchy was derived divisively or agglomeratively.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-016,
 REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035
@@ -226,8 +229,8 @@ hierarchy.
 
 **Pass condition:** parent-layer construction is driven by the stored partition
 hierarchy, and any clustering used while deriving or refining that hierarchy
-still flows through the shared streaming clustering contract rather than an
-older batch-only clustering boundary.
+for either built-in direction still flows through the shared streaming
+clustering contract rather than an older batch-only clustering boundary.
 
 **Traces to:** REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-035
 
@@ -302,9 +305,9 @@ caller's behalf, even if internal partition-plan state is retained.
 Inspect the new crate's dependency manifest and built-in planning realizations.
 
 **Pass condition:** the crate depends on `lexongraph-dcbc-streaming` and
-`lexongraph-directional-pca`, and each built-in planning path delegates through
-the shared streaming clustering contract rather than reimplementing either
-algorithm locally.
+`lexongraph-directional-pca`, and each supported built-in
+realization-and-direction combination delegates through the shared streaming
+clustering contract rather than reimplementing either algorithm locally.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-019
 
@@ -320,16 +323,18 @@ validation surface.
 ### VAL-STREAM-INDEXER-028
 
 Construct the streaming indexer through its built-in planning-selection
-surface, selecting directional PCA in one case and DCBC in another.
+surface, selecting supported built-in realization-and-direction combinations.
 
-**Pass condition:** callers can choose either built-in planning algorithm
+**Pass condition:** callers can choose supported built-in planning combinations
 through the indexer API without implementing a custom planning factory, each
-selection requires caller-supplied settings for the chosen algorithm, attempts
-to omit the required algorithm choice or required settings fail explicitly, and
-the rest of the streaming runtime contract remains unchanged.
+selection requires caller-supplied settings for the chosen algorithm and
+direction, attempts to omit the required algorithm choice, required direction,
+or required settings fail explicitly, and the rest of the streaming runtime
+contract remains unchanged.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-014,
-REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032
+REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032,
+REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042
 
 ### VAL-STREAM-INDEXER-029
 
@@ -337,13 +342,14 @@ Inspect the repository verification artifacts for algorithm-agnostic built-in
 planning behavior.
 
 **Pass condition:** algorithm-agnostic built-in-path planning and assembly
-cases whose fixtures are compatible with both built-in algorithms'
-caller-supplied settings
-are realized as a matrix over both built-in planning realizations rather than
-favoring one built-in algorithm, while unsupported or algorithm-specific
-behavior remains covered by separate targeted tests.
+cases whose fixtures are compatible with supported built-in
+realization-and-direction combinations' caller-supplied settings are realized
+as a matrix over those supported combinations rather than favoring one built-in
+algorithm or direction, while unsupported or algorithm-specific behavior
+remains covered by separate targeted tests.
 
-**Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033
+**Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033,
+REQ-STREAM-INDEXER-041
 
 ### VAL-STREAM-INDEXER-030
 
@@ -382,9 +388,10 @@ Construct the built-in hierarchical planning path using one algorithm for the
 coarse phase and another for the fine phase.
 
 **Pass condition:** the coarse/fine phase boundary and the settings for each
-algorithm are explicit, and the resulting planning behavior is deterministic.
+algorithm are explicit, any phase-local direction policy is explicit, and the
+resulting planning behavior is deterministic.
 
-**Traces to:** REQ-STREAM-INDEXER-036
+**Traces to:** REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041
 
 ### VAL-STREAM-INDEXER-034
 
@@ -440,3 +447,29 @@ semantic layer reuse the same `layer_index`, and the observed layer indexes are
 bounded by the assembled tree depth implied by the hierarchy and block levels.
 
 **Traces to:** REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-040
+
+### VAL-STREAM-INDEXER-038
+
+Construct two deterministic built-in planning runs over compatible fixtures:
+one using a supported `Divisive` combination and one using a supported
+`Agglomerative` combination.
+
+**Pass condition:** both runs derive a deterministic finalized partition
+hierarchy that can drive the same final-materialization contract, and the
+addition of the `Agglomerative` option does not retire the conforming
+`Divisive` path.
+
+**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-020,
+REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-043
+
+### VAL-STREAM-INDEXER-039
+
+Attempt to invoke the built-in planning surface without specifying a direction,
+or by selecting a realization/settings combination that does not support the
+requested direction.
+
+**Pass condition:** the crate fails explicitly and does not silently substitute
+another planning direction.
+
+**Traces to:** REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-031,
+REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-042
