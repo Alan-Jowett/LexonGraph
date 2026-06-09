@@ -89,6 +89,9 @@ The crate consumes:
 - a hierarchical planning strategy whose clustering subproblems flow through
   streaming clustering realizations or factories whose trainer/classifier
   surface is defined by the shared streaming clustering contract
+- a built-in hierarchy-construction-direction policy that selects whether the
+  built-in planning path derives the finalized partition hierarchy divisively or
+  agglomeratively
 - a terminal-partition normalization or termination policy, or equivalent
   planning rule, used by bottom-up assembly
 
@@ -100,12 +103,17 @@ The crate exposes:
 - built-in hierarchical planning choices backed by
   `lexongraph-directional-pca` and `lexongraph-dcbc-streaming`
 - a caller-visible built-in planning-selection surface that requires explicit
-  selection of one realization or hybrid coarse/fine combination without
-  requiring a caller-implemented factory
+  selection of one supported realization-and-direction combination or hybrid
+  coarse/fine combination without requiring a caller-implemented factory
 - caller-supplied algorithm settings supported by the selected built-in
-  planning realization or each selected hybrid phase
-- no implicit built-in default planning algorithm or implicit built-in planning
-  settings
+  planning realization or each selected hybrid phase, validated against the
+  selected direction
+- no implicit built-in default planning algorithm, no implicit built-in default
+  direction, and no implicit built-in planning settings
+
+The built-in surface collectively exposes at least one supported `Divisive`
+option and at least one supported `Agglomerative` option. Not every built-in
+realization is required to support every direction in this revision.
 
 The crate also exposes override paths for caller-supplied canonical-embedding
 and planning policies.
@@ -148,8 +156,11 @@ replay order:
 3. deterministic derivation of planning-time item embeddings and any pass-local
    planning artifacts
 4. deterministic refinement or validation of the hierarchical partition plan
-   over original-item embeddings, using selected shared streaming clustering
-   realizations wherever clustering is required
+   using the selected planning direction, where built-in `Divisive` mode
+   partitions replayed original-item embeddings from coarser units to finer ones
+   and built-in `Agglomerative` mode groups lower-layer planning units bottom-up
+   into the same finalized partition-hierarchy abstraction, using selected
+   shared streaming clustering realizations wherever clustering is required
 5. pass completion on each clustering realization used in that planning work
 6. construction of the public `IndexingPassReport`
 
@@ -162,8 +173,9 @@ materialized parent layer.
 
 - the observed item count for the completed pass
 - deterministic planning progress or quality information for the caller-visible
-  replayed hierarchy-building work, derived from the shared streaming
-  clustering pass-report surface wherever clustering participates in that work
+  hierarchy-building work for the selected planning direction, derived from the
+  shared streaming clustering pass-report surface wherever clustering
+  participates in that work
 - structured state sufficient for caller stop/continue decisions
 
 The report remains deterministic for a fixed indexing context and replay order.
@@ -190,6 +202,10 @@ During that replay, the crate:
 5. materializes parent layers bottom-up from the terminal partitions until
    exactly one root remains
 
+The final materialization flow does not depend on whether the retained
+partition hierarchy was derived through built-in `Divisive` or
+`Agglomerative` planning.
+
 ### DSG-STREAM-INDEXER-014 `Higher-layer realization`
 
 Once leaves have been materialized and bound to terminal partitions, the crate
@@ -197,7 +213,8 @@ builds higher parent layers by following ancestor relations in the finalized
 partition hierarchy rather than by further caller replay of the original items.
 
 Any clustering used to derive or refine that hierarchy before planning
-completion still flows through the shared streaming clustering contract.
+completion in either built-in direction still flows through the shared
+streaming clustering contract.
 
 ### DSG-STREAM-INDEXER-015 `Core conformance ownership`
 
@@ -293,20 +310,25 @@ traits behind a non-default Cargo feature intended for downstream tests only.
 ### DSG-STREAM-INDEXER-022 `Built-in algorithm verification matrix`
 
 Algorithm-agnostic behavior exercised through the built-in planning-selection
-surface over fixtures compatible with both algorithms' caller-supplied settings
-is intended to hold regardless of whether the caller selects the built-in
-directional-PCA realization or the built-in DCBC realization.
+surface over fixtures compatible with supported built-in
+realization-and-direction combinations' caller-supplied settings is intended to
+hold regardless of which supported combination the caller selects.
 
 Repository verification artifacts therefore realize that algorithm-agnostic
-built-in-path behavior through a two-algorithm matrix, while algorithm-specific
-behavior remains covered by separate targeted cases.
+built-in-path behavior through a matrix over supported built-in
+realization-and-direction combinations, while algorithm-specific or
+direction-specific behavior remains covered by separate targeted cases.
 
 ### DSG-STREAM-INDEXER-023 `Planning boundary`
 
 The run maintains a deterministic partition hierarchy over the established
-logical item set. Planning operates over replayed original-item embeddings and
+logical item set. Planning operates over replayed original-item embeddings or
+lower-layer planning units, depending on the selected built-in direction, and
 stores only the hierarchy state and replay-baseline information needed for
 later replay validation and bottom-up assembly.
+
+Both built-in directions normalize into the same finalized partition-hierarchy
+representation before final materialization.
 
 ### DSG-STREAM-INDEXER-024 `Partition identity and ancestry`
 
@@ -333,8 +355,8 @@ or rejected before materialization.
 
 The built-in planning path supports hybrid coarse/fine behavior through
 caller-visible configuration that selects the coarse-phase algorithm, the
-fine-phase algorithm, the phase boundary, and the settings for each phase
-explicitly.
+fine-phase algorithm, the phase boundary, any phase-local built-in direction
+policy, and the settings for each phase explicitly.
 
 ### DSG-STREAM-INDEXER-028 `Concurrent subpartition execution`
 
@@ -387,6 +409,23 @@ Recursive, repeated, or concurrent subtree assembly may therefore reuse the
 same `layer_index` multiple times when those operations build the same semantic
 layer.
 
+### DSG-STREAM-INDEXER-031 `Explicit built-in direction policy`
+
+The built-in planning surface exposes an explicit deterministic direction policy
+whose supported values in this revision are `Divisive` and `Agglomerative`.
+
+### DSG-STREAM-INDEXER-032 `No silent direction substitution`
+
+If a caller omits the required built-in direction or selects a
+realization/settings combination that does not support the requested direction,
+the crate fails explicitly rather than silently substituting a different
+direction.
+
+### DSG-STREAM-INDEXER-033 `Divisive continuity`
+
+Adding built-in `Agglomerative` support does not retire the existing conforming
+built-in `Divisive` path.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -394,8 +433,8 @@ layer.
 | DSG-STREAM-INDEXER-001 | REQ-STREAM-INDEXER-002 |
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
-| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-034 |
-| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036 |
+| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
+| DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043 |
 | DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017 |
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
@@ -413,3 +452,6 @@ layer.
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039 |
 | DSG-STREAM-INDEXER-030 | REQ-STREAM-INDEXER-040 |
+| DSG-STREAM-INDEXER-031 | REQ-STREAM-INDEXER-041 |
+| DSG-STREAM-INDEXER-032 | REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-042 |
+| DSG-STREAM-INDEXER-033 | REQ-STREAM-INDEXER-043 |

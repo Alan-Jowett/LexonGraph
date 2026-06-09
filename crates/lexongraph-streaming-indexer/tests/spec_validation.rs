@@ -20,8 +20,8 @@ use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusteringConfig, StreamingClusteringError,
 };
 use lexongraph_streaming_indexer::{
-    ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningPhase,
-    CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
+    ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
+    BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, FinalizedPartition, FinalizedPartitionHierarchy,
     HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome, PlanningStage,
     StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
@@ -495,16 +495,18 @@ struct BuiltInAlgorithmCase {
     planning: BuiltInPlanning,
 }
 
-fn dcbc_planning() -> BuiltInPlanning {
+fn dcbc_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
     BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+        direction,
         cluster_count: 2,
         balance_constraints: None,
         random_seed: Some(7),
     })
 }
 
-fn directional_pca_planning() -> BuiltInPlanning {
+fn directional_pca_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
     BuiltInPlanning::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+        direction,
         cluster_count: 2,
         random_seed: Some(7),
         params: DirectionalPcaParams {
@@ -518,15 +520,17 @@ fn directional_pca_planning() -> BuiltInPlanning {
     })
 }
 
-fn hybrid_planning() -> BuiltInPlanning {
+fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
     BuiltInPlanning::Hybrid(
         lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
             coarse: BuiltInPlanningPhase::Dcbc(DcbcBuiltInPlanningSettings {
+                direction,
                 cluster_count: 2,
                 balance_constraints: None,
                 random_seed: Some(11),
             }),
             fine: BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                direction,
                 cluster_count: 2,
                 random_seed: Some(13),
                 params: DirectionalPcaParams {
@@ -547,11 +551,13 @@ fn invalid_hybrid_planning() -> BuiltInPlanning {
     BuiltInPlanning::Hybrid(
         lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
             coarse: BuiltInPlanningPhase::Dcbc(DcbcBuiltInPlanningSettings {
+                direction: BuiltInPlanningDirection::Divisive,
                 cluster_count: 2,
                 balance_constraints: None,
                 random_seed: None,
             }),
             fine: BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                direction: BuiltInPlanningDirection::Divisive,
                 cluster_count: 2,
                 random_seed: None,
                 params: DirectionalPcaParams {
@@ -568,15 +574,50 @@ fn invalid_hybrid_planning() -> BuiltInPlanning {
     )
 }
 
-fn built_in_cases() -> [BuiltInAlgorithmCase; 2] {
+fn mixed_direction_hybrid_planning() -> BuiltInPlanning {
+    BuiltInPlanning::Hybrid(
+        lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
+            coarse: BuiltInPlanningPhase::Dcbc(DcbcBuiltInPlanningSettings {
+                direction: BuiltInPlanningDirection::Divisive,
+                cluster_count: 2,
+                balance_constraints: None,
+                random_seed: Some(11),
+            }),
+            fine: BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                direction: BuiltInPlanningDirection::Agglomerative,
+                cluster_count: 2,
+                random_seed: Some(13),
+                params: DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            }),
+            fine_partition_max_items: 4,
+        },
+    )
+}
+
+fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
     [
         BuiltInAlgorithmCase {
-            name: "dcbc",
-            planning: dcbc_planning(),
+            name: "dcbc-divisive",
+            planning: dcbc_planning(BuiltInPlanningDirection::Divisive),
         },
         BuiltInAlgorithmCase {
-            name: "directional-pca",
-            planning: directional_pca_planning(),
+            name: "dcbc-agglomerative",
+            planning: dcbc_planning(BuiltInPlanningDirection::Agglomerative),
+        },
+        BuiltInAlgorithmCase {
+            name: "directional-pca-divisive",
+            planning: directional_pca_planning(BuiltInPlanningDirection::Divisive),
+        },
+        BuiltInAlgorithmCase {
+            name: "directional-pca-agglomerative",
+            planning: directional_pca_planning(BuiltInPlanningDirection::Agglomerative),
         },
     ]
 }
@@ -661,6 +702,7 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
     let src = include_str!("../src/lib.rs");
     let manifest = include_str!("../Cargo.toml");
     assert!(src.contains("with_builtin_planning"));
+    assert!(src.contains("BuiltInPlanningDirection"));
     assert!(src.contains("mark_planning_complete"));
     assert!(src.contains("HierarchyPlanning"));
     assert!(src.contains("BottomUpAssembly"));
@@ -698,7 +740,13 @@ async fn val_stream_indexer_003_empty_pass_and_empty_run_fail() {
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_004_reference_input_and_inline_leaf_content() {
     let items = [item("alpha")];
-    let (store, result) = one_shot(dcbc_planning(), &items, 256).await.unwrap();
+    let (store, result) = one_shot(
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
+        &items,
+        256,
+    )
+    .await
+    .unwrap();
     let validated = store.get(&result.root_id).unwrap().unwrap();
     match into_entries(validated) {
         TypedEntries::Leaf(_, entries) => {
@@ -712,7 +760,7 @@ async fn val_stream_indexer_004_reference_input_and_inline_leaf_content() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_005_replay_baseline_accepts_identical_passes_and_rejects_drift() {
-    let mut run = run_with_builtin(dcbc_planning(), 256);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 256);
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
     let report1 = {
         run.ingest_batch(&items[..2]).await.unwrap();
@@ -738,7 +786,7 @@ async fn val_stream_indexer_006_content_and_embedding_failures_are_explicit() {
     let mut run = StreamingIndexingRun::with_builtin_planning(
         UnusableResolver,
         AsciiEmbeddingProvider,
-        dcbc_planning(),
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
         embedding_spec(),
         256,
     );
@@ -750,7 +798,7 @@ async fn val_stream_indexer_006_content_and_embedding_failures_are_explicit() {
     let mut run = StreamingIndexingRun::with_builtin_planning(
         MapResolver,
         FailingEmbeddingProvider,
-        dcbc_planning(),
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
         embedding_spec(),
         256,
     );
@@ -764,7 +812,7 @@ async fn val_stream_indexer_006_content_and_embedding_failures_are_explicit() {
 async fn val_stream_indexer_007_finalize_requires_planning_completion() {
     let items = [item("alpha"), item("bravo")];
     let store = MemoryBlockStore::default();
-    let mut run = run_with_builtin(dcbc_planning(), 256);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 256);
     assert!(matches!(
         run.finalize(std::iter::once(items.as_slice()), &store)
             .await
@@ -884,7 +932,7 @@ async fn val_stream_indexer_010_hierarchy_is_exposed_and_schedule_independent() 
         item("golf"),
         item("hotel"),
     ];
-    let mut run = run_with_builtin(dcbc_planning(), 160);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     let hierarchy = run.finalized_partition_hierarchy().unwrap();
@@ -976,7 +1024,7 @@ async fn regression_default_custom_policy_emits_live_stage_progress() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_012_materializability_bound_is_enforced() {
-    let mut run = run_with_builtin(dcbc_planning(), 1);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 1);
     run.ingest_batch(&[item("alpha"), item("bravo")])
         .await
         .unwrap();
@@ -1032,7 +1080,7 @@ async fn val_stream_indexer_013_hybrid_planning_is_explicit_and_deterministic() 
         item("golf"),
         item("hotel"),
     ];
-    let mut first = run_with_builtin(hybrid_planning(), 160);
+    let mut first = run_with_builtin(hybrid_planning(BuiltInPlanningDirection::Divisive), 160);
     first.ingest_batch(&items).await.unwrap();
     let report1 = first.finish_pass().unwrap();
     let hierarchy1 = first.finalized_partition_hierarchy().unwrap().clone();
@@ -1043,7 +1091,7 @@ async fn val_stream_indexer_013_hybrid_planning_is_explicit_and_deterministic() 
             .any(|partition| partition.planning_stage == PlanningStage::Fine)
     );
 
-    let mut second = run_with_builtin(hybrid_planning(), 160);
+    let mut second = run_with_builtin(hybrid_planning(BuiltInPlanningDirection::Divisive), 160);
     second.ingest_batch(&items).await.unwrap();
     let report2 = second.finish_pass().unwrap();
     assert_eq!(report1, report2);
@@ -1051,6 +1099,60 @@ async fn val_stream_indexer_013_hybrid_planning_is_explicit_and_deterministic() 
         hierarchy1,
         second.finalized_partition_hierarchy().unwrap().clone()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_hybrid_agglomerative_planning_is_explicit_and_deterministic() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+        item("golf"),
+        item("hotel"),
+    ];
+    let mut first = run_with_builtin(
+        hybrid_planning(BuiltInPlanningDirection::Agglomerative),
+        160,
+    );
+    first.ingest_batch(&items).await.unwrap();
+    let report1 = first.finish_pass().unwrap();
+    let hierarchy1 = first.finalized_partition_hierarchy().unwrap().clone();
+    assert!(
+        hierarchy1
+            .partitions
+            .iter()
+            .any(|partition| partition.planning_stage == PlanningStage::Fine)
+    );
+    first.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result1 = first
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(store.get(&result1.root_id).unwrap().is_some());
+
+    let mut second = run_with_builtin(
+        hybrid_planning(BuiltInPlanningDirection::Agglomerative),
+        160,
+    );
+    second.ingest_batch(&items).await.unwrap();
+    let report2 = second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let store2 = MemoryBlockStore::default();
+    let result2 = second
+        .finalize(std::iter::once(items.as_slice()), &store2)
+        .await
+        .unwrap();
+    assert_eq!(report1, report2);
+    assert_eq!(
+        hierarchy1,
+        second.finalized_partition_hierarchy().unwrap().clone()
+    );
+    assert_eq!(result1.root_id, result2.root_id);
+    assert_eq!(result1.block_ids, result2.block_ids);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1063,7 +1165,13 @@ async fn val_stream_indexer_014_bottom_up_assembly_returns_complete_block_set() 
         item("echo"),
         item("foxtrot"),
     ];
-    let (store, result) = one_shot(dcbc_planning(), &items, 160).await.unwrap();
+    let (store, result) = one_shot(
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
+        &items,
+        160,
+    )
+    .await
+    .unwrap();
     assert!(store.get(&result.root_id).unwrap().is_some());
     for block_id in &result.block_ids {
         assert!(store.get(block_id).unwrap().is_some());
@@ -1091,7 +1199,8 @@ async fn val_stream_indexer_015_status_observer_uses_planning_and_bottom_up_phas
         item("foxtrot"),
     ];
     let store = SlowBranchStore::default();
-    let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_planning_complete().unwrap();
@@ -1228,7 +1337,8 @@ async fn val_stream_indexer_036_status_progress_counts_have_phase_semantics() {
         item("foxtrot"),
     ];
     let store = SlowBranchStore::default();
-    let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_planning_complete().unwrap();
@@ -1339,7 +1449,13 @@ async fn val_stream_indexer_036_status_progress_counts_have_phase_semantics() {
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_016_terminal_partition_normalization_can_collapse_duplicates() {
     let items = [item("alpha"), item("alpha")];
-    let (store, result) = one_shot(dcbc_planning(), &items, 256).await.unwrap();
+    let (store, result) = one_shot(
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
+        &items,
+        256,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.block_ids.len(), 1);
     let validated = store.get(&result.root_id).unwrap().unwrap();
     match into_entries(validated) {
@@ -1413,7 +1529,7 @@ async fn val_stream_indexer_017_replay_uses_content_reference_identity() {
     let mut run = StreamingIndexingRun::with_builtin_planning(
         AliasResolver,
         AsciiEmbeddingProvider,
-        dcbc_planning(),
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
         embedding_spec(),
         256,
     );
@@ -1431,7 +1547,7 @@ async fn val_stream_indexer_017_replay_uses_content_reference_identity() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_018_storage_integrity_is_checked() {
-    let mut run = run_with_builtin(dcbc_planning(), 160);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160);
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
@@ -1453,7 +1569,8 @@ async fn val_stream_indexer_023_failed_bottom_up_assembly_does_not_fail_replay_s
     };
 
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
-    let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_planning_complete().unwrap();
@@ -1552,7 +1669,8 @@ async fn val_stream_indexer_027_unused_declared_stages_do_not_emit_status() {
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
 
-    let mut run = run_with_builtin(hybrid_planning(), 256).with_observer(observer);
+    let mut run = run_with_builtin(hybrid_planning(BuiltInPlanningDirection::Divisive), 256)
+        .with_observer(observer);
     run.ingest_batch(&[item("alpha"), item("bravo")])
         .await
         .unwrap();
@@ -1577,7 +1695,8 @@ async fn val_stream_indexer_025_final_replay_mismatch_emits_failed_status() {
 
     let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
     let store = MemoryBlockStore::default();
-    let mut run = run_with_builtin(dcbc_planning(), 160).with_observer(observer);
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160)
+        .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     run.finish_pass().unwrap();
     run.mark_planning_complete().unwrap();
@@ -1659,4 +1778,72 @@ async fn val_stream_indexer_026_clustering_failure_is_explicit() {
             }
         ) && status.state == StreamingIndexingStatusState::Failed
     }));
+}
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_038_divisive_and_agglomerative_built_in_paths_are_available() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+
+    let divisive_store = MemoryBlockStore::default();
+    let mut divisive = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160);
+    divisive.ingest_batch(&items).await.unwrap();
+    let divisive_report = divisive.finish_pass().unwrap();
+    let divisive_hierarchy = divisive.finalized_partition_hierarchy().unwrap().clone();
+    divisive.mark_planning_complete().unwrap();
+    let divisive_result = divisive
+        .finalize(std::iter::once(items.as_slice()), &divisive_store)
+        .await
+        .unwrap();
+
+    let agglomerative_store = MemoryBlockStore::default();
+    let mut agglomerative =
+        run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Agglomerative), 160);
+    agglomerative.ingest_batch(&items).await.unwrap();
+    let agglomerative_report = agglomerative.finish_pass().unwrap();
+    let agglomerative_hierarchy = agglomerative
+        .finalized_partition_hierarchy()
+        .unwrap()
+        .clone();
+    agglomerative.mark_planning_complete().unwrap();
+    let agglomerative_result = agglomerative
+        .finalize(std::iter::once(items.as_slice()), &agglomerative_store)
+        .await
+        .unwrap();
+
+    assert!(divisive_report.planned_partition_count > 0);
+    assert!(agglomerative_report.planned_partition_count > 0);
+    assert_eq!(divisive_hierarchy.root_partition_id, "p0");
+    assert_eq!(agglomerative_hierarchy.root_partition_id, "p0");
+    assert!(
+        divisive_store
+            .get(&divisive_result.root_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        agglomerative_store
+            .get(&agglomerative_result.root_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(!divisive_result.block_ids.is_empty());
+    assert!(!agglomerative_result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_039_mixed_direction_hybrid_is_rejected_explicitly() {
+    let mut run = run_with_builtin(mixed_direction_hybrid_planning(), 256);
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    assert!(matches!(
+        run.finish_pass().unwrap_err(),
+        StreamingIndexerError::InvalidHybridPlanningConfiguration(_)
+    ));
 }

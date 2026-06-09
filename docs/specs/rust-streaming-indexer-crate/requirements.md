@@ -57,6 +57,11 @@ assembly.
 `Terminal partition` means one partition in that hierarchy chosen as a direct
 input to bottom-up parent construction over materialized leaves.
 
+`Built-in hierarchy construction direction` means the caller-selected policy for
+how the built-in planning path derives the finalized partition hierarchy. In
+this revision the supported direction values are `Divisive` (top-down) and
+`Agglomerative` (bottom-up).
+
 ## Requirements
 
 ### REQ-STREAM-INDEXER-001
@@ -135,9 +140,12 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 - content resolution
 - embedding generation through the shared embeddings-trait contract
 - canonical-embedding selection for child-bearing blocks
-- hierarchical planning over replayed original-item embeddings, with any
-  clustering subproblems flowing through the shared streaming clustering
-  contract
+- hierarchical planning over replayed original-item embeddings or lower-layer
+  planning units, with any clustering subproblems flowing through the shared
+  streaming clustering contract
+- built-in hierarchy construction direction selection governing whether the
+  built-in planning path derives the finalized partition hierarchy divisively or
+  agglomeratively
 - terminal-partition normalization or termination policy used by bottom-up
   assembly
 
@@ -147,6 +155,10 @@ The crate shall provide built-in planning realizations for hierarchical planning
 that depend on both `lexongraph-dcbc-streaming` and
 `lexongraph-directional-pca` rather than reimplementing either clustering
 algorithm locally.
+
+Across those built-in realizations, the caller-visible built-in planning path
+shall support at least one conforming `Divisive` option and at least one
+conforming `Agglomerative` option.
 
 ### REQ-STREAM-INDEXER-012
 
@@ -163,11 +175,12 @@ finalized entries.
 
 ### REQ-STREAM-INDEXER-014
 
-The crate shall not assign an implicit built-in default planning algorithm.
+The crate shall not assign an implicit built-in default planning algorithm or
+built-in hierarchy construction direction.
 
 The caller-facing built-in planning path for the streaming indexing runtime
 API shall require the caller to select one supported built-in planning
-realization explicitly.
+realization-and-direction combination explicitly.
 
 ### REQ-STREAM-INDEXER-015
 
@@ -203,9 +216,17 @@ indexer shall remain authoritative for protocol conformance checks.
 
 For the caller-visible replay passes over original indexing items, the crate
 shall use the shared streaming clustering contract as the clustering boundary
-for deriving a deterministic hierarchical partition plan over original-item
-embeddings rather than directly deriving the first parent-producing layer from
-leaf-level embeddings.
+for deriving or refining a deterministic finalized partition hierarchy.
+
+When the built-in planning path is selected:
+
+- `Divisive` mode shall derive or refine that hierarchy by partitioning replayed
+  original-item embeddings from coarser planning units to finer ones
+- `Agglomerative` mode shall derive or refine that hierarchy by grouping
+  lower-layer planning units bottom-up
+
+Both modes shall normalize into the same deterministic finalized partition
+hierarchy abstraction before final materialization.
 
 ### REQ-STREAM-INDEXER-020
 
@@ -213,9 +234,10 @@ After planning completion and during the final materialization replay, the crate
 shall construct the finished block tree by materializing leaves and assembling
 parent layers bottom-up from the finalized partition hierarchy.
 
-Any clustering used while deriving or refining that hierarchy shall continue to
-flow through the shared streaming clustering contract rather than an older
-batch-only clustering boundary.
+Any clustering used while deriving or refining that hierarchy in either
+`Divisive` or `Agglomerative` mode shall continue to flow through the shared
+streaming clustering contract rather than an older batch-only clustering
+boundary.
 
 ### REQ-STREAM-INDEXER-021
 
@@ -224,8 +246,9 @@ pass report that includes:
 
 - the observed item count for that pass
 - deterministic planning progress or quality information for the caller-visible
-  replayed hierarchy-building work, derived from the shared streaming
-  clustering surface wherever clustering participates in that work
+  hierarchy-building work for the selected planning direction, derived from the
+  shared streaming clustering surface wherever clustering participates in that
+  work
 - enough structured state for the caller to decide whether to continue or stop
 
 ### REQ-STREAM-INDEXER-022
@@ -264,12 +287,14 @@ The crate shall surface explicit failure when:
 - content resolution fails, is inaccessible, or returns content unusable for
   indexing
 - embedding generation fails
-- the caller omits a required built-in planning algorithm selection or required
-  planning settings
+- the caller omits a required built-in planning algorithm selection, built-in
+  hierarchy construction direction selection, or required planning settings
 - a later replay differs from the established logical item set or replay order
 - the finalized partition hierarchy is invalid, overlapping, non-covering, or
   otherwise inconsistent with the replayed logical item set
 - hybrid planning configuration is invalid
+- a selected built-in planning realization does not support the requested
+  hierarchy construction direction
 - a terminal partition cannot be normalized or assembled into
   protocol-conforming parent blocks
 - clustering, canonical-embedding selection, block construction, or storage
@@ -324,9 +349,10 @@ validation surface defined in
 ### REQ-STREAM-INDEXER-031
 
 The crate shall provide a caller-visible built-in planning-selection surface
-that requires callers to choose either the built-in streaming directional-PCA
-realization or the built-in streaming DCBC realization without implementing a
-custom planning factory.
+that requires callers to choose a supported built-in planning
+realization-and-direction combination backed by either the built-in streaming
+directional-PCA realization or the built-in streaming DCBC realization without
+implementing a custom planning factory.
 
 ### REQ-STREAM-INDEXER-032
 
@@ -334,12 +360,16 @@ When a built-in planning realization is selected through the indexer API, the
 crate shall require the caller to provide that algorithm's settings rather than
 supplying implicit built-in planning settings.
 
+The crate shall validate that the supplied settings are compatible with the
+requested built-in hierarchy construction direction.
+
 ### REQ-STREAM-INDEXER-033
 
 The repository verification artifacts for algorithm-agnostic built-in-path
-behavior over fixtures compatible with both built-in planning realizations'
-caller-supplied settings shall realize the corresponding validation coverage as
-a matrix over both built-in planning realizations.
+behavior over fixtures compatible with supported built-in planning
+realization-and-direction combinations' caller-supplied settings shall realize
+the corresponding validation coverage as a matrix over those supported
+combinations.
 
 Algorithm-specific behavior may be validated through separate targeted cases
 rather than forced into that symmetric matrix.
@@ -347,7 +377,12 @@ rather than forced into that symmetric matrix.
 ### REQ-STREAM-INDEXER-034
 
 The crate shall define an explicit deterministic planning boundary over replayed
-original-item embeddings that is distinct from final block materialization.
+original-item embeddings or lower-layer planning units that is distinct from
+final block materialization.
+
+This boundary shall remain expressed as a finalized partition hierarchy
+regardless of whether the built-in planning path derives that hierarchy
+divisively or agglomeratively.
 
 ### REQ-STREAM-INDEXER-035
 
@@ -355,11 +390,32 @@ The crate shall define a deterministic mapping from the finalized partition
 hierarchy to a bottom-up block tree, including deterministic normalization or
 explicit failure for singleton, undersized, or oversized terminal partitions.
 
+Built-in `Divisive` and `Agglomerative` planning modes shall both normalize into
+that finalized partition hierarchy before this mapping is applied.
+
 ### REQ-STREAM-INDEXER-036
 
 The crate shall support hybrid coarse/fine algorithm selection and require
-explicit caller-visible configuration for the phase boundary and
-algorithm-specific settings.
+explicit caller-visible configuration for the phase boundary, any phase-local
+hierarchy construction direction policy, and algorithm-specific settings.
+
+### REQ-STREAM-INDEXER-041
+
+The built-in planning path shall expose an explicit deterministic
+hierarchy-construction-direction policy whose supported values in this revision
+are `Divisive` and `Agglomerative`.
+
+### REQ-STREAM-INDEXER-042
+
+If a caller omits the required built-in hierarchy construction direction or
+selects a realization/settings combination that does not support the requested
+direction, the crate shall fail explicitly rather than silently substituting a
+different direction.
+
+### REQ-STREAM-INDEXER-043
+
+This revision shall retain a conforming built-in `Divisive` planning path after
+adding built-in `Agglomerative` support.
 
 ### REQ-STREAM-INDEXER-037
 
