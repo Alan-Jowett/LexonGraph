@@ -43,8 +43,8 @@ packages, and does not redefine the shared streaming clustering contract.
 Construct the adaptive realization with valid explicit settings.
 
 **Pass condition:** construction succeeds only when direction, directional-PCA
-settings, DCBC settings, and deterministic switch criteria are all provided in
-supported combinations.
+settings, DCBC settings, and a finite non-negative mean-cluster-radius switch
+threshold are all provided in supported combinations.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-004, REQ-ADAPTIVE-POLICY-013
 
@@ -74,13 +74,14 @@ decision boundary.
 
 **Pass condition:** the recorded diagnostics are structured, deterministic, and
 sufficient to decide whether directional PCA remained eligible at that
-boundary.
+boundary, including the measured mean cluster radius.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-007, REQ-ADAPTIVE-POLICY-012
 
 ### VAL-ADAPTIVE-POLICY-007
 
-Run a deterministic fixture whose configured collapse criteria are never met.
+Run a deterministic fixture whose measured mean cluster radius stays at or
+below the configured threshold.
 
 **Pass condition:** the adaptive realization does not switch to DCBC and
 remains on the directional-PCA path throughout the exercised flow.
@@ -89,7 +90,8 @@ remains on the directional-PCA path throughout the exercised flow.
 
 ### VAL-ADAPTIVE-POLICY-008
 
-Run a deterministic fixture whose configured collapse criteria are met.
+Run a deterministic fixture whose measured mean cluster radius exceeds the
+configured threshold.
 
 **Pass condition:** the adaptive realization switches from directional PCA to
 DCBC at a deterministic boundary.
@@ -118,8 +120,8 @@ materialization contract.
 
 ### VAL-ADAPTIVE-POLICY-011
 
-Exercise invalid adaptive configuration, contradictory switch criteria, and an
-unsupported direction or realization combination.
+Exercise invalid adaptive configuration, invalid mean-cluster-radius threshold
+configuration, and an unsupported direction or realization combination.
 
 **Pass condition:** each case fails explicitly rather than silently
 substituting another algorithm, threshold interpretation, or direction.
@@ -133,6 +135,7 @@ the same switch-triggering fixture twice.
 
 **Pass condition:** automated coverage exists for construction, no-switch
 behavior, switch-trigger behavior, both directions, and hierarchy
-compatibility, and both repeated runs select the same switch boundary.
+compatibility, including coverage for a current threshold assumption of `0.25`,
+and both repeated runs select the same switch boundary.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-014

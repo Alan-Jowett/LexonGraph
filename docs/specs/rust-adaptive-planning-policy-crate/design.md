@@ -64,8 +64,9 @@ The adaptive configuration contains:
 - one DCBC configuration block
 - one deterministic switch-policy configuration block
 
-The switch-policy block contains explicit thresholds, comparators, and
-tie-breaking behavior rather than an implicit or informal heuristic.
+The switch-policy block contains an explicit mean-cluster-radius threshold used
+to decide when directional PCA has become too diffuse for the current planning
+boundary.
 
 ### DSG-ADAPTIVE-POLICY-004 `Directional-PCA initial mode`
 
@@ -80,16 +81,22 @@ At deterministic planning boundaries, the adaptive realization derives
 structured collapse diagnostics from the represented planning inputs or outputs
 available at that boundary.
 
-Those diagnostics are compared with the configured switch-policy thresholds to
-determine whether directional PCA remains eligible.
+Those diagnostics include the mean cluster radius produced by the current
+directional-PCA realization, computed as the arithmetic mean of per-cluster
+mean distances from represented items to their realized cluster centroids.
+
+The adaptive realization compares that mean cluster radius with the configured
+switch threshold to determine whether directional PCA remains eligible.
 
 ### DSG-ADAPTIVE-POLICY-006 `Deterministic switch execution`
 
-When the collapse diagnostics satisfy the configured switch criteria, the
-adaptive realization switches from directional PCA to DCBC at that boundary.
+When the measured mean cluster radius is greater than the configured switch
+threshold, the adaptive realization switches from directional PCA to DCBC at
+that boundary.
 
-When the criteria are not satisfied, the realization remains on the
-directional-PCA path for that boundary.
+When the measured mean cluster radius is less than or equal to the configured
+switch threshold, the realization remains on the directional-PCA path for that
+boundary.
 
 ### DSG-ADAPTIVE-POLICY-007 `Direction continuity`
 
@@ -114,7 +121,8 @@ back to directional PCA.
 For each evaluated boundary, the crate retains a structured record identifying:
 
 - the active algorithm realization
-- the deterministic inputs to the switch decision
+- the deterministic inputs to the switch decision, including the measured mean
+  cluster radius
 - whether the switch criteria were satisfied
 - whether the switch boundary occurred at that boundary
 

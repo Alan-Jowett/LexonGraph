@@ -22,7 +22,7 @@ use lexongraph_streaming_clustering::{
 use lexongraph_streaming_indexer::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
     AdaptivePlanningDirection, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-    AdaptiveSwitchTieBreak,
+    DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
 };
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
@@ -554,7 +554,7 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
 
 fn adaptive_planning(
     direction: BuiltInPlanningDirection,
-    min_cumulative_variance: f32,
+    mean_cluster_radius_threshold: f32,
 ) -> BuiltInPlanning {
     let adaptive_direction = match direction {
         BuiltInPlanningDirection::Divisive => AdaptivePlanningDirection::Divisive,
@@ -571,7 +571,7 @@ fn adaptive_planning(
                 temperature: 1.0,
                 min_input_count: 2,
                 min_effective_rank: 1,
-                min_cumulative_variance,
+                min_cumulative_variance: 0.0,
             },
         },
         dcbc: AdaptiveDcbcSettings {
@@ -580,9 +580,7 @@ fn adaptive_planning(
             random_seed: Some(19),
         },
         switch_criteria: AdaptiveSwitchCriteria {
-            min_effective_rank: 1,
-            min_cumulative_variance,
-            tie_break: AdaptiveSwitchTieBreak::PreferDirectionalPca,
+            mean_cluster_radius_threshold,
         },
     })
 }
@@ -608,9 +606,7 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
             random_seed: None,
         },
         switch_criteria: AdaptiveSwitchCriteria {
-            min_effective_rank: 1,
-            min_cumulative_variance: f32::NAN,
-            tie_break: AdaptiveSwitchTieBreak::PreferDirectionalPca,
+            mean_cluster_radius_threshold: f32::NAN,
         },
     })
 }
@@ -1952,8 +1948,14 @@ async fn val_stream_indexer_039_mixed_direction_hybrid_is_rejected_explicitly() 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions() {
     for planning in [
-        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
-        adaptive_planning(BuiltInPlanningDirection::Agglomerative, 0.8),
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
+        adaptive_planning(
+            BuiltInPlanningDirection::Agglomerative,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
     ] {
         let (_, result) = one_shot(planning, &[item("alpha"), item("bravo")], 256)
             .await
@@ -1966,7 +1968,7 @@ async fn val_stream_indexer_040_adaptive_builtin_constructs_for_both_directions(
 async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible() {
     let items = [item("a"), item("m"), item("x"), item("z")];
     let mut run = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        adaptive_planning(BuiltInPlanningDirection::Divisive, f32::MAX),
         160,
     );
     run.ingest_batch(&items).await.unwrap();
@@ -1989,7 +1991,10 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
 async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
     let items = switch_trigger_items();
     let mut run = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
         160,
     );
     run.ingest_batch(&items).await.unwrap();
@@ -2019,7 +2024,10 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
 async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
     let items = switch_trigger_items();
     let mut first = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
         160,
     );
     first.ingest_batch(&items).await.unwrap();
@@ -2033,7 +2041,10 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
     let first_decisions = first.adaptive_decision_records().to_vec();
 
     let mut second = run_with_builtin(
-        adaptive_planning(BuiltInPlanningDirection::Divisive, 0.8),
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
         160,
     );
     second.ingest_batch(&items).await.unwrap();
@@ -2090,7 +2101,7 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
                     temperature: 1.0,
                     min_input_count: 2,
                     min_effective_rank: 1,
-                    min_cumulative_variance: 0.8,
+                    min_cumulative_variance: 0.0,
                 },
             },
             dcbc: AdaptiveDcbcSettings {
@@ -2099,9 +2110,7 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
                 random_seed: Some(19),
             },
             switch_criteria: AdaptiveSwitchCriteria {
-                min_effective_rank: 1,
-                min_cumulative_variance: 0.8,
-                tie_break: AdaptiveSwitchTieBreak::PreferDirectionalPca,
+                mean_cluster_radius_threshold: DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
             },
         },
     )
