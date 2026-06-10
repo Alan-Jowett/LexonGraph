@@ -87,6 +87,30 @@ pub struct IndexingPassReport {
     pub planned_partition_count: usize,
     pub terminal_partition_count: usize,
     pub hierarchy_depth: usize,
+    pub adaptive_planning: Option<AdaptivePlanningPassTelemetry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdaptivePlanningDecisionTelemetry {
+    pub boundary_position: usize,
+    pub active_algorithm: ActivePlanningAlgorithm,
+    pub switch_boundary_occurred: bool,
+    pub mean_cluster_radius: Option<f32>,
+    pub mean_cluster_radius_threshold: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdaptivePlanningPassTelemetry {
+    pub pass_number: usize,
+    pub switch_occurred: bool,
+    pub latest_decision: AdaptivePlanningDecisionTelemetry,
+    pub first_switch_boundary_position: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdaptivePlanningStatusTelemetry {
+    pub pass_number: usize,
+    pub decision: AdaptivePlanningDecisionTelemetry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -160,6 +184,10 @@ pub trait HierarchicalPlanningPolicy {
         BTreeSet::from([PlanningStage::Custom])
     }
 
+    fn adaptive_decision_records(&self) -> &[AdaptiveSwitchDecisionRecord] {
+        &[]
+    }
+
     fn finish_planning_pass(
         &mut self,
         embeddings: &[Vec<f32>],
@@ -177,18 +205,25 @@ pub trait HierarchicalPlanningPolicy {
         mut observe_stage: SO,
     ) -> Result<PlanningPassOutcome, Self::Error>
     where
-        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+        SO: FnMut(
+            PlanningStage,
+            usize,
+            StreamingIndexingStatusState,
+            Option<AdaptivePlanningDecisionTelemetry>,
+        ),
     {
         for stage in self.declared_stages() {
             observe_stage(
                 stage,
                 embeddings.len(),
                 StreamingIndexingStatusState::Started,
+                None,
             );
             observe_stage(
                 stage,
                 embeddings.len(),
                 StreamingIndexingStatusState::InProgress,
+                None,
             );
         }
         self.finish_planning_pass(
@@ -313,6 +348,7 @@ pub struct StreamingIndexingStatus {
     pub remaining_unit_count: Option<usize>,
     pub elapsed: Duration,
     pub error: Option<String>,
+    pub adaptive_planning: Option<AdaptivePlanningStatusTelemetry>,
 }
 
 pub type StreamingIndexingStatusObserver =
@@ -563,7 +599,7 @@ where
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
-        let mut noop = |_, _, _| {};
+        let mut noop = |_, _, _, _| {};
         derive_hierarchy_from_factory(
             &self.factory,
             embeddings,
@@ -583,7 +619,12 @@ where
         mut observe_stage: SO,
     ) -> Result<PlanningPassOutcome, Self::Error>
     where
-        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+        SO: FnMut(
+            PlanningStage,
+            usize,
+            StreamingIndexingStatusState,
+            Option<AdaptivePlanningDecisionTelemetry>,
+        ),
     {
         derive_hierarchy_from_factory(
             &self.factory,
@@ -617,7 +658,7 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
-        let mut noop = |_, _, _| {};
+        let mut noop = |_, _, _, _| {};
         let (outcome, decision_records) = derive_hierarchy_from_built_in(
             &self.planning,
             embeddings,
@@ -639,7 +680,12 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         mut observe_stage: SO,
     ) -> Result<PlanningPassOutcome, Self::Error>
     where
-        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+        SO: FnMut(
+            PlanningStage,
+            usize,
+            StreamingIndexingStatusState,
+            Option<AdaptivePlanningDecisionTelemetry>,
+        ),
     {
         let (outcome, decision_records) = derive_hierarchy_from_built_in(
             &self.planning,
@@ -651,6 +697,10 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         )?;
         self.last_adaptive_decision_records = decision_records;
         Ok(outcome)
+    }
+
+    fn adaptive_decision_records(&self) -> &[AdaptiveSwitchDecisionRecord] {
+        &self.last_adaptive_decision_records
     }
 }
 
@@ -995,8 +1045,14 @@ where
                 &self.embedding_spec,
                 materializability_bound,
                 self.block_size_target,
-                |stage, item_count, state| {
-                    stage_statuses.observe(stage, state, item_count);
+                |stage, item_count, state, adaptive_decision| {
+                    stage_statuses.observe(
+                        pass_number,
+                        stage,
+                        state,
+                        item_count,
+                        adaptive_decision,
+                    );
                 },
             )
             .map_err(map_planning_policy_error);
@@ -1064,6 +1120,10 @@ where
         );
 
         let hierarchy_stats = hierarchy_stats(&outcome.hierarchy);
+        let adaptive_planning = adaptive_pass_telemetry(
+            pass_number,
+            self.planning_policy.adaptive_decision_records(),
+        );
         Ok(IndexingPassReport {
             observed_item_count: self.baseline.as_ref().map_or(0, std::vec::Vec::len),
             completed_pass_count: self.completed_passes,
@@ -1074,6 +1134,7 @@ where
             planned_partition_count: hierarchy_stats.partition_count,
             terminal_partition_count: hierarchy_stats.terminal_partition_count,
             hierarchy_depth: hierarchy_stats.depth,
+            adaptive_planning,
         })
     }
 
@@ -1680,7 +1741,12 @@ fn derive_hierarchy_from_built_in(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     _block_size_target: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 ) -> Result<(PlanningPassOutcome, Vec<AdaptiveSwitchDecisionRecord>), StreamingIndexerError> {
     match planning {
         BuiltInPlanning::Dcbc(settings) => derive_hierarchy_for_single_built_in_phase(
@@ -1718,15 +1784,18 @@ fn derive_hierarchy_from_built_in(
                     |partition_embeddings| {
                         let (stage, phase) =
                             select_hybrid_phase(settings, partition_embeddings.len());
-                        Ok(PartitionPlanner::new(
-                            stage,
-                            create_built_in_trainer(
-                                &phase,
-                                partition_embeddings.len(),
-                                partition_embeddings.first().map_or(0, std::vec::Vec::len),
-                                embedding_spec,
-                                materializability_bound,
-                            )?,
+                        Ok((
+                            PartitionPlanner::new(
+                                stage,
+                                create_built_in_trainer(
+                                    &phase,
+                                    partition_embeddings.len(),
+                                    partition_embeddings.first().map_or(0, std::vec::Vec::len),
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ),
+                            None,
                         ))
                     },
                 )
@@ -1738,15 +1807,18 @@ fn derive_hierarchy_from_built_in(
                         stage_observer,
                         |layer_embeddings, _represented_item_count, max_unit_item_count| {
                             let (stage, phase) = select_hybrid_phase(settings, max_unit_item_count);
-                            Ok(PartitionPlanner::new(
-                                stage,
-                                create_built_in_trainer(
-                                    &phase,
-                                    layer_embeddings.len(),
-                                    layer_embeddings.first().map_or(0, std::vec::Vec::len),
-                                    embedding_spec,
-                                    materializability_bound,
-                                )?,
+                            Ok((
+                                PartitionPlanner::new(
+                                    stage,
+                                    create_built_in_trainer(
+                                        &phase,
+                                        layer_embeddings.len(),
+                                        layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                                        embedding_spec,
+                                        materializability_bound,
+                                    )?,
+                                ),
+                                None,
                             ))
                         },
                     )
@@ -1769,7 +1841,12 @@ fn derive_hierarchy_for_single_built_in_phase(
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match phase.direction() {
         BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder(
@@ -1777,15 +1854,18 @@ fn derive_hierarchy_for_single_built_in_phase(
             materializability_bound,
             stage_observer,
             |partition_embeddings| {
-                Ok(PartitionPlanner::new(
-                    PlanningStage::Single,
-                    create_built_in_trainer(
-                        &phase,
-                        partition_embeddings.len(),
-                        partition_embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
+                Ok((
+                    PartitionPlanner::new(
+                        PlanningStage::Single,
+                        create_built_in_trainer(
+                            &phase,
+                            partition_embeddings.len(),
+                            partition_embeddings.first().map_or(0, std::vec::Vec::len),
+                            embedding_spec,
+                            materializability_bound,
+                        )?,
+                    ),
+                    None,
                 ))
             },
         ),
@@ -1794,15 +1874,18 @@ fn derive_hierarchy_for_single_built_in_phase(
             materializability_bound,
             stage_observer,
             |layer_embeddings, _represented_item_count, _max_unit_item_count| {
-                Ok(PartitionPlanner::new(
-                    PlanningStage::Single,
-                    create_built_in_trainer(
-                        &phase,
-                        layer_embeddings.len(),
-                        layer_embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
+                Ok((
+                    PartitionPlanner::new(
+                        PlanningStage::Single,
+                        create_built_in_trainer(
+                            &phase,
+                            layer_embeddings.len(),
+                            layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                            embedding_spec,
+                            materializability_bound,
+                        )?,
+                    ),
+                    None,
                 ))
             },
         ),
@@ -1877,7 +1960,12 @@ fn derive_hierarchy_for_adaptive_built_in(
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 ) -> Result<(PlanningPassOutcome, Vec<AdaptiveSwitchDecisionRecord>), StreamingIndexerError> {
     let mut selector =
         AdaptivePlanningSelector::new(settings.clone()).map_err(map_adaptive_planning_error)?;
@@ -1887,11 +1975,25 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |partition_embeddings| {
+                let realized_cluster_count = effective_cluster_count(
+                    settings.directional_pca.cluster_count,
+                    partition_embeddings.len(),
+                    materializability_bound,
+                )
+                .map_err(StreamingIndexerError::InvalidAdaptivePlanningConfiguration)?;
                 let algorithm = selector
-                    .select_algorithm(partition_embeddings.len(), partition_embeddings)
+                    .select_algorithm_with_realized_cluster_count(
+                        partition_embeddings.len(),
+                        partition_embeddings,
+                        realized_cluster_count,
+                    )
                     .map_err(map_adaptive_planning_error)?;
+                let adaptive_decision = selector
+                    .decision_records()
+                    .last()
+                    .map(adaptive_decision_telemetry);
                 let phase = adaptive_phase(settings, algorithm);
-                Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
+                Ok::<_, StreamingIndexerError>((
                     PartitionPlanner::new(
                         PlanningStage::Single,
                         create_built_in_trainer(
@@ -1902,7 +2004,8 @@ fn derive_hierarchy_for_adaptive_built_in(
                             materializability_bound,
                         )?,
                     ),
-                )
+                    adaptive_decision,
+                ))
             },
         ),
         AdaptivePlanningDirection::Agglomerative => derive_hierarchy_agglomeratively_with_builder(
@@ -1910,11 +2013,25 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |layer_embeddings, represented_item_count, _max_unit_item_count| {
+                let realized_cluster_count = effective_cluster_count(
+                    settings.directional_pca.cluster_count,
+                    layer_embeddings.len(),
+                    materializability_bound,
+                )
+                .map_err(StreamingIndexerError::InvalidAdaptivePlanningConfiguration)?;
                 let algorithm = selector
-                    .select_algorithm(represented_item_count, layer_embeddings)
+                    .select_algorithm_with_realized_cluster_count(
+                        represented_item_count,
+                        layer_embeddings,
+                        realized_cluster_count,
+                    )
                     .map_err(map_adaptive_planning_error)?;
+                let adaptive_decision = selector
+                    .decision_records()
+                    .last()
+                    .map(adaptive_decision_telemetry);
                 let phase = adaptive_phase(settings, algorithm);
-                Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
+                Ok::<_, StreamingIndexerError>((
                     PartitionPlanner::new(
                         PlanningStage::Single,
                         create_built_in_trainer(
@@ -1925,7 +2042,8 @@ fn derive_hierarchy_for_adaptive_built_in(
                             materializability_bound,
                         )?,
                     ),
-                )
+                    adaptive_decision,
+                ))
             },
         ),
     }?;
@@ -1981,7 +2099,12 @@ fn derive_hierarchy_from_factory<F>(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     block_size_target: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 ) -> Result<PlanningPassOutcome, StreamingClusteringError>
 where
     F: StreamingClusteringFactory,
@@ -1999,7 +2122,7 @@ where
                     embedding_spec,
                 )
                 .map_err(|error| invalid_config(error.to_string()))?;
-            Ok(PartitionPlanner::new(PlanningStage::Custom, trainer))
+            Ok((PartitionPlanner::new(PlanningStage::Custom, trainer), None))
         },
     )
 }
@@ -2060,9 +2183,14 @@ fn derive_hierarchy_with_builder<E, B, P, SO>(
 ) -> Result<PlanningPassOutcome, E>
 where
     E: From<StreamingClusteringError>,
-    B: FnMut(&[Vec<f32>]) -> Result<P, E>,
+    B: FnMut(&[Vec<f32>]) -> Result<(P, Option<AdaptivePlanningDecisionTelemetry>), E>,
     P: PartitionPlannerRunner,
-    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    SO: FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 {
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
@@ -2114,9 +2242,18 @@ fn derive_hierarchy_agglomeratively_with_builder<E, B, P, SO>(
 ) -> Result<PlanningPassOutcome, E>
 where
     E: From<StreamingClusteringError>,
-    B: FnMut(&[Vec<f32>], usize, usize) -> Result<P, E>,
+    B: FnMut(
+        &[Vec<f32>],
+        usize,
+        usize,
+    ) -> Result<(P, Option<AdaptivePlanningDecisionTelemetry>), E>,
     P: PartitionPlannerRunner,
-    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    SO: FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 {
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
@@ -2169,7 +2306,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(E::from)?;
-        let planner = planner_builder(
+        let (planner, adaptive_decision) = planner_builder(
             &layer_embeddings,
             represented_item_count,
             max_unit_item_count,
@@ -2179,11 +2316,13 @@ where
             stage,
             represented_item_count,
             StreamingIndexingStatusState::Started,
+            adaptive_decision,
         );
         stage_observer(
             stage,
             represented_item_count,
             StreamingIndexingStatusState::InProgress,
+            adaptive_decision,
         );
         let (pass_report, assignments) = planner.run(&layer_embeddings).map_err(E::from)?;
         if assignments.len() != layer_embeddings.len() {
@@ -2318,9 +2457,14 @@ fn derive_partition_recursive<E, B, P, SO>(
 ) -> Result<(), E>
 where
     E: From<StreamingClusteringError>,
-    B: FnMut(&[Vec<f32>]) -> Result<P, E>,
+    B: FnMut(&[Vec<f32>]) -> Result<(P, Option<AdaptivePlanningDecisionTelemetry>), E>,
     P: PartitionPlannerRunner,
-    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    SO: FnMut(
+        PlanningStage,
+        usize,
+        StreamingIndexingStatusState,
+        Option<AdaptivePlanningDecisionTelemetry>,
+    ),
 {
     let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
     if terminal {
@@ -2339,13 +2483,19 @@ where
         .iter()
         .map(|&index| embeddings[index].clone())
         .collect::<Vec<_>>();
-    let planner = planner_builder(&partition_embeddings)?;
+    let (planner, adaptive_decision) = planner_builder(&partition_embeddings)?;
     let stage = planner.stage();
-    stage_observer(stage, indices.len(), StreamingIndexingStatusState::Started);
+    stage_observer(
+        stage,
+        indices.len(),
+        StreamingIndexingStatusState::Started,
+        adaptive_decision,
+    );
     stage_observer(
         stage,
         indices.len(),
         StreamingIndexingStatusState::InProgress,
+        adaptive_decision,
     );
     let (pass_report, assignments) = planner.run(&partition_embeddings).map_err(E::from)?;
     if assignments.len() != partition_embeddings.len() {
@@ -2471,25 +2621,35 @@ impl<'a> PlanningStageStatusTracker<'a> {
 
     fn observe(
         &mut self,
+        pass_number: usize,
         stage: PlanningStage,
         state: StreamingIndexingStatusState,
         item_count: usize,
+        adaptive_decision: Option<AdaptivePlanningDecisionTelemetry>,
     ) {
         match state {
-            StreamingIndexingStatusState::Started => self.ensure_started(stage, item_count),
+            StreamingIndexingStatusState::Started => {
+                self.ensure_started(pass_number, stage, item_count, adaptive_decision)
+            }
             StreamingIndexingStatusState::InProgress => {
-                self.ensure_started(stage, item_count);
+                self.ensure_started(pass_number, stage, item_count, adaptive_decision);
                 let total = self.stage_item_counts.entry(stage).or_insert(0);
                 *total += item_count;
                 emit_status(
                     self.observer,
-                    status_with_progress(
-                        StreamingIndexingPhase::HierarchyPlanning { stage },
-                        state,
-                        None,
-                        *total,
-                        self.pass_started.elapsed(),
-                        None,
+                    with_adaptive_planning(
+                        status_with_progress(
+                            StreamingIndexingPhase::HierarchyPlanning { stage },
+                            state,
+                            None,
+                            *total,
+                            self.pass_started.elapsed(),
+                            None,
+                        ),
+                        adaptive_decision.map(|decision| AdaptivePlanningStatusTelemetry {
+                            pass_number,
+                            decision,
+                        }),
                     ),
                 );
             }
@@ -2529,7 +2689,13 @@ impl<'a> PlanningStageStatusTracker<'a> {
         }
     }
 
-    fn ensure_started(&mut self, stage: PlanningStage, item_count: usize) {
+    fn ensure_started(
+        &mut self,
+        pass_number: usize,
+        stage: PlanningStage,
+        item_count: usize,
+        adaptive_decision: Option<AdaptivePlanningDecisionTelemetry>,
+    ) {
         if self.stage_item_counts.contains_key(&stage) {
             return;
         }
@@ -2537,13 +2703,19 @@ impl<'a> PlanningStageStatusTracker<'a> {
         emit_status(
             self.observer,
             with_legacy_item_count(
-                status_with_progress(
-                    StreamingIndexingPhase::HierarchyPlanning { stage },
-                    StreamingIndexingStatusState::Started,
-                    None,
-                    0,
-                    Duration::ZERO,
-                    None,
+                with_adaptive_planning(
+                    status_with_progress(
+                        StreamingIndexingPhase::HierarchyPlanning { stage },
+                        StreamingIndexingStatusState::Started,
+                        None,
+                        0,
+                        Duration::ZERO,
+                        None,
+                    ),
+                    adaptive_decision.map(|decision| AdaptivePlanningStatusTelemetry {
+                        pass_number,
+                        decision,
+                    }),
                 ),
                 item_count,
             ),
@@ -2557,6 +2729,45 @@ impl<'a> PlanningStageStatusTracker<'a> {
 
 fn remaining_units(total: Option<usize>, completed: usize) -> Option<usize> {
     total.and_then(|total| total.checked_sub(completed))
+}
+
+fn adaptive_decision_telemetry(
+    record: &AdaptiveSwitchDecisionRecord,
+) -> AdaptivePlanningDecisionTelemetry {
+    AdaptivePlanningDecisionTelemetry {
+        boundary_position: record.boundary_position,
+        active_algorithm: record.active_algorithm,
+        switch_boundary_occurred: record.switch_boundary_occurred,
+        mean_cluster_radius: record
+            .collapse_diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.mean_cluster_radius),
+        mean_cluster_radius_threshold: record.mean_cluster_radius_threshold,
+    }
+}
+
+fn adaptive_pass_telemetry(
+    pass_number: usize,
+    decision_records: &[AdaptiveSwitchDecisionRecord],
+) -> Option<AdaptivePlanningPassTelemetry> {
+    let latest_decision = adaptive_decision_telemetry(
+        decision_records
+            .iter()
+            .rev()
+            .find(|record| record.collapse_diagnostics.is_some())
+            .unwrap_or(decision_records.last()?),
+    );
+    Some(AdaptivePlanningPassTelemetry {
+        pass_number,
+        switch_occurred: decision_records
+            .iter()
+            .any(|record| record.switch_boundary_occurred),
+        latest_decision,
+        first_switch_boundary_position: decision_records
+            .iter()
+            .find(|record| record.switch_boundary_occurred)
+            .map(|record| record.boundary_position),
+    })
 }
 
 fn status_with_progress(
@@ -2576,6 +2787,7 @@ fn status_with_progress(
         remaining_unit_count: remaining_units(phase_total_unit_count, completed_unit_count),
         elapsed,
         error,
+        adaptive_planning: None,
     }
 }
 
@@ -2602,6 +2814,14 @@ fn with_legacy_item_count(
     legacy_item_count: usize,
 ) -> StreamingIndexingStatus {
     status.item_count = legacy_item_count;
+    status
+}
+
+fn with_adaptive_planning(
+    mut status: StreamingIndexingStatus,
+    adaptive_planning: Option<AdaptivePlanningStatusTelemetry>,
+) -> StreamingIndexingStatus {
+    status.adaptive_planning = adaptive_planning;
     status
 }
 

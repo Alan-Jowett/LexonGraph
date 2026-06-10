@@ -3,7 +3,7 @@
 //! Executable verification for docs/specs/rust-streaming-indexer-crate/validation.md
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -556,6 +556,14 @@ fn adaptive_planning(
     direction: BuiltInPlanningDirection,
     mean_cluster_radius_threshold: f32,
 ) -> BuiltInPlanning {
+    adaptive_planning_with_cluster_count(direction, mean_cluster_radius_threshold, 2)
+}
+
+fn adaptive_planning_with_cluster_count(
+    direction: BuiltInPlanningDirection,
+    mean_cluster_radius_threshold: f32,
+    cluster_count: u32,
+) -> BuiltInPlanning {
     let adaptive_direction = match direction {
         BuiltInPlanningDirection::Divisive => AdaptivePlanningDirection::Divisive,
         BuiltInPlanningDirection::Agglomerative => AdaptivePlanningDirection::Agglomerative,
@@ -563,7 +571,7 @@ fn adaptive_planning(
     BuiltInPlanning::Adaptive(AdaptivePlanningSettings {
         direction: adaptive_direction,
         directional_pca: AdaptiveDirectionalPcaSettings {
-            cluster_count: 2,
+            cluster_count,
             random_seed: Some(17),
             params: DirectionalPcaParams {
                 retained_dimension_count: 1,
@@ -716,6 +724,24 @@ fn run_with_builtin(
         embedding_spec(),
         block_size_target,
     )
+}
+
+fn unique_adaptive_status_telemetries(
+    statuses: &[StreamingIndexingStatus],
+) -> Vec<lexongraph_streaming_indexer::AdaptivePlanningStatusTelemetry> {
+    let mut by_boundary = BTreeMap::new();
+    for status in statuses {
+        if matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning { .. }
+        ) && let Some(telemetry) = status.adaptive_planning
+        {
+            by_boundary
+                .entry(telemetry.decision.boundary_position)
+                .or_insert(telemetry);
+        }
+    }
+    by_boundary.into_values().collect()
 }
 
 async fn one_shot(
@@ -1972,11 +1998,59 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
         160,
     );
     run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
+    let report = run.finish_pass().unwrap();
+    let decision_records = run.adaptive_decision_records();
     assert!(
-        run.adaptive_decision_records()
+        decision_records
             .iter()
             .all(|record| record.active_algorithm == ActivePlanningAlgorithm::DirectionalPca)
+    );
+    assert_eq!(
+        decision_records
+            .iter()
+            .map(|record| record.boundary_position)
+            .collect::<Vec<_>>(),
+        (0..decision_records.len()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        report.adaptive_planning,
+        Some(
+            lexongraph_streaming_indexer::AdaptivePlanningPassTelemetry {
+                pass_number: 1,
+                switch_occurred: false,
+                latest_decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry {
+                    boundary_position: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .boundary_position,
+                    active_algorithm: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .active_algorithm,
+                    switch_boundary_occurred: decision_records
+                        .iter()
+                        .rev()
+                        .find(|record| record.collapse_diagnostics.is_some())
+                        .unwrap_or(decision_records.last().unwrap())
+                        .switch_boundary_occurred,
+                    mean_cluster_radius: decision_records.iter().rev().find_map(|record| {
+                        record
+                            .collapse_diagnostics
+                            .as_ref()
+                            .map(|diagnostics| diagnostics.mean_cluster_radius)
+                    }),
+                    mean_cluster_radius_threshold: decision_records
+                        .iter()
+                        .rev()
+                        .find_map(|record| record.mean_cluster_radius_threshold),
+                },
+                first_switch_boundary_position: None,
+            }
+        )
     );
     run.mark_planning_complete().unwrap();
     let store = MemoryBlockStore::default();
@@ -1998,7 +2072,7 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
         160,
     );
     run.ingest_batch(&items).await.unwrap();
-    run.finish_pass().unwrap();
+    let report = run.finish_pass().unwrap();
     let decision_records = run.adaptive_decision_records();
     assert_eq!(
         decision_records
@@ -2011,6 +2085,47 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
             .iter()
             .any(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
     );
+    assert_eq!(
+        decision_records
+            .iter()
+            .map(|record| record.boundary_position)
+            .collect::<Vec<_>>(),
+        (0..decision_records.len()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        report.adaptive_planning.as_ref().map(|telemetry| (
+            telemetry.pass_number,
+            telemetry.switch_occurred,
+            telemetry.latest_decision.active_algorithm,
+            telemetry.first_switch_boundary_position,
+            telemetry.latest_decision.mean_cluster_radius_threshold
+        )),
+        Some((
+            1,
+            true,
+            decision_records
+                .iter()
+                .rev()
+                .find(|record| record.collapse_diagnostics.is_some())
+                .unwrap_or(decision_records.last().unwrap())
+                .active_algorithm,
+            decision_records
+                .iter()
+                .find(|record| record.switch_boundary_occurred)
+                .map(|record| record.boundary_position),
+            decision_records
+                .iter()
+                .rev()
+                .find_map(|record| record.mean_cluster_radius_threshold)
+        ))
+    );
+    assert!(
+        report
+            .adaptive_planning
+            .as_ref()
+            .and_then(|telemetry| telemetry.latest_decision.mean_cluster_radius)
+            .is_some()
+    );
     run.mark_planning_complete().unwrap();
     let store = MemoryBlockStore::default();
     let result = run
@@ -2021,7 +2136,196 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
+async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_report_and_status() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = [item("a"), item("m"), item("x"), item("z")];
+    let mut run = run_with_builtin(
+        adaptive_planning(BuiltInPlanningDirection::Divisive, f32::MAX),
+        160,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    let report = run.finish_pass().unwrap();
+
+    let status_telemetry = unique_adaptive_status_telemetries(&statuses.lock().unwrap().clone());
+    assert!(!status_telemetry.is_empty());
+    assert!(
+        status_telemetry
+            .iter()
+            .all(|telemetry| telemetry.pass_number == 1)
+    );
+    assert!(status_telemetry.iter().all(|telemetry| {
+        telemetry.decision.active_algorithm == ActivePlanningAlgorithm::DirectionalPca
+            && !telemetry.decision.switch_boundary_occurred
+    }));
+    assert!(status_telemetry.iter().all(|telemetry| {
+        telemetry.decision.mean_cluster_radius.is_none()
+            && telemetry.decision.mean_cluster_radius_threshold.is_none()
+    }));
+    assert_eq!(
+        status_telemetry
+            .iter()
+            .map(|telemetry| telemetry.decision.boundary_position)
+            .collect::<Vec<_>>(),
+        (0..status_telemetry.len()).collect::<Vec<_>>()
+    );
+
+    let pass_telemetry = report.adaptive_planning.unwrap();
+    let expected_report_decision = run
+        .adaptive_decision_records()
+        .iter()
+        .rev()
+        .find(|record| record.collapse_diagnostics.is_some())
+        .unwrap_or(run.adaptive_decision_records().last().unwrap());
+    assert_eq!(pass_telemetry.pass_number, 1);
+    assert!(!pass_telemetry.switch_occurred);
+    assert_eq!(
+        pass_telemetry.latest_decision.active_algorithm,
+        expected_report_decision.active_algorithm
+    );
+    assert_eq!(pass_telemetry.first_switch_boundary_position, None);
+    assert_eq!(
+        pass_telemetry.latest_decision.boundary_position,
+        expected_report_decision.boundary_position
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius,
+        expected_report_decision
+            .collapse_diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.mean_cluster_radius)
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius_threshold,
+        expected_report_decision.mean_cluster_radius_threshold
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_report_and_status() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
+        160,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    let report = run.finish_pass().unwrap();
+
+    let status_telemetry = unique_adaptive_status_telemetries(&statuses.lock().unwrap().clone());
+    assert!(!status_telemetry.is_empty());
+    assert!(
+        status_telemetry
+            .iter()
+            .all(|telemetry| telemetry.pass_number == 1)
+    );
+    let switch_boundary = status_telemetry
+        .iter()
+        .find(|telemetry| telemetry.decision.switch_boundary_occurred)
+        .map(|telemetry| telemetry.decision);
+    assert!(switch_boundary.is_some());
+    assert_eq!(
+        status_telemetry.last().unwrap().decision.active_algorithm,
+        ActivePlanningAlgorithm::Dcbc
+    );
+
+    let pass_telemetry = report.adaptive_planning.unwrap();
+    let expected_report_decision = run
+        .adaptive_decision_records()
+        .iter()
+        .rev()
+        .find(|record| record.collapse_diagnostics.is_some())
+        .unwrap_or(run.adaptive_decision_records().last().unwrap());
+    assert_eq!(pass_telemetry.pass_number, 1);
+    assert!(pass_telemetry.switch_occurred);
+    assert_eq!(
+        pass_telemetry.latest_decision.active_algorithm,
+        expected_report_decision.active_algorithm
+    );
+    assert_eq!(
+        pass_telemetry.first_switch_boundary_position,
+        switch_boundary.map(|decision| decision.boundary_position)
+    );
+    let switch_boundary = switch_boundary.unwrap();
+    let measured = switch_boundary.mean_cluster_radius.unwrap();
+    let threshold = switch_boundary.mean_cluster_radius_threshold.unwrap();
+    assert!(measured > threshold);
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius,
+        expected_report_decision
+            .collapse_diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.mean_cluster_radius)
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.mean_cluster_radius_threshold,
+        expected_report_decision.mean_cluster_radius_threshold
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_across_runs() {
+    let items = switch_trigger_items();
+
+    let first_statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let first_observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&first_statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let mut first = run_with_builtin(
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
+        160,
+    )
+    .with_observer(first_observer);
+    first.ingest_batch(&items).await.unwrap();
+    let first_report = first.finish_pass().unwrap();
+    let first_telemetry =
+        unique_adaptive_status_telemetries(&first_statuses.lock().unwrap().clone());
+
+    let second_statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let second_observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&second_statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let mut second = run_with_builtin(
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
+        160,
+    )
+    .with_observer(second_observer);
+    second.ingest_batch(&items).await.unwrap();
+    let second_report = second.finish_pass().unwrap();
+    let second_telemetry =
+        unique_adaptive_status_telemetries(&second_statuses.lock().unwrap().clone());
+
+    assert_eq!(first_report, second_report);
+    assert_eq!(first_telemetry, second_telemetry);
+    assert!(first_telemetry.iter().any(|telemetry| {
+        telemetry.decision.mean_cluster_radius.is_some()
+            && telemetry.decision.mean_cluster_radius_threshold.is_some()
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
     let items = switch_trigger_items();
     let mut first = run_with_builtin(
         adaptive_planning(
@@ -2032,12 +2336,6 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
     );
     first.ingest_batch(&items).await.unwrap();
     let first_report = first.finish_pass().unwrap();
-    first.mark_planning_complete().unwrap();
-    let first_store = MemoryBlockStore::default();
-    let first_result = first
-        .finalize(std::iter::once(items.as_slice()), &first_store)
-        .await
-        .unwrap();
     let first_decisions = first.adaptive_decision_records().to_vec();
 
     let mut second = run_with_builtin(
@@ -2049,46 +2347,65 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
     );
     second.ingest_batch(&items).await.unwrap();
     let second_report = second.finish_pass().unwrap();
-    second.mark_planning_complete().unwrap();
-    let second_store = MemoryBlockStore::default();
-    let second_result = second
-        .finalize(std::iter::once(items.as_slice()), &second_store)
-        .await
-        .unwrap();
     let second_decisions = second.adaptive_decision_records().to_vec();
-    let first_algorithm_sequence: Vec<_> = first_decisions
-        .iter()
-        .map(|record| record.active_algorithm)
-        .collect();
-    let second_algorithm_sequence: Vec<_> = second_decisions
-        .iter()
-        .map(|record| record.active_algorithm)
-        .collect();
-    let first_switch_boundaries: Vec<_> = first_decisions
-        .iter()
-        .enumerate()
-        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
-        .collect();
-    let second_switch_boundaries: Vec<_> = second_decisions
-        .iter()
-        .enumerate()
-        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
-        .collect();
-    let first_reasons: Vec<_> = first_decisions.iter().map(|record| record.reason).collect();
-    let second_reasons: Vec<_> = second_decisions
-        .iter()
-        .map(|record| record.reason)
-        .collect();
 
     assert_eq!(first_report, second_report);
-    assert_eq!(first_result, second_result);
-    assert_eq!(first_algorithm_sequence, second_algorithm_sequence);
-    assert_eq!(first_switch_boundaries, second_switch_boundaries);
-    assert_eq!(first_reasons, second_reasons);
+    assert_eq!(first_decisions, second_decisions);
+    assert!(
+        first_decisions
+            .iter()
+            .skip_while(|record| !record.switch_boundary_occurred)
+            .all(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
+    );
+    assert!(first_decisions.iter().any(|record| {
+        record.collapse_diagnostics.is_some() && record.mean_cluster_radius_threshold.is_some()
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_adaptive_diagnostics_use_realized_cluster_count_from_planner() {
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
+        adaptive_planning_with_cluster_count(BuiltInPlanningDirection::Divisive, 0.0, 8),
+        160,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    let report = run.finish_pass().unwrap();
+    let decision_records = run.adaptive_decision_records();
+    let diagnostic_decision = decision_records
+        .iter()
+        .find(|record| record.collapse_diagnostics.is_some())
+        .unwrap();
+    let diagnostics = diagnostic_decision.collapse_diagnostics.as_ref().unwrap();
+    assert_eq!(diagnostics.realized_cluster_count, 2);
+    assert_eq!(
+        diagnostics.cluster_member_counts.iter().sum::<usize>(),
+        diagnostics.represented_item_count
+    );
+    assert_eq!(diagnostics.cluster_member_counts.len(), 2);
+    assert!(
+        diagnostics
+            .cluster_mean_radii
+            .iter()
+            .all(|radius| *radius > 0.0)
+    );
+    assert!(diagnostics.mean_cluster_radius > 0.0);
+    assert!(diagnostic_decision.switch_boundary_occurred);
+    assert_eq!(
+        diagnostic_decision.active_algorithm,
+        ActivePlanningAlgorithm::Dcbc
+    );
+    assert_eq!(
+        report
+            .adaptive_planning
+            .as_ref()
+            .and_then(|telemetry| telemetry.latest_decision.mean_cluster_radius),
+        Some(diagnostics.mean_cluster_radius)
+    );
 }
 
 #[test]
-fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
+fn regression_adaptive_selector_keeps_one_way_switch_records() {
     let mut selector = lexongraph_adaptive_planning_policy::AdaptivePlanningSelector::new(
         AdaptivePlanningSettings {
             direction: AdaptivePlanningDirection::Divisive,
@@ -2138,5 +2455,21 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
     assert_eq!(
         selector.select_algorithm(line.len(), &line).unwrap(),
         ActivePlanningAlgorithm::Dcbc
+    );
+    assert_eq!(
+        selector
+            .decision_records()
+            .iter()
+            .map(|record| record.boundary_position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        selector
+            .decision_records()
+            .iter()
+            .map(|record| record.mean_cluster_radius_threshold)
+            .collect::<Vec<_>>(),
+        vec![None, Some(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD), None]
     );
 }

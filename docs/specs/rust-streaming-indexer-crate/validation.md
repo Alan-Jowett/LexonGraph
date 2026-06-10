@@ -520,6 +520,67 @@ REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046
 
 ### VAL-STREAM-INDEXER-043
 
+Run a deterministic adaptive-planning fixture whose configured switch criteria
+are never met, capture the completed `IndexingPassReport`, and capture the
+caller-visible status observer stream for hierarchy-planning updates.
+
+**Pass condition:** the pass report and observer stream both surface
+deterministic adaptive telemetry showing that no PCA-to-DCBC switch occurred,
+that directional PCA remained the active adaptive algorithm throughout the
+exercised flow, that no switch boundary position is falsely reported as if a
+switch had occurred, and that evaluated boundaries with diagnostics expose the
+measured `mean_cluster_radius` plus configured
+`mean_cluster_radius_threshold` while boundaries without diagnostics report
+those fields as unavailable.
+
+For fixtures expected to produce a non-zero measured radius, this validation
+also confirms that neither caller-visible surface reports `0.0` unless the
+underlying adaptive decision records justify that exact value.
+
+**Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
+REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-044
+
+Run a deterministic adaptive-planning fixture whose configured switch criteria
+are met during planning, capture the completed `IndexingPassReport`, and
+capture the caller-visible status observer stream for hierarchy-planning
+updates.
+
+**Pass condition:** the pass report and observer stream both surface
+deterministic adaptive telemetry showing that a PCA-to-DCBC switch occurred,
+that DCBC became the active adaptive algorithm after the switch, and that the
+reported switch boundary position identifies the same adaptive boundary in both
+caller-visible telemetry surfaces while also surfacing the measured
+`mean_cluster_radius` and configured `mean_cluster_radius_threshold` whose
+comparison explains why the switch occurred.
+
+This validation also checks that the surfaced radius and threshold exactly match
+the underlying adaptive decision records rather than a lossy reformatted value.
+
+**Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
+REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-045
+
+Repeat the same deterministic adaptive switch-triggering fixture twice while
+capturing both completed `IndexingPassReport` values and both caller-visible
+status observer streams.
+
+**Pass condition:** both runs surface the same adaptive switch occurrence, the
+same active adaptive algorithm sequence at evaluated boundaries, and the same
+reported switch boundary position across both pass reports and observer
+streams, along with the same surfaced `mean_cluster_radius` and
+`mean_cluster_radius_threshold` values and availability semantics.
+
+Repeated runs also preserve equality between the caller-visible telemetry and
+the underlying adaptive decision records for suspicious values such as a
+reported `mean_cluster_radius` of `0.0`.
+
+**Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-046
+
 Repeat the same adaptive switch-triggering fixture twice with identical logical
 input, replay order, settings, and deterministic dependency behavior.
 
@@ -530,7 +591,7 @@ same planning flow.
 **Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046,
 REQ-STREAM-INDEXER-047
 
-### VAL-STREAM-INDEXER-044
+### VAL-STREAM-INDEXER-047
 
 Inspect the repository verification artifacts for the built-in planning matrix
 and adaptive targeted cases.
