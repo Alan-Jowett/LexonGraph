@@ -5,7 +5,7 @@
 
 This document defines the externally observable properties and behavioral contracts that any valid system solution must satisfy. It completely decouples **what** the system must guarantee from **how** the internal algorithms achieve it.
 
-The requirements are divided into two distinct tiers, followed by supplemental operational contracts:
+The requirements are divided into two distinct tiers, followed by a supplemental operational contract section:
 
 1. **Hard Invariants:** Binary, non-negotiable structural and behavioral constraints. Failure to meet any of these constitutes an invalid system.
 2. **Quality Metrics & Objectives:** Measurable performance and geometric goals evaluated against thresholds on a defined benchmark dataset.
@@ -41,7 +41,7 @@ Every leaf bucket must contain exactly $L$ vectors (where $L$ is the configured 
 
 To guarantee this structural invariant on arbitrary dataset sizes ($N$), the system must enforce one of the following configuration-driven protocols:
 
-- **Strict Alignment:** The input dataset size $N$ must be an integer multiple of $L$ ($N \pmod L == 0$). If it is not, the build must fail immediately with an alignment error.
+- **Strict Alignment:** The input dataset size $N$ must be an integer multiple of $L$ ($N \equiv 0 \pmod L$). If it is not, the build must fail immediately with an alignment error.
 - **Deterministic Synthetic Padding:** If $N \pmod L \neq 0$, the system must add a pre-defined, deterministic set of synthetic padding entities prior to building the tree to bring the total count to the next multiple of $L$. Synthetic padding entities must be uniquely tagged, must not duplicate any real input vector, and must be excluded from externally visible search results and benchmark metrics.
 
 #### Invariant Triggers
@@ -62,7 +62,7 @@ The system must produce a multi-level hierarchy where the branching factor (fano
 - **Configured Fanout Range:** Every internal node must have a number of children $f$ such that $f_{\min} \le f \le f_{\max}$ (where $1 < f_{\min} \le f_{\max}$).
 - **Root Edge Case:** If the total number of leaves is less than $f_{\min}$, the root node may have fanout equal to the total number of leaves, provided that number is at least $2$.
 - **Degenerate Chain Prohibition:** Single-child internal nodes ($f = 1$) are strictly prohibited.
-- **Strict Depth Bound:** The total tree depth $D$ (where the root is at depth $0$ and leaves are at depth $D$) must not exceed the depth implied by a balanced tree using the minimum allowed fanout:
+- **Strict Depth Bound:** The total tree depth $D$ (where the root is at depth $0$ and leaves are at depth $D$) must not exceed the depth implied by a balanced tree using the minimum allowed fanout, where $N_{\text{indexed}}$ is the total number of indexed entities (real vectors plus any synthetic padding):
 
 $$
 D \le \left\lceil \log_{f_{\min}} \left(\frac{N_{\text{indexed}}}{L}\right) \right\rceil
@@ -255,7 +255,7 @@ The build process must fail atomically and report errors deterministically.
 
 ---
 
-# Requirements Traceability Matrix (Summary)
+## Requirements Traceability Matrix (Summary)
 
 | # | Requirement Name | Classification | Primary Metric / Verification Method |
 | --- | --- | --- | --- |
