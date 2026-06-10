@@ -62,9 +62,10 @@ impl StreamingClusterTrainer for InvalidRangeTrainer {
 
     fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
         if self.state != TrainerState::Ingesting {
+            let invalid_state = self.state;
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::InvalidTransition {
-                state: self.state,
+                state: invalid_state,
                 operation: "finish_pass".into(),
             });
         }
@@ -81,9 +82,10 @@ impl StreamingClusterTrainer for InvalidRangeTrainer {
 
     fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
         if self.state != TrainerState::PassComplete {
+            let invalid_state = self.state;
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::InvalidTransition {
-                state: self.state,
+                state: invalid_state,
                 operation: "complete_training".into(),
             });
         }
@@ -599,4 +601,106 @@ fn regression_leaf_membership_assignments_outside_k_are_reported_as_shared_contr
             .detail
             .contains("outside [0, 2)")
     );
+}
+
+#[test]
+fn regression_candidate_artifact_names_are_sanitized_before_writing() {
+    let mut report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+    )
+    .unwrap();
+    report.run_reports[0].candidate_identity.candidate_id = "..\\evil/name".into();
+
+    let artifacts = emit_campaign_artifacts(&report).unwrap();
+
+    assert_eq!(
+        artifacts.per_candidate_reports[0].file_name,
+        "evil_name-run-report.json"
+    );
+}
+
+#[test]
+fn regression_duplicate_corpus_ids_are_rejected() {
+    let mut profile = strict_alignment_profile();
+    profile.corpus_ids.push("fixture-corpus-a".into());
+
+    let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate value in corpus ids"))
+    );
+}
+
+#[test]
+fn regression_unknown_entity_corpus_ids_are_rejected() {
+    let mut profile = strict_alignment_profile();
+    profile.evaluation_entities[0].corpus_id = "unknown-corpus".into();
+
+    let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("references unknown corpus"))
+    );
+}
+
+#[test]
+fn regression_non_finite_or_negative_ranking_weights_are_rejected() {
+    for invalid_weight in [f64::NAN, f64::INFINITY, -0.5] {
+        let mut profile = strict_alignment_profile();
+        profile.metric_declarations[0].ranking_weight = invalid_weight;
+
+        let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
+
+        assert!(
+            matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("ranking_weight must be finite and non-negative"))
+        );
+    }
+}
+
+#[test]
+fn regression_non_finite_gate_minima_are_rejected() {
+    for invalid_minimum in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut profile = strict_alignment_profile();
+        if let lexongraph_streaming_clustering_evaluator::GateKind::MetricAtLeast {
+            minimum, ..
+        } = &mut profile.gate_declarations[5].kind
+        {
+            *minimum = invalid_minimum;
+        }
+
+        let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
+
+        assert!(
+            matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("minimum must be finite"))
+        );
+    }
+}
+
+#[test]
+fn regression_invalid_transition_errors_report_the_original_state() {
+    let config = strict_alignment_profile()
+        .shared_candidate_config
+        .to_streaming_config();
+
+    let mut trainer = InvalidRangeTrainer::new(&config, InvalidRangeMode::Probe);
+    assert!(matches!(
+        trainer.finish_pass(),
+        Err(StreamingClusteringError::InvalidTransition {
+            state: TrainerState::Idle,
+            ..
+        })
+    ));
+
+    let mut trainer = InvalidRangeTrainer::new(&config, InvalidRangeMode::Probe);
+    trainer.ingest_batch(&[vec![0.0, 0.0]]).unwrap();
+    trainer.finish_pass().unwrap();
+    trainer.complete_training().unwrap();
+    assert!(matches!(
+        trainer.complete_training(),
+        Err(StreamingClusteringError::InvalidTransition {
+            state: TrainerState::TrainingComplete,
+            ..
+        })
+    ));
 }

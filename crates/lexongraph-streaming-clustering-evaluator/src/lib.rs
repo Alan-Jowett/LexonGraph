@@ -461,11 +461,9 @@ pub fn emit_campaign_artifacts(
 ) -> Result<CampaignArtifacts, EvaluatorError> {
     let mut per_candidate_reports = Vec::with_capacity(report.run_reports.len());
     for run_report in &report.run_reports {
+        let safe_candidate_id = sanitize_artifact_stem(&run_report.candidate_identity.candidate_id);
         per_candidate_reports.push(EmittedArtifact {
-            file_name: format!(
-                "{}-run-report.json",
-                run_report.candidate_identity.candidate_id
-            ),
+            file_name: format!("{safe_candidate_id}-run-report.json"),
             contents: serde_json::to_string_pretty(run_report)
                 .map_err(|error| EvaluatorError::Json(error.to_string()))?,
         });
@@ -609,6 +607,7 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
     validate_config(&profile.shared_candidate_config.to_streaming_config())
         .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?;
 
+    assert_unique(profile.corpus_ids.iter().map(String::as_str), "corpus ids")?;
     assert_unique(
         profile
             .metric_declarations
@@ -680,6 +679,11 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
     }
 
     let mut synthetic_count = 0usize;
+    let corpus_ids = profile
+        .corpus_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     for entity in &profile.evaluation_entities {
         validate_embedding(&entity.embedding, dimensions).map_err(|error| {
             EvaluatorError::InvalidConfiguration(format!(
@@ -687,6 +691,12 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
                 entity.entity_id
             ))
         })?;
+        if !corpus_ids.contains(entity.corpus_id.as_str()) {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "evaluation entity {} references unknown corpus {}",
+                entity.entity_id, entity.corpus_id
+            )));
+        }
         if entity.synthetic {
             synthetic_count += 1;
         }
@@ -761,6 +771,12 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
                 declaration.metric_id
             )));
         }
+        if !declaration.ranking_weight.is_finite() || declaration.ranking_weight < 0.0 {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "metric {} ranking_weight must be finite and non-negative",
+                declaration.metric_id
+            )));
+        }
     }
     for declaration in &profile.gate_declarations {
         if declaration.research_goal_ids.is_empty() {
@@ -769,13 +785,19 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
                 declaration.gate_id
             )));
         }
-        if let GateKind::MetricAtLeast { metric_id, .. } = &declaration.kind
-            && !declared_metric_ids.contains(metric_id.as_str())
-        {
-            return Err(EvaluatorError::InvalidConfiguration(format!(
-                "gate {} references unknown metric {}",
-                declaration.gate_id, metric_id
-            )));
+        if let GateKind::MetricAtLeast { metric_id, minimum } = &declaration.kind {
+            if !declared_metric_ids.contains(metric_id.as_str()) {
+                return Err(EvaluatorError::InvalidConfiguration(format!(
+                    "gate {} references unknown metric {}",
+                    declaration.gate_id, metric_id
+                )));
+            }
+            if !minimum.is_finite() {
+                return Err(EvaluatorError::InvalidConfiguration(format!(
+                    "gate {} minimum must be finite",
+                    declaration.gate_id
+                )));
+            }
         }
     }
     for declaration in &profile.deferred_research_goals {
@@ -827,6 +849,28 @@ fn assert_unique<'a>(
         }
     }
     Ok(())
+}
+
+fn sanitize_artifact_stem(input: &str) -> String {
+    let sanitized = input
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .trim_matches('_')
+        .to_string();
+
+    if sanitized.is_empty() {
+        "candidate".into()
+    } else {
+        sanitized
+    }
 }
 
 fn run_candidate(
@@ -1676,9 +1720,10 @@ impl StreamingClusterTrainer for FixtureTrainer {
             self.state,
             TrainerState::Idle | TrainerState::Ingesting | TrainerState::PassComplete
         ) {
+            let invalid_state = self.state;
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::InvalidTransition {
-                state: self.state,
+                state: invalid_state,
                 operation: "ingest_batch".into(),
             });
         }
@@ -1692,9 +1737,10 @@ impl StreamingClusterTrainer for FixtureTrainer {
 
     fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
         if self.state != TrainerState::Ingesting {
+            let invalid_state = self.state;
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::InvalidTransition {
-                state: self.state,
+                state: invalid_state,
                 operation: "finish_pass".into(),
             });
         }
@@ -1735,9 +1781,10 @@ impl StreamingClusterTrainer for FixtureTrainer {
 
     fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
         if self.state != TrainerState::PassComplete {
+            let invalid_state = self.state;
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::InvalidTransition {
-                state: self.state,
+                state: invalid_state,
                 operation: "complete_training".into(),
             });
         }
