@@ -15,7 +15,9 @@ pub(crate) fn solve_lexicographic_assignment(
     cluster_count: usize,
     min_cluster_size: usize,
     max_cluster_size: usize,
+    mut observe_progress: impl FnMut(usize, usize),
 ) -> Result<Vec<usize>, StreamingClusteringError> {
+    let total_progress_units = point_count.saturating_add(1);
     let mut fixed = vec![None; point_count];
     let optimal = solve_subproblem(
         distances,
@@ -29,6 +31,7 @@ pub(crate) fn solve_lexicographic_assignment(
         constraint_error("the assignment solver could not produce a feasible assignment")
     })?;
     let optimal_cost = optimal.true_cost;
+    observe_progress(1, total_progress_units);
 
     for point_index in 0..point_count {
         let mut chosen = None;
@@ -61,6 +64,7 @@ pub(crate) fn solve_lexicographic_assignment(
             ));
         };
         fixed[point_index] = Some(cluster_index);
+        observe_progress(point_index.saturating_add(2), total_progress_units);
     }
 
     fixed

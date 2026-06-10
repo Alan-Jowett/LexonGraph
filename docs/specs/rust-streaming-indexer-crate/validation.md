@@ -277,6 +277,10 @@ repository-specific telemetry, and for each observed phase:
   `phase_total_unit_count - completed_unit_count`
 - in-progress updates reflect advancing completion state when the underlying
   work advances measurably, rather than only elapsed time
+- when adaptive divisive planning is active, live adaptive-subproblem telemetry
+  is distinguishable from post-hoc adaptive decision telemetry and reports
+  explicit unavailability rather than synthesized values for active-work
+  quantities that are not yet knowable
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-039
@@ -536,8 +540,13 @@ measured `pc1_explained_variance_ratio`, configured
 configured `dcbc_max_embedding_count`, and the explicit decision reason while
 boundaries without diagnostics report those fields as unavailable.
 
+This validation also checks that live hierarchy-planning status updates report
+the currently active adaptive divisive subproblem as directional PCA work while
+that subproblem is executing, and that active-subproblem progress fields remain
+explicitly unavailable when the pass structure total is not yet knowable.
+
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
-REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
+REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-048
 
 ### VAL-STREAM-INDEXER-044
 
@@ -563,7 +572,7 @@ reason exactly match the underlying adaptive decision records rather than a
 lossy reformatted value.
 
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
-REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
+REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-048
 
 ### VAL-STREAM-INDEXER-045
 
@@ -577,9 +586,11 @@ reported switch boundary position across both pass reports and observer
 streams, along with the same surfaced
 `pc1_explained_variance_ratio`, `pc1_explained_variance_ratio_threshold`,
 `embedding_count`, `dcbc_max_embedding_count`, decision reason, and
-availability semantics.
+availability semantics, and the same live active-subproblem algorithm and
+pass-structure progress sequence in the observer stream.
 
-**Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046
+**Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046,
+REQ-STREAM-INDEXER-048
 
 ### VAL-STREAM-INDEXER-046
 
@@ -605,3 +616,32 @@ separate targeted cases rather than being omitted.
 
 **Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033,
 REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-048
+
+Run a deterministic adaptive divisive planning fixture whose hierarchy planning
+contains multiple adaptive subproblems and capture live hierarchy-planning
+status updates before all subproblems have completed.
+
+**Pass condition:** the observer stream surfaces live active-subproblem
+telemetry distinct from evaluated adaptive decision records, including the
+currently executing adaptive algorithm, the active subproblem position when
+knowable, the number of completed adaptive subproblems, and explicit
+unavailability for any active-progress quantity not yet knowable.
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
+REQ-STREAM-INDEXER-048
+
+### VAL-STREAM-INDEXER-049
+
+Run a deterministic adaptive divisive planning fixture in which one active DCBC
+subproblem remains busy long enough to emit multiple in-progress status updates
+before the pass advances to the next adaptive subproblem.
+
+**Pass condition:** the observer stream exposes nested progress for that active
+DCBC subproblem sufficient to distinguish repeated work inside the same active
+subproblem from advancement to a later adaptive subproblem, and any nested
+totals or completed counts that are not meaningful are reported as explicitly
+unavailable.
+
+**Traces to:** REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-049

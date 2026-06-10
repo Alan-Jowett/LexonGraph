@@ -292,7 +292,14 @@ For each reported phase, the observer contract shall expose:
 - when adaptive aggregate built-in planning is active for hierarchy planning,
   structured adaptive telemetry sufficient to identify the currently active
   adaptive algorithm, whether the reported adaptive boundary was the PCA-to-DCBC
-  switch boundary, and for divisive adaptive planning the measured
+  switch boundary, and for divisive adaptive planning both the latest evaluated
+  adaptive-decision telemetry and the currently active adaptive-subproblem
+  telemetry
+- for currently active adaptive divisive work, the deterministic active
+  subproblem position within the pass structure, the number of adaptive
+  subproblems already completed in the current pass, and the total adaptive
+  subproblem count when knowable
+- for the latest evaluated divisive adaptive boundary, the measured
   `pc1_explained_variance_ratio`, configured
   `pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
   configured `dcbc_max_embedding_count`, and an explicit decision reason for
@@ -314,9 +321,15 @@ so a caller can distinguish forward progress within the current phase from mere
 elapsed time.
 
 When adaptive aggregate built-in planning is active, hierarchy-planning status
-updates shall also report newly observed adaptive-boundary telemetry as soon as
-that boundary has been evaluated rather than delaying switch visibility until
-the pass-completion report alone.
+updates shall also report:
+
+- newly observed adaptive-boundary telemetry as soon as that boundary has been
+  evaluated rather than delaying switch visibility until the pass-completion
+  report alone
+- live adaptive-subproblem execution telemetry while a divisive adaptive
+  subproblem is still in progress, including which adaptive algorithm is
+  currently executing for that subproblem and whether progress is advancing to
+  later subproblems or remains inside the same active subproblem
 
 For boundaries whose diagnostics have not yet been computed, surfaced adaptive
 decision metrics and decision-reason telemetry shall be explicitly unavailable
@@ -513,6 +526,39 @@ Within one adaptive planning flow, divisive adaptive planning may choose
 directional PCA or DCBC independently for each evaluated collection, while
 agglomerative adaptive planning shall continue to use one-way PCA-to-DCBC
 ownership once it switches.
+
+### REQ-STREAM-INDEXER-048
+
+When adaptive divisive built-in planning is active, the hierarchy-planning
+status observer surface shall expose structured live telemetry for the
+currently active adaptive subproblem distinct from post-hoc adaptive decision
+records.
+
+That live telemetry shall identify at least:
+
+- the adaptive algorithm currently executing for the active subproblem
+- the deterministic zero-based position of the active subproblem within the
+  current pass when knowable
+- the number of adaptive subproblems already completed in the current pass
+- the total adaptive subproblem count for the current pass when knowable
+
+If any of those quantities are not yet knowable at the moment of emission, the
+observer surface shall report them as explicitly unavailable rather than
+deriving or synthesizing them from another field.
+
+### REQ-STREAM-INDEXER-049
+
+When the currently active adaptive divisive subproblem is executing built-in
+DCBC work and that work has meaningful internal progress, the hierarchy-planning
+status observer surface shall expose nested progress for the active DCBC
+subproblem sufficient for callers to distinguish:
+
+- advancement to a later adaptive subproblem in the pass structure
+- continued work inside one long-running active DCBC subproblem
+
+If nested progress totals or completed counts are not meaningful or not yet
+knowable for the active DCBC subproblem, those nested quantities shall be
+reported as explicitly unavailable rather than as placeholder values.
 
 ### REQ-STREAM-INDEXER-037
 

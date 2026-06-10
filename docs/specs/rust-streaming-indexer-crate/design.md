@@ -289,6 +289,13 @@ Those surfaced numeric fields remain faithful to the adaptive-policy diagnostic
 source and do not rewrite or synthesize a different adaptive
 decision through formatting-only presentation.
 
+When adaptive divisive planning is active, hierarchy-planning status updates
+also carry live adaptive-subproblem telemetry distinct from post-hoc adaptive
+decision telemetry. That live telemetry identifies the adaptive algorithm
+currently executing for the active subproblem plus pass-structure progress for
+that active subproblem, including the active subproblem position, completed
+subproblem count, and total subproblem count when knowable.
+
 For `InProgress` updates, the observer receives the latest measured completion
 state for the phase rather than a heartbeat carrying only a fixed total. If a
 quantity is not knowable for a phase at a given moment, the observer represents
@@ -532,6 +539,39 @@ surface reports those fields as unavailable rather than synthesizing values.
 Repeated deterministic runs surface the same adaptive decision occurrence,
 boundary position, and compared diagnostic values.
 
+### DSG-STREAM-INDEXER-039 `Live adaptive subproblem telemetry surface`
+
+The built-in adaptive divisive realization emits live status telemetry for the
+currently active subproblem while that subproblem is still executing rather than
+waiting for the adaptive decision record to become complete.
+
+This live telemetry is a separate surface from evaluated-boundary decision
+telemetry and identifies at least:
+
+- the adaptive algorithm currently executing for the active subproblem
+- the deterministic zero-based active subproblem position when knowable
+- the number of adaptive subproblems already completed in the current pass
+- the total adaptive subproblem count for the current pass when knowable
+
+The indexer does not infer unavailable active-work quantities from
+post-hoc decision records or unrelated phase counters.
+
+### DSG-STREAM-INDEXER-040 `Nested active DCBC progress forwarding`
+
+When the active adaptive divisive subproblem is executing built-in DCBC work,
+the hierarchy-planning observer surface reports nested progress for that active
+DCBC subproblem.
+
+That nested progress is scoped to the currently active subproblem and is kept
+separate from pass-level hierarchy-planning counts so callers can distinguish a
+long-running DCBC step from lack of forward movement to the next adaptive
+subproblem.
+
+If the active DCBC work does not yet have a meaningful nested total or
+completed count at the moment of emission, the indexer reports those nested
+quantities as unavailable rather than claiming a false zero or pass-complete
+state.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -566,3 +606,5 @@ boundary position, and compared diagnostic values.
 | DSG-STREAM-INDEXER-036 | REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-037 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-045 |
 | DSG-STREAM-INDEXER-038 | REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046 |
+| DSG-STREAM-INDEXER-039 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-048 |
+| DSG-STREAM-INDEXER-040 | REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-049 |

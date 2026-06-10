@@ -87,7 +87,10 @@ impl DcbcStreamingTrainer {
         error
     }
 
-    fn finish_pass_impl(&mut self) -> Result<PassReport, StreamingClusteringError> {
+    fn finish_pass_impl(
+        &mut self,
+        mut observe_progress: impl FnMut(usize, usize),
+    ) -> Result<PassReport, StreamingClusteringError> {
         if self.state != TrainerState::Ingesting {
             return Err(self.invalid_transition("finish_pass"));
         }
@@ -118,6 +121,7 @@ impl DcbcStreamingTrainer {
                 .ok_or_else(|| constraint_error("missing centroid state for later DCBC passes"))?
         };
 
+        observe_progress(0, prepared.raw_points.len().saturating_add(1));
         let result = run_iteration(
             &prepared.raw_points,
             &prepared.normalized_points,
@@ -125,6 +129,7 @@ impl DcbcStreamingTrainer {
             prepared.dimensions,
             bounds,
             cluster_count,
+            &mut observe_progress,
         )?;
 
         self.completed_passes += 1;
@@ -141,6 +146,17 @@ impl DcbcStreamingTrainer {
             balance_direction: MetricDirection::SmallerIsBetter,
             cluster_ids: (0..self.config.cluster_count).collect(),
         })
+    }
+
+    pub fn finish_pass_with_progress_observer<F>(
+        &mut self,
+        observe_progress: F,
+    ) -> Result<PassReport, StreamingClusteringError>
+    where
+        F: FnMut(usize, usize),
+    {
+        self.finish_pass_impl(observe_progress)
+            .map_err(|error| self.fail(error))
     }
 }
 
@@ -178,7 +194,8 @@ impl StreamingClusterTrainer for DcbcStreamingTrainer {
     }
 
     fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
-        self.finish_pass_impl().map_err(|error| self.fail(error))
+        self.finish_pass_impl(|_, _| {})
+            .map_err(|error| self.fail(error))
     }
 
     fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
@@ -402,6 +419,7 @@ fn run_iteration(
     dimensions: usize,
     bounds: OccupancyBounds,
     cluster_count: usize,
+    mut observe_progress: impl FnMut(usize, usize),
 ) -> Result<IterationResult, StreamingClusteringError> {
     let distances = distance_matrix(normalized_points, start_normalized_centroids)?;
     let assignment = solve_lexicographic_assignment(
@@ -410,6 +428,7 @@ fn run_iteration(
         cluster_count,
         bounds.min,
         bounds.max,
+        &mut observe_progress,
     )?;
     let memberships = materialize_memberships(assignment.as_slice(), cluster_count, bounds)?;
     let (raw_centroids, normalized_centroids) = recompute_centroids(

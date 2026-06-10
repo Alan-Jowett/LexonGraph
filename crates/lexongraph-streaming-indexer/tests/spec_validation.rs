@@ -763,6 +763,21 @@ fn unique_adaptive_status_telemetries(
     by_boundary.into_values().collect()
 }
 
+fn adaptive_status_telemetries(
+    statuses: &[StreamingIndexingStatus],
+) -> Vec<lexongraph_streaming_indexer::AdaptivePlanningStatusTelemetry> {
+    statuses
+        .iter()
+        .filter(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning { .. }
+            )
+        })
+        .filter_map(|status| status.adaptive_planning)
+        .collect()
+}
+
 async fn one_shot(
     planning: BuiltInPlanning,
     items: &[IndexItem<&'static str>],
@@ -2209,6 +2224,16 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
             && telemetry.decision.reason
                 == AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     }));
+    let live_statuses = adaptive_status_telemetries(&statuses.lock().unwrap().clone());
+    assert!(live_statuses.iter().any(|telemetry| {
+        telemetry.active_subproblem.is_some_and(|active| {
+            active.active_algorithm == ActivePlanningAlgorithm::DirectionalPca
+                && active.active_subproblem_position == Some(0)
+                && active.completed_subproblem_count == 0
+                && active.total_subproblem_count.is_none()
+                && active.active_dcbc_progress.is_none()
+        })
+    }));
     assert_eq!(
         status_telemetry
             .iter()
@@ -2298,6 +2323,15 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
             .iter()
             .any(|telemetry| telemetry.decision.active_algorithm == ActivePlanningAlgorithm::Dcbc)
     );
+    let live_statuses = adaptive_status_telemetries(&statuses.lock().unwrap().clone());
+    assert!(live_statuses.iter().any(|telemetry| {
+        telemetry.active_subproblem.is_some_and(|active| {
+            active.active_algorithm == ActivePlanningAlgorithm::Dcbc
+                && active.active_subproblem_position.is_some()
+                && active.total_subproblem_count.is_none()
+                && active.active_dcbc_progress.is_some()
+        })
+    }));
 
     let pass_telemetry = report.adaptive_planning.unwrap();
     let expected_report_decision = run
@@ -2377,6 +2411,7 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
     let first_report = first.finish_pass().unwrap();
     let first_telemetry =
         unique_adaptive_status_telemetries(&first_statuses.lock().unwrap().clone());
+    let first_live_telemetry = adaptive_status_telemetries(&first_statuses.lock().unwrap().clone());
 
     let second_statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> =
         Arc::new(Mutex::new(Vec::new()));
@@ -2393,9 +2428,12 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
     let second_report = second.finish_pass().unwrap();
     let second_telemetry =
         unique_adaptive_status_telemetries(&second_statuses.lock().unwrap().clone());
+    let second_live_telemetry =
+        adaptive_status_telemetries(&second_statuses.lock().unwrap().clone());
 
     assert_eq!(first_report, second_report);
     assert_eq!(first_telemetry, second_telemetry);
+    assert_eq!(first_live_telemetry, second_live_telemetry);
     assert!(first_telemetry.iter().any(|telemetry| {
         telemetry.decision.pc1_explained_variance_ratio.is_some()
             && telemetry.decision.pc1_explained_variance_ratio_threshold == Some(0.6)
@@ -2439,6 +2477,88 @@ async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
             && record.pc1_explained_variance_ratio_threshold == Some(0.6)
             && record.dcbc_max_embedding_count == Some(8)
     }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_048_live_adaptive_subproblem_status_reports_active_progress() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+
+    let live_statuses = adaptive_status_telemetries(&statuses.lock().unwrap().clone());
+    assert!(live_statuses.iter().any(|telemetry| {
+        telemetry.active_subproblem.is_some_and(|active| {
+            active.active_algorithm == ActivePlanningAlgorithm::DirectionalPca
+                && active.active_subproblem_position == Some(0)
+                && active.completed_subproblem_count == 0
+                && active.total_subproblem_count.is_none()
+        })
+    }));
+    assert!(live_statuses.iter().any(|telemetry| {
+        telemetry.active_subproblem.is_some_and(|active| {
+            active.active_subproblem_position == Some(1) && active.completed_subproblem_count == 1
+        })
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_049_live_adaptive_dcbc_status_reports_nested_progress() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+
+    let live_statuses = adaptive_status_telemetries(&statuses.lock().unwrap().clone());
+    let mut nested_updates = live_statuses
+        .iter()
+        .filter_map(|telemetry| telemetry.active_subproblem)
+        .filter(|active| active.active_algorithm == ActivePlanningAlgorithm::Dcbc)
+        .filter_map(|active| {
+            active.active_dcbc_progress.map(|progress| {
+                (
+                    active.active_subproblem_position,
+                    progress.completed_unit_count,
+                    progress.total_unit_count,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(!nested_updates.is_empty());
+    nested_updates.sort_unstable();
+    let first_position = nested_updates[0].0;
+    let first_position_updates = nested_updates
+        .into_iter()
+        .filter(|(position, _, _)| *position == first_position)
+        .collect::<Vec<_>>();
+    assert!(first_position_updates.len() > 1);
+    let total = first_position_updates[0].2;
+    assert!(total.is_some());
+    let completed = first_position_updates
+        .iter()
+        .map(|(_, completed, _)| completed.unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(completed.first().copied(), Some(0));
+    assert!(completed.windows(2).all(|window| window[0] <= window[1]));
+    assert_eq!(completed.last().copied(), total);
 }
 
 #[test]
