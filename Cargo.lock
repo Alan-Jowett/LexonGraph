@@ -1373,6 +1373,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-block-store-overlay"
+version = "0.1.0"
+dependencies = [
+ "lexongraph-block",
+ "lexongraph-block-store",
+]
+
+[[package]]
 name = "lexongraph-dcbc-streaming"
 version = "0.1.0"
 dependencies = [
