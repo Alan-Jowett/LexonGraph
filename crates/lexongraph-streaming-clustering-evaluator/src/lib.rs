@@ -702,8 +702,15 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
         }
     }
 
-    let expected_total_count =
-        profile.leaf_model.leaf_size * profile.leaf_model.declared_final_cluster_count as usize;
+    let expected_total_count = profile
+        .leaf_model
+        .leaf_size
+        .checked_mul(profile.leaf_model.declared_final_cluster_count as usize)
+        .ok_or_else(|| {
+            EvaluatorError::InvalidConfiguration(
+                "leaf_size * declared_final_cluster_count overflowed usize".into(),
+            )
+        })?;
     if profile.evaluation_entities.len() != expected_total_count {
         return Err(EvaluatorError::InvalidConfiguration(format!(
             "evaluation entity count {} must equal leaf_size * cluster_count {}",
