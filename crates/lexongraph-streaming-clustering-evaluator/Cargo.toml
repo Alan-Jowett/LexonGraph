@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
 [package]
 name = "lexongraph-streaming-clustering-evaluator"
 version = "0.1.0"

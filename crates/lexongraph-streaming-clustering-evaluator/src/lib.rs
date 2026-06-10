@@ -679,7 +679,6 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
         }
     }
 
-    let mut real_entity_ids = HashSet::new();
     let mut synthetic_count = 0usize;
     for entity in &profile.evaluation_entities {
         validate_embedding(&entity.embedding, dimensions).map_err(|error| {
@@ -690,8 +689,6 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
         })?;
         if entity.synthetic {
             synthetic_count += 1;
-        } else {
-            real_entity_ids.insert(entity.entity_id.clone());
         }
     }
 
@@ -1193,9 +1190,14 @@ fn execute_candidate_once(
         .probe_workloads
         .iter()
         .map(|workload| {
+            let assignments = classifier.assign_batch(&workload.embeddings)?;
             Ok(ProbeAssignmentResult {
                 workload_id: workload.workload_id.clone(),
-                assignments: classifier.assign_batch(&workload.embeddings)?,
+                assignments: validate_cluster_assignments(
+                    assignments,
+                    profile.leaf_model.declared_final_cluster_count,
+                    &format!("probe workload {}", workload.workload_id),
+                )?,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1206,7 +1208,11 @@ fn execute_candidate_once(
         .map(|entity| {
             Ok(LeafMembershipRecord {
                 entity_id: entity.entity_id.clone(),
-                cluster_id: classifier.assign(&entity.embedding)?,
+                cluster_id: validate_cluster_id(
+                    classifier.assign(&entity.embedding)?,
+                    profile.leaf_model.declared_final_cluster_count,
+                    &format!("evaluation entity {}", entity.entity_id),
+                )?,
                 synthetic: entity.synthetic,
             })
         })
@@ -1236,9 +1242,36 @@ fn build_provenance(
         candidate_identity: identity.clone(),
         shared_candidate_config: profile.shared_candidate_config.clone(),
         seed_policy: profile.reproducibility.seed_policy.clone(),
-        software_identity: identity.software_identity.clone(),
+        software_identity: profile.reproducibility.software_identity.clone(),
         floating_point_profile: profile.reproducibility.floating_point_profile.clone(),
         hardware_profile: profile.reproducibility.hardware_profile.clone(),
+    }
+}
+
+fn validate_cluster_assignments(
+    assignments: Vec<ClusterId>,
+    cluster_count: u32,
+    context: &str,
+) -> Result<Vec<ClusterId>, StreamingClusteringError> {
+    assignments
+        .into_iter()
+        .map(|cluster_id| validate_cluster_id(cluster_id, cluster_count, context))
+        .collect()
+}
+
+fn validate_cluster_id(
+    cluster_id: ClusterId,
+    cluster_count: u32,
+    context: &str,
+) -> Result<ClusterId, StreamingClusteringError> {
+    if cluster_id < cluster_count {
+        Ok(cluster_id)
+    } else {
+        Err(StreamingClusteringError::UnsatisfiableConstraint {
+            message: format!(
+                "{context} returned cluster id {cluster_id} outside [0, {cluster_count})"
+            ),
+        })
     }
 }
 

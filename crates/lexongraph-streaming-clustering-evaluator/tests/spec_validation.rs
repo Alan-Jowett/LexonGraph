@@ -5,14 +5,130 @@ mod support;
 
 use std::path::Path;
 
+use lexongraph_streaming_clustering::{
+    MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
+    StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_embedding,
+};
 use lexongraph_streaming_clustering_evaluator::{
-    CandidateRunStatus, DeferredMeasurementStatus, EvaluatorError, GateStatus,
-    built_in_fixture_candidate_names, emit_campaign_artifacts, run_evaluation_campaign,
+    CandidateIdentity, CandidateRunStatus, DeferredMeasurementStatus, EvaluatorError, GateStatus,
+    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
+    run_evaluation_campaign,
 };
 use support::{
     balanced_and_skewed_candidates, invalid_profile, lib_source, nondeterministic_candidate,
     shared_contract_failure_candidate, strict_alignment_profile, synthetic_padding_profile,
 };
+
+#[derive(Clone, Copy)]
+enum InvalidRangeMode {
+    Probe,
+    LeafMembership,
+}
+
+struct InvalidRangeTrainer {
+    config: StreamingClusteringConfig,
+    state: TrainerState,
+    mode: InvalidRangeMode,
+}
+
+impl InvalidRangeTrainer {
+    fn new(config: &StreamingClusteringConfig, mode: InvalidRangeMode) -> Self {
+        Self {
+            config: config.clone(),
+            state: TrainerState::Idle,
+            mode,
+        }
+    }
+}
+
+impl StreamingClusterTrainer for InvalidRangeTrainer {
+    type Classifier = InvalidRangeClassifier;
+
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn state(&self) -> TrainerState {
+        self.state
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Vec<f32>]) -> Result<(), StreamingClusteringError> {
+        for embedding in embeddings {
+            validate_embedding(embedding, self.config.dimensions)?;
+        }
+        self.state = TrainerState::Ingesting;
+        Ok(())
+    }
+
+    fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
+        if self.state != TrainerState::Ingesting {
+            self.state = TrainerState::Error;
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: self.state,
+                operation: "finish_pass".into(),
+            });
+        }
+        self.state = TrainerState::PassComplete;
+        Ok(PassReport {
+            observed_count: 4,
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: vec![0, 1],
+        })
+    }
+
+    fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+        if self.state != TrainerState::PassComplete {
+            self.state = TrainerState::Error;
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: self.state,
+                operation: "complete_training".into(),
+            });
+        }
+        self.state = TrainerState::TrainingComplete;
+        Ok(())
+    }
+
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+        if self.state != TrainerState::TrainingComplete {
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: self.state,
+                operation: "into_classifier".into(),
+            });
+        }
+        Ok(InvalidRangeClassifier {
+            config: self.config,
+            mode: self.mode,
+        })
+    }
+}
+
+struct InvalidRangeClassifier {
+    config: StreamingClusteringConfig,
+    mode: InvalidRangeMode,
+}
+
+impl StreamingClusterClassifier for InvalidRangeClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn assign(&self, embedding: &[f32]) -> Result<u32, StreamingClusteringError> {
+        validate_embedding(embedding, self.config.dimensions)?;
+        let first = embedding[0];
+        match self.mode {
+            InvalidRangeMode::Probe
+                if (0.1..0.2).contains(&first) || (10.0..10.1).contains(&first) =>
+            {
+                Ok(self.config.cluster_count)
+            }
+            InvalidRangeMode::LeafMembership if first < 0.05 => Ok(self.config.cluster_count),
+            _ => Ok(if first < 5.0 { 0 } else { 1 }),
+        }
+    }
+}
 
 #[test]
 fn val_stream_eval_001_repository_includes_crate_and_spec_package() {
@@ -116,6 +232,7 @@ fn val_stream_eval_007_provenance_manifest_records_reproducibility_metadata() {
         "balanced-threshold"
     );
     assert_eq!(provenance.seed_policy, "fixed-seed-7");
+    assert_eq!(provenance.software_identity, "fixture-campaign-builder");
     assert_eq!(
         provenance.floating_point_profile,
         "ieee754-deterministic-no-fma"
@@ -430,5 +547,56 @@ fn val_stream_eval_determinism_gate_detects_observable_nondeterminism() {
     assert_eq!(
         report.run_reports[0].run_status,
         CandidateRunStatus::GateFailed
+    );
+}
+
+#[test]
+fn regression_probe_assignments_outside_k_are_reported_as_shared_contract_failures() {
+    let candidate = candidate_adapter(
+        CandidateIdentity {
+            candidate_id: "invalid-probe-cluster-id".into(),
+            implementation_label: "Invalid probe cluster-id fixture".into(),
+            software_identity: "invalid-probe-cluster-id-v1".into(),
+        },
+        |config| Ok(InvalidRangeTrainer::new(config, InvalidRangeMode::Probe)),
+    );
+    let report = run_evaluation_campaign(&strict_alignment_profile(), &[candidate]).unwrap();
+
+    assert_eq!(
+        report.run_reports[0].run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(
+        report.run_reports[0].prerequisite_checks[0]
+            .detail
+            .contains("outside [0, 2)")
+    );
+}
+
+#[test]
+fn regression_leaf_membership_assignments_outside_k_are_reported_as_shared_contract_failures() {
+    let candidate = candidate_adapter(
+        CandidateIdentity {
+            candidate_id: "invalid-leaf-cluster-id".into(),
+            implementation_label: "Invalid leaf cluster-id fixture".into(),
+            software_identity: "invalid-leaf-cluster-id-v1".into(),
+        },
+        |config| {
+            Ok(InvalidRangeTrainer::new(
+                config,
+                InvalidRangeMode::LeafMembership,
+            ))
+        },
+    );
+    let report = run_evaluation_campaign(&strict_alignment_profile(), &[candidate]).unwrap();
+
+    assert_eq!(
+        report.run_reports[0].run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(
+        report.run_reports[0].prerequisite_checks[0]
+            .detail
+            .contains("outside [0, 2)")
     );
 }
