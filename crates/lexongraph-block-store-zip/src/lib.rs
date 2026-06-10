@@ -1,0 +1,319 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonGraph contributors
+//! Read-only `BlockStore` implementation over a single zip archive.
+//!
+//! This crate intentionally does not satisfy the parent trait specification's
+//! successful-`put` requirements. It supports `get` and `iter_block_ids` over a
+//! caller-supplied archive whose internal entry layout matches the sharded
+//! filesystem block-store layout.
+
+use std::collections::HashSet;
+use std::fs;
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use lexongraph_block::{Block, BlockError, BlockHash, ValidatedBlock, deserialize_block};
+use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
+use zip::ZipArchive;
+
+#[derive(Clone, Debug)]
+pub struct ZipBlockStore {
+    archive_path: PathBuf,
+}
+
+impl ZipBlockStore {
+    pub fn new(archive_path: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
+        let requested_path = archive_path.as_ref();
+        let canonical_path = requested_path.canonicalize().map_err(|error| {
+            backend_failure(format!(
+                "failed to canonicalize zip archive {}: {error}",
+                requested_path.display()
+            ))
+        })?;
+        let metadata = fs::metadata(&canonical_path).map_err(|error| {
+            backend_failure(format!(
+                "failed to stat zip archive {}: {error}",
+                canonical_path.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(backend_failure(format!(
+                "zip archive {} is not a file",
+                canonical_path.display()
+            )));
+        }
+
+        let store = Self {
+            archive_path: canonical_path,
+        };
+        let _ = store.open_archive()?;
+        Ok(store)
+    }
+
+    fn open_archive(&self) -> Result<ZipArchive<File>, BlockStoreError> {
+        let file = File::open(&self.archive_path).map_err(|error| {
+            backend_failure(format!(
+                "failed to open zip archive {}: {error}",
+                self.archive_path.display()
+            ))
+        })?;
+        ZipArchive::new(file).map_err(|error| {
+            backend_failure(format!(
+                "failed to read zip archive {}: {error}",
+                self.archive_path.display()
+            ))
+        })
+    }
+
+    fn block_entry_name(block_id: &BlockHash) -> String {
+        let hex = block_id.to_string();
+        format!("{}/{}/{}.cbor", &hex[..2], &hex[2..4], hex)
+    }
+
+    fn enumerate_block_ids(&self) -> Result<Vec<BlockHash>, BlockStoreError> {
+        let entry_names = self.archive_entry_names()?;
+        let mut seen_names = HashSet::new();
+        let mut block_ids = Vec::new();
+        for name in entry_names {
+            let Some(block_id) = decode_recognized_block_entry_name(&name) else {
+                continue;
+            };
+            if !seen_names.insert(name.clone()) {
+                return Err(backend_failure(format!(
+                    "duplicate recognized block entry {name} found in {}",
+                    self.archive_path.display()
+                )));
+            }
+            block_ids.push(block_id);
+        }
+        Ok(block_ids)
+    }
+
+    fn archive_entry_names(&self) -> Result<Vec<String>, BlockStoreError> {
+        let archive_bytes = fs::read(&self.archive_path).map_err(|error| {
+            backend_failure(format!(
+                "failed to read zip archive {}: {error}",
+                self.archive_path.display()
+            ))
+        })?;
+        let directory = find_end_of_central_directory(&archive_bytes).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to locate the zip central directory in {}",
+                self.archive_path.display()
+            ))
+        })?;
+        let directory_end = directory
+            .offset
+            .checked_add(directory.size)
+            .filter(|end| *end <= archive_bytes.len())
+            .ok_or_else(|| {
+                backend_failure(format!(
+                    "failed to bound the zip central directory in {}",
+                    self.archive_path.display()
+                ))
+            })?;
+
+        let mut names = Vec::with_capacity(directory.entry_count);
+        let mut cursor = directory.offset;
+        for entry_index in 0..directory.entry_count {
+            if archive_bytes.get(cursor..cursor + CENTRAL_DIRECTORY_HEADER_SIGNATURE.len())
+                != Some(CENTRAL_DIRECTORY_HEADER_SIGNATURE.as_slice())
+            {
+                return Err(backend_failure(format!(
+                    "failed to parse central directory entry {entry_index} in {}",
+                    self.archive_path.display()
+                )));
+            }
+
+            let name_len = read_u16_le(&archive_bytes, cursor + 28)
+                .map(usize::from)
+                .ok_or_else(|| {
+                    backend_failure(format!(
+                        "failed to read central directory entry {entry_index} name length in {}",
+                        self.archive_path.display()
+                    ))
+                })?;
+            let extra_len = read_u16_le(&archive_bytes, cursor + 30)
+                .map(usize::from)
+                .ok_or_else(|| {
+                    backend_failure(format!(
+                        "failed to read central directory entry {entry_index} extra length in {}",
+                        self.archive_path.display()
+                    ))
+                })?;
+            let comment_len = read_u16_le(&archive_bytes, cursor + 32)
+                .map(usize::from)
+                .ok_or_else(|| {
+                    backend_failure(format!(
+                        "failed to read central directory entry {entry_index} comment length in {}",
+                        self.archive_path.display()
+                    ))
+                })?;
+            let name_start = cursor + 46;
+            let name_end = name_start
+                .checked_add(name_len)
+                .filter(|end| *end <= directory_end)
+                .ok_or_else(|| {
+                    backend_failure(format!(
+                        "failed to bound central directory entry {entry_index} name in {}",
+                        self.archive_path.display()
+                    ))
+                })?;
+            if let Ok(name) = std::str::from_utf8(&archive_bytes[name_start..name_end]) {
+                names.push(name.to_string());
+            }
+
+            cursor = name_end
+                .checked_add(extra_len)
+                .and_then(|next| next.checked_add(comment_len))
+                .filter(|next| *next <= directory_end)
+                .ok_or_else(|| {
+                    backend_failure(format!(
+                        "failed to advance past central directory entry {entry_index} in {}",
+                        self.archive_path.display()
+                    ))
+                })?;
+        }
+
+        Ok(names)
+    }
+}
+
+impl BlockStore for ZipBlockStore {
+    fn put(&self, _block: &Block) -> Result<BlockHash, BlockStoreError> {
+        Err(backend_failure(format!(
+            "zip archive {} is read-only; put is not supported",
+            self.archive_path.display()
+        )))
+    }
+
+    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+        let target_name = Self::block_entry_name(block_id);
+        let match_count = self
+            .archive_entry_names()?
+            .into_iter()
+            .filter(|name| name == &target_name)
+            .count();
+        if match_count > 1 {
+            return Err(backend_failure(format!(
+                "duplicate recognized block entry {target_name} found in {}",
+                self.archive_path.display()
+            )));
+        }
+        if match_count == 0 {
+            return Ok(None);
+        }
+
+        let mut archive = self.open_archive()?;
+        let mut file = archive.by_name(&target_name).map_err(|error| {
+            backend_failure(format!(
+                "failed to open zip archive entry {target_name} in {}: {error}",
+                self.archive_path.display()
+            ))
+        })?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(|error| {
+            backend_failure(format!(
+                "failed to read zip archive entry {target_name} in {}: {error}",
+                self.archive_path.display()
+            ))
+        })?;
+
+        deserialize_block(&bytes, block_id)
+            .map(Some)
+            .map_err(map_get_error)
+    }
+
+    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+        Ok(Box::new(self.enumerate_block_ids()?.into_iter().map(Ok)))
+    }
+}
+
+fn backend_failure(message: String) -> BlockStoreError {
+    BlockStoreError::BackendFailure(message)
+}
+
+const CENTRAL_DIRECTORY_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+const END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+
+struct CentralDirectory {
+    entry_count: usize,
+    offset: usize,
+    size: usize,
+}
+
+fn map_get_error(error: BlockError) -> BlockStoreError {
+    match error {
+        BlockError::HashMismatch { expected, actual } => {
+            BlockStoreError::IntegrityMismatch { expected, actual }
+        }
+        other => BlockStoreError::MalformedContent(other),
+    }
+}
+
+fn decode_recognized_block_entry_name(name: &str) -> Option<BlockHash> {
+    let mut components = name.split('/');
+    let first_level = components.next()?;
+    let second_level = components.next()?;
+    let file_name = components.next()?;
+    if components.next().is_some() {
+        return None;
+    }
+    if !is_lower_hex_prefix(first_level) || !is_lower_hex_prefix(second_level) {
+        return None;
+    }
+    let hex = file_name.strip_suffix(".cbor")?;
+    if hex.len() != BlockHash::LEN * 2 || !hex.bytes().all(|byte| decode_hex_nibble(byte).is_some())
+    {
+        return None;
+    }
+    if &hex[..2] != first_level || &hex[2..4] != second_level {
+        return None;
+    }
+
+    let mut bytes = [0_u8; BlockHash::LEN];
+    for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let high = decode_hex_nibble(chunk[0])?;
+        let low = decode_hex_nibble(chunk[1])?;
+        bytes[index] = (high << 4) | low;
+    }
+    Some(BlockHash::from_bytes(bytes))
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn is_lower_hex_prefix(value: &str) -> bool {
+    value.len() == 2 && value.bytes().all(|byte| decode_hex_nibble(byte).is_some())
+}
+
+fn find_end_of_central_directory(bytes: &[u8]) -> Option<CentralDirectory> {
+    let search_start = bytes.len().saturating_sub(22 + usize::from(u16::MAX));
+    let eocd_offset = (search_start..bytes.len().saturating_sub(21))
+        .rev()
+        .find(|offset| {
+            bytes[*offset..].starts_with(END_OF_CENTRAL_DIRECTORY_SIGNATURE.as_slice())
+        })?;
+
+    Some(CentralDirectory {
+        entry_count: usize::from(read_u16_le(bytes, eocd_offset + 10)?),
+        size: read_u32_le(bytes, eocd_offset + 12)? as usize,
+        offset: read_u32_le(bytes, eocd_offset + 16)? as usize,
+    })
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    let chunk: [u8; 2] = bytes.get(offset..offset + 2)?.try_into().ok()?;
+    Some(u16::from_le_bytes(chunk))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let chunk: [u8; 4] = bytes.get(offset..offset + 4)?.try_into().ok()?;
+    Some(u32::from_le_bytes(chunk))
+}

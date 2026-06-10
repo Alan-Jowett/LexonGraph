@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-block-store-zip"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lexongraph-block = { version = "0.1.0", path = "../lexongraph-block" }
+lexongraph-block-store = { version = "0.1.0", path = "../lexongraph-block-store" }
+zip = "2"
+
+[dev-dependencies]
+tempfile = "3"
