@@ -224,9 +224,9 @@ impl BlockStore for OverlayBlockStore {
             }
         }
 
-        let result = Err(
-            last_error.expect("overlay block store construction guarantees at least one layer")
-        );
+        let result =
+            Err(last_error
+                .expect("overlay block store construction guarantees at least two layers"));
         self.notify_put(block, &result);
         result
     }

@@ -100,8 +100,8 @@ operation result.
 
 ### REQ-OVERLAY-STORE-011
 
-The overlay crate shall preserve the parent trait's integrity, explicit-failure,
-streaming-enumeration, and backend-neutrality rules.
+The overlay crate shall preserve the parent trait's integrity, explicit failure,
+streaming enumeration, and backend neutrality rules.
 
 ## Out of Scope
 
