@@ -662,12 +662,17 @@ fn regression_non_finite_or_negative_ranking_weights_are_rejected() {
 fn regression_non_finite_gate_minima_are_rejected() {
     for invalid_minimum in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let mut profile = strict_alignment_profile();
-        if let lexongraph_streaming_clustering_evaluator::GateKind::MetricAtLeast {
-            minimum, ..
-        } = &mut profile.gate_declarations[5].kind
-        {
-            *minimum = invalid_minimum;
-        }
+        let gate = profile
+            .gate_declarations
+            .iter_mut()
+            .find(|gate| gate.gate_id == "same-leaf-coherence-threshold")
+            .expect("strict fixture profile should include the same-leaf coherence gate");
+        let lexongraph_streaming_clustering_evaluator::GateKind::MetricAtLeast { minimum, .. } =
+            &mut gate.kind
+        else {
+            panic!("same-leaf coherence threshold gate should use MetricAtLeast");
+        };
+        *minimum = invalid_minimum;
 
         let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
 
