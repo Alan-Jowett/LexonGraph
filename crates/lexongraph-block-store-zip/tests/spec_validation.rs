@@ -169,7 +169,7 @@ fn val_zip_store_011_put_fails_explicitly_without_mutating_the_archive() {
 }
 
 #[test]
-fn val_zip_store_012_repository_includes_zip_store_verification_artifacts() {
+fn val_zip_store_010_repository_includes_zip_store_verification_artifacts() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     assert!(
