@@ -33,9 +33,10 @@ use half::f16;
 use lexongraph_adaptive_planning_policy::AdaptivePlanningSelector;
 pub use lexongraph_adaptive_planning_policy::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
-    AdaptivePlanningDecisionReason, AdaptivePlanningDiagnostics, AdaptivePlanningDirection,
-    AdaptivePlanningError, AdaptivePlanningSettings, AdaptiveSwitchDecisionRecord,
-    DEFAULT_EMBEDDING_COUNT_CUTOFF,
+    AdaptiveDivisiveSwitchSettings, AdaptivePlanningDecisionReason, AdaptivePlanningDiagnostics,
+    AdaptivePlanningDirection, AdaptivePlanningError, AdaptivePlanningSettings,
+    AdaptiveSwitchDecisionRecord, DEFAULT_DCBC_MAX_EMBEDDING_COUNT, DEFAULT_EMBEDDING_COUNT_CUTOFF,
+    DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
 };
 use lexongraph_block::{
     Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
@@ -96,7 +97,9 @@ pub struct AdaptivePlanningDecisionTelemetry {
     pub active_algorithm: ActivePlanningAlgorithm,
     pub switch_boundary_occurred: bool,
     pub embedding_count: Option<usize>,
-    pub embedding_count_cutoff: Option<usize>,
+    pub pc1_explained_variance_ratio: Option<f32>,
+    pub pc1_explained_variance_ratio_threshold: Option<f32>,
+    pub dcbc_max_embedding_count: Option<usize>,
     pub reason: AdaptivePlanningDecisionReason,
 }
 
@@ -2723,7 +2726,12 @@ fn adaptive_decision_telemetry(
             .collapse_diagnostics
             .as_ref()
             .map(|diagnostics| diagnostics.embedding_count),
-        embedding_count_cutoff: record.embedding_count_cutoff,
+        pc1_explained_variance_ratio: record
+            .collapse_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.pc1_explained_variance_ratio),
+        pc1_explained_variance_ratio_threshold: record.pc1_explained_variance_ratio_threshold,
+        dcbc_max_embedding_count: record.dcbc_max_embedding_count,
         reason: record.reason,
     }
 }

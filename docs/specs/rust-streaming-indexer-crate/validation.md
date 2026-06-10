@@ -520,40 +520,45 @@ REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046
 
 ### VAL-STREAM-INDEXER-043
 
-Run a deterministic adaptive-planning fixture whose evaluated adaptive
-boundaries all retain embedding counts greater than or equal to `1000`, capture
-the completed `IndexingPassReport`, and capture the caller-visible status
-observer stream for hierarchy-planning updates.
+Run a deterministic divisive adaptive-planning fixture whose evaluated
+collections all produce first-principal-component explained-variance ratios at
+or above the configured threshold, capture the completed `IndexingPassReport`,
+and capture the caller-visible status observer stream for hierarchy-planning
+updates.
 
 **Pass condition:** the pass report and observer stream both surface
 deterministic adaptive telemetry showing that no PCA-to-DCBC switch occurred,
 that directional PCA remained the active adaptive algorithm throughout the
 exercised flow, that no switch boundary position is falsely reported as if a
 switch had occurred, and that evaluated boundaries with diagnostics expose the
-represented `embedding_count`, the hardcoded `embedding_count_cutoff` of
-`1000`, and the explicit count-based reason while boundaries without
-diagnostics report those fields as unavailable.
+measured `pc1_explained_variance_ratio`, configured
+`pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+configured `dcbc_max_embedding_count`, and the explicit decision reason while
+boundaries without diagnostics report those fields as unavailable.
 
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-022,
 REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-046
 
 ### VAL-STREAM-INDEXER-044
 
-Run a deterministic adaptive-planning fixture whose evaluated adaptive boundary
-drops below `1000` embeddings during planning, capture the completed
-`IndexingPassReport`, and capture the caller-visible status observer stream for
-hierarchy-planning updates.
+Run a deterministic divisive adaptive-planning fixture whose evaluated
+collection produces a first-principal-component explained-variance ratio below
+the configured threshold while also remaining below the configured DCBC
+embedding-count upper bound, capture the completed `IndexingPassReport`, and
+capture the caller-visible status observer stream for hierarchy-planning
+updates.
 
 **Pass condition:** the pass report and observer stream both surface
 deterministic adaptive telemetry showing that a PCA-to-DCBC switch occurred,
 that DCBC became the active adaptive algorithm after the switch, and that the
 reported switch boundary position identifies the same adaptive boundary in both
-caller-visible telemetry surfaces while also surfacing the represented
-`embedding_count`, the hardcoded `embedding_count_cutoff` of `1000`, and the
-explicit count-based decision reason whose comparison explains why the switch
-occurred.
+caller-visible telemetry surfaces while also surfacing the measured
+`pc1_explained_variance_ratio`, configured
+`pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+configured `dcbc_max_embedding_count`, and the explicit decision reason whose
+comparison explains why the switch occurred.
 
-This validation also checks that the surfaced count, cutoff, and decision
+This validation also checks that the surfaced metrics and decision
 reason exactly match the underlying adaptive decision records rather than a
 lossy reformatted value.
 
@@ -569,9 +574,10 @@ status observer streams.
 **Pass condition:** both runs surface the same adaptive switch occurrence, the
 same active adaptive algorithm sequence at evaluated boundaries, and the same
 reported switch boundary position across both pass reports and observer
-streams, along with the same surfaced `embedding_count`,
-`embedding_count_cutoff`, count-based decision reason, and availability
-semantics.
+streams, along with the same surfaced
+`pc1_explained_variance_ratio`, `pc1_explained_variance_ratio_threshold`,
+`embedding_count`, `dcbc_max_embedding_count`, decision reason, and
+availability semantics.
 
 **Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046
 
@@ -580,9 +586,9 @@ semantics.
 Repeat the same adaptive switch-triggering fixture twice with identical logical
 input, replay order, settings, and deterministic dependency behavior.
 
-**Pass condition:** both runs choose the same PCA-to-DCBC switch boundary and,
-after switching, do not revert from DCBC back to directional PCA later in the
-same planning flow.
+**Pass condition:** both runs choose the same adaptive realization for each
+evaluated divisive collection and surface the same collection-local decision
+sequence across those runs.
 
 **Traces to:** REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-046,
 REQ-STREAM-INDEXER-047

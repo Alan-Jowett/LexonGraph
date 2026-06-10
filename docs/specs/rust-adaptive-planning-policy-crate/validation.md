@@ -43,7 +43,8 @@ packages, and does not redefine the shared streaming clustering contract.
 Construct the adaptive realization with valid explicit settings.
 
 **Pass condition:** construction succeeds only when direction, directional-PCA
-settings, and DCBC settings are all provided in supported combinations.
+settings, DCBC settings, `pc1_explained_variance_ratio_threshold`, and
+`dcbc_max_embedding_count` are all provided in supported combinations.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-004, REQ-ADAPTIVE-POLICY-013
 
@@ -62,7 +63,8 @@ Construct two adaptive runs over fixtures compatible with both supported
 directions: one `Divisive` and one `Agglomerative`.
 
 **Pass condition:** both runs preserve their selected direction across the full
-adaptive flow, regardless of whether a switch occurs.
+adaptive flow, regardless of whether divisive collections choose different
+realizations or agglomerative planning switches.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-006
 
@@ -73,39 +75,46 @@ decision boundary.
 
 **Pass condition:** the recorded diagnostics are structured, deterministic, and
 sufficient to decide whether directional PCA remained eligible at that
-boundary, including the represented embedding count, the hardcoded embedding
-count cutoff of `1000` when diagnostics exist, an explicit structured
-count-based decision reason, a caller-usable adaptive boundary position, and
-explicit unavailability semantics where diagnostics do not yet exist.
+boundary, including for divisive planning the measured
+`pc1_explained_variance_ratio`, configured
+`pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+configured `dcbc_max_embedding_count`, an explicit structured decision reason,
+a caller-usable adaptive boundary position, and explicit unavailability
+semantics where diagnostics do not yet exist.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-007, REQ-ADAPTIVE-POLICY-012
 
 ### VAL-ADAPTIVE-POLICY-007
 
-Run a deterministic fixture whose evaluated adaptive boundaries all retain
-embedding counts greater than or equal to `1000`.
+Run a deterministic divisive fixture whose evaluated collections produce first
+principal component explained-variance ratios greater than or equal to the
+configured threshold.
 
-**Pass condition:** the adaptive realization does not switch to DCBC and
-remains on the directional-PCA path throughout the exercised flow.
+**Pass condition:** the adaptive realization selects directional PCA for each
+evaluated collection and does not route those collections through DCBC.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-008, REQ-ADAPTIVE-POLICY-010
 
 ### VAL-ADAPTIVE-POLICY-008
 
-Run a deterministic fixture whose evaluated adaptive boundary drops below
-`1000` embeddings.
+Run a deterministic divisive fixture whose evaluated collection produces a
+first principal component explained-variance ratio below the configured
+threshold while also keeping the embedding count below the configured DCBC
+upper bound.
 
-**Pass condition:** the adaptive realization switches from directional PCA to
-DCBC at a deterministic boundary.
+**Pass condition:** the adaptive realization selects DCBC for that collection
+deterministically.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-008
 
 ### VAL-ADAPTIVE-POLICY-009
 
-Continue the same switch-triggering flow after the first adaptive switch.
+Continue a divisive adaptive flow across multiple collections whose PCA ratios
+and embedding counts exercise different selection outcomes.
 
-**Pass condition:** later planning segments in that same flow remain DCBC-owned
-and do not switch back to directional PCA.
+**Pass condition:** later collections can independently choose directional PCA
+or DCBC according to the configured divisive decision rule, while agglomerative
+flows retain their existing one-way DCBC ownership.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-009
 
@@ -126,7 +135,7 @@ Exercise invalid adaptive configuration and an unsupported direction or
 realization combination.
 
 **Pass condition:** each case fails explicitly rather than silently
-substituting another algorithm, threshold interpretation, or direction.
+substituting another algorithm, parameter interpretation, or direction.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-013
 
@@ -137,9 +146,11 @@ the same switch-triggering fixture twice.
 
 **Pass condition:** automated coverage exists for construction, no-switch
 behavior, switch-trigger behavior, both directions, and hierarchy
-compatibility, including coverage for the current hardcoded cutoff of `1000`,
-and both repeated runs select the same switch boundary and surface the same
-adaptive boundary position, represented embedding count, hardcoded cutoff, and
-availability semantics for that switch.
+compatibility, including coverage for divisive PC1-at-or-above-threshold
+behavior, divisive below-threshold-and-below-upper-bound DCBC behavior,
+divisive below-threshold-but-too-large PCA retention, and both repeated runs
+surface the same adaptive boundary position, measured PC1 ratio, configured
+threshold, measured embedding count, configured upper bound, and availability
+semantics for the exercised decision.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-014

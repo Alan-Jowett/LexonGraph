@@ -261,14 +261,16 @@ pass report that includes:
   structured adaptive-switch telemetry sufficient to identify whether a
   directional-PCA-to-DCBC switch occurred during the completed pass, which
   adaptive algorithm remained active after the most recent evaluated adaptive
-  boundary, the represented `embedding_count`, the experimental hardcoded
-  `embedding_count_cutoff` of `1000`, and an explicit count-based decision
-  reason for that boundary when diagnostics exist, and the adaptive boundary
-  position of the first switch when one occurred
+  boundary, and for divisive adaptive planning the measured
+  `pc1_explained_variance_ratio`, configured
+  `pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+  configured `dcbc_max_embedding_count`, and an explicit decision reason for
+  that boundary when diagnostics exist, and the adaptive boundary position of
+  the first agglomerative switch when one occurred
 
 That surfaced telemetry shall faithfully reflect the adaptive-policy
 diagnostics without lossy transformation or omission of state needed to explain
-the count-based adaptive decision.
+the adaptive decision.
 - enough structured state for the caller to decide whether to continue or stop
 
 ### REQ-STREAM-INDEXER-022
@@ -290,10 +292,12 @@ For each reported phase, the observer contract shall expose:
 - when adaptive aggregate built-in planning is active for hierarchy planning,
   structured adaptive telemetry sufficient to identify the currently active
   adaptive algorithm, whether the reported adaptive boundary was the PCA-to-DCBC
-  switch boundary, the represented `embedding_count`, the experimental
-  hardcoded `embedding_count_cutoff` of `1000`, and an explicit count-based
-  decision reason for the reported boundary when diagnostics exist, and the
-  adaptive boundary position when that boundary has been evaluated
+  switch boundary, and for divisive adaptive planning the measured
+  `pc1_explained_variance_ratio`, configured
+  `pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+  configured `dcbc_max_embedding_count`, and an explicit decision reason for
+  the reported boundary when diagnostics exist, and the adaptive boundary
+  position when that boundary has been evaluated
 
 The observer contract shall preserve those surfaced numeric values exactly from
 the adaptive-policy diagnostic source rather than reformatting them into a less
@@ -314,9 +318,9 @@ updates shall also report newly observed adaptive-boundary telemetry as soon as
 that boundary has been evaluated rather than delaying switch visibility until
 the pass-completion report alone.
 
-For boundaries whose diagnostics have not yet been computed, surfaced
-`embedding_count`, `embedding_count_cutoff`, and count-based decision telemetry
-shall be explicitly unavailable rather than synthesized.
+For boundaries whose diagnostics have not yet been computed, surfaced adaptive
+decision metrics and decision-reason telemetry shall be explicitly unavailable
+rather than synthesized.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -358,9 +362,10 @@ root block ID, and the same persisted block set.
 This determinism requirement includes any surfaced adaptive-switch telemetry in
 pass reports or status updates, including whether a switch occurred, which
 adaptive algorithm was active at each evaluated boundary, and any reported
-adaptive boundary positions, `embedding_count` values,
-`embedding_count_cutoff` values, count-based decision reasons, and their
-availability semantics.
+adaptive boundary positions, divisive `pc1_explained_variance_ratio` values,
+divisive `pc1_explained_variance_ratio_threshold` values, divisive
+`embedding_count` values, divisive `dcbc_max_embedding_count` values, decision
+reasons, and their availability semantics.
 
 ### REQ-STREAM-INDEXER-027
 
@@ -494,17 +499,20 @@ remain unchanged.
 
 ### REQ-STREAM-INDEXER-046
 
-The adaptive aggregate built-in realization shall derive its PCA-to-DCBC switch
-decisions from explicit deterministic diagnostics and configured thresholds.
+The adaptive aggregate built-in realization shall derive its adaptive algorithm
+decisions from explicit deterministic diagnostics and configured parameters.
 
 Given the same logical item set, replay order, planning settings, and
-deterministic dependency behavior, the same switch boundary shall be selected.
+deterministic dependency behavior, divisive adaptive planning shall choose the
+same per-collection decision sequence and agglomerative adaptive planning shall
+choose the same switch boundary.
 
 ### REQ-STREAM-INDEXER-047
 
-Within one adaptive planning flow, once the built-in realization switches from
-directional PCA to DCBC, it shall not switch back to directional PCA later in
-that same flow.
+Within one adaptive planning flow, divisive adaptive planning may choose
+directional PCA or DCBC independently for each evaluated collection, while
+agglomerative adaptive planning shall continue to use one-way PCA-to-DCBC
+ownership once it switches.
 
 ### REQ-STREAM-INDEXER-037
 

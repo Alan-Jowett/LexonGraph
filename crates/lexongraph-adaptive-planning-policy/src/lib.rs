@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
-
 //! Deterministic adaptive planning-policy selection for LexonGraph.
 
 use std::fmt;
 
 use lexongraph_directional_pca::DirectionalPcaParams;
+use lexongraph_pca::{PcaError, fit};
 use lexongraph_streaming_clustering::BalanceConstraints;
 
+pub const DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD: f32 = 0.25;
+pub const DEFAULT_DCBC_MAX_EMBEDDING_COUNT: usize = 2048;
 pub const DEFAULT_EMBEDDING_COUNT_CUTOFF: usize = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,10 +33,17 @@ pub struct AdaptiveDcbcSettings {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct AdaptiveDivisiveSwitchSettings {
+    pub pc1_explained_variance_ratio_threshold: f32,
+    pub dcbc_max_embedding_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct AdaptivePlanningSettings {
     pub direction: AdaptivePlanningDirection,
     pub directional_pca: AdaptiveDirectionalPcaSettings,
     pub dcbc: AdaptiveDcbcSettings,
+    pub divisive_switch: AdaptiveDivisiveSwitchSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +55,9 @@ pub enum ActivePlanningAlgorithm {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdaptivePlanningDecisionReason {
     InitialDirectionalPcaSegment,
+    StayedOnDirectionalPcaAtOrAbovePc1Threshold,
+    StayedOnDirectionalPcaAtOrAboveEmbeddingCountLimit,
+    SelectedDcbcBelowPc1ThresholdAndBelowEmbeddingCountLimit,
     StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff,
     SwitchedToDcbcBelowEmbeddingCountCutoff,
     PreviouslySwitchedToDcbc,
@@ -54,6 +66,7 @@ pub enum AdaptivePlanningDecisionReason {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdaptivePlanningDiagnostics {
     pub embedding_count: usize,
+    pub pc1_explained_variance_ratio: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,7 +74,8 @@ pub struct AdaptiveSwitchDecisionRecord {
     pub boundary_position: usize,
     pub active_algorithm: ActivePlanningAlgorithm,
     pub switch_boundary_occurred: bool,
-    pub embedding_count_cutoff: Option<usize>,
+    pub pc1_explained_variance_ratio_threshold: Option<f32>,
+    pub dcbc_max_embedding_count: Option<usize>,
     pub reason: AdaptivePlanningDecisionReason,
     pub collapse_diagnostics: Option<AdaptivePlanningDiagnostics>,
 }
@@ -124,12 +138,16 @@ impl AdaptivePlanningSelector {
         embeddings: &[Vec<f32>],
     ) -> Result<ActivePlanningAlgorithm, AdaptivePlanningError> {
         let boundary_position = self.decision_records.len();
-        if self.switched_to_dcbc {
+
+        if self.settings.direction == AdaptivePlanningDirection::Agglomerative
+            && self.switched_to_dcbc
+        {
             self.decision_records.push(AdaptiveSwitchDecisionRecord {
                 boundary_position,
                 active_algorithm: ActivePlanningAlgorithm::Dcbc,
                 switch_boundary_occurred: false,
-                embedding_count_cutoff: None,
+                pc1_explained_variance_ratio_threshold: None,
+                dcbc_max_embedding_count: None,
                 reason: AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc,
                 collapse_diagnostics: None,
             });
@@ -141,37 +159,118 @@ impl AdaptivePlanningSelector {
                 boundary_position,
                 active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
                 switch_boundary_occurred: false,
-                embedding_count_cutoff: None,
+                pc1_explained_variance_ratio_threshold: None,
+                dcbc_max_embedding_count: None,
                 reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
                 collapse_diagnostics: None,
             });
             return Ok(ActivePlanningAlgorithm::DirectionalPca);
         }
 
-        let diagnostics = evaluate_boundary_diagnostics(embeddings)?;
-        let switch_boundary_occurred = diagnostics.embedding_count < DEFAULT_EMBEDDING_COUNT_CUTOFF;
-        let (active_algorithm, reason) = if switch_boundary_occurred {
+        let previous_algorithm = self
+            .decision_records
+            .last()
+            .map(|record| record.active_algorithm);
+        let decision = match self.settings.direction {
+            AdaptivePlanningDirection::Divisive => self.select_divisive(embeddings)?,
+            AdaptivePlanningDirection::Agglomerative => self.select_agglomerative(embeddings)?,
+        };
+        let switch_boundary_occurred = previous_algorithm
+            == Some(ActivePlanningAlgorithm::DirectionalPca)
+            && decision.active_algorithm == ActivePlanningAlgorithm::Dcbc;
+        if self.settings.direction == AdaptivePlanningDirection::Agglomerative
+            && switch_boundary_occurred
+        {
             self.switched_to_dcbc = true;
+        }
+
+        self.decision_records.push(AdaptiveSwitchDecisionRecord {
+            boundary_position,
+            active_algorithm: decision.active_algorithm,
+            switch_boundary_occurred,
+            pc1_explained_variance_ratio_threshold: decision.pc1_explained_variance_ratio_threshold,
+            dcbc_max_embedding_count: decision.dcbc_max_embedding_count,
+            reason: decision.reason,
+            collapse_diagnostics: Some(decision.diagnostics),
+        });
+        Ok(decision.active_algorithm)
+    }
+
+    fn select_divisive(
+        &self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<AdaptiveDecision, AdaptivePlanningError> {
+        let diagnostics = evaluate_divisive_diagnostics(embeddings)?;
+        let pc1 = diagnostics.pc1_explained_variance_ratio.ok_or_else(|| {
+            AdaptivePlanningError::DiagnosticComputation(
+                "divisive adaptive diagnostics require a PC1 explained variance ratio".into(),
+            )
+        })?;
+        let threshold = self
+            .settings
+            .divisive_switch
+            .pc1_explained_variance_ratio_threshold;
+        let dcbc_max_embedding_count = self.settings.divisive_switch.dcbc_max_embedding_count;
+
+        let (active_algorithm, reason) = if pc1 >= threshold {
+            (
+                ActivePlanningAlgorithm::DirectionalPca,
+                AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAbovePc1Threshold,
+            )
+        } else if diagnostics.embedding_count < dcbc_max_embedding_count {
             (
                 ActivePlanningAlgorithm::Dcbc,
-                AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff,
+                AdaptivePlanningDecisionReason::SelectedDcbcBelowPc1ThresholdAndBelowEmbeddingCountLimit,
             )
         } else {
             (
                 ActivePlanningAlgorithm::DirectionalPca,
-                AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff,
+                AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountLimit,
             )
         };
-        self.decision_records.push(AdaptiveSwitchDecisionRecord {
-            boundary_position,
+
+        Ok(AdaptiveDecision {
             active_algorithm,
-            switch_boundary_occurred,
-            embedding_count_cutoff: Some(DEFAULT_EMBEDDING_COUNT_CUTOFF),
             reason,
-            collapse_diagnostics: Some(diagnostics),
-        });
-        Ok(active_algorithm)
+            diagnostics,
+            pc1_explained_variance_ratio_threshold: Some(threshold),
+            dcbc_max_embedding_count: Some(dcbc_max_embedding_count),
+        })
     }
+
+    fn select_agglomerative(
+        &self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<AdaptiveDecision, AdaptivePlanningError> {
+        let diagnostics = evaluate_agglomerative_diagnostics(embeddings)?;
+        let (active_algorithm, reason) =
+            if diagnostics.embedding_count < DEFAULT_EMBEDDING_COUNT_CUTOFF {
+                (
+                    ActivePlanningAlgorithm::Dcbc,
+                    AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff,
+                )
+            } else {
+                (
+                ActivePlanningAlgorithm::DirectionalPca,
+                AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff,
+            )
+            };
+        Ok(AdaptiveDecision {
+            active_algorithm,
+            reason,
+            diagnostics,
+            pc1_explained_variance_ratio_threshold: None,
+            dcbc_max_embedding_count: Some(DEFAULT_EMBEDDING_COUNT_CUTOFF),
+        })
+    }
+}
+
+struct AdaptiveDecision {
+    active_algorithm: ActivePlanningAlgorithm,
+    reason: AdaptivePlanningDecisionReason,
+    diagnostics: AdaptivePlanningDiagnostics,
+    pc1_explained_variance_ratio_threshold: Option<f32>,
+    dcbc_max_embedding_count: Option<usize>,
 }
 
 fn validate_settings(settings: &AdaptivePlanningSettings) -> Result<(), AdaptivePlanningError> {
@@ -183,6 +282,19 @@ fn validate_settings(settings: &AdaptivePlanningSettings) -> Result<(), Adaptive
     if settings.dcbc.cluster_count == 0 {
         return Err(AdaptivePlanningError::InvalidConfiguration(
             "DCBC cluster_count must be greater than zero".into(),
+        ));
+    }
+    let threshold = settings
+        .divisive_switch
+        .pc1_explained_variance_ratio_threshold;
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(AdaptivePlanningError::InvalidConfiguration(
+            "pc1_explained_variance_ratio_threshold must be finite and in [0.0, 1.0]".into(),
+        ));
+    }
+    if settings.divisive_switch.dcbc_max_embedding_count == 0 {
+        return Err(AdaptivePlanningError::InvalidConfiguration(
+            "dcbc_max_embedding_count must be greater than zero".into(),
         ));
     }
     validate_directional_pca_params(&settings.directional_pca)?;
@@ -240,7 +352,51 @@ fn validate_directional_pca_params(
     Ok(())
 }
 
-fn evaluate_boundary_diagnostics(
+fn evaluate_divisive_diagnostics(
+    embeddings: &[Vec<f32>],
+) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError> {
+    if embeddings.is_empty() {
+        return Err(AdaptivePlanningError::DiagnosticComputation(
+            "adaptive diagnostics require at least one embedding".into(),
+        ));
+    }
+    let first_dim = embeddings.first().map(std::vec::Vec::len).ok_or_else(|| {
+        AdaptivePlanningError::DiagnosticComputation(
+            "adaptive diagnostics require at least one embedding".into(),
+        )
+    })?;
+    if first_dim == 0 {
+        return Err(AdaptivePlanningError::DiagnosticComputation(
+            "adaptive diagnostics require non-empty embeddings".into(),
+        ));
+    }
+    if embeddings
+        .iter()
+        .any(|embedding| embedding.len() != first_dim)
+    {
+        return Err(AdaptivePlanningError::DiagnosticComputation(
+            "adaptive diagnostics require one consistent embedding dimensionality".into(),
+        ));
+    }
+
+    let transform = fit(embeddings).map_err(map_pca_error)?;
+    let pc1_explained_variance_ratio = transform
+        .cumulative_variance()
+        .and_then(|ratios| ratios.into_iter().next())
+        .unwrap_or(0.0);
+    if !pc1_explained_variance_ratio.is_finite() {
+        return Err(AdaptivePlanningError::DiagnosticComputation(
+            "PC1 explained variance ratio became non-finite".into(),
+        ));
+    }
+
+    Ok(AdaptivePlanningDiagnostics {
+        embedding_count: embeddings.len(),
+        pc1_explained_variance_ratio: Some(pc1_explained_variance_ratio),
+    })
+}
+
+fn evaluate_agglomerative_diagnostics(
     embeddings: &[Vec<f32>],
 ) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError> {
     if embeddings.is_empty() {
@@ -250,5 +406,10 @@ fn evaluate_boundary_diagnostics(
     }
     Ok(AdaptivePlanningDiagnostics {
         embedding_count: embeddings.len(),
+        pc1_explained_variance_ratio: None,
     })
+}
+
+fn map_pca_error(error: PcaError) -> AdaptivePlanningError {
+    AdaptivePlanningError::DiagnosticComputation(error.to_string())
 }

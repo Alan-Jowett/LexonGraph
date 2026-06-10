@@ -62,9 +62,8 @@ The adaptive configuration contains:
 - one selected built-in direction
 - one directional-PCA configuration block
 - one DCBC configuration block
-
-The experimental embedding-count switch cutoff is hardcoded at `1000` rather
-than supplied through caller configuration.
+- one tunable `pc1_explained_variance_ratio_threshold`
+- one tunable `dcbc_max_embedding_count`
 
 ### DSG-ADAPTIVE-POLICY-004 `Directional-PCA initial mode`
 
@@ -79,38 +78,52 @@ At deterministic planning boundaries, the adaptive realization derives
 structured collapse diagnostics from the represented planning inputs or outputs
 available at that boundary.
 
-Those diagnostics include the represented embedding count observed at the
-current boundary.
+For divisive adaptive planning, those diagnostics include the explained
+variance ratio of the first principal component and the represented embedding
+count observed for the current collection.
 
-The adaptive realization compares that embedding count with the experimental
-hardcoded cutoff of `1000` to determine whether directional PCA remains
-eligible.
+For agglomerative adaptive planning, the existing count-based diagnostic inputs
+remain unchanged in this experiment.
 
 ### DSG-ADAPTIVE-POLICY-006 `Deterministic switch execution`
 
-When the represented embedding count is less than `1000`, the adaptive
-realization switches from directional PCA to DCBC at that boundary.
+For divisive adaptive planning, the adaptive realization selects DCBC for a
+collection when:
 
-When the represented embedding count is greater than or equal to `1000`, the
-realization remains on the directional-PCA path for that boundary.
+1. the collection's first-principal-component explained variance ratio is less
+   than `pc1_explained_variance_ratio_threshold`, and
+2. the collection's represented embedding count is less than
+   `dcbc_max_embedding_count`
+
+If the explained variance ratio is greater than or equal to the threshold, the
+divisive realization selects directional PCA for that collection. If the
+explained variance ratio is below threshold but the embedding count is at or
+above `dcbc_max_embedding_count`, the divisive realization also selects
+directional PCA for that collection.
+
+Agglomerative adaptive planning retains the existing one-way count-based
+switching behavior in this experiment.
 
 ### DSG-ADAPTIVE-POLICY-007 `Direction continuity`
 
 The selected built-in direction remains stable across the full adaptive
 planning flow:
 
-- in `Divisive` mode, the switch changes the clustering realization used for
-  top-down refinement without changing the top-down direction
+- in `Divisive` mode, each evaluated collection independently selects the
+  clustering realization used for top-down refinement without changing the
+  top-down direction
 - in `Agglomerative` mode, the switch changes the clustering realization used
   for bottom-up grouping without changing the bottom-up direction
 
 ### DSG-ADAPTIVE-POLICY-008 `One-way switch rule`
 
-After the first switch from directional PCA to DCBC, the adaptive realization
-marks the flow as DCBC-owned for the remainder of that flow.
+Divisive adaptive planning does not impose one-way ownership across a full
+planning flow: each collection is evaluated independently and may choose a
+different realization from adjacent collections.
 
-Later planning boundaries in the same flow therefore skip any attempt to switch
-back to directional PCA.
+Agglomerative adaptive planning continues to mark the flow as DCBC-owned after
+its first switch and therefore skips any attempt to switch back to directional
+PCA later in that same flow.
 
 ### DSG-ADAPTIVE-POLICY-009 `Structured diagnostics and switch records`
 
@@ -119,12 +132,14 @@ For each evaluated boundary, the crate retains a structured record identifying:
 - the active algorithm realization
 - the deterministic zero-based adaptive boundary position for that evaluated
   planning boundary
-- the deterministic inputs to the switch decision, including the represented
-  embedding count and the experimental hardcoded cutoff of `1000` when
-  diagnostics exist
-- the explicit count-based decision reason for that boundary
+- for divisive adaptive planning, the deterministic inputs to the collection
+  decision, including `pc1_explained_variance_ratio`,
+  `pc1_explained_variance_ratio_threshold`, `embedding_count`, and
+  `dcbc_max_embedding_count` when diagnostics exist
+- the explicit decision reason for that boundary or collection
 - whether the switch criteria were satisfied
-- whether the switch boundary occurred at that boundary
+- for agglomerative adaptive planning, whether the first switch boundary
+  occurred at that boundary
 
 If surfaced publicly, these diagnostics remain deterministic and suitable for
 validation without requiring parsing of free-form messages or inference from

@@ -21,8 +21,9 @@ use lexongraph_streaming_clustering::{
 };
 use lexongraph_streaming_indexer::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
-    AdaptivePlanningDecisionReason, AdaptivePlanningDirection, AdaptivePlanningSettings,
-    DEFAULT_EMBEDDING_COUNT_CUTOFF,
+    AdaptiveDivisiveSwitchSettings, AdaptivePlanningDecisionReason, AdaptivePlanningDirection,
+    AdaptivePlanningSettings, DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+    DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
 };
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
@@ -187,6 +188,19 @@ fn item(name: &'static str) -> IndexItem<&'static str> {
         metadata: vec![],
         content_ref: name,
     }
+}
+
+fn switch_trigger_items() -> [IndexItem<&'static str>; 8] {
+    [
+        item("a"),
+        item("aa"),
+        item("b"),
+        item("bb"),
+        item("x"),
+        item("xx"),
+        item("y"),
+        item("yy"),
+    ]
 }
 
 #[derive(Clone, Copy)]
@@ -553,12 +567,32 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
 }
 
 fn adaptive_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
-    adaptive_planning_with_cluster_count(direction, 2)
+    adaptive_planning_with_settings(
+        direction,
+        2,
+        DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
+        DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+    )
 }
 
-fn adaptive_planning_with_cluster_count(
+fn adaptive_planning_with_divisive_switch(
+    direction: BuiltInPlanningDirection,
+    pc1_explained_variance_ratio_threshold: f32,
+    dcbc_max_embedding_count: usize,
+) -> BuiltInPlanning {
+    adaptive_planning_with_settings(
+        direction,
+        2,
+        pc1_explained_variance_ratio_threshold,
+        dcbc_max_embedding_count,
+    )
+}
+
+fn adaptive_planning_with_settings(
     direction: BuiltInPlanningDirection,
     cluster_count: u32,
+    pc1_explained_variance_ratio_threshold: f32,
+    dcbc_max_embedding_count: usize,
 ) -> BuiltInPlanning {
     let adaptive_direction = match direction {
         BuiltInPlanningDirection::Divisive => AdaptivePlanningDirection::Divisive,
@@ -583,6 +617,10 @@ fn adaptive_planning_with_cluster_count(
             balance_constraints: None,
             random_seed: Some(19),
         },
+        divisive_switch: AdaptiveDivisiveSwitchSettings {
+            pc1_explained_variance_ratio_threshold,
+            dcbc_max_embedding_count,
+        },
     })
 }
 
@@ -605,6 +643,10 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
             cluster_count: 2,
             balance_constraints: None,
             random_seed: None,
+        },
+        divisive_switch: AdaptiveDivisiveSwitchSettings {
+            pc1_explained_variance_ratio_threshold: f32::NAN,
+            dcbc_max_embedding_count: 0,
         },
     })
 }
@@ -681,19 +723,6 @@ fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
             name: "directional-pca-agglomerative",
             planning: directional_pca_planning(BuiltInPlanningDirection::Agglomerative),
         },
-    ]
-}
-
-fn switch_trigger_items() -> [IndexItem<&'static str>; 8] {
-    [
-        item("a"),
-        item("aa"),
-        item("b"),
-        item("bb"),
-        item("x"),
-        item("xx"),
-        item("y"),
-        item("yy"),
     ]
 }
 
@@ -2024,10 +2053,22 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
                             .as_ref()
                             .map(|diagnostics| diagnostics.embedding_count)
                     }),
-                    embedding_count_cutoff: decision_records
+                    pc1_explained_variance_ratio: decision_records.iter().rev().find_map(
+                        |record| {
+                            record
+                                .collapse_diagnostics
+                                .as_ref()
+                                .and_then(|diagnostics| diagnostics.pc1_explained_variance_ratio)
+                        }
+                    ),
+                    pc1_explained_variance_ratio_threshold: decision_records
                         .iter()
                         .rev()
-                        .find_map(|record| record.embedding_count_cutoff),
+                        .find_map(|record| record.pc1_explained_variance_ratio_threshold),
+                    dcbc_max_embedding_count: decision_records
+                        .iter()
+                        .rev()
+                        .find_map(|record| record.dcbc_max_embedding_count),
                     reason: decision_records
                         .iter()
                         .rev()
@@ -2051,7 +2092,10 @@ async fn val_stream_indexer_041_adaptive_no_switch_path_remains_pca_compatible()
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
     let items = switch_trigger_items();
-    let mut run = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
+    let mut run = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    );
     run.ingest_batch(&items).await.unwrap();
     let report = run.finish_pass().unwrap();
     let decision_records = run.adaptive_decision_records();
@@ -2079,7 +2123,10 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
             telemetry.switch_occurred,
             telemetry.latest_decision.active_algorithm,
             telemetry.first_switch_boundary_position,
-            telemetry.latest_decision.embedding_count_cutoff,
+            telemetry
+                .latest_decision
+                .pc1_explained_variance_ratio_threshold,
+            telemetry.latest_decision.dcbc_max_embedding_count,
             telemetry.latest_decision.reason,
         )),
         Some((
@@ -2098,7 +2145,11 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
             decision_records
                 .iter()
                 .rev()
-                .find_map(|record| record.embedding_count_cutoff),
+                .find_map(|record| record.pc1_explained_variance_ratio_threshold),
+            decision_records
+                .iter()
+                .rev()
+                .find_map(|record| record.dcbc_max_embedding_count),
             decision_records
                 .iter()
                 .rev()
@@ -2111,8 +2162,8 @@ async fn val_stream_indexer_042_adaptive_switch_path_falls_back_to_dcbc() {
         report
             .adaptive_planning
             .as_ref()
-            .and_then(|telemetry| telemetry.latest_decision.embedding_count)
-            .is_some_and(|embedding_count| embedding_count < DEFAULT_EMBEDDING_COUNT_CUTOFF)
+            .and_then(|telemetry| telemetry.latest_decision.pc1_explained_variance_ratio)
+            .is_some_and(|pc1| pc1 < 0.6)
     );
     run.mark_planning_complete().unwrap();
     let store = MemoryBlockStore::default();
@@ -2149,7 +2200,12 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
     }));
     assert!(status_telemetry.iter().all(|telemetry| {
         telemetry.decision.embedding_count.is_none()
-            && telemetry.decision.embedding_count_cutoff.is_none()
+            && telemetry.decision.pc1_explained_variance_ratio.is_none()
+            && telemetry
+                .decision
+                .pc1_explained_variance_ratio_threshold
+                .is_none()
+            && telemetry.decision.dcbc_max_embedding_count.is_none()
             && telemetry.decision.reason
                 == AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     }));
@@ -2187,8 +2243,21 @@ async fn val_stream_indexer_043_adaptive_no_switch_telemetry_surfaces_in_pass_re
             .map(|diagnostics| diagnostics.embedding_count)
     );
     assert_eq!(
-        pass_telemetry.latest_decision.embedding_count_cutoff,
-        expected_report_decision.embedding_count_cutoff
+        pass_telemetry.latest_decision.pc1_explained_variance_ratio,
+        expected_report_decision
+            .collapse_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.pc1_explained_variance_ratio)
+    );
+    assert_eq!(
+        pass_telemetry
+            .latest_decision
+            .pc1_explained_variance_ratio_threshold,
+        expected_report_decision.pc1_explained_variance_ratio_threshold
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.dcbc_max_embedding_count,
+        expected_report_decision.dcbc_max_embedding_count
     );
     assert_eq!(
         pass_telemetry.latest_decision.reason,
@@ -2204,8 +2273,11 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
     let items = switch_trigger_items();
-    let mut run = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
-        .with_observer(observer);
+    let mut run = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    )
+    .with_observer(observer);
     run.ingest_batch(&items).await.unwrap();
     let report = run.finish_pass().unwrap();
 
@@ -2221,9 +2293,10 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
         .find(|telemetry| telemetry.decision.switch_boundary_occurred)
         .map(|telemetry| telemetry.decision);
     assert!(switch_boundary.is_some());
-    assert_eq!(
-        status_telemetry.last().unwrap().decision.active_algorithm,
-        ActivePlanningAlgorithm::Dcbc
+    assert!(
+        status_telemetry
+            .iter()
+            .any(|telemetry| telemetry.decision.active_algorithm == ActivePlanningAlgorithm::Dcbc)
     );
 
     let pass_telemetry = report.adaptive_planning.unwrap();
@@ -2245,11 +2318,16 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
     );
     let switch_boundary = switch_boundary.unwrap();
     let embedding_count = switch_boundary.embedding_count.unwrap();
-    let cutoff = switch_boundary.embedding_count_cutoff.unwrap();
-    assert!(embedding_count < cutoff);
+    let pc1 = switch_boundary.pc1_explained_variance_ratio.unwrap();
+    let threshold = switch_boundary
+        .pc1_explained_variance_ratio_threshold
+        .unwrap();
+    let max_embedding_count = switch_boundary.dcbc_max_embedding_count.unwrap();
+    assert!(pc1 < threshold);
+    assert!(embedding_count < max_embedding_count);
     assert_eq!(
         switch_boundary.reason,
-        AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff
+        AdaptivePlanningDecisionReason::SelectedDcbcBelowPc1ThresholdAndBelowEmbeddingCountLimit
     );
     assert_eq!(
         pass_telemetry.latest_decision.embedding_count,
@@ -2259,8 +2337,21 @@ async fn val_stream_indexer_044_adaptive_switch_telemetry_surfaces_in_pass_repor
             .map(|diagnostics| diagnostics.embedding_count)
     );
     assert_eq!(
-        pass_telemetry.latest_decision.embedding_count_cutoff,
-        expected_report_decision.embedding_count_cutoff
+        pass_telemetry.latest_decision.pc1_explained_variance_ratio,
+        expected_report_decision
+            .collapse_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.pc1_explained_variance_ratio)
+    );
+    assert_eq!(
+        pass_telemetry
+            .latest_decision
+            .pc1_explained_variance_ratio_threshold,
+        expected_report_decision.pc1_explained_variance_ratio_threshold
+    );
+    assert_eq!(
+        pass_telemetry.latest_decision.dcbc_max_embedding_count,
+        expected_report_decision.dcbc_max_embedding_count
     );
     assert_eq!(
         pass_telemetry.latest_decision.reason,
@@ -2277,8 +2368,11 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
         let statuses = Arc::clone(&first_statuses);
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
-    let mut first = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
-        .with_observer(first_observer);
+    let mut first = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    )
+    .with_observer(first_observer);
     first.ingest_batch(&items).await.unwrap();
     let first_report = first.finish_pass().unwrap();
     let first_telemetry =
@@ -2290,8 +2384,11 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
         let statuses = Arc::clone(&second_statuses);
         Arc::new(move |status| statuses.lock().unwrap().push(status))
     };
-    let mut second = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160)
-        .with_observer(second_observer);
+    let mut second = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    )
+    .with_observer(second_observer);
     second.ingest_batch(&items).await.unwrap();
     let second_report = second.finish_pass().unwrap();
     let second_telemetry =
@@ -2300,20 +2397,27 @@ async fn val_stream_indexer_045_adaptive_switch_telemetry_is_deterministic_acros
     assert_eq!(first_report, second_report);
     assert_eq!(first_telemetry, second_telemetry);
     assert!(first_telemetry.iter().any(|telemetry| {
-        telemetry.decision.embedding_count.is_some()
-            && telemetry.decision.embedding_count_cutoff == Some(DEFAULT_EMBEDDING_COUNT_CUTOFF)
+        telemetry.decision.pc1_explained_variance_ratio.is_some()
+            && telemetry.decision.pc1_explained_variance_ratio_threshold == Some(0.6)
+            && telemetry.decision.dcbc_max_embedding_count == Some(8)
     }));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
     let items = switch_trigger_items();
-    let mut first = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
+    let mut first = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    );
     first.ingest_batch(&items).await.unwrap();
     let first_report = first.finish_pass().unwrap();
     let first_decisions = first.adaptive_decision_records().to_vec();
 
-    let mut second = run_with_builtin(adaptive_planning(BuiltInPlanningDirection::Divisive), 160);
+    let mut second = run_with_builtin(
+        adaptive_planning_with_divisive_switch(BuiltInPlanningDirection::Divisive, 0.6, 8),
+        160,
+    );
     second.ingest_batch(&items).await.unwrap();
     let second_report = second.finish_pass().unwrap();
     let second_decisions = second.adaptive_decision_records().to_vec();
@@ -2323,16 +2427,22 @@ async fn val_stream_indexer_046_adaptive_switch_boundary_is_deterministic() {
     assert!(
         first_decisions
             .iter()
-            .skip_while(|record| !record.switch_boundary_occurred)
-            .all(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
+            .any(|record| record.switch_boundary_occurred)
+    );
+    assert!(
+        first_decisions
+            .iter()
+            .any(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
     );
     assert!(first_decisions.iter().any(|record| {
-        record.collapse_diagnostics.is_some() && record.embedding_count_cutoff.is_some()
+        record.collapse_diagnostics.is_some()
+            && record.pc1_explained_variance_ratio_threshold == Some(0.6)
+            && record.dcbc_max_embedding_count == Some(8)
     }));
 }
 
 #[test]
-fn regression_adaptive_selector_keeps_one_way_switch_records() {
+fn regression_adaptive_selector_can_return_to_directional_pca_for_later_divisive_collections() {
     let mut selector = lexongraph_adaptive_planning_policy::AdaptivePlanningSelector::new(
         AdaptivePlanningSettings {
             direction: AdaptivePlanningDirection::Divisive,
@@ -2353,15 +2463,25 @@ fn regression_adaptive_selector_keeps_one_way_switch_records() {
                 balance_constraints: None,
                 random_seed: Some(19),
             },
+            divisive_switch: AdaptiveDivisiveSwitchSettings {
+                pc1_explained_variance_ratio_threshold: 0.6,
+                dcbc_max_embedding_count: 8,
+            },
         },
     )
     .unwrap();
-    let switch_fixture = (0..(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1))
-        .map(|index| vec![index as f32, 0.0])
-        .collect::<Vec<_>>();
-    let stay_fixture = (0..DEFAULT_EMBEDDING_COUNT_CUTOFF)
-        .map(|index| vec![index as f32, 1.0])
-        .collect::<Vec<_>>();
+    let switch_fixture = vec![
+        vec![-1.0, -1.0],
+        vec![-1.0, 1.0],
+        vec![1.0, -1.0],
+        vec![1.0, 1.0],
+    ];
+    let stay_fixture = vec![
+        vec![-3.0, 0.0],
+        vec![-1.0, 0.0],
+        vec![1.0, 0.0],
+        vec![3.0, 0.0],
+    ];
     assert_eq!(
         selector.select_algorithm(&switch_fixture).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
@@ -2372,7 +2492,7 @@ fn regression_adaptive_selector_keeps_one_way_switch_records() {
     );
     assert_eq!(
         selector.select_algorithm(&stay_fixture).unwrap(),
-        ActivePlanningAlgorithm::Dcbc
+        ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
         selector
@@ -2386,8 +2506,12 @@ fn regression_adaptive_selector_keeps_one_way_switch_records() {
         selector
             .decision_records()
             .iter()
-            .map(|record| record.embedding_count_cutoff)
+            .map(|record| record.active_algorithm)
             .collect::<Vec<_>>(),
-        vec![None, Some(DEFAULT_EMBEDDING_COUNT_CUTOFF), None]
+        vec![
+            ActivePlanningAlgorithm::DirectionalPca,
+            ActivePlanningAlgorithm::Dcbc,
+            ActivePlanningAlgorithm::DirectionalPca,
+        ]
     );
 }

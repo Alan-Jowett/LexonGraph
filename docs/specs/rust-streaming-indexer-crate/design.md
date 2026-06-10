@@ -183,13 +183,15 @@ materialized parent layer.
 - when adaptive aggregate built-in planning is active, deterministic structured
   adaptive-switch telemetry stating whether a PCA-to-DCBC switch occurred in
   the completed pass, which adaptive algorithm was active after the most recent
-  evaluated adaptive boundary, the represented `embedding_count`, the
-  experimental hardcoded `embedding_count_cutoff` of `1000`, and the explicit
-  count-based decision reason for that boundary when diagnostics exist, and the
-  adaptive boundary position of the first switch when one occurred
+  evaluated adaptive boundary, and for divisive adaptive planning the measured
+  `pc1_explained_variance_ratio`, configured
+  `pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+  configured `dcbc_max_embedding_count`, and the explicit decision reason for
+  that boundary when diagnostics exist, and the adaptive boundary position of
+  the first agglomerative switch when one occurred
 
 This pass-report surface forwards the adaptive-policy diagnostic values without
-lossy transformation, so the surfaced count-based adaptive decision remains
+lossy transformation, so the surfaced adaptive decision remains
 traceable to the underlying adaptive decision state rather than to formatting
 or summarization.
 - structured state sufficient for caller stop/continue decisions
@@ -277,12 +279,14 @@ Each status update includes:
 - `remaining_unit_count: Option<usize>`
 - optional deterministic adaptive-switch telemetry for hierarchy-planning
   updates emitted while the adaptive built-in realization is active, including
-  the represented `embedding_count`, the experimental hardcoded
-  `embedding_count_cutoff` of `1000`, and the count-based decision reason for
-  the reported boundary when diagnostics exist
+  for divisive adaptive planning the measured
+  `pc1_explained_variance_ratio`, configured
+  `pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+  configured `dcbc_max_embedding_count`, and the decision reason for the
+  reported boundary when diagnostics exist
 
 Those surfaced numeric fields remain faithful to the adaptive-policy diagnostic
-source and do not rewrite or synthesize a different count-based adaptive
+source and do not rewrite or synthesize a different adaptive
 decision through formatting-only presentation.
 
 For `InProgress` updates, the observer receives the latest measured completion
@@ -471,25 +475,28 @@ shared clustering contract.
 ### DSG-STREAM-INDEXER-035 `Deterministic adaptive switch boundary`
 
 Within one planning flow, the adaptive realization starts with directional PCA
-and evaluates deterministic diagnostics plus configured thresholds to determine
+and evaluates deterministic diagnostics plus configured parameters to determine
 whether PCA remains eligible for the current planning work.
 
 Given the same replayed inputs, settings, and deterministic dependency
-behavior, the realization chooses the same PCA-to-DCBC switch boundary.
+behavior, divisive adaptive planning chooses the same per-collection decision
+sequence and agglomerative adaptive planning chooses the same PCA-to-DCBC
+switch boundary.
 
 ### DSG-STREAM-INDEXER-036 `Adaptive direction continuity and one-way switch`
 
 The adaptive realization supports both built-in directions:
 
-- in `Divisive` mode, the internal algorithm switch changes the clustering
-  realization used for top-down partition refinement without changing the
-  top-down direction policy
+- in `Divisive` mode, each evaluated collection independently chooses the
+  clustering realization used for top-down partition refinement without
+  changing the top-down direction policy
 - in `Agglomerative` mode, the internal algorithm switch changes the clustering
   realization used for bottom-up grouping without changing the bottom-up
   direction policy
 
-Once the realization switches from directional PCA to DCBC within one planning
-flow, it does not switch back to directional PCA later in that same flow.
+Only agglomerative adaptive planning preserves one-way PCA-to-DCBC ownership
+across a full planning flow. Divisive adaptive planning may alternate between
+directional PCA and DCBC across evaluated collections.
 
 ### DSG-STREAM-INDEXER-037 `Adaptive normalization compatibility`
 
@@ -509,18 +516,21 @@ That surfaced telemetry identifies at least:
 
 - the adaptive algorithm active after the evaluated boundary
 - whether that boundary was the first PCA-to-DCBC switch boundary in the pass
+  when agglomerative adaptive planning switched
 - the deterministic zero-based adaptive boundary position for the evaluated
   planning segment
-- the represented `embedding_count`, the hardcoded
-  `embedding_count_cutoff` of `1000`, and the explicit count-based decision
-  reason for that boundary when diagnostics exist
+- for divisive adaptive planning, the measured
+  `pc1_explained_variance_ratio`, configured
+  `pc1_explained_variance_ratio_threshold`, measured `embedding_count`,
+  configured `dcbc_max_embedding_count`, and the explicit decision reason for
+  that boundary when diagnostics exist
 
 No-switch executions therefore surface deterministic adaptive telemetry that
 continues to identify the active directional-PCA path without falsely claiming
 a switch boundary. For boundaries that have not yet computed diagnostics, the
 surface reports those fields as unavailable rather than synthesizing values.
-Repeated deterministic runs surface the same switch occurrence, boundary
-position, and compared diagnostic values.
+Repeated deterministic runs surface the same adaptive decision occurrence,
+boundary position, and compared diagnostic values.
 
 ## Traceability
 

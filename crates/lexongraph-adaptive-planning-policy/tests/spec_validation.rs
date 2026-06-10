@@ -4,8 +4,10 @@
 
 use lexongraph_adaptive_planning_policy::{
     ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings,
-    AdaptivePlanningDecisionReason, AdaptivePlanningDirection, AdaptivePlanningError,
-    AdaptivePlanningSelector, AdaptivePlanningSettings, DEFAULT_EMBEDDING_COUNT_CUTOFF,
+    AdaptiveDivisiveSwitchSettings, AdaptivePlanningDecisionReason, AdaptivePlanningDirection,
+    AdaptivePlanningError, AdaptivePlanningSelector, AdaptivePlanningSettings,
+    DEFAULT_DCBC_MAX_EMBEDDING_COUNT, DEFAULT_EMBEDDING_COUNT_CUTOFF,
+    DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
 };
 use lexongraph_directional_pca::DirectionalPcaParams;
 
@@ -32,12 +34,38 @@ fn dcbc_settings() -> AdaptiveDcbcSettings {
     }
 }
 
-fn settings(direction: AdaptivePlanningDirection) -> AdaptivePlanningSettings {
+fn settings(
+    direction: AdaptivePlanningDirection,
+    pc1_explained_variance_ratio_threshold: f32,
+    dcbc_max_embedding_count: usize,
+) -> AdaptivePlanningSettings {
     AdaptivePlanningSettings {
         direction,
         directional_pca: directional_pca_settings(),
         dcbc: dcbc_settings(),
+        divisive_switch: AdaptiveDivisiveSwitchSettings {
+            pc1_explained_variance_ratio_threshold,
+            dcbc_max_embedding_count,
+        },
     }
+}
+
+fn strong_pc1_embeddings() -> Vec<Vec<f32>> {
+    vec![
+        vec![-3.0, 0.0],
+        vec![-1.0, 0.0],
+        vec![1.0, 0.0],
+        vec![3.0, 0.0],
+    ]
+}
+
+fn weak_pc1_embeddings() -> Vec<Vec<f32>> {
+    vec![
+        vec![-1.0, -1.0],
+        vec![-1.0, 1.0],
+        vec![1.0, -1.0],
+        vec![1.0, 1.0],
+    ]
 }
 
 fn embeddings(count: usize) -> Vec<Vec<f32>> {
@@ -48,7 +76,11 @@ fn embeddings(count: usize) -> Vec<Vec<f32>> {
 
 #[test]
 fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
-    let mut invalid = settings(AdaptivePlanningDirection::Divisive);
+    let mut invalid = settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
+        DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+    );
     invalid.directional_pca.params.temperature = 0.0;
     let err = AdaptivePlanningSelector::new(invalid).unwrap_err();
     assert!(matches!(
@@ -58,11 +90,14 @@ fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
 }
 
 #[test]
-fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
-    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
-    let mut selector =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
-    let algorithm = selector.select_algorithm(&fixture).unwrap();
+fn val_adaptive_policy_004_starts_with_directional_pca_before_divisive_diagnostics_exist() {
+    let mut selector = AdaptivePlanningSelector::new(settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
+        DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+    ))
+    .unwrap();
+    let algorithm = selector.select_algorithm(&strong_pc1_embeddings()).unwrap();
     assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
     assert!(!selector.switched_to_dcbc());
     let decision = selector.decision_records().last().unwrap();
@@ -71,7 +106,8 @@ fn val_adaptive_policy_004_starts_with_directional_pca_when_signal_is_strong() {
         AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment
     );
     assert!(!decision.switch_boundary_occurred);
-    assert_eq!(decision.embedding_count_cutoff, None);
+    assert_eq!(decision.pc1_explained_variance_ratio_threshold, None);
+    assert_eq!(decision.dcbc_max_embedding_count, None);
     assert!(decision.collapse_diagnostics.is_none());
 }
 
@@ -81,79 +117,92 @@ fn val_adaptive_policy_005_supports_both_direction_modes() {
         AdaptivePlanningDirection::Divisive,
         AdaptivePlanningDirection::Agglomerative,
     ] {
-        let selector = AdaptivePlanningSelector::new(settings(direction)).unwrap();
+        let selector = AdaptivePlanningSelector::new(settings(
+            direction,
+            DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
+            DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+        ))
+        .unwrap();
         assert_eq!(selector.settings().direction, direction);
     }
 }
 
 #[test]
-fn val_adaptive_policy_006_records_structured_diagnostics() {
-    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+fn val_adaptive_policy_006_records_structured_divisive_diagnostics() {
     let mut selector =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
-    selector.select_algorithm(&fixture).unwrap();
-    selector.select_algorithm(&fixture).unwrap();
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.6, 8))
+            .unwrap();
+    selector.select_algorithm(&weak_pc1_embeddings()).unwrap();
+    selector.select_algorithm(&weak_pc1_embeddings()).unwrap();
     let decision = selector.decision_records().last().unwrap();
     let diagnostics = decision.collapse_diagnostics.as_ref().unwrap();
-    assert_eq!(diagnostics.embedding_count, DEFAULT_EMBEDDING_COUNT_CUTOFF);
-    assert_eq!(
-        decision.embedding_count_cutoff,
-        Some(DEFAULT_EMBEDDING_COUNT_CUTOFF)
-    );
+    assert_eq!(diagnostics.embedding_count, 4);
+    let pc1 = diagnostics.pc1_explained_variance_ratio.unwrap();
+    assert!((pc1 - 0.5).abs() < 1e-6);
+    assert_eq!(decision.pc1_explained_variance_ratio_threshold, Some(0.6));
+    assert_eq!(decision.dcbc_max_embedding_count, Some(8));
     assert_eq!(
         decision.reason,
-        AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff
+        AdaptivePlanningDecisionReason::SelectedDcbcBelowPc1ThresholdAndBelowEmbeddingCountLimit
     );
 }
 
 #[test]
-fn val_adaptive_policy_007_stays_on_directional_pca_when_embedding_count_is_at_or_above_cutoff() {
-    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
-    let mut selector =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+fn val_adaptive_policy_007_stays_on_directional_pca_when_pc1_is_at_or_above_threshold() {
+    let mut selector = AdaptivePlanningSelector::new(settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
+        DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+    ))
+    .unwrap();
     assert_eq!(
-        selector.select_algorithm(&fixture).unwrap(),
+        selector.select_algorithm(&strong_pc1_embeddings()).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector.select_algorithm(&fixture).unwrap(),
+        selector.select_algorithm(&strong_pc1_embeddings()).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert!(!selector.switched_to_dcbc());
+    assert_eq!(
+        selector.decision_records().last().unwrap().reason,
+        AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAbovePc1Threshold
+    );
 }
 
 #[test]
-fn val_adaptive_policy_008_switches_to_dcbc_when_embedding_count_drops_below_cutoff() {
-    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1);
+fn val_adaptive_policy_008_switches_to_dcbc_when_pc1_is_below_threshold_and_collection_is_small_enough()
+ {
     let mut selector =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.6, 8))
+            .unwrap();
     assert_eq!(
-        selector.select_algorithm(&fixture).unwrap(),
+        selector.select_algorithm(&weak_pc1_embeddings()).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector.select_algorithm(&fixture).unwrap(),
+        selector.select_algorithm(&weak_pc1_embeddings()).unwrap(),
         ActivePlanningAlgorithm::Dcbc
     );
-    assert!(selector.switched_to_dcbc());
+    assert!(!selector.switched_to_dcbc());
     let decision = selector.decision_records().last().unwrap();
     assert!(decision.switch_boundary_occurred);
     assert_eq!(
-        decision.embedding_count_cutoff,
-        Some(DEFAULT_EMBEDDING_COUNT_CUTOFF)
-    );
-    assert_eq!(
         decision.reason,
-        AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff
+        AdaptivePlanningDecisionReason::SelectedDcbcBelowPc1ThresholdAndBelowEmbeddingCountLimit
     );
 }
 
 #[test]
-fn val_adaptive_policy_009_does_not_switch_back_after_dcbc_boundary() {
+fn val_adaptive_policy_009_agglomerative_does_not_switch_back_after_dcbc_boundary() {
     let switch_fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1);
     let stay_fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
-    let mut selector =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Agglomerative)).unwrap();
+    let mut selector = AdaptivePlanningSelector::new(settings(
+        AdaptivePlanningDirection::Agglomerative,
+        DEFAULT_PC1_EXPLAINED_VARIANCE_RATIO_THRESHOLD,
+        DEFAULT_DCBC_MAX_EMBEDDING_COUNT,
+    ))
+    .unwrap();
     selector.select_algorithm(&switch_fixture).unwrap();
     selector.select_algorithm(&switch_fixture).unwrap();
     let third = selector.select_algorithm(&stay_fixture).unwrap();
@@ -164,17 +213,20 @@ fn val_adaptive_policy_009_does_not_switch_back_after_dcbc_boundary() {
         AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc
     );
     assert!(!last.switch_boundary_occurred);
-    assert_eq!(last.embedding_count_cutoff, None);
+    assert_eq!(last.pc1_explained_variance_ratio_threshold, None);
+    assert_eq!(last.dcbc_max_embedding_count, None);
     assert!(last.collapse_diagnostics.is_none());
 }
 
 #[test]
-fn val_adaptive_policy_012_repeats_the_same_switch_boundary() {
-    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF - 1);
+fn val_adaptive_policy_012_divisive_decisions_are_deterministic_per_collection() {
+    let fixture = weak_pc1_embeddings();
     let mut first =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.6, 8))
+            .unwrap();
     let mut second =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.6, 8))
+            .unwrap();
     first.select_algorithm(&fixture).unwrap();
     first.select_algorithm(&fixture).unwrap();
     second.select_algorithm(&fixture).unwrap();
@@ -183,10 +235,12 @@ fn val_adaptive_policy_012_repeats_the_same_switch_boundary() {
 }
 
 #[test]
-fn regression_adaptive_policy_switches_only_below_cutoff() {
-    let fixture = embeddings(DEFAULT_EMBEDDING_COUNT_CUTOFF);
+fn regression_adaptive_policy_keeps_directional_pca_when_pc1_is_below_threshold_but_collection_is_too_large()
+ {
+    let fixture = weak_pc1_embeddings();
     let mut selector =
-        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive)).unwrap();
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.6, 4))
+            .unwrap();
     assert_eq!(
         selector.select_algorithm(&fixture).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
@@ -195,10 +249,26 @@ fn regression_adaptive_policy_switches_only_below_cutoff() {
         selector.select_algorithm(&fixture).unwrap(),
         ActivePlanningAlgorithm::DirectionalPca
     );
-    let diagnostics = selector
-        .decision_records()
-        .last()
-        .and_then(|record| record.collapse_diagnostics.as_ref())
-        .unwrap();
-    assert_eq!(diagnostics.embedding_count, DEFAULT_EMBEDDING_COUNT_CUTOFF);
+    let decision = selector.decision_records().last().unwrap();
+    let diagnostics = decision.collapse_diagnostics.as_ref().unwrap();
+    assert_eq!(diagnostics.embedding_count, 4);
+    assert_eq!(
+        decision.reason,
+        AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountLimit
+    );
+}
+
+#[test]
+fn regression_adaptive_policy_treats_threshold_equality_as_directional_pca() {
+    let fixture = weak_pc1_embeddings();
+    let mut selector =
+        AdaptivePlanningSelector::new(settings(AdaptivePlanningDirection::Divisive, 0.5, 8))
+            .unwrap();
+    selector.select_algorithm(&fixture).unwrap();
+    let algorithm = selector.select_algorithm(&fixture).unwrap();
+    assert_eq!(algorithm, ActivePlanningAlgorithm::DirectionalPca);
+    assert_eq!(
+        selector.decision_records().last().unwrap().reason,
+        AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAbovePc1Threshold
+    );
 }
