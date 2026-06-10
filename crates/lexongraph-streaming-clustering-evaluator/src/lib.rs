@@ -1069,7 +1069,7 @@ fn compute_metric_results(
             coverage: declaration.coverage.clone(),
             research_goal_ids: declaration.research_goal_ids.clone(),
             ranking_weight: declaration.ranking_weight,
-            value: match declaration.kind {
+            value: match &declaration.kind {
                 MetricKind::SameLeafNeighborhoodCoherence => same_leaf_neighborhood_coherence(
                     &execution.leaf_membership,
                     &profile.locality_ground_truth,
@@ -1519,7 +1519,6 @@ fn scalar_quantization_error(entities: &[&EvaluationEntity]) -> f64 {
                 .iter()
                 .enumerate()
                 .map(|(index, value)| quantization_error(*value, mins[index], maxs[index]))
-                .collect::<Vec<_>>()
         })
         .sum::<f64>()
 }
