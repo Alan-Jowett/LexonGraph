@@ -3,7 +3,9 @@
 
 mod support;
 
+use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lexongraph_streaming_clustering::{
     MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
@@ -621,6 +623,55 @@ fn regression_candidate_artifact_names_are_sanitized_before_writing() {
 }
 
 #[test]
+fn regression_sanitized_candidate_artifact_names_remain_unique() {
+    let mut report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+    )
+    .unwrap();
+    report.run_reports[0].candidate_identity.candidate_id = "a/b".into();
+    report.run_reports[1].candidate_identity.candidate_id = "a\\b".into();
+
+    let artifacts = emit_campaign_artifacts(&report).unwrap();
+
+    assert_eq!(
+        artifacts.per_candidate_reports[0].file_name,
+        "a_b-run-report.json"
+    );
+    assert_eq!(
+        artifacts.per_candidate_reports[1].file_name,
+        "a_b-1-run-report.json"
+    );
+}
+
+#[test]
+fn regression_write_campaign_artifacts_includes_output_path_in_io_errors() {
+    let report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+    )
+    .unwrap();
+    let artifacts = emit_campaign_artifacts(&report).unwrap();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_file = std::env::temp_dir().join(format!(
+        "lexongraph-streaming-evaluator-io-error-{unique}.tmp"
+    ));
+    fs::write(&temp_file, "occupied").unwrap();
+
+    let result =
+        lexongraph_streaming_clustering_evaluator::write_campaign_artifacts(&temp_file, &artifacts);
+
+    assert!(
+        matches!(result, Err(EvaluatorError::Io(message)) if message.contains(&temp_file.display().to_string()))
+    );
+
+    fs::remove_file(temp_file).unwrap();
+}
+
+#[test]
 fn regression_duplicate_corpus_ids_are_rejected() {
     let mut profile = strict_alignment_profile();
     profile.corpus_ids.push("fixture-corpus-a".into());
@@ -708,4 +759,18 @@ fn regression_invalid_transition_errors_report_the_original_state() {
             ..
         })
     ));
+}
+
+#[test]
+fn regression_cli_profile_errors_include_profile_path_context() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("main.rs"),
+    )
+    .unwrap();
+
+    assert!(source.contains("failed to read benchmark profile {}"));
+    assert!(source.contains("failed to parse benchmark profile {}"));
+    assert!(source.contains("profile_path.display()"));
 }

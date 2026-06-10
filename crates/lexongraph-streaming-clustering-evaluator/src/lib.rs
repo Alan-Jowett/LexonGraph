@@ -460,10 +460,13 @@ pub fn emit_campaign_artifacts(
     report: &CampaignReport,
 ) -> Result<CampaignArtifacts, EvaluatorError> {
     let mut per_candidate_reports = Vec::with_capacity(report.run_reports.len());
+    let mut used_file_names = HashSet::new();
     for run_report in &report.run_reports {
         let safe_candidate_id = sanitize_artifact_stem(&run_report.candidate_identity.candidate_id);
+        let file_name =
+            unique_artifact_file_name(&mut used_file_names, &safe_candidate_id, "-run-report.json");
         per_candidate_reports.push(EmittedArtifact {
-            file_name: format!("{safe_candidate_id}-run-report.json"),
+            file_name,
             contents: serde_json::to_string_pretty(run_report)
                 .map_err(|error| EvaluatorError::Json(error.to_string()))?,
         });
@@ -491,7 +494,12 @@ pub fn write_campaign_artifacts(
     output_dir: &Path,
     artifacts: &CampaignArtifacts,
 ) -> Result<Vec<PathBuf>, EvaluatorError> {
-    std::fs::create_dir_all(output_dir).map_err(|error| EvaluatorError::Io(error.to_string()))?;
+    std::fs::create_dir_all(output_dir).map_err(|error| {
+        EvaluatorError::Io(format!(
+            "failed to create output directory {}: {error}",
+            output_dir.display()
+        ))
+    })?;
 
     let mut written = Vec::with_capacity(artifacts.per_candidate_reports.len() + 2);
     for artifact in artifacts
@@ -500,8 +508,12 @@ pub fn write_campaign_artifacts(
         .chain([&artifacts.campaign_report, &artifacts.scorecard])
     {
         let path = output_dir.join(&artifact.file_name);
-        std::fs::write(&path, &artifact.contents)
-            .map_err(|error| EvaluatorError::Io(error.to_string()))?;
+        std::fs::write(&path, &artifact.contents).map_err(|error| {
+            EvaluatorError::Io(format!(
+                "failed to write artifact {}: {error}",
+                path.display()
+            ))
+        })?;
         written.push(path);
     }
 
@@ -877,6 +889,25 @@ fn sanitize_artifact_stem(input: &str) -> String {
         "candidate".into()
     } else {
         sanitized
+    }
+}
+
+fn unique_artifact_file_name(
+    used_file_names: &mut HashSet<String>,
+    stem: &str,
+    suffix: &str,
+) -> String {
+    let mut index = 0usize;
+    loop {
+        let candidate = if index == 0 {
+            format!("{stem}{suffix}")
+        } else {
+            format!("{stem}-{index}{suffix}")
+        };
+        if used_file_names.insert(candidate.clone()) {
+            return candidate;
+        }
+        index += 1;
     }
 }
 

@@ -51,10 +51,19 @@ fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
         } => {
-            let profile = std::fs::read_to_string(&profile)
-                .map_err(|error| EvaluatorError::Io(error.to_string()))?;
-            let profile: BenchmarkProfile = serde_json::from_str(&profile)
-                .map_err(|error| EvaluatorError::Json(error.to_string()))?;
+            let profile_path = profile;
+            let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
+                EvaluatorError::Io(format!(
+                    "failed to read benchmark profile {}: {error}",
+                    profile_path.display()
+                ))
+            })?;
+            let profile: BenchmarkProfile = serde_json::from_str(&profile).map_err(|error| {
+                EvaluatorError::Json(format!(
+                    "failed to parse benchmark profile {}: {error}",
+                    profile_path.display()
+                ))
+            })?;
 
             let mut registered_candidates = Vec::with_capacity(candidates.len());
             for candidate_name in candidates {
