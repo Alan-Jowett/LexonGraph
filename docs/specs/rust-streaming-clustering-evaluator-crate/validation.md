@@ -5,14 +5,15 @@
 ## Status
 
 Draft validation specification for a Rust crate that evaluates candidate
-streaming clustering implementations for LexonGraph.
+streaming clustering implementations for LexonGraph at the leaf-partition
+boundary.
 
 ## Validation Scope
 
 These validation entries define the conformance surface for the new streaming
 clustering evaluator crate. They cover benchmark-profile definition, candidate
-execution, comparative reporting, determinism checking, and explicit deferred
-research-goal handling.
+execution, leaf membership scoring, comparative reporting, determinism checking,
+and explicit deferred research-goal handling.
 
 ## Validation Entries
 
@@ -41,8 +42,8 @@ Run the evaluator with a benchmark profile and at least two registered
 candidates.
 
 **Pass condition:** one executable campaign evaluates the candidates through a
-shared benchmark profile and emits comparative outputs without requiring an
-algorithm-specific candidate API.
+shared leaf-stage benchmark profile and emits comparative outputs without
+requiring an algorithm-specific candidate API.
 
 **Traces to:** REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-005, REQ-STREAM-EVAL-007
 
@@ -60,8 +61,8 @@ constructs a trainer conforming to the shared streaming clustering contract.
 Inspect one benchmark profile definition.
 
 **Pass condition:** the profile fixes corpus identities, streaming pass inputs,
-classifier-side probe workloads, metric declarations, gate declarations,
-comparative ranking weights, deferred research-goal records, and
+classifier-side probe workloads, the leaf model, metric declarations, gate
+declarations, comparative ranking weights, deferred research-goal records, and
 reproducibility metadata for one campaign.
 
 **Traces to:** REQ-STREAM-EVAL-006
@@ -74,7 +75,7 @@ Run the same candidate twice under the same benchmark profile.
 classifier-side probe outputs across repeated executions and reports whether the
 observable results are deterministic.
 
-**Traces to:** REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-010
+**Traces to:** REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-011
 
 ### VAL-STREAM-EVAL-007
 
@@ -90,16 +91,60 @@ and hardware-profile metadata.
 
 ### VAL-STREAM-EVAL-008
 
-Execute a candidate through at least one multi-batch pass and one classifier
-probe workload.
+Execute a candidate through at least one multi-batch pass, final classifier
+production, full-corpus assignment replay, and one classifier probe workload.
 
 **Pass condition:** the evaluator drives the candidate through trainer
 construction, pass ingestion, `finish_pass()`, training completion, classifier
-production, and classifier-side probing according to the benchmark profile.
+production, evaluator-owned leaf membership materialization, and
+classifier-side probing according to the benchmark profile.
 
-**Traces to:** REQ-STREAM-EVAL-009
+**Traces to:** REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-010
 
 ### VAL-STREAM-EVAL-009
+
+Run the evaluator on a benchmark profile with declared strict alignment and leaf
+size `L`.
+
+**Pass condition:** the evaluator verifies exact final cluster occupancy,
+complete coverage, one-cluster-per-entity assignment, and absence of empty
+declared clusters from the leaf membership artifact.
+
+**Traces to:** REQ-STREAM-EVAL-017
+
+### VAL-STREAM-EVAL-010
+
+Run the evaluator on a benchmark profile with deterministic synthetic padding.
+
+**Pass condition:** the evaluator distinguishes real from synthetic entities in
+the leaf membership artifact, enforces exact final occupancy against the padded
+evaluated set, and excludes synthetic entities from externally reported
+locality and compression metrics.
+
+**Traces to:** REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018
+
+### VAL-STREAM-EVAL-011
+
+Run the evaluator on a benchmark profile with exact nearest-neighbor ground
+truth over real entities.
+
+**Pass condition:** the evaluator computes same-leaf neighborhood coherence from
+the leaf membership artifact without claiming same-or-sibling locality proof.
+
+**Traces to:** REQ-STREAM-EVAL-019
+
+### VAL-STREAM-EVAL-012
+
+Run the evaluator on a benchmark profile with a declared local compression
+method and global baseline.
+
+**Pass condition:** the evaluator computes local per-cluster compression quality
+versus the declared global real-dataset baseline from the leaf membership
+artifact.
+
+**Traces to:** REQ-STREAM-EVAL-020
+
+### VAL-STREAM-EVAL-013
 
 Inspect one completed campaign report.
 
@@ -107,9 +152,9 @@ Inspect one completed campaign report.
 checks, must-pass gates, and comparative metrics, and does not rank a gate
 failing candidate as a surviving success.
 
-**Traces to:** REQ-STREAM-EVAL-011
+**Traces to:** REQ-STREAM-EVAL-012
 
-### VAL-STREAM-EVAL-010
+### VAL-STREAM-EVAL-014
 
 Inspect the metric and gate declarations in a benchmark profile and the
 corresponding campaign report.
@@ -118,9 +163,9 @@ corresponding campaign report.
 record traces to one or more research goals and is tagged as direct, proxy, or
 deferred.
 
-**Traces to:** REQ-STREAM-EVAL-012
+**Traces to:** REQ-STREAM-EVAL-013
 
-### VAL-STREAM-EVAL-011
+### VAL-STREAM-EVAL-015
 
 Inspect the emitted campaign artifacts for one benchmark execution.
 
@@ -128,9 +173,9 @@ Inspect the emitted campaign artifacts for one benchmark execution.
 candidate, a machine-readable comparative campaign report, and a human-readable
 scorecard summarizing pass/fail status, metric values, and survivor ranking.
 
-**Traces to:** REQ-STREAM-EVAL-013
+**Traces to:** REQ-STREAM-EVAL-014
 
-### VAL-STREAM-EVAL-012
+### VAL-STREAM-EVAL-016
 
 Run the evaluator with an invalid benchmark profile and with a candidate that
 returns a shared-contract failure.
@@ -138,9 +183,9 @@ returns a shared-contract failure.
 **Pass condition:** failures are surfaced deterministically and distinguish
 invalid evaluator configuration from candidate-reported shared-contract failure.
 
-**Traces to:** REQ-STREAM-EVAL-014
+**Traces to:** REQ-STREAM-EVAL-015
 
-### VAL-STREAM-EVAL-013
+### VAL-STREAM-EVAL-017
 
 Run the evaluator with a candidate that fails one declared benchmark gate and
 with a benchmark profile that includes at least one deferred research goal.
@@ -149,25 +194,27 @@ with a benchmark profile that includes at least one deferred research goal.
 failure from incomplete or unsupported measurement due to a deferred research
 requirement.
 
-**Traces to:** REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-016
+**Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-021
 
-### VAL-STREAM-EVAL-014
+### VAL-STREAM-EVAL-018
 
 Inspect the benchmark profile and scorecard against the clustering research
 documents.
 
-**Pass condition:** research goals requiring full hierarchy, routing, or durable
-index artifacts are recorded as deferred rather than claimed as fully proven by
-the streaming clustering evaluator alone.
+**Pass condition:** research goals requiring full hierarchy, sibling structure,
+routing, or durable index artifacts are recorded as deferred rather than
+claimed as fully proven by the streaming clustering evaluator alone, and the
+future end-to-end evaluator is called out as a separate later line.
 
-**Traces to:** REQ-STREAM-EVAL-012, REQ-STREAM-EVAL-016
+**Traces to:** REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021
 
-### VAL-STREAM-EVAL-015
+### VAL-STREAM-EVAL-019
 
 Inspect repository verification artifacts for the new crate.
 
 **Pass condition:** executable tests exist for benchmark-profile validation,
-candidate execution, repeated-run determinism checks, comparative scorecard
+candidate execution, leaf membership materialization, occupancy/locality/
+compression scoring, repeated-run determinism checks, comparative scorecard
 generation, failure classification, and deferred-goal reporting.
 
-**Traces to:** REQ-STREAM-EVAL-015
+**Traces to:** REQ-STREAM-EVAL-016
