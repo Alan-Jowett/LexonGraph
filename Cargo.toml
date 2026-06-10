@@ -13,7 +13,7 @@ members = [
     "crates/lexongraph-embeddings-trait",
     "crates/lexongraph-pca",
     "crates/lexongraph-search",
-    "crates/lexongraph-streaming-clustering",
+    "crates/lexongraph-streaming-clustering", "crates/lexongraph-streaming-clustering-evaluator",
     "crates/lexongraph-streaming-indexer",
 ]
 resolver = "2"
