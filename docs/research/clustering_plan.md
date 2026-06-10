@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+
 # Experimental Plan for Selecting a Hierarchical Clustering / Index Design
 
 ## Purpose

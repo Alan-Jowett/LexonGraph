@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+
 # Black‑Box Requirements Specification for Hierarchical Vector Indexing
 
 This document defines the externally observable properties and behavioral contracts that any valid system solution must satisfy. It completely decouples **what** the system must guarantee from **how** the internal algorithms achieve it.
