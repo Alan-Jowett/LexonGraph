@@ -94,7 +94,7 @@ fn val_overlay_store_005_get_returns_ok_none_only_when_all_layers_are_absent_or_
 }
 
 #[test]
-fn val_overlay_store_006_and_007_put_uses_the_first_accepting_layer() {
+fn val_overlay_store_006_put_uses_the_first_accepting_layer() {
     let block = sample_leaf_block("stored");
     let block_id = serialize_block(&block).unwrap().hash;
     let high = MockStore::for_put(Err(backend_failure("cache layer rejected write")));
@@ -116,7 +116,7 @@ fn val_overlay_store_006_and_007_put_uses_the_first_accepting_layer() {
 }
 
 #[test]
-fn val_overlay_store_008_put_returns_the_last_error_when_all_layers_fail() {
+fn val_overlay_store_007_put_returns_the_last_error_when_all_layers_fail() {
     let block = sample_leaf_block("failure");
     let expected_error = backend_failure("lowest write failed");
     let overlay = OverlayBlockStore::new(vec![
@@ -133,12 +133,12 @@ fn val_overlay_store_008_put_returns_the_last_error_when_all_layers_fail() {
 }
 
 #[test]
-fn val_overlay_store_009_parent_conformance_requirements_are_realized_by_tests() {
+fn val_overlay_store_008_parent_conformance_requirements_are_realized_by_tests() {
     run_full_suite(&OverlayHarness).unwrap();
 }
 
 #[test]
-fn val_overlay_store_010_enumeration_yields_the_deduplicated_union_in_priority_order() {
+fn val_overlay_store_009_enumeration_yields_the_deduplicated_union_in_priority_order() {
     let first = validated_block("first").hash;
     let second = validated_block("second").hash;
     let third = validated_block("third").hash;
@@ -164,8 +164,22 @@ fn val_overlay_store_010_enumeration_yields_the_deduplicated_union_in_priority_o
 }
 
 #[test]
-fn val_overlay_store_011_enumeration_failures_are_explicit() {
+fn val_overlay_store_010_enumeration_failures_are_explicit() {
     let first = validated_block("first").hash;
+    let startup_error = backend_failure("highest enumeration failed before startup");
+    let startup_overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::new(MockStore::for_iter(Err(
+            startup_error.clone()
+        )))),
+        Box::new(PassiveLayer::new(MockStore::for_iter(Ok(vec![Ok(first)])))),
+    ])
+    .unwrap();
+
+    match startup_overlay.iter_block_ids() {
+        Ok(_) => panic!("expected highest-priority enumeration startup to fail explicitly"),
+        Err(error) => assert_eq!(error, startup_error),
+    }
+
     let expected_error = backend_failure("lower enumeration failed");
     let overlay = OverlayBlockStore::new(vec![
         Box::new(PassiveLayer::new(MockStore::for_iter(Ok(vec![Ok(first)])))),
@@ -182,7 +196,8 @@ fn val_overlay_store_011_enumeration_failures_are_explicit() {
 }
 
 #[test]
-fn val_overlay_store_012_notifications_only_target_opted_in_layers_and_run_low_to_high_for_get() {
+fn val_overlay_store_011_and_012_notifications_only_target_opted_in_layers_and_run_low_to_high_for_get()
+ {
     let log = Arc::new(Mutex::new(Vec::new()));
     let block = validated_block("cached");
     let overlay = OverlayBlockStore::new(vec![
@@ -208,7 +223,8 @@ fn val_overlay_store_012_notifications_only_target_opted_in_layers_and_run_low_t
 }
 
 #[test]
-fn val_overlay_store_013_notifications_only_target_opted_in_layers_and_run_low_to_high_for_put() {
+fn val_overlay_store_011_and_013_notifications_only_target_opted_in_layers_and_run_low_to_high_for_put()
+ {
     let log = Arc::new(Mutex::new(Vec::new()));
     let block = sample_leaf_block("write-through-notification");
     let block_id = serialize_block(&block).unwrap().hash;

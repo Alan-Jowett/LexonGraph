@@ -255,7 +255,7 @@ impl BlockStore for OverlayBlockStore {
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        Ok(Box::new(OverlayBlockIdIterator::new(&self.layers)))
+        Ok(Box::new(OverlayBlockIdIterator::new(&self.layers)?))
     }
 }
 
@@ -268,14 +268,27 @@ struct OverlayBlockIdIterator<'a> {
 }
 
 impl<'a> OverlayBlockIdIterator<'a> {
-    fn new(layers: &'a [Box<dyn OverlayStoreLayer>]) -> Self {
-        Self {
+    fn new(layers: &'a [Box<dyn OverlayStoreLayer>]) -> Result<Self, BlockStoreError> {
+        let mut iter = Self {
             layers,
             next_layer: 0,
             current: None,
             seen: HashSet::new(),
             failed: false,
+        };
+        iter.advance_to_next_layer()?;
+        Ok(iter)
+    }
+
+    fn advance_to_next_layer(&mut self) -> Result<(), BlockStoreError> {
+        if self.current.is_some() || self.next_layer == self.layers.len() {
+            return Ok(());
         }
+
+        let iter = self.layers[self.next_layer].iter_block_ids()?;
+        self.current = Some(iter);
+        self.next_layer += 1;
+        Ok(())
     }
 }
 
@@ -310,15 +323,9 @@ impl Iterator for OverlayBlockIdIterator<'_> {
                 return None;
             }
 
-            match self.layers[self.next_layer].iter_block_ids() {
-                Ok(iter) => {
-                    self.current = Some(iter);
-                    self.next_layer += 1;
-                }
-                Err(error) => {
-                    self.failed = true;
-                    return Some(Err(error));
-                }
+            if let Err(error) = self.advance_to_next_layer() {
+                self.failed = true;
+                return Some(Err(error));
             }
         }
     }
