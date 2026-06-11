@@ -20,6 +20,7 @@ use zip::ZipArchive;
 #[derive(Clone, Debug)]
 pub struct ZipBlockStore {
     archive_path: PathBuf,
+    archive_offset: u64,
 }
 
 impl ZipBlockStore {
@@ -45,13 +46,15 @@ impl ZipBlockStore {
         }
 
         let file = open_archive_file(&canonical_path)?;
-        let _ = open_archive_from_file(file, &canonical_path)?;
+        let archive = open_archive_from_file(file, &canonical_path)?;
+        let archive_offset = archive.offset();
 
         let mut file = open_archive_file(&canonical_path)?;
-        let _ = archive_entry_names(&mut file, &canonical_path)?;
+        let _ = archive_entry_names(&mut file, &canonical_path, archive_offset)?;
 
         Ok(Self {
             archive_path: canonical_path,
+            archive_offset,
         })
     }
 
@@ -62,7 +65,7 @@ impl ZipBlockStore {
 
     fn enumerate_block_ids(&self) -> Result<Vec<BlockHash>, BlockStoreError> {
         let mut file = open_archive_file(&self.archive_path)?;
-        let entry_names = archive_entry_names(&mut file, &self.archive_path)?;
+        let entry_names = archive_entry_names(&mut file, &self.archive_path, self.archive_offset)?;
         let mut seen_names = HashSet::new();
         let mut block_ids = Vec::new();
         for name in entry_names {
@@ -92,7 +95,7 @@ impl BlockStore for ZipBlockStore {
     fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
         let target_name = Self::block_entry_name(block_id);
         let mut file = open_archive_file(&self.archive_path)?;
-        let match_count = archive_entry_names(&mut file, &self.archive_path)?
+        let match_count = archive_entry_names(&mut file, &self.archive_path, self.archive_offset)?
             .into_iter()
             .filter(|name| name == &target_name)
             .count();
@@ -186,6 +189,7 @@ fn open_archive_from_file(
 fn archive_entry_names(
     file: &mut File,
     archive_path: &Path,
+    archive_offset: u64,
 ) -> Result<Vec<String>, BlockStoreError> {
     let file_len = file
         .metadata()
@@ -214,7 +218,6 @@ fn archive_entry_names(
         ))
     })?;
 
-    let archive_offset = archive_data_offset(archive_path)?;
     let eocd = find_end_of_central_directory(&eocd_tail).ok_or_else(|| {
         backend_failure(format!(
             "failed to locate the zip central directory in {}",
@@ -317,12 +320,6 @@ fn archive_entry_names(
     }
 
     Ok(names)
-}
-
-fn archive_data_offset(archive_path: &Path) -> Result<u64, BlockStoreError> {
-    let file = open_archive_file(archive_path)?;
-    let archive = open_archive_from_file(file, archive_path)?;
-    Ok(archive.offset())
 }
 
 fn resolve_central_directory(

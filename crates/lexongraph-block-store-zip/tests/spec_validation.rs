@@ -202,6 +202,30 @@ fn val_zip_store_010_constructor_accepts_zip64_archives_with_max_eocd_comment() 
 }
 
 #[test]
+fn val_zip_store_007_duplicate_recognized_entries_fail_explicitly_for_zip64_archives() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("zip64-duplicate-blocks.zip");
+    let block = serialize_block(&sample_leaf_block("zip64-duplicate")).unwrap();
+    let entry_name = expected_entry_name(&block.hash);
+
+    write_zip64_archive_with_duplicate_entry(&archive_path, &entry_name, &block.bytes);
+
+    let store = ZipBlockStore::new(&archive_path).unwrap();
+
+    expect_backend_failure_contains(
+        store.get(&block.hash).unwrap_err(),
+        "duplicate recognized block entry",
+    );
+    expect_backend_failure_contains(
+        match store.iter_block_ids() {
+            Ok(_) => panic!("expected duplicate recognized Zip64 entries to fail enumeration"),
+            Err(error) => error,
+        },
+        "duplicate recognized block entry",
+    );
+}
+
+#[test]
 fn val_zip_store_012_put_fails_explicitly_without_mutating_the_archive() {
     let temp_dir = tempfile::tempdir().unwrap();
     let archive_path = temp_dir.path().join("blocks.zip");
@@ -347,6 +371,25 @@ fn write_zip64_archive_with_comment(path: &Path, entries: &[(String, Vec<u8>)], 
 fn write_zip_archive_with_duplicate_entry(path: &Path, entry_name: &str, bytes: &[u8]) {
     let duplicate_placeholder = entry_name.replacen(".cbor", ".dbor", 1);
     write_zip_archive(
+        path,
+        &[
+            (entry_name.to_string(), bytes.to_vec()),
+            (duplicate_placeholder.clone(), bytes.to_vec()),
+        ],
+    );
+
+    let mut archive_bytes = std::fs::read(path).unwrap();
+    replace_all_bytes(
+        &mut archive_bytes,
+        duplicate_placeholder.as_bytes(),
+        entry_name.as_bytes(),
+    );
+    std::fs::write(path, archive_bytes).unwrap();
+}
+
+fn write_zip64_archive_with_duplicate_entry(path: &Path, entry_name: &str, bytes: &[u8]) {
+    let duplicate_placeholder = entry_name.replacen(".cbor", ".dbor", 1);
+    write_zip64_archive(
         path,
         &[
             (entry_name.to_string(), bytes.to_vec()),
