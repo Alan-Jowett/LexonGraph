@@ -1525,9 +1525,13 @@ dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
  "lexongraph-block-store-fs",
+ "lexongraph-block-store-overlay",
+ "lexongraph-block-store-zip",
  "lexongraph-streaming-clustering",
  "serde",
  "serde_json",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]

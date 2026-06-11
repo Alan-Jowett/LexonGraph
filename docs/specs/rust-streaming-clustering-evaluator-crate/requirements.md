@@ -37,8 +37,10 @@ gates, and ranking weights used for one comparative evaluation campaign.
 
 `Corpus source` means the benchmark-declared mechanism by which the evaluator
 obtains the embeddings and related entity identities for a workload. In this
-revision the supported source families are inline fixture data and
-block-store-backed corpus references.
+revision the supported source families are inline fixture data,
+filesystem-root-backed block-store corpus references, and zip-archive-backed
+block-store corpus references resolved through an overlay of repository
+block-store implementations.
 
 `Evaluation campaign` means one execution of the evaluator over one benchmark
 profile and one or more named candidates.
@@ -125,7 +127,8 @@ campaign:
   corpus-source mode for each dataset or workload
 - the candidate training pass plan and any held-out probe workloads, including
   whether each workload is supplied inline or through a block-store-backed
-  corpus reference
+  corpus reference and, for archive-backed references, the declared zip archive
+  path
 - the leaf model, including target leaf size `L`, the relationship between
   observed item count `N`, target cluster count `K`, and expected occupancy, and
   the alignment policy
@@ -164,7 +167,8 @@ shared lifecycle by:
 
 - constructing or obtaining a trainer through the shared candidate boundary
 - executing the caller-driven streaming passes declared by the benchmark profile
-  from the workload's declared corpus source
+  from the workload's declared corpus source, including archive-backed sources
+  resolved through an overlay of repository block-store implementations
 - obtaining pass reports from completed passes
 - marking training complete when the benchmark profile requires it
 - producing a classifier and running the declared classifier-side probe
@@ -237,6 +241,10 @@ at least:
 - invalid or unresolved corpus-source references
 - explicit block-store or corpus-content loading failure encountered while
   consuming referenced corpora
+- explicit zip-archive open or read failure encountered while consuming
+  archive-backed referenced corpora
+- explicit temporary writable-layer creation failure encountered while resolving
+  archive-backed referenced corpora
 - candidate-reported shared-contract failure
 - evaluator-owned gate failure
 - incomplete or unsupported measurement caused by a deferred research
@@ -301,7 +309,8 @@ This revision also shall not define the future end-to-end evaluator layered on
 ### REQ-STREAM-EVAL-022
 
 The evaluator shall support benchmark corpora supplied by block-store-backed
-corpus references in addition to inline benchmark-profile fixture data.
+corpus references in addition to inline benchmark-profile fixture data,
+including both filesystem-root-backed and zip-archive-backed references.
 
 ### REQ-STREAM-EVAL-023
 
@@ -324,13 +333,55 @@ those workload families.
 
 The evaluator's scalable corpus path shall align with the repository's existing
 block-store-based abstraction rather than defining a separate evaluator-specific
-large-corpus persistence contract in benchmark-profile JSON.
+large-corpus persistence contract in benchmark-profile JSON. This path may
+compose existing repository block-store implementations, including a mutable
+filesystem layer over an immutable zip layer, without widening the parent
+`BlockStore` trait.
 
 ### REQ-STREAM-EVAL-026
 
 This revision shall not require benchmark profiles for large corpora to embed
 every training-pass entry, evaluation entity, and probe embedding directly in a
 single JSON document.
+
+### REQ-STREAM-EVAL-027
+
+The benchmark-profile JSON surface shall support an evaluator-owned
+zip-archive-backed corpus-source declaration that carries:
+
+- a source identity
+- a zip archive path
+- a root block ID
+
+This declaration shall be valid anywhere the unified corpus-source model accepts
+block-store-backed corpus references.
+
+### REQ-STREAM-EVAL-028
+
+When resolving a zip-archive-backed corpus source, the evaluator shall construct
+an overlay block store consisting of:
+
+- a higher-priority mutable filesystem block-store layer
+- a lower-priority immutable zip block-store layer bound to the declared
+  archive
+
+The evaluator shall use that overlay-backed view uniformly for training-pass
+inputs, evaluation replay entities, and classifier-side probe workloads.
+
+### REQ-STREAM-EVAL-029
+
+For zip-archive-backed corpus sources, the benchmark profile shall not require
+the user to provide a writable overlay directory.
+
+The evaluator shall create and manage the temporary writable filesystem layer
+needed by the overlay for the duration of source resolution and any block
+creation performed through that overlay-backed view.
+
+### REQ-STREAM-EVAL-030
+
+If doing so reduces implementation duplication without widening the parent
+`BlockStore` API, the repository may expose a reusable helper or constructor for
+the mutable-filesystem-over-immutable-zip overlay used by the evaluator.
 
 ## Out of Scope
 

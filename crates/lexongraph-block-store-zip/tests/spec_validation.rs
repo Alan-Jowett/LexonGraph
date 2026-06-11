@@ -10,7 +10,7 @@ use lexongraph_block::{
     compute_block_hash, serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
-use lexongraph_block_store_zip::ZipBlockStore;
+use lexongraph_block_store_zip::{ZipBlockStore, ZipBlockStoreInitError};
 use zip::CompressionMethod;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
@@ -46,6 +46,23 @@ fn val_zip_store_002_constructor_rejects_missing_non_file_and_invalid_zip_inputs
         ZipBlockStore::new(&invalid).unwrap_err(),
         "failed to read zip archive",
     );
+}
+
+#[test]
+fn regression_zip_store_constructor_classifies_open_vs_read_failures() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let missing = temp_dir.path().join("missing.zip");
+    assert!(matches!(
+        ZipBlockStore::new_classified(&missing),
+        Err(ZipBlockStoreInitError::Open(_))
+    ));
+
+    let invalid = temp_dir.path().join("invalid.zip");
+    std::fs::write(&invalid, b"not a zip archive").unwrap();
+    assert!(matches!(
+        ZipBlockStore::new_classified(&invalid),
+        Err(ZipBlockStoreInitError::Read(_))
+    ));
 }
 
 #[test]
