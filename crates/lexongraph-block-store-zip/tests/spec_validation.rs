@@ -46,13 +46,6 @@ fn val_zip_store_002_constructor_rejects_missing_non_file_and_invalid_zip_inputs
         ZipBlockStore::new(&invalid).unwrap_err(),
         "failed to read zip archive",
     );
-
-    let zip64 = temp_dir.path().join("zip64.zip");
-    write_zip64_archive(&zip64);
-    expect_backend_failure_contains(
-        ZipBlockStore::new(&zip64).unwrap_err(),
-        "zip64 archives are not supported by ZipBlockStore",
-    );
 }
 
 #[test]
@@ -161,7 +154,33 @@ fn val_zip_store_008_and_009_unrelated_entries_are_ignored_and_enumeration_yield
 }
 
 #[test]
-fn val_zip_store_011_put_fails_explicitly_without_mutating_the_archive() {
+fn val_zip_store_010_constructor_and_read_paths_accept_valid_zip64_archives() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("zip64-blocks.zip");
+    let block = sample_leaf_block("zip64-round-trip");
+    let serialized = serialize_block(&block).unwrap();
+    write_zip64_archive(
+        &archive_path,
+        &[
+            (
+                expected_entry_name(&serialized.hash),
+                serialized.bytes.clone(),
+            ),
+            ("notes/readme.txt".into(), b"ignore me".to_vec()),
+        ],
+    );
+
+    let store = ZipBlockStore::new(&archive_path).unwrap();
+    let loaded = store.get(&serialized.hash).unwrap().unwrap();
+    let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
+
+    assert_eq!(loaded.hash, serialized.hash);
+    assert_eq!(loaded.block, block);
+    assert_eq!(enumerated, HashSet::from([serialized.hash]));
+}
+
+#[test]
+fn val_zip_store_012_put_fails_explicitly_without_mutating_the_archive() {
     let temp_dir = tempfile::tempdir().unwrap();
     let archive_path = temp_dir.path().join("blocks.zip");
     let block = sample_leaf_block("read-only");
@@ -177,7 +196,7 @@ fn val_zip_store_011_put_fails_explicitly_without_mutating_the_archive() {
 }
 
 #[test]
-fn val_zip_store_010_repository_includes_zip_store_verification_artifacts() {
+fn val_zip_store_011_repository_includes_zip_store_verification_artifacts() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
     let crate_docs = std::fs::read_to_string(manifest_dir.join("src").join("lib.rs")).unwrap();
@@ -283,7 +302,7 @@ fn write_zip_archive(path: &Path, entries: &[(String, Vec<u8>)]) {
     archive.finish().unwrap();
 }
 
-fn write_zip64_archive(path: &Path) {
+fn write_zip64_archive(path: &Path, entries: &[(String, Vec<u8>)]) {
     let file = File::create(path).unwrap();
     let mut archive = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
@@ -291,8 +310,10 @@ fn write_zip64_archive(path: &Path) {
         .large_file(true);
     archive.set_zip64_comment(Some("zip64"));
 
-    archive.start_file("zip64.txt", options).unwrap();
-    archive.write_all(b"zip64").unwrap();
+    for (name, bytes) in entries {
+        archive.start_file(name, options).unwrap();
+        archive.write_all(bytes).unwrap();
+    }
     archive.finish().unwrap();
 }
 
