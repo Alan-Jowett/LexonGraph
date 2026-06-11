@@ -221,6 +221,16 @@ fn archive_entry_names(
             )));
         }
     };
+    let directory_end = directory
+        .offset
+        .checked_add(directory.size)
+        .filter(|end| (*end as u64) <= file_len)
+        .ok_or_else(|| {
+            backend_failure(format!(
+                "failed to bound the zip central directory in {}",
+                archive_path.display()
+            ))
+        })?;
 
     file.seek(SeekFrom::Start(directory.offset as u64))
         .map_err(|error| {
@@ -229,7 +239,7 @@ fn archive_entry_names(
                 archive_path.display()
             ))
         })?;
-    let mut directory_bytes = vec![0_u8; directory.size];
+    let mut directory_bytes = vec![0_u8; directory_end - directory.offset];
     file.read_exact(&mut directory_bytes).map_err(|error| {
         backend_failure(format!(
             "failed to read the central directory from zip archive {}: {error}",

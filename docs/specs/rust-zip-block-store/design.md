@@ -59,6 +59,10 @@ A concrete store type owns a canonicalized filesystem path to one zip archive.
 The constructor validates that the path resolves to a file and that the file can
 be opened and parsed as a zip archive before returning an initialized store.
 
+This revision validates only classic EOCD-based central-directory metadata.
+Archives that require zip64 interpretation are rejected explicitly as unsupported
+by `ZipBlockStore`.
+
 ## Archive Recognition Model
 
 ### DSG-ZIP-STORE-003 `Recognized block entry layout`

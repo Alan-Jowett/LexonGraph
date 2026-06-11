@@ -30,8 +30,8 @@ archive internals beyond the supplied archive path.
 
 ### VAL-ZIP-STORE-002
 
-Attempt to construct the zip-backed store from missing, non-file, and invalid
-zip inputs.
+Attempt to construct the zip-backed store from missing, non-file, invalid-zip,
+and unsupported zip64 inputs.
 
 **Pass condition:** construction fails explicitly as a backend failure.
 

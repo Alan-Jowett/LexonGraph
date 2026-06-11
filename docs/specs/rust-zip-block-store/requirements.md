@@ -62,6 +62,10 @@ archive file path or fail explicitly as a backend failure when the requested
 path cannot be canonicalized, stat'ed, resolved to a non-file, opened, or read
 as a zip archive.
 
+This revision does not require zip64 support. Archives whose central-directory
+metadata requires zip64 interpretation may fail explicitly as unsupported backend
+inputs.
+
 ### REQ-ZIP-STORE-004
 
 The zip block-store crate shall recognize stored blocks only from archive
@@ -131,6 +135,7 @@ This crate does not define or own:
 
 - block canonicalization, block validity, or block-ID derivation rules
 - zip archive mutation, append, rewrite, deletion, or compaction behavior
+- zip64 archive support
 - any public compatibility promise for unrelated archive entries
 - parent trait conformance claims for successful `put`
 - non-zip storage backends

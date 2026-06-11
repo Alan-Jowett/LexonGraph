@@ -171,6 +171,32 @@ fn val_zip_store_011_put_fails_explicitly_without_mutating_the_archive() {
 #[test]
 fn val_zip_store_010_repository_includes_zip_store_verification_artifacts() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let crate_docs = std::fs::read_to_string(manifest_dir.join("src").join("lib.rs")).unwrap();
+    let requirements = std::fs::read_to_string(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-zip-block-store")
+            .join("requirements.md"),
+    )
+    .unwrap();
+    let design = std::fs::read_to_string(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-zip-block-store")
+            .join("design.md"),
+    )
+    .unwrap();
+    let validation = std::fs::read_to_string(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-zip-block-store")
+            .join("validation.md"),
+    )
+    .unwrap();
 
     assert!(
         manifest_dir
@@ -178,6 +204,35 @@ fn val_zip_store_010_repository_includes_zip_store_verification_artifacts() {
             .join("spec_validation.rs")
             .is_file()
     );
+    assert!(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-zip-block-store")
+            .join("requirements.md")
+            .is_file()
+    );
+    assert!(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-zip-block-store")
+            .join("design.md")
+            .is_file()
+    );
+    assert!(
+        repo_root
+            .join("docs")
+            .join("specs")
+            .join("rust-zip-block-store")
+            .join("validation.md")
+            .is_file()
+    );
+    assert!(crate_docs.contains("does not satisfy the parent trait specification's"));
+    assert!(crate_docs.contains("read-only"));
+    assert!(requirements.contains("zip64"));
+    assert!(design.contains("zip64"));
+    assert!(validation.contains("zip64"));
 }
 
 fn sample_leaf_block(body: &str) -> Block {
