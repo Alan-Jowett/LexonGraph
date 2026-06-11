@@ -148,7 +148,7 @@ fn val_mem_store_011_get_miss_and_error_notifications_do_not_populate() {
 }
 
 #[test]
-fn val_mem_store_011_invalid_get_hit_notification_is_ignored() {
+fn invalid_get_hit_notification_is_ignored() {
     let store = MemoryBlockStore::new(2).unwrap();
     let invalid = lexongraph_block::ValidatedBlock {
         block: Block::Leaf(LeafBlock {
@@ -172,6 +172,30 @@ fn val_mem_store_011_invalid_get_hit_notification_is_ignored() {
     };
 
     store.on_get_result(&invalid.hash, OverlayGetOutcome::Hit(&invalid));
+
+    assert_eq!(resident_ids(&store), HashSet::new());
+}
+
+#[test]
+fn mismatched_notification_block_id_is_ignored() {
+    let store = MemoryBlockStore::new(2).unwrap();
+    let block = validated_block("notified");
+
+    store.on_get_result(
+        &BlockHash::from_bytes([0x66; 32]),
+        OverlayGetOutcome::Hit(&block),
+    );
+
+    assert_eq!(resident_ids(&store), HashSet::new());
+}
+
+#[test]
+fn mismatched_validated_block_hash_is_ignored() {
+    let store = MemoryBlockStore::new(2).unwrap();
+    let mut block = validated_block("notified");
+    block.hash = BlockHash::from_bytes([0x77; 32]);
+
+    store.on_get_result(&block.hash, OverlayGetOutcome::Hit(&block));
 
     assert_eq!(resident_ids(&store), HashSet::new());
 }

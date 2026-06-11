@@ -85,12 +85,19 @@ impl MemoryBlockStore {
         Ok(serialized.hash)
     }
 
-    fn refresh_residency_from_validated_block(&self, block: &ValidatedBlock) {
+    fn refresh_residency_from_validated_block(
+        &self,
+        notified_block_id: &BlockHash,
+        block: &ValidatedBlock,
+    ) {
         let Ok(serialized) = serialize_block(&block.block) else {
             return;
         };
+        if serialized.hash != block.hash || &block.hash != notified_block_id {
+            return;
+        }
         let mut state = self.state.lock().unwrap();
-        state.insert_or_refresh(serialized.hash, serialized.bytes);
+        state.insert_or_refresh(block.hash, serialized.bytes);
     }
 }
 
@@ -168,9 +175,9 @@ impl BlockStore for MemoryBlockStore {
 }
 
 impl OverlayLayerNotifier for MemoryBlockStore {
-    fn on_get_result(&self, _block_id: &BlockHash, outcome: OverlayGetOutcome<'_>) {
+    fn on_get_result(&self, block_id: &BlockHash, outcome: OverlayGetOutcome<'_>) {
         if let OverlayGetOutcome::Hit(block) = outcome {
-            self.refresh_residency_from_validated_block(block);
+            self.refresh_residency_from_validated_block(block_id, block);
         }
     }
 
