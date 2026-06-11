@@ -717,6 +717,10 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
             .map(|workload| workload.workload_id.as_str()),
         "probe workload ids",
     )?;
+    assert_unique(
+        iter_declared_source_reference_ids(profile),
+        "corpus source ids",
+    )?;
 
     let dimensions = profile.shared_candidate_config.dimensions;
     let corpus_ids = profile
@@ -780,6 +784,14 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
                 if corpus.entity_id_metadata_key.trim().is_empty() {
                     return Err(EvaluatorError::InvalidConfiguration(format!(
                         "block-store evaluation corpus {} must declare entity_id_metadata_key",
+                        corpus.corpus.source_id
+                    )));
+                }
+                if let Some(key) = &corpus.synthetic_metadata_key
+                    && key.trim().is_empty()
+                {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store evaluation corpus {} must not declare an empty synthetic_metadata_key",
                         corpus.corpus.source_id
                     )));
                 }
@@ -1608,22 +1620,40 @@ fn build_provenance(
 
 fn declared_source_reference_ids(profile: &BenchmarkProfile) -> Vec<String> {
     let mut ids = BTreeMap::<String, ()>::new();
-    for pass in &profile.training_passes {
-        if let TrainingPassSource::BlockStore { corpus, .. } = pass {
-            ids.insert(corpus.source_id.clone(), ());
-        }
-    }
-    for workload in &profile.probe_workloads {
-        if let EmbeddingWorkloadSource::BlockStore { corpus } = &workload.source {
-            ids.insert(corpus.source_id.clone(), ());
-        }
-    }
-    if let EvaluationEntitySource::BlockStore { corpora } = &profile.evaluation_entities {
-        for corpus in corpora {
-            ids.insert(corpus.corpus.source_id.clone(), ());
-        }
+    for source_id in iter_declared_source_reference_ids(profile) {
+        ids.insert(source_id.to_owned(), ());
     }
     ids.into_keys().collect()
+}
+
+fn iter_declared_source_reference_ids(profile: &BenchmarkProfile) -> impl Iterator<Item = &str> {
+    let training = profile
+        .training_passes
+        .iter()
+        .filter_map(|pass| match pass {
+            TrainingPassSource::BlockStore { corpus, .. } => Some(corpus.source_id.as_str()),
+            TrainingPassSource::Inline { .. } => None,
+        });
+    let probes = profile
+        .probe_workloads
+        .iter()
+        .filter_map(|workload| match &workload.source {
+            EmbeddingWorkloadSource::BlockStore { corpus } => Some(corpus.source_id.as_str()),
+            EmbeddingWorkloadSource::Inline { .. } => None,
+        });
+    let evaluation = match &profile.evaluation_entities {
+        EvaluationEntitySource::BlockStore { corpora } => Some(
+            corpora
+                .iter()
+                .map(|corpus| corpus.corpus.source_id.as_str())
+                .collect::<Vec<_>>(),
+        ),
+        EvaluationEntitySource::Inline { .. } => None,
+    }
+    .into_iter()
+    .flatten();
+
+    training.chain(probes).chain(evaluation)
 }
 
 fn structured_failure_detail(failure: &StructuredFailure) -> String {
@@ -1990,7 +2020,7 @@ fn decode_embedding_to_f32(
 fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
     if value.len() != BlockHash::LEN * 2 {
         return Err(format!(
-            "expected a {}-character lowercase hex block id, found {} characters",
+            "expected a {}-character hex block id, found {} characters",
             BlockHash::LEN * 2,
             value.len()
         ));

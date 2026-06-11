@@ -247,10 +247,10 @@ pub fn block_store_backed_profile() -> BenchmarkProfile {
     let store_root = unique_store_root("streaming-clustering-evaluator");
     let store = FilesystemBlockStore::new(&store_root).unwrap();
 
-    let training_source = write_corpus(
+    let shared_corpus = write_corpus(
         &store,
         &store_root,
-        "training-eval-corpus",
+        "shared-corpus",
         &[
             StoredEntity {
                 entity_id: Some("a"),
@@ -295,11 +295,17 @@ pub fn block_store_backed_profile() -> BenchmarkProfile {
     BenchmarkProfile {
         training_passes: vec![
             TrainingPassSource::BlockStore {
-                corpus: training_source.clone(),
+                corpus: BlockStoreCorpusReference {
+                    source_id: "training-pass-1".into(),
+                    ..shared_corpus.clone()
+                },
                 batch_size: 2,
             },
             TrainingPassSource::BlockStore {
-                corpus: training_source.clone(),
+                corpus: BlockStoreCorpusReference {
+                    source_id: "training-pass-2".into(),
+                    ..shared_corpus.clone()
+                },
                 batch_size: 2,
             },
         ],
@@ -312,7 +318,10 @@ pub fn block_store_backed_profile() -> BenchmarkProfile {
         evaluation_entities: EvaluationEntitySource::BlockStore {
             corpora: vec![BlockStoreEvaluationCorpus {
                 corpus_id: "fixture-corpus-a".into(),
-                corpus: training_source,
+                corpus: BlockStoreCorpusReference {
+                    source_id: "evaluation-corpus".into(),
+                    ..shared_corpus
+                },
                 entity_id_metadata_key: "entity_id".into(),
                 synthetic_metadata_key: Some("synthetic".into()),
             }],
@@ -332,6 +341,28 @@ pub fn broken_block_store_profile() -> BenchmarkProfile {
         },
         batch_size: 2,
     }];
+    profile
+}
+
+pub fn duplicate_source_id_profile() -> BenchmarkProfile {
+    let mut profile = block_store_backed_profile();
+    let duplicate = match &profile.training_passes[0] {
+        TrainingPassSource::BlockStore { corpus, .. } => corpus.clone(),
+        TrainingPassSource::Inline { .. } => panic!("expected block-store training pass"),
+    };
+    profile.probe_workloads = vec![ProbeWorkload {
+        workload_id: "heldout-probes".into(),
+        source: EmbeddingWorkloadSource::BlockStore { corpus: duplicate },
+    }];
+    profile
+}
+
+pub fn empty_synthetic_metadata_key_profile() -> BenchmarkProfile {
+    let mut profile = block_store_backed_profile();
+    let EvaluationEntitySource::BlockStore { corpora } = &mut profile.evaluation_entities else {
+        panic!("expected block-store evaluation corpus");
+    };
+    corpora[0].synthetic_metadata_key = Some("   ".into());
     profile
 }
 

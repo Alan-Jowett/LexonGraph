@@ -18,8 +18,9 @@ use lexongraph_streaming_clustering_evaluator::{
 };
 use support::{
     balanced_and_skewed_candidates, block_store_backed_profile, broken_block_store_profile,
-    invalid_profile, lib_source, nondeterministic_candidate, shared_contract_failure_candidate,
-    strict_alignment_profile, synthetic_padding_profile,
+    duplicate_source_id_profile, empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
+    nondeterministic_candidate, shared_contract_failure_candidate, strict_alignment_profile,
+    synthetic_padding_profile,
 };
 
 #[derive(Clone, Copy)]
@@ -582,7 +583,12 @@ fn val_stream_eval_020_block_store_sources_cover_training_replay_and_probes() {
     assert_eq!(run_report.leaf_membership.len(), 4);
     assert_eq!(
         run_report.provenance.source_reference_ids,
-        vec!["probe-corpus", "training-eval-corpus"]
+        vec![
+            "evaluation-corpus",
+            "probe-corpus",
+            "training-pass-1",
+            "training-pass-2",
+        ]
     );
 }
 
@@ -776,6 +782,30 @@ fn regression_unknown_entity_corpus_ids_are_rejected() {
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("references unknown corpus"))
+    );
+}
+
+#[test]
+fn regression_duplicate_corpus_source_ids_are_rejected() {
+    let result = run_evaluation_campaign(
+        &duplicate_source_id_profile(),
+        &balanced_and_skewed_candidates(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate value in corpus source ids"))
+    );
+}
+
+#[test]
+fn regression_empty_synthetic_metadata_keys_are_rejected() {
+    let result = run_evaluation_campaign(
+        &empty_synthetic_metadata_key_profile(),
+        &balanced_and_skewed_candidates(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must not declare an empty synthetic_metadata_key"))
     );
 }
 
