@@ -13,14 +13,16 @@ use lexongraph_streaming_clustering::{
 };
 use lexongraph_streaming_clustering_evaluator::{
     CandidateIdentity, CandidateRunStatus, DeferredMeasurementStatus, EvaluatorError, GateStatus,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    run_evaluation_campaign,
+    StructuredFailure, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, run_evaluation_campaign,
 };
 use support::{
     balanced_and_skewed_candidates, block_store_backed_profile, broken_block_store_profile,
-    duplicate_source_id_profile, empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
+    duplicate_evaluation_entities_block_store_profile, duplicate_source_id_profile,
+    empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
     missing_synthetic_metadata_key_profile, nondeterministic_candidate,
     shared_contract_failure_candidate, strict_alignment_profile, synthetic_padding_profile,
+    wrong_entity_count_block_store_profile,
 };
 
 #[derive(Clone, Copy)]
@@ -867,6 +869,34 @@ fn regression_failed_corpus_source_runs_keep_evaluation_entities_in_determinism_
             "provenance",
         ]
     );
+}
+
+#[test]
+fn regression_duplicate_materialized_block_store_entities_are_load_failures() {
+    let report = run_evaluation_campaign(
+        &duplicate_evaluation_entities_block_store_profile(),
+        &balanced_and_skewed_candidates()[..1],
+    )
+    .expect("corpus content failures should still produce a campaign report");
+
+    assert!(matches!(
+        report.run_reports[0].terminal_failure,
+        Some(StructuredFailure::CorpusSourceLoadFailure { .. })
+    ));
+}
+
+#[test]
+fn regression_invalid_materialized_block_store_entity_counts_are_load_failures() {
+    let report = run_evaluation_campaign(
+        &wrong_entity_count_block_store_profile(),
+        &balanced_and_skewed_candidates()[..1],
+    )
+    .expect("materialized entity validation failures should still produce a campaign report");
+
+    assert!(matches!(
+        report.run_reports[0].terminal_failure,
+        Some(StructuredFailure::CorpusSourceLoadFailure { .. })
+    ));
 }
 
 #[test]

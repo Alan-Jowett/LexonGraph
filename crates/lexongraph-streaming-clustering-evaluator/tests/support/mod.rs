@@ -377,6 +377,23 @@ pub fn missing_synthetic_metadata_key_profile() -> BenchmarkProfile {
     profile
 }
 
+pub fn duplicate_evaluation_entities_block_store_profile() -> BenchmarkProfile {
+    let mut profile = block_store_backed_profile();
+    let EvaluationEntitySource::BlockStore { corpora } = &mut profile.evaluation_entities else {
+        panic!("expected block-store evaluation corpus");
+    };
+    let mut duplicate = corpora[0].clone();
+    duplicate.corpus.source_id = "evaluation-corpus-duplicate".into();
+    corpora.push(duplicate);
+    profile
+}
+
+pub fn wrong_entity_count_block_store_profile() -> BenchmarkProfile {
+    let mut profile = block_store_backed_profile();
+    profile.leaf_model.leaf_size = 3;
+    profile
+}
+
 pub fn invalid_profile() -> BenchmarkProfile {
     let mut profile = strict_alignment_profile();
     profile

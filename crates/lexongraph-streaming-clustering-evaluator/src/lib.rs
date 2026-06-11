@@ -1762,13 +1762,13 @@ fn resolve_profile_inputs(
         "evaluation entity ids",
     )
     .map_err(|error| {
-        invalid_corpus_source_reference(
+        corpus_source_load_failure(
             &evaluation_source_label(&profile.evaluation_entities),
             error.to_string(),
         )
     })?;
     validate_materialized_evaluation_entities(profile, &evaluation_entities).map_err(|error| {
-        invalid_corpus_source_reference(
+        corpus_source_load_failure(
             &evaluation_source_label(&profile.evaluation_entities),
             error.to_string(),
         )
