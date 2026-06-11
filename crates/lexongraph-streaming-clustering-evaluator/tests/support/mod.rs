@@ -477,7 +477,7 @@ fn write_corpus(
             None,
         )
         .unwrap();
-        let block = Block::Leaf(leaf.clone());
+        let block = Block::Leaf(leaf);
         let block_id = store.put(&block).unwrap();
         leaves.push((block_id, encode_embedding(&entity.embedding)));
     }
