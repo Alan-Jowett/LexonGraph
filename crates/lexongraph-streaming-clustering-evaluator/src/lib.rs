@@ -3085,8 +3085,8 @@ mod tests {
     fn block_store_reference_store_prefers_tagged_forms_over_legacy_shape() {
         let parsed: super::BlockStoreReferenceStore = serde_json::from_value(json!({
             "store_kind": "zip-archive",
-            "archive_path": "C:\\\\archive.zip",
-            "store_root": "C:\\\\ignored-if-legacy-wins"
+            "archive_path": r"C:\archive.zip",
+            "store_root": r"C:\ignored-if-legacy-wins"
         }))
         .expect("tagged zip-archive shape should deserialize as a zip-backed reference");
 
