@@ -17,6 +17,8 @@ The crate design is intended to be:
 - comparative without redefining the shared candidate contract
 - able to score leaf occupancy, locality, and compression directly from final
   assignments
+- able to consume large benchmark corpora through the existing block-store
+  abstraction without embedding every workload entry in one profile document
 - honest about research goals that remain deferred at this boundary
 
 ## Crate Boundary
@@ -45,7 +47,9 @@ The crate does not own:
 
 The crate depends on the two clustering research documents for evaluation intent
 and on `docs/specs/rust-streaming-clustering-crate/` for the candidate
-trainer/classifier boundary. The crate does not redefine those sources.
+trainer/classifier boundary. For scalable corpus inputs, it also depends on
+`docs/specs/rust-block-storage-trait/` for the backend-neutral storage
+contract. The crate does not redefine those sources.
 
 ### DSG-STREAM-EVAL-002 `Evaluator-owned boundary`
 
@@ -73,10 +77,13 @@ boundary.
 The benchmark profile fixes all candidate-comparable inputs for one campaign,
 including:
 
-- corpus panel identities or equivalent dataset handles
-- the streaming pass plan used for candidate training
+- corpus panel identities or equivalent dataset handles, plus the declared
+  source mode for each workload
+- the streaming pass plan used for candidate training, whether supplied inline
+  or through referenced corpus material
 - classifier-side probe workloads such as held-out embeddings or other
-  benchmark-owned probes
+  benchmark-owned probes, whether supplied inline or through referenced corpus
+  material
 - the leaf model, including target leaf size `L`, the relationship among `N`,
   `K`, and expected occupancy, and the alignment policy
 - metric declarations, gate declarations, and comparative ranking weights
@@ -91,28 +98,65 @@ One evaluation campaign binds one benchmark profile to one or more registered
 candidates. The runner fans the shared profile out across candidates rather than
 allowing candidate-specific benchmark contracts that would break comparability.
 
+This same shared-profile rule applies to corpus sourcing: compared candidates
+observe the same declared inline fixtures or referenced block-store-backed
+datasets rather than candidate-specific corpus materialization paths.
+
 ### DSG-STREAM-EVAL-007 `Provenance manifest`
 
 Before reporting comparative results, the runner materializes a deterministic
 provenance manifest containing the benchmark profile identity, corpus identities,
-candidate identity, shared clustering configuration, deterministic seed policy,
-software version identity, declared floating-point execution-profile metadata,
-and declared hardware-profile metadata.
+source-reference identities for referenced corpora, candidate identity, shared
+clustering configuration, deterministic seed policy, software version identity,
+declared floating-point execution-profile metadata, and declared
+hardware-profile metadata.
 
 ### DSG-STREAM-EVAL-008 `Candidate execution flow`
 
 For each candidate run, the runner:
 
 1. constructs a trainer through the candidate adapter
-2. replays the benchmark profile's declared pass inputs through
-   `ingest_batch()`
+2. resolves the benchmark profile's declared training-pass workload source and
+   replays those inputs through `ingest_batch()`
 3. completes each pass with `finish_pass()` and records the resulting pass
    reports
 4. transitions through `complete_training()` when required by the profile
 5. produces a classifier through `into_classifier()`
-6. replays the benchmark corpus through the classifier to materialize the
+6. resolves the benchmark profile's declared evaluation corpus source and
+   replays the benchmark corpus through the classifier to materialize the
    evaluator-owned leaf membership artifact
-7. executes the classifier-side probe workloads and records the observed outputs
+7. resolves and executes the classifier-side probe workloads and records the
+   observed outputs
+
+Inline fixtures and block-store-backed corpus references therefore share one
+execution shape after workload resolution rather than splitting the evaluator
+into unrelated small-corpus and large-corpus code paths.
+
+### DSG-STREAM-EVAL-008A `Unified corpus-source model`
+
+The evaluator defines one corpus-source abstraction that can back:
+
+- training-pass inputs
+- evaluation replay entities
+- classifier-side probe workloads
+
+The abstraction supports:
+
+- inline fixture payloads embedded in the benchmark profile
+- block-store-backed references that identify externally stored corpus material
+
+This preserves small-fixture ergonomics while allowing large corpora to remain
+outside the profile document.
+
+### DSG-STREAM-EVAL-008B `Block-store-backed corpus references`
+
+For scalable workloads, the benchmark profile carries evaluator-owned corpus
+references whose external loading semantics align with the existing
+block-storage trait boundary.
+
+This design does not widen `BlockStore` with evaluator-specific query
+operations, whole-corpus JSON payloads, or candidate-owned shortcuts. Any
+concrete store construction inputs remain outside the parent trait boundary.
 
 ### DSG-STREAM-EVAL-009 `Observable determinism checks`
 
@@ -139,6 +183,9 @@ The artifact is the common basis for:
 - same-leaf locality scoring
 - local-versus-global compression scoring
 - padding-aware metric exclusion when synthetic padding is enabled
+
+The artifact's semantics are independent of whether evaluation entities were
+declared inline or loaded through block-store-backed corpus references.
 
 ### DSG-STREAM-EVAL-011 `Leaf-stage invariant scoring`
 
@@ -194,12 +241,18 @@ The evaluator emits:
 - a human-readable scorecard that summarizes gates, direct metrics, proxy
   metrics, deferred goals, and survivor ranking
 
+Output artifacts remain source-neutral. When block-store-backed corpus
+references are used, provenance expands to identify those sources, but run
+reports and comparative scoring semantics do not change.
+
 ### DSG-STREAM-EVAL-017 `Failure taxonomy`
 
 Evaluator failures are reported through an evaluator-owned structured taxonomy
 that distinguishes invalid evaluator configuration, candidate-reported
-shared-contract failure, evaluator-owned gate failure, and incomplete or
-unsupported measurement due to a deferred research requirement.
+shared-contract failure, evaluator-owned gate failure, invalid corpus-source
+references, corpus-loading failures encountered through block-store-backed
+inputs, and incomplete or unsupported measurement due to a deferred research
+requirement.
 
 ### DSG-STREAM-EVAL-018 `Explicit non-goal boundary`
 
@@ -216,9 +269,10 @@ this crate.
 
 The repository includes executable verification artifacts covering benchmark
 profile validation, candidate execution, observable determinism checking,
-leaf membership materialization, occupancy/locality/compression scoring,
-comparative scorecard generation, failure classification, and deferred-goal
-reporting for the evaluator crate.
+inline-fixture and block-store-backed corpus-source handling, leaf membership
+materialization, occupancy/locality/compression scoring, comparative scorecard
+generation, failure classification, and deferred-goal reporting for the
+evaluator crate.
 
 ## Traceability
 
@@ -228,18 +282,20 @@ reporting for the evaluator crate.
 | DSG-STREAM-EVAL-002 | REQ-STREAM-EVAL-001, REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-005 |
 | DSG-STREAM-EVAL-003 | REQ-STREAM-EVAL-003 |
 | DSG-STREAM-EVAL-004 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-005 |
-| DSG-STREAM-EVAL-005 | REQ-STREAM-EVAL-006 |
+| DSG-STREAM-EVAL-005 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-026 |
 | DSG-STREAM-EVAL-006 | REQ-STREAM-EVAL-007 |
 | DSG-STREAM-EVAL-007 | REQ-STREAM-EVAL-008 |
-| DSG-STREAM-EVAL-008 | REQ-STREAM-EVAL-009 |
+| DSG-STREAM-EVAL-008 | REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-024 |
+| DSG-STREAM-EVAL-008A | REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-024, REQ-STREAM-EVAL-026 |
+| DSG-STREAM-EVAL-008B | REQ-STREAM-EVAL-002, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-025 |
 | DSG-STREAM-EVAL-009 | REQ-STREAM-EVAL-011 |
-| DSG-STREAM-EVAL-010 | REQ-STREAM-EVAL-010 |
+| DSG-STREAM-EVAL-010 | REQ-STREAM-EVAL-010, REQ-STREAM-EVAL-022 |
 | DSG-STREAM-EVAL-011 | REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018 |
 | DSG-STREAM-EVAL-012 | REQ-STREAM-EVAL-019 |
 | DSG-STREAM-EVAL-013 | REQ-STREAM-EVAL-020 |
 | DSG-STREAM-EVAL-014 | REQ-STREAM-EVAL-012, REQ-STREAM-EVAL-013 |
 | DSG-STREAM-EVAL-015 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021 |
 | DSG-STREAM-EVAL-016 | REQ-STREAM-EVAL-014 |
-| DSG-STREAM-EVAL-017 | REQ-STREAM-EVAL-015 |
-| DSG-STREAM-EVAL-018 | REQ-STREAM-EVAL-021 |
+| DSG-STREAM-EVAL-017 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022 |
+| DSG-STREAM-EVAL-018 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-025 |
 | DSG-STREAM-EVAL-019 | REQ-STREAM-EVAL-016 |

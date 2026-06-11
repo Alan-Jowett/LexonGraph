@@ -13,7 +13,8 @@ boundary.
 These validation entries define the conformance surface for the new streaming
 clustering evaluator crate. They cover benchmark-profile definition, candidate
 execution, leaf membership scoring, comparative reporting, determinism checking,
-and explicit deferred research-goal handling.
+explicit deferred research-goal handling, and corpus sourcing through both
+inline fixtures and block-store-backed references.
 
 ## Validation Entries
 
@@ -61,9 +62,10 @@ constructs a trainer conforming to the shared streaming clustering contract.
 Inspect one benchmark profile definition.
 
 **Pass condition:** the profile fixes corpus identities, streaming pass inputs,
-classifier-side probe workloads, the leaf model, metric declarations, gate
-declarations, comparative ranking weights, deferred research-goal records, and
-reproducibility metadata for one campaign.
+classifier-side probe workloads, the declared source mode for each workload, the
+leaf model, metric declarations, gate declarations, comparative ranking
+weights, deferred research-goal records, and reproducibility metadata for one
+campaign.
 
 **Traces to:** REQ-STREAM-EVAL-006
 
@@ -85,7 +87,8 @@ reproducibility metadata is fixed.
 **Pass condition:** the resulting provenance manifest deterministically records
 benchmark profile identity, corpus identities, candidate identity, clustering
 configuration, seed policy, software identity, floating-point profile metadata,
-and hardware-profile metadata.
+and hardware-profile metadata, plus any declared source-reference identities
+needed to reproduce block-store-backed corpus inputs.
 
 **Traces to:** REQ-STREAM-EVAL-008
 
@@ -97,9 +100,10 @@ production, full-corpus assignment replay, and one classifier probe workload.
 **Pass condition:** the evaluator drives the candidate through trainer
 construction, pass ingestion, `finish_pass()`, training completion, classifier
 production, evaluator-owned leaf membership materialization, and
-classifier-side probing according to the benchmark profile.
+classifier-side probing according to the benchmark profile for both inline
+fixture workloads and block-store-backed referenced workloads.
 
-**Traces to:** REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-010
+**Traces to:** REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-010, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-024
 
 ### VAL-STREAM-EVAL-009
 
@@ -181,9 +185,11 @@ Run the evaluator with an invalid benchmark profile and with a candidate that
 returns a shared-contract failure.
 
 **Pass condition:** failures are surfaced deterministically and distinguish
-invalid evaluator configuration from candidate-reported shared-contract failure.
+invalid evaluator configuration, invalid or unresolved corpus-source
+references, block-store-backed corpus-loading failures, and candidate-reported
+shared-contract failure.
 
-**Traces to:** REQ-STREAM-EVAL-015
+**Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022
 
 ### VAL-STREAM-EVAL-017
 
@@ -213,8 +219,32 @@ future end-to-end evaluator is called out as a separate later line.
 Inspect repository verification artifacts for the new crate.
 
 **Pass condition:** executable tests exist for benchmark-profile validation,
-candidate execution, leaf membership materialization, occupancy/locality/
-compression scoring, repeated-run determinism checks, comparative scorecard
-generation, failure classification, and deferred-goal reporting.
+candidate execution, inline-fixture and block-store-backed corpus-source
+handling, leaf membership materialization, occupancy/locality/compression
+scoring, repeated-run determinism checks, comparative scorecard generation,
+failure classification, and deferred-goal reporting.
 
-**Traces to:** REQ-STREAM-EVAL-016
+**Traces to:** REQ-STREAM-EVAL-016, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-024
+
+### VAL-STREAM-EVAL-020
+
+Run one campaign whose training passes, evaluation replay entities, and
+classifier-side probes all resolve through block-store-backed corpus
+references.
+
+**Pass condition:** the evaluator consumes all three workload families through
+the same declared scalable corpus-source model without requiring a monolithic
+profile-embedded JSON corpus.
+
+**Traces to:** REQ-STREAM-EVAL-024, REQ-STREAM-EVAL-025, REQ-STREAM-EVAL-026
+
+### VAL-STREAM-EVAL-021
+
+Run the evaluator with one small inline benchmark fixture and one functionally
+equivalent block-store-backed benchmark fixture.
+
+**Pass condition:** both source modes remain supported, and the resulting leaf
+membership semantics and report semantics are equivalent apart from provenance
+details specific to the referenced external corpus source.
+
+**Traces to:** REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023

@@ -6,7 +6,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ciborium = "0.2"
 clap = { version = "4.5.53", features = ["derive"] }
+half = "2"
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-block-store-fs = { path = "../lexongraph-block-store-fs" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
