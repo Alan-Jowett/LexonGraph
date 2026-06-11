@@ -16,7 +16,7 @@
         "source_id": "weak-uniform-strict-small-training",
         "root_block_id": "4935e718ece4f32190877382378b53f956f40b2d345b21a6657d02dc6c2d2224",
         "store_kind": "zip-archive",
-        "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\weak-uniform-strict-small.zip"
+        "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/weak-uniform-strict-small.zip"
       },
       "batch_size": 2
     }
@@ -29,7 +29,7 @@
         "source_id": "weak-uniform-strict-small-probe",
         "root_block_id": "4935e718ece4f32190877382378b53f956f40b2d345b21a6657d02dc6c2d2224",
         "store_kind": "zip-archive",
-        "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\weak-uniform-strict-small.zip"
+        "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/weak-uniform-strict-small.zip"
       }
     }
   ],
@@ -42,7 +42,7 @@
           "source_id": "weak-uniform-strict-small-evaluation",
           "root_block_id": "4935e718ece4f32190877382378b53f956f40b2d345b21a6657d02dc6c2d2224",
           "store_kind": "zip-archive",
-          "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\weak-uniform-strict-small.zip"
+          "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/weak-uniform-strict-small.zip"
         },
         "entity_id_metadata_key": "entity_id",
         "synthetic_metadata_key": "synthetic"

@@ -16,7 +16,7 @@
         "source_id": "near-duplicate-padding-small-training",
         "root_block_id": "913d0d4aaed71b5360d6d72b1217df9bed3e10c9e01116e4ed0749db7da8d997",
         "store_kind": "zip-archive",
-        "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\near-duplicate-padding-small.zip"
+        "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/near-duplicate-padding-small.zip"
       },
       "batch_size": 2
     }
@@ -29,7 +29,7 @@
         "source_id": "near-duplicate-padding-small-probe",
         "root_block_id": "913d0d4aaed71b5360d6d72b1217df9bed3e10c9e01116e4ed0749db7da8d997",
         "store_kind": "zip-archive",
-        "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\near-duplicate-padding-small.zip"
+        "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/near-duplicate-padding-small.zip"
       }
     }
   ],
@@ -42,7 +42,7 @@
           "source_id": "near-duplicate-padding-small-evaluation",
           "root_block_id": "913d0d4aaed71b5360d6d72b1217df9bed3e10c9e01116e4ed0749db7da8d997",
           "store_kind": "zip-archive",
-          "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\near-duplicate-padding-small.zip"
+          "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/near-duplicate-padding-small.zip"
         },
         "entity_id_metadata_key": "entity_id",
         "synthetic_metadata_key": "synthetic"

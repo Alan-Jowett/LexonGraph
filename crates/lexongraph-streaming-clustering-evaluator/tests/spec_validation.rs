@@ -1712,17 +1712,22 @@ fn regression_checked_in_synthetic_suite_assets_exist_and_match_the_spec() {
     let suite_spec_path = suite_dir.join("section4-suite-spec.json");
     let suite_spec: Section4SuiteSpec =
         serde_json::from_str(&fs::read_to_string(suite_spec_path).unwrap()).unwrap();
+    let manifest_contents =
+        fs::read_to_string(suite_dir.join("section4-suite-manifest.json")).unwrap();
     let manifest = checked_in_synthetic_suite_manifest();
     let repo_root = repository_root();
 
     assert_eq!(suite_spec.suite_id, manifest.suite_id);
     assert_eq!(suite_spec.profiles.len(), 6);
     assert_eq!(manifest.generated_profiles.len(), suite_spec.profiles.len());
+    assert!(!manifest_contents.contains("\\\\"));
     for generated in &manifest.generated_profiles {
         assert!(generated.profile_path.exists());
         assert!(generated.corpus_archive_path.exists());
         assert!(generated.profile_path.starts_with(&repo_root));
         assert!(generated.corpus_archive_path.starts_with(&repo_root));
+        let profile_contents = fs::read_to_string(&generated.profile_path).unwrap();
+        assert!(!profile_contents.contains("\\\\"));
     }
 }
 
@@ -1750,5 +1755,17 @@ fn regression_checked_in_synthetic_suite_assets_run_successfully() {
             .path()
             .join("well-clustered-strict-small")
             .exists()
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_unsafe_profile_ids() {
+    let output_dir = tempdir().unwrap();
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("../escape", "unsafe", 4)]);
+
+    let result = generate_section4_suite_assets(&spec, output_dir.path());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("profile_id"))
     );
 }

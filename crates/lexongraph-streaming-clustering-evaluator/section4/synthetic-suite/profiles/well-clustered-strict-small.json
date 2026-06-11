@@ -16,7 +16,7 @@
         "source_id": "well-clustered-strict-small-training",
         "root_block_id": "2805ad88ea18a677d8f06bb45411767505de672742f9289da6168f61ae0b53ac",
         "store_kind": "zip-archive",
-        "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\well-clustered-strict-small.zip"
+        "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/well-clustered-strict-small.zip"
       },
       "batch_size": 2
     }
@@ -29,7 +29,7 @@
         "source_id": "well-clustered-strict-small-probe",
         "root_block_id": "2805ad88ea18a677d8f06bb45411767505de672742f9289da6168f61ae0b53ac",
         "store_kind": "zip-archive",
-        "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\well-clustered-strict-small.zip"
+        "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/well-clustered-strict-small.zip"
       }
     }
   ],
@@ -42,7 +42,7 @@
           "source_id": "well-clustered-strict-small-evaluation",
           "root_block_id": "2805ad88ea18a677d8f06bb45411767505de672742f9289da6168f61ae0b53ac",
           "store_kind": "zip-archive",
-          "archive_path": "crates\\lexongraph-streaming-clustering-evaluator\\section4\\synthetic-suite\\corpora\\well-clustered-strict-small.zip"
+          "archive_path": "crates/lexongraph-streaming-clustering-evaluator/section4/synthetic-suite/corpora/well-clustered-strict-small.zip"
         },
         "entity_id_metadata_key": "entity_id",
         "synthetic_metadata_key": "synthetic"

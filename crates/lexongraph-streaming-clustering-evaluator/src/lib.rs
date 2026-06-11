@@ -161,8 +161,14 @@ pub struct BlockStoreCorpusReference {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "store_kind", rename_all = "kebab-case")]
 pub enum BlockStoreReferenceStore {
-    Filesystem { store_root: PathBuf },
-    ZipArchive { archive_path: PathBuf },
+    Filesystem {
+        #[serde(serialize_with = "serialize_portable_pathbuf")]
+        store_root: PathBuf,
+    },
+    ZipArchive {
+        #[serde(serialize_with = "serialize_portable_pathbuf")]
+        archive_path: PathBuf,
+    },
 }
 
 pub(crate) fn normalize_cross_platform_path(path: impl AsRef<str>) -> PathBuf {
@@ -181,6 +187,13 @@ where
 {
     let raw = String::deserialize(deserializer)?;
     Ok(normalize_cross_platform_path(raw))
+}
+
+pub(crate) fn serialize_portable_pathbuf<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&path.to_string_lossy().replace('\\', "/"))
 }
 
 fn has_windows_drive_prefix(path: &str) -> bool {

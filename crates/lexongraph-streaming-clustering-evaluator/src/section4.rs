@@ -15,6 +15,7 @@ use lexongraph_block::{
 };
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
+use lexongraph_streaming_clustering::validate_embedding;
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir_in;
 use zip::CompressionMethod as ZipCompressionMethod;
@@ -99,9 +100,15 @@ pub struct Section4GeneratedProfile {
     pub real_entity_count: usize,
     pub evaluated_entity_count: usize,
     pub cluster_count: u32,
-    #[serde(deserialize_with = "crate::deserialize_cross_platform_pathbuf")]
+    #[serde(
+        serialize_with = "crate::serialize_portable_pathbuf",
+        deserialize_with = "crate::deserialize_cross_platform_pathbuf"
+    )]
     pub profile_path: PathBuf,
-    #[serde(deserialize_with = "crate::deserialize_cross_platform_pathbuf")]
+    #[serde(
+        serialize_with = "crate::serialize_portable_pathbuf",
+        deserialize_with = "crate::deserialize_cross_platform_pathbuf"
+    )]
     pub corpus_archive_path: PathBuf,
     pub root_block_id: String,
     pub harvested_source_id: Option<String>,
@@ -496,6 +503,42 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite must declare at least one profile".into(),
         ));
     }
+    for profile in &spec.profiles {
+        validate_profile_id(&profile.profile_id)?;
+        let real_entity_count = match &profile.source {
+            Section4ProfileSourceSpec::Synthetic {
+                real_entity_count, ..
+            }
+            | Section4ProfileSourceSpec::Harvested {
+                real_entity_count, ..
+            } => *real_entity_count,
+        };
+        if real_entity_count <= spec.neighbor_count {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "profile {} must declare more than {} real entities to compute exact-neighbor ground truth",
+                profile.profile_id, spec.neighbor_count
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_profile_id(profile_id: &str) -> Result<(), EvaluatorError> {
+    if profile_id.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite profile_id must not be empty".into(),
+        ));
+    }
+    if profile_id.contains('/')
+        || profile_id.contains('\\')
+        || profile_id == "."
+        || profile_id == ".."
+    {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-4 suite profile_id {:?} must not contain path separators or dot segments",
+            profile_id
+        )));
+    }
     Ok(())
 }
 
@@ -627,14 +670,12 @@ fn harvest_real_entities(
                 &format!("harvested source {} block {}", source.source_id, record.block_id),
             )
             .map_err(EvaluatorError::InvalidConfiguration)?;
-            if embedding.len() != dimensions {
-                return Err(EvaluatorError::InvalidConfiguration(format!(
-                    "harvested entity {} has dimensions {}, expected {}",
-                    entity_id,
-                    embedding.len(),
-                    dimensions
-                )));
-            }
+            validate_embedding(&embedding, dimensions).map_err(|error| {
+                EvaluatorError::InvalidConfiguration(format!(
+                    "harvested source {} block {} failed embedding validation: {error}",
+                    source.source_id, record.block_id
+                ))
+            })?;
             Ok(EvaluationEntity {
                 entity_id,
                 corpus_id: corpus_id.into(),
@@ -674,6 +715,12 @@ fn apply_alignment_policy(
             Ok(real_entities.to_vec())
         }
         AlignmentPolicy::DeterministicSyntheticPadding => {
+            if real_entities.is_empty() {
+                return Err(EvaluatorError::InvalidConfiguration(
+                    "deterministic-padding section-4 corpus must include at least one real entity"
+                        .into(),
+                ));
+            }
             if real_entities.len().is_multiple_of(leaf_size) {
                 return Err(EvaluatorError::InvalidConfiguration(format!(
                     "deterministic-padding section-4 corpus has {} real entities, which is already divisible by leaf_size {}",
