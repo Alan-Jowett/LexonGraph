@@ -1703,10 +1703,7 @@ fn resolve_profile_inputs(
                         "resolved to zero embeddings".into(),
                     ));
                 }
-                Ok(embeddings
-                    .chunks(*batch_size)
-                    .map(|chunk| chunk.to_vec())
-                    .collect::<Vec<_>>())
+                Ok(embeddings_into_batches(embeddings, *batch_size))
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1815,6 +1812,22 @@ fn load_embeddings_from_reference(
             Ok(embedding)
         })
         .collect()
+}
+
+fn embeddings_into_batches(embeddings: Vec<Embedding>, batch_size: usize) -> PassPlan {
+    let mut batches = Vec::with_capacity(embeddings.len().div_ceil(batch_size));
+    let mut next_batch = Vec::with_capacity(batch_size);
+    for embedding in embeddings {
+        next_batch.push(embedding);
+        if next_batch.len() == batch_size {
+            batches.push(next_batch);
+            next_batch = Vec::with_capacity(batch_size);
+        }
+    }
+    if !next_batch.is_empty() {
+        batches.push(next_batch);
+    }
+    batches
 }
 
 fn load_evaluation_entities_from_reference(
@@ -1986,10 +1999,12 @@ fn decode_embedding_to_f32(
     })?;
     match spec.encoding.as_str() {
         "f32le" => {
-            if bytes.len() != dims * 4 {
+            let expected_len =
+                checked_embedding_byte_len(dims, 4, context, spec.encoding.as_str())?;
+            if bytes.len() != expected_len {
                 return Err(format!(
                     "{context} expected {} f32 bytes, found {}",
-                    dims * 4,
+                    expected_len,
                     bytes.len()
                 ));
             }
@@ -1999,10 +2014,12 @@ fn decode_embedding_to_f32(
                 .collect())
         }
         "f16le" => {
-            if bytes.len() != dims * 2 {
+            let expected_len =
+                checked_embedding_byte_len(dims, 2, context, spec.encoding.as_str())?;
+            if bytes.len() != expected_len {
                 return Err(format!(
                     "{context} expected {} f16 bytes, found {}",
-                    dims * 2,
+                    expected_len,
                     bytes.len()
                 ));
             }
@@ -2025,6 +2042,19 @@ fn decode_embedding_to_f32(
             "{context} uses unsupported embedding encoding {other:?}; evaluator corpus sources currently require f32le, f16le, or i8"
         )),
     }
+}
+
+fn checked_embedding_byte_len(
+    dims: usize,
+    bytes_per_dimension: usize,
+    context: &str,
+    encoding: &str,
+) -> Result<usize, String> {
+    dims.checked_mul(bytes_per_dimension).ok_or_else(|| {
+        format!(
+            "{context} byte length overflowed usize for {dims}-dimensional {encoding} embedding"
+        )
+    })
 }
 
 fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
@@ -2640,4 +2670,53 @@ fn validate_fixture_config(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_embedding_to_f32, embeddings_into_batches};
+    use lexongraph_block::EmbeddingSpec;
+
+    #[test]
+    fn embeddings_into_batches_preserves_order_without_dropping_tail_items() {
+        let batches = embeddings_into_batches(
+            vec![vec![1.0], vec![2.0], vec![3.0], vec![4.0], vec![5.0]],
+            2,
+        );
+
+        assert_eq!(
+            batches,
+            vec![
+                vec![vec![1.0], vec![2.0]],
+                vec![vec![3.0], vec![4.0]],
+                vec![vec![5.0]]
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_embedding_to_f32_rejects_f32_byte_length_overflow() {
+        let spec = EmbeddingSpec {
+            dims: (usize::MAX / 4 + 1) as u64,
+            encoding: "f32le".into(),
+        };
+
+        let error = decode_embedding_to_f32(&[], &spec, "overflowing f32 corpus")
+            .expect_err("overflowing f32 dimensions should be rejected");
+
+        assert!(error.contains("overflowed usize"));
+    }
+
+    #[test]
+    fn decode_embedding_to_f32_rejects_f16_byte_length_overflow() {
+        let spec = EmbeddingSpec {
+            dims: (usize::MAX / 2 + 1) as u64,
+            encoding: "f16le".into(),
+        };
+
+        let error = decode_embedding_to_f32(&[], &spec, "overflowing f16 corpus")
+            .expect_err("overflowing f16 dimensions should be rejected");
+
+        assert!(error.contains("overflowed usize"));
+    }
 }
