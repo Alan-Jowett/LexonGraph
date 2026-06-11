@@ -15,6 +15,8 @@ This document specifies the crate-level requirements for a new Rust crate that:
   streaming clustering implementations as leaf-partition realizations
 - reuses the shared trainer/classifier boundary defined by
   `docs/specs/rust-streaming-clustering-crate/`
+- aligns scalable corpus consumption with the repository's existing block-store
+  abstraction rather than requiring monolithic profile-embedded JSON datasets
 - translates applicable intent from `docs/research/clustering.md` and
   `docs/research/clustering_plan.md` into an evaluator-owned benchmark contract
 
@@ -32,6 +34,11 @@ boundary.
 `Benchmark profile` means the evaluator-owned description of the fixed corpora,
 pass plan, probe workloads, leaf-model declarations, metric declarations,
 gates, and ranking weights used for one comparative evaluation campaign.
+
+`Corpus source` means the benchmark-declared mechanism by which the evaluator
+obtains the embeddings and related entity identities for a workload. In this
+revision the supported source families are inline fixture data and
+block-store-backed corpus references.
 
 `Evaluation campaign` means one execution of the evaluator over one benchmark
 profile and one or more named candidates.
@@ -78,11 +85,15 @@ The new crate shall remain subordinate to:
   workflow
 - `docs/specs/rust-streaming-clustering-crate/` for the shared candidate
   trainer/classifier contract
+- `docs/specs/rust-block-storage-trait/` for the backend-neutral storage
+  contract used by scalable corpus references
 
 If those sources appear to conflict, the narrower evaluator scope remains
 authoritative for this crate's boundary: the research documents are
 authoritative for evaluation intent, and the shared streaming clustering
-specification is authoritative for the candidate integration surface.
+specification is authoritative for the candidate integration surface. The
+block-storage trait specification is authoritative for the scalable external
+corpus-loading contract.
 
 ### REQ-STREAM-EVAL-003
 
@@ -110,8 +121,11 @@ boundary and benchmark fixtures.
 The evaluator shall define a benchmark profile that fixes, for one evaluation
 campaign:
 
-- the corpus panel or equivalent named input datasets
-- the candidate training pass plan and any held-out probe workloads
+- the corpus panel or equivalent named input datasets, including the declared
+  corpus-source mode for each dataset or workload
+- the candidate training pass plan and any held-out probe workloads, including
+  whether each workload is supplied inline or through a block-store-backed
+  corpus reference
 - the leaf model, including target leaf size `L`, the relationship between
   observed item count `N`, target cluster count `K`, and expected occupancy, and
   the alignment policy
@@ -134,6 +148,8 @@ records at least:
 
 - benchmark profile identity
 - corpus identities
+- source-reference identities needed to reproduce any block-store-backed corpus
+  inputs used by the campaign
 - candidate identity
 - shared clustering configuration used for the candidate
 - deterministic seed policy
@@ -148,17 +164,20 @@ shared lifecycle by:
 
 - constructing or obtaining a trainer through the shared candidate boundary
 - executing the caller-driven streaming passes declared by the benchmark profile
+  from the workload's declared corpus source
 - obtaining pass reports from completed passes
 - marking training complete when the benchmark profile requires it
 - producing a classifier and running the declared classifier-side probe
-  workloads
+  workloads from the workload's declared corpus source
 
 ### REQ-STREAM-EVAL-010
 
 For each candidate run, after producing the final classifier, the evaluator
 shall replay the benchmark corpus through that classifier and materialize an
 evaluator-owned leaf membership artifact that assigns every evaluated entity to
-exactly one final cluster.
+exactly one final cluster, whether the evaluated corpus is declared inline in
+the benchmark profile or supplied through a block-store-backed corpus
+reference.
 
 The leaf membership artifact shall be sufficient to drive evaluator-owned leaf
 occupancy, coverage, locality, and compression checks without requiring the
@@ -204,12 +223,20 @@ The evaluator shall emit:
 - a human-readable scorecard summarizing pass/fail status, metric values, and
   comparative ranking for surviving candidates
 
+These outputs remain evaluator-owned and source-neutral: changing a workload
+from inline fixture data to a block-store-backed corpus reference shall change
+input acquisition and provenance detail, not the semantic meaning of the
+reported evaluator results.
+
 ### REQ-STREAM-EVAL-015
 
 The evaluator shall surface deterministic structured failures that distinguish
 at least:
 
 - invalid evaluator or benchmark-profile configuration
+- invalid or unresolved corpus-source references
+- explicit block-store or corpus-content loading failure encountered while
+  consuming referenced corpora
 - candidate-reported shared-contract failure
 - evaluator-owned gate failure
 - incomplete or unsupported measurement caused by a deferred research
@@ -218,7 +245,9 @@ at least:
 ### REQ-STREAM-EVAL-016
 
 The repository shall include executable verification artifacts that realize the
-validation plan for the streaming clustering evaluator crate.
+validation plan for the streaming clustering evaluator crate, including both
+inline-fixture and block-store-backed corpus-source modes where this revision
+defines both.
 
 ### REQ-STREAM-EVAL-017
 
@@ -269,6 +298,40 @@ This revision also shall not define the future end-to-end evaluator layered on
 `docs/specs/rust-streaming-indexer-crate/` and
 `docs/specs/rust-search-crate/`; that line remains future work.
 
+### REQ-STREAM-EVAL-022
+
+The evaluator shall support benchmark corpora supplied by block-store-backed
+corpus references in addition to inline benchmark-profile fixture data.
+
+### REQ-STREAM-EVAL-023
+
+This revision shall preserve inline benchmark-profile corpus data for small
+fixtures and focused tests; scalable corpus support shall extend rather than
+replace that fixture path.
+
+### REQ-STREAM-EVAL-024
+
+The evaluator shall use one unified corpus-source model across:
+
+- candidate training-pass inputs
+- final evaluation replay entities
+- classifier-side probe workloads
+
+The evaluator shall not require a separate large-corpus transport contract for
+those workload families.
+
+### REQ-STREAM-EVAL-025
+
+The evaluator's scalable corpus path shall align with the repository's existing
+block-store-based abstraction rather than defining a separate evaluator-specific
+large-corpus persistence contract in benchmark-profile JSON.
+
+### REQ-STREAM-EVAL-026
+
+This revision shall not require benchmark profiles for large corpora to embed
+every training-pass entry, evaluation entity, and probe embedding directly in a
+single JSON document.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -280,12 +343,18 @@ This crate does not define or own:
 - proof of end-to-end hierarchical index conformance beyond the shared
   streaming clustering boundary
 - the future end-to-end evaluator over the indexer and search specifications
+- a new production storage backend or a widening of the parent `BlockStore`
+  trait
 
 ## Relationship to Other Specifications
 
 This document creates a leaf-stage evaluator line layered on top of the shared
 streaming clustering trait boundary and motivated by the clustering research
 documents.
+
+This document also layers scalable corpus consumption on top of the existing
+block-storage trait specification rather than redefining a separate evaluator
+storage contract.
 
 If future repository specifications define an end-to-end index evaluation line
 on top of `docs/specs/rust-streaming-indexer-crate/` and

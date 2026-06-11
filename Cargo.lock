@@ -1519,7 +1519,12 @@ version = "0.1.0"
 name = "lexongraph-streaming-clustering-evaluator"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "clap",
+ "half",
+ "lexongraph-block",
+ "lexongraph-block-store",
+ "lexongraph-block-store-fs",
  "lexongraph-streaming-clustering",
  "serde",
  "serde_json",

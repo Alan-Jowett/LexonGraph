@@ -13,12 +13,16 @@ use lexongraph_streaming_clustering::{
 };
 use lexongraph_streaming_clustering_evaluator::{
     CandidateIdentity, CandidateRunStatus, DeferredMeasurementStatus, EvaluatorError, GateStatus,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    run_evaluation_campaign,
+    StructuredFailure, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, run_evaluation_campaign,
 };
 use support::{
-    balanced_and_skewed_candidates, invalid_profile, lib_source, nondeterministic_candidate,
+    balanced_and_skewed_candidates, block_store_backed_profile, broken_block_store_profile,
+    duplicate_evaluation_entities_block_store_profile, duplicate_source_id_profile,
+    empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
+    missing_synthetic_metadata_key_profile, nondeterministic_candidate,
     shared_contract_failure_candidate, strict_alignment_profile, synthetic_padding_profile,
+    wrong_entity_count_block_store_profile,
 };
 
 #[derive(Clone, Copy)]
@@ -188,6 +192,10 @@ fn val_stream_eval_005_benchmark_profile_declares_the_required_campaign_fields()
     let profile = strict_alignment_profile();
 
     assert_eq!(profile.corpus_ids, vec!["fixture-corpus-a"]);
+    assert!(matches!(
+        &profile.training_passes[0],
+        lexongraph_streaming_clustering_evaluator::TrainingPassSource::Inline { .. }
+    ));
     assert_eq!(profile.leaf_model.leaf_size, 2);
     assert_eq!(profile.metric_declarations.len(), 2);
     assert!(!profile.gate_declarations.is_empty());
@@ -242,6 +250,7 @@ fn val_stream_eval_007_provenance_manifest_records_reproducibility_metadata() {
         "ieee754-deterministic-no-fma"
     );
     assert_eq!(provenance.hardware_profile, "fixture-cpu");
+    assert!(provenance.source_reference_ids.is_empty());
 }
 
 #[test]
@@ -478,6 +487,21 @@ fn val_stream_eval_016_invalid_profiles_and_shared_contract_failures_are_disting
         report.run_reports[0].run_status,
         CandidateRunStatus::CandidateSharedContractFailure
     );
+
+    let source_failure = run_evaluation_campaign(
+        &broken_block_store_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        source_failure.run_reports[0].run_status,
+        CandidateRunStatus::CorpusSourceFailure
+    );
 }
 
 #[test]
@@ -539,6 +563,71 @@ fn val_stream_eval_019_repository_verification_artifacts_cover_the_evaluator_sur
             .exists()
     );
     assert!(built_in_fixture_candidate_names().contains(&"nondeterministic-probe"));
+}
+
+#[test]
+fn val_stream_eval_020_block_store_sources_cover_training_replay_and_probes() {
+    let report = run_evaluation_campaign(
+        &block_store_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let run_report = &report.run_reports[0];
+    assert_eq!(run_report.run_status, CandidateRunStatus::Succeeded);
+    assert_eq!(run_report.pass_reports.len(), 2);
+    assert_eq!(run_report.probe_results.len(), 1);
+    assert_eq!(run_report.leaf_membership.len(), 4);
+    assert_eq!(
+        run_report.provenance.source_reference_ids,
+        vec![
+            "evaluation-corpus",
+            "probe-corpus",
+            "training-pass-1",
+            "training-pass-2",
+        ]
+    );
+}
+
+#[test]
+fn val_stream_eval_021_inline_and_block_store_profiles_are_semantically_equivalent() {
+    let inline_report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let block_store_report = run_evaluation_campaign(
+        &block_store_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let inline_run = &inline_report.run_reports[0];
+    let block_store_run = &block_store_report.run_reports[0];
+    let mut inline_membership = inline_run.leaf_membership.clone();
+    inline_membership.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+    let mut block_store_membership = block_store_run.leaf_membership.clone();
+    block_store_membership.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+
+    assert_eq!(inline_run.pass_reports, block_store_run.pass_reports);
+    assert_eq!(inline_run.probe_results, block_store_run.probe_results);
+    assert_eq!(inline_membership, block_store_membership);
+    assert_eq!(inline_run.metric_results, block_store_run.metric_results);
 }
 
 #[test]
@@ -686,13 +775,128 @@ fn regression_duplicate_corpus_ids_are_rejected() {
 #[test]
 fn regression_unknown_entity_corpus_ids_are_rejected() {
     let mut profile = strict_alignment_profile();
-    profile.evaluation_entities[0].corpus_id = "unknown-corpus".into();
+    profile
+        .inline_evaluation_entities_mut()
+        .expect("unknown-corpus regression fixture should use inline entities")[0]
+        .corpus_id = "unknown-corpus".into();
 
     let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("references unknown corpus"))
     );
+}
+
+#[test]
+fn regression_duplicate_corpus_source_ids_are_rejected() {
+    let result = run_evaluation_campaign(
+        &duplicate_source_id_profile(),
+        &balanced_and_skewed_candidates(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate value in corpus source ids"))
+    );
+}
+
+#[test]
+fn regression_empty_synthetic_metadata_keys_are_rejected() {
+    let result = run_evaluation_campaign(
+        &empty_synthetic_metadata_key_profile(),
+        &balanced_and_skewed_candidates(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must not declare an empty synthetic_metadata_key"))
+    );
+}
+
+#[test]
+fn regression_missing_synthetic_metadata_keys_are_rejected_for_block_store_padding_profiles() {
+    let result = run_evaluation_campaign(
+        &missing_synthetic_metadata_key_profile(),
+        &balanced_and_skewed_candidates(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must declare synthetic_metadata_key when using deterministic synthetic padding"))
+    );
+}
+
+#[test]
+fn regression_failed_candidate_runs_keep_evaluation_entities_in_determinism_schema() {
+    let report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &[shared_contract_failure_candidate()],
+    )
+    .expect("shared-contract failures should still produce a campaign report")
+    .run_reports
+    .into_iter()
+    .next()
+    .expect("campaign should include one candidate report");
+
+    assert_eq!(
+        report.determinism.compared_fields,
+        vec![
+            "pass_reports",
+            "probe_results",
+            "leaf_membership",
+            "evaluation_entities",
+            "provenance",
+        ]
+    );
+}
+
+#[test]
+fn regression_failed_corpus_source_runs_keep_evaluation_entities_in_determinism_schema() {
+    let report = run_evaluation_campaign(
+        &broken_block_store_profile(),
+        &balanced_and_skewed_candidates()[..1],
+    )
+    .expect("corpus source failures should still produce a campaign report")
+    .run_reports
+    .into_iter()
+    .next()
+    .expect("campaign should include one candidate report");
+
+    assert_eq!(
+        report.determinism.compared_fields,
+        vec![
+            "pass_reports",
+            "probe_results",
+            "leaf_membership",
+            "evaluation_entities",
+            "provenance",
+        ]
+    );
+}
+
+#[test]
+fn regression_duplicate_materialized_block_store_entities_are_load_failures() {
+    let report = run_evaluation_campaign(
+        &duplicate_evaluation_entities_block_store_profile(),
+        &balanced_and_skewed_candidates()[..1],
+    )
+    .expect("corpus content failures should still produce a campaign report");
+
+    assert!(matches!(
+        report.run_reports[0].terminal_failure,
+        Some(StructuredFailure::CorpusSourceLoadFailure { .. })
+    ));
+}
+
+#[test]
+fn regression_invalid_materialized_block_store_entity_counts_are_load_failures() {
+    let report = run_evaluation_campaign(
+        &wrong_entity_count_block_store_profile(),
+        &balanced_and_skewed_candidates()[..1],
+    )
+    .expect("materialized entity validation failures should still produce a campaign report");
+
+    assert!(matches!(
+        report.run_reports[0].terminal_failure,
+        Some(StructuredFailure::CorpusSourceLoadFailure { .. })
+    ));
 }
 
 #[test]

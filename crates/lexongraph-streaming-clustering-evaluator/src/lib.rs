@@ -17,6 +17,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
+use ciborium::value::Value as CborValue;
+use half::f16;
+use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry, Metadata, TypedEntries, into_entries};
+use lexongraph_block_store::BlockStore;
+use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
@@ -117,9 +122,9 @@ pub struct BenchmarkProfile {
     pub profile_id: String,
     pub corpus_ids: Vec<String>,
     pub shared_candidate_config: SharedCandidateConfig,
-    pub training_passes: Vec<PassPlan>,
+    pub training_passes: Vec<TrainingPassSource>,
     pub probe_workloads: Vec<ProbeWorkload>,
-    pub evaluation_entities: Vec<EvaluationEntity>,
+    pub evaluation_entities: EvaluationEntitySource,
     pub leaf_model: LeafModel,
     pub locality_ground_truth: Vec<GroundTruthNeighborhood>,
     pub compression_benchmark: CompressionBenchmark,
@@ -130,9 +135,36 @@ pub struct BenchmarkProfile {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlockStoreCorpusReference {
+    pub source_id: String,
+    pub store_root: PathBuf,
+    pub root_block_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "source_kind", rename_all = "kebab-case")]
+pub enum TrainingPassSource {
+    Inline {
+        batches: PassPlan,
+    },
+    BlockStore {
+        corpus: BlockStoreCorpusReference,
+        batch_size: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "source_kind", rename_all = "kebab-case")]
+pub enum EmbeddingWorkloadSource {
+    Inline { embeddings: Vec<Embedding> },
+    BlockStore { corpus: BlockStoreCorpusReference },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProbeWorkload {
     pub workload_id: String,
-    pub embeddings: Vec<Embedding>,
+    #[serde(flatten)]
+    pub source: EmbeddingWorkloadSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -141,6 +173,41 @@ pub struct EvaluationEntity {
     pub corpus_id: String,
     pub embedding: Embedding,
     pub synthetic: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlockStoreEvaluationCorpus {
+    pub corpus_id: String,
+    pub corpus: BlockStoreCorpusReference,
+    pub entity_id_metadata_key: String,
+    pub synthetic_metadata_key: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "source_kind", rename_all = "kebab-case")]
+pub enum EvaluationEntitySource {
+    Inline {
+        entities: Vec<EvaluationEntity>,
+    },
+    BlockStore {
+        corpora: Vec<BlockStoreEvaluationCorpus>,
+    },
+}
+
+impl BenchmarkProfile {
+    pub fn inline_evaluation_entities(&self) -> Option<&[EvaluationEntity]> {
+        match &self.evaluation_entities {
+            EvaluationEntitySource::Inline { entities } => Some(entities),
+            EvaluationEntitySource::BlockStore { .. } => None,
+        }
+    }
+
+    pub fn inline_evaluation_entities_mut(&mut self) -> Option<&mut Vec<EvaluationEntity>> {
+        match &mut self.evaluation_entities {
+            EvaluationEntitySource::Inline { entities } => Some(entities),
+            EvaluationEntitySource::BlockStore { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -229,6 +296,7 @@ pub struct ReproducibilityMetadata {
 pub struct ProvenanceManifest {
     pub profile_id: String,
     pub corpus_ids: Vec<String>,
+    pub source_reference_ids: Vec<String>,
     pub candidate_identity: CandidateIdentity,
     pub shared_candidate_config: SharedCandidateConfig,
     pub seed_policy: String,
@@ -321,11 +389,20 @@ pub enum CandidateRunStatus {
     Succeeded,
     GateFailed,
     CandidateSharedContractFailure,
+    CorpusSourceFailure,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum StructuredFailure {
     InvalidConfiguration {
+        message: String,
+    },
+    InvalidCorpusSourceReference {
+        source_id: String,
+        message: String,
+    },
+    CorpusSourceLoadFailure {
+        source_id: String,
         message: String,
     },
     CandidateSharedContractFailure {
@@ -523,6 +600,7 @@ pub fn render_scorecard(report: &CampaignReport) -> String {
             CandidateRunStatus::Succeeded => "PASS",
             CandidateRunStatus::GateFailed => "GATE-FAILED",
             CandidateRunStatus::CandidateSharedContractFailure => "CONTRACT-FAILED",
+            CandidateRunStatus::CorpusSourceFailure => "SOURCE-FAILED",
         };
         let ranking = report
             .ranking
@@ -576,11 +654,6 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
     if profile.probe_workloads.is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "benchmark profile must declare at least one probe workload".into(),
-        ));
-    }
-    if profile.evaluation_entities.is_empty() {
-        return Err(EvaluatorError::InvalidConfiguration(
-            "benchmark profile must declare at least one evaluation entity".into(),
         ));
     }
     if profile.metric_declarations.is_empty() {
@@ -645,131 +718,99 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
         "probe workload ids",
     )?;
     assert_unique(
-        profile
-            .evaluation_entities
-            .iter()
-            .map(|entity| entity.entity_id.as_str()),
-        "evaluation entity ids",
+        iter_declared_source_reference_ids(profile),
+        "corpus source ids",
     )?;
 
     let dimensions = profile.shared_candidate_config.dimensions;
-    for pass in &profile.training_passes {
-        if pass.is_empty() {
-            return Err(EvaluatorError::InvalidConfiguration(
-                "each training pass must contain at least one batch".into(),
-            ));
-        }
-        for batch in pass {
-            if batch.is_empty() {
-                return Err(EvaluatorError::InvalidConfiguration(
-                    "each training batch must contain at least one embedding".into(),
-                ));
-            }
-            for embedding in batch {
-                validate_embedding(embedding, dimensions).map_err(|error| {
-                    EvaluatorError::InvalidConfiguration(format!(
-                        "invalid training embedding: {error}"
-                    ))
-                })?;
-            }
-        }
-    }
-
-    for workload in &profile.probe_workloads {
-        for embedding in &workload.embeddings {
-            validate_embedding(embedding, dimensions).map_err(|error| {
-                EvaluatorError::InvalidConfiguration(format!(
-                    "invalid probe embedding in {}: {error}",
-                    workload.workload_id
-                ))
-            })?;
-        }
-    }
-
-    let mut synthetic_count = 0usize;
     let corpus_ids = profile
         .corpus_ids
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
-    for entity in &profile.evaluation_entities {
-        validate_embedding(&entity.embedding, dimensions).map_err(|error| {
-            EvaluatorError::InvalidConfiguration(format!(
-                "invalid evaluation entity {}: {error}",
-                entity.entity_id
-            ))
-        })?;
-        if !corpus_ids.contains(entity.corpus_id.as_str()) {
-            return Err(EvaluatorError::InvalidConfiguration(format!(
-                "evaluation entity {} references unknown corpus {}",
-                entity.entity_id, entity.corpus_id
-            )));
-        }
-        if entity.synthetic {
-            synthetic_count += 1;
-        }
-    }
-
-    let expected_total_count = profile
-        .leaf_model
-        .leaf_size
-        .checked_mul(profile.leaf_model.declared_final_cluster_count as usize)
-        .ok_or_else(|| {
-            EvaluatorError::InvalidConfiguration(
-                "leaf_size * declared_final_cluster_count overflowed usize".into(),
-            )
-        })?;
-    if profile.evaluation_entities.len() != expected_total_count {
-        return Err(EvaluatorError::InvalidConfiguration(format!(
-            "evaluation entity count {} must equal leaf_size * cluster_count {}",
-            profile.evaluation_entities.len(),
-            expected_total_count
-        )));
-    }
-
-    match profile.leaf_model.alignment_policy {
-        AlignmentPolicy::StrictAlignment => {
-            if synthetic_count != 0 {
-                return Err(EvaluatorError::InvalidConfiguration(
-                    "strict alignment profiles must not contain synthetic entities".into(),
-                ));
-            }
-        }
-        AlignmentPolicy::DeterministicSyntheticPadding => {
-            if synthetic_count == 0 {
-                return Err(EvaluatorError::InvalidConfiguration(
-                    "deterministic synthetic padding profiles must contain synthetic entities"
-                        .into(),
-                ));
+    for pass in &profile.training_passes {
+        match pass {
+            TrainingPassSource::Inline { batches } => validate_inline_batches(
+                batches,
+                dimensions,
+                "training embedding",
+                "each training pass must contain at least one batch",
+                "each training batch must contain at least one embedding",
+            )?,
+            TrainingPassSource::BlockStore { corpus, batch_size } => {
+                validate_corpus_reference(corpus)?;
+                if *batch_size == 0 {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store training pass {} must declare a positive batch_size",
+                        corpus.source_id
+                    )));
+                }
             }
         }
     }
 
-    let real_entity_lookup = profile
-        .evaluation_entities
-        .iter()
-        .filter(|entity| !entity.synthetic)
-        .map(|entity| entity.entity_id.as_str())
-        .collect::<HashSet<_>>();
-    for truth in &profile.locality_ground_truth {
-        if !real_entity_lookup.contains(truth.entity_id.as_str()) {
-            return Err(EvaluatorError::InvalidConfiguration(format!(
-                "ground truth entity {} must refer to a real evaluation entity",
-                truth.entity_id
-            )));
+    for workload in &profile.probe_workloads {
+        match &workload.source {
+            EmbeddingWorkloadSource::Inline { embeddings } => {
+                for embedding in embeddings {
+                    validate_embedding(embedding, dimensions).map_err(|error| {
+                        EvaluatorError::InvalidConfiguration(format!(
+                            "invalid probe embedding in {}: {error}",
+                            workload.workload_id
+                        ))
+                    })?;
+                }
+            }
+            EmbeddingWorkloadSource::BlockStore { corpus } => validate_corpus_reference(corpus)?,
         }
-        if truth.neighbor_ids.is_empty() {
-            return Err(EvaluatorError::InvalidConfiguration(format!(
-                "ground truth entry {} must list at least one neighbor",
-                truth.entity_id
-            )));
+    }
+
+    match &profile.evaluation_entities {
+        EvaluationEntitySource::Inline { entities } => {
+            assert_unique(
+                entities.iter().map(|entity| entity.entity_id.as_str()),
+                "evaluation entity ids",
+            )?;
+            validate_materialized_evaluation_entities(profile, entities)?;
         }
-        for neighbor_id in &truth.neighbor_ids {
-            if !real_entity_lookup.contains(neighbor_id.as_str()) {
-                return Err(EvaluatorError::InvalidConfiguration(format!(
-                    "ground truth neighbor {} must refer to a real evaluation entity",
-                    neighbor_id
-                )));
+        EvaluationEntitySource::BlockStore { corpora } => {
+            if corpora.is_empty() {
+                return Err(EvaluatorError::InvalidConfiguration(
+                    "block-store evaluation sources must declare at least one corpus".into(),
+                ));
+            }
+            for corpus in corpora {
+                validate_corpus_reference(&corpus.corpus)?;
+                if corpus.entity_id_metadata_key.trim().is_empty() {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store evaluation corpus {} must declare entity_id_metadata_key",
+                        corpus.corpus.source_id
+                    )));
+                }
+                if let Some(key) = &corpus.synthetic_metadata_key
+                    && key.trim().is_empty()
+                {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store evaluation corpus {} must not declare an empty synthetic_metadata_key",
+                        corpus.corpus.source_id
+                    )));
+                }
+                if matches!(
+                    profile.leaf_model.alignment_policy,
+                    AlignmentPolicy::DeterministicSyntheticPadding
+                ) && corpus.synthetic_metadata_key.is_none()
+                {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store evaluation corpus {} must declare synthetic_metadata_key when using deterministic synthetic padding",
+                        corpus.corpus.source_id
+                    )));
+                }
+                if !corpus_ids.contains(corpus.corpus_id.as_str()) {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store evaluation corpus {} references unknown corpus {}",
+                        corpus.corpus.source_id, corpus.corpus_id
+                    )));
+                }
             }
         }
     }
@@ -866,6 +907,158 @@ fn assert_unique<'a>(
     Ok(())
 }
 
+fn validate_corpus_reference(reference: &BlockStoreCorpusReference) -> Result<(), EvaluatorError> {
+    if reference.source_id.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "block-store corpus references must declare a non-empty source_id".into(),
+        ));
+    }
+    if reference.store_root.as_os_str().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "block-store corpus reference {} must declare a non-empty store_root",
+            reference.source_id
+        )));
+    }
+    parse_block_hash_hex(&reference.root_block_id).map_err(|message| {
+        EvaluatorError::InvalidConfiguration(format!(
+            "block-store corpus reference {} has an invalid root_block_id: {message}",
+            reference.source_id
+        ))
+    })?;
+    Ok(())
+}
+
+fn validate_inline_batches(
+    batches: &PassPlan,
+    dimensions: usize,
+    embedding_label: &str,
+    empty_pass_message: &str,
+    empty_batch_message: &str,
+) -> Result<(), EvaluatorError> {
+    if batches.is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            empty_pass_message.into(),
+        ));
+    }
+    for batch in batches {
+        if batch.is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                empty_batch_message.into(),
+            ));
+        }
+        for embedding in batch {
+            validate_embedding(embedding, dimensions).map_err(|error| {
+                EvaluatorError::InvalidConfiguration(format!("invalid {embedding_label}: {error}"))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_materialized_evaluation_entities(
+    profile: &BenchmarkProfile,
+    entities: &[EvaluationEntity],
+) -> Result<(), EvaluatorError> {
+    if entities.is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "benchmark profile must declare at least one evaluation entity".into(),
+        ));
+    }
+
+    let mut synthetic_count = 0usize;
+    let corpus_ids = profile
+        .corpus_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    for entity in entities {
+        validate_embedding(
+            &entity.embedding,
+            profile.shared_candidate_config.dimensions,
+        )
+        .map_err(|error| {
+            EvaluatorError::InvalidConfiguration(format!(
+                "invalid evaluation entity {}: {error}",
+                entity.entity_id
+            ))
+        })?;
+        if !corpus_ids.contains(entity.corpus_id.as_str()) {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "evaluation entity {} references unknown corpus {}",
+                entity.entity_id, entity.corpus_id
+            )));
+        }
+        if entity.synthetic {
+            synthetic_count += 1;
+        }
+    }
+
+    let expected_total_count = profile
+        .leaf_model
+        .leaf_size
+        .checked_mul(profile.leaf_model.declared_final_cluster_count as usize)
+        .ok_or_else(|| {
+            EvaluatorError::InvalidConfiguration(
+                "leaf_size * declared_final_cluster_count overflowed usize".into(),
+            )
+        })?;
+    if entities.len() != expected_total_count {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "evaluation entity count {} must equal leaf_size * cluster_count {}",
+            entities.len(),
+            expected_total_count
+        )));
+    }
+
+    match profile.leaf_model.alignment_policy {
+        AlignmentPolicy::StrictAlignment => {
+            if synthetic_count != 0 {
+                return Err(EvaluatorError::InvalidConfiguration(
+                    "strict alignment profiles must not contain synthetic entities".into(),
+                ));
+            }
+        }
+        AlignmentPolicy::DeterministicSyntheticPadding => {
+            if synthetic_count == 0 {
+                return Err(EvaluatorError::InvalidConfiguration(
+                    "deterministic synthetic padding profiles must contain synthetic entities"
+                        .into(),
+                ));
+            }
+        }
+    }
+
+    let real_entity_lookup = entities
+        .iter()
+        .filter(|entity| !entity.synthetic)
+        .map(|entity| entity.entity_id.as_str())
+        .collect::<HashSet<_>>();
+    for truth in &profile.locality_ground_truth {
+        if !real_entity_lookup.contains(truth.entity_id.as_str()) {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "ground truth entity {} must refer to a real evaluation entity",
+                truth.entity_id
+            )));
+        }
+        if truth.neighbor_ids.is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "ground truth entry {} must list at least one neighbor",
+                truth.entity_id
+            )));
+        }
+        for neighbor_id in &truth.neighbor_ids {
+            if !real_entity_lookup.contains(neighbor_id.as_str()) {
+                return Err(EvaluatorError::InvalidConfiguration(format!(
+                    "ground truth neighbor {} must refer to a real evaluation entity",
+                    neighbor_id
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_candidates(candidates: &[RegisteredCandidate]) -> Result<(), EvaluatorError> {
     if candidates.is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
@@ -934,14 +1127,29 @@ fn run_candidate(
     profile: &BenchmarkProfile,
     candidate: &RegisteredCandidate,
 ) -> CandidateRunReport {
-    let first_execution = execute_candidate_once(profile, candidate);
-    let second_execution = execute_candidate_once(profile, candidate);
-    match (first_execution, second_execution) {
+    let resolved = match resolve_profile_inputs(profile) {
+        Ok(resolved) => resolved,
+        Err(CandidateExecutionError::Candidate(error)) => {
+            return failed_candidate_run(profile, &candidate.identity, error);
+        }
+        Err(CandidateExecutionError::CorpusSource(failure)) => {
+            return failed_corpus_source_run(profile, &candidate.identity, failure);
+        }
+    };
+    match (
+        execute_candidate_once(profile, candidate, &resolved),
+        execute_candidate_once(profile, candidate, &resolved),
+    ) {
         (Ok(primary), Ok(repeated)) => {
             finalize_successful_run(profile, &candidate.identity, primary, repeated)
         }
-        (Err(error), _) | (_, Err(error)) => {
+        (Err(CandidateExecutionError::Candidate(error)), _)
+        | (_, Err(CandidateExecutionError::Candidate(error))) => {
             failed_candidate_run(profile, &candidate.identity, error)
+        }
+        (Err(CandidateExecutionError::CorpusSource(failure)), _)
+        | (_, Err(CandidateExecutionError::CorpusSource(failure))) => {
+            failed_corpus_source_run(profile, &candidate.identity, failure)
         }
     }
 }
@@ -951,7 +1159,7 @@ fn failed_candidate_run(
     identity: &CandidateIdentity,
     error: StreamingClusteringError,
 ) -> CandidateRunReport {
-    let provenance = build_provenance(profile, identity);
+    let provenance = build_provenance(profile, identity, declared_source_reference_ids(profile));
     CandidateRunReport {
         candidate_identity: identity.clone(),
         provenance,
@@ -967,12 +1175,7 @@ fn failed_candidate_run(
         cluster_occupancies: Vec::new(),
         determinism: DeterminismReport {
             deterministic: false,
-            compared_fields: vec![
-                "pass_reports".into(),
-                "probe_results".into(),
-                "leaf_membership".into(),
-                "provenance".into(),
-            ],
+            compared_fields: determinism_compared_fields(),
             mismatch_details: vec!["candidate execution did not complete".into()],
         },
         metric_results: Vec::new(),
@@ -999,6 +1202,51 @@ fn failed_candidate_run(
     }
 }
 
+fn failed_corpus_source_run(
+    profile: &BenchmarkProfile,
+    identity: &CandidateIdentity,
+    failure: StructuredFailure,
+) -> CandidateRunReport {
+    let provenance = build_provenance(profile, identity, declared_source_reference_ids(profile));
+    CandidateRunReport {
+        candidate_identity: identity.clone(),
+        provenance,
+        prerequisite_checks: vec![PrerequisiteCheckResult {
+            check_id: "corpus-source-resolution".into(),
+            label: "Corpus source resolution".into(),
+            passed: false,
+            detail: structured_failure_detail(&failure),
+        }],
+        pass_reports: Vec::new(),
+        probe_results: Vec::new(),
+        leaf_membership: Vec::new(),
+        cluster_occupancies: Vec::new(),
+        determinism: DeterminismReport {
+            deterministic: false,
+            compared_fields: determinism_compared_fields(),
+            mismatch_details: vec!["corpus source resolution did not complete".into()],
+        },
+        metric_results: Vec::new(),
+        gate_results: Vec::new(),
+        deferred_research_goals: profile
+            .deferred_research_goals
+            .iter()
+            .map(|goal| DeferredResearchGoalResult {
+                deferred_id: goal.deferred_id.clone(),
+                label: goal.label.clone(),
+                reason: goal.reason.clone(),
+                research_goal_ids: goal.research_goal_ids.clone(),
+                coverage: goal.coverage.clone(),
+                status: DeferredMeasurementStatus::Deferred,
+            })
+            .collect(),
+        run_status: CandidateRunStatus::CorpusSourceFailure,
+        survived_required_gates: false,
+        ranking_score: None,
+        terminal_failure: Some(failure),
+    }
+}
+
 fn finalize_successful_run(
     profile: &BenchmarkProfile,
     identity: &CandidateIdentity,
@@ -1006,7 +1254,7 @@ fn finalize_successful_run(
     repeated: SingleExecution,
 ) -> CandidateRunReport {
     let determinism = compare_executions(&primary, &repeated);
-    let metric_results = compute_metric_results(profile, &primary);
+    let metric_results = compute_metric_results(&primary, profile);
     let gate_results = compute_gate_results(profile, &primary, &metric_results, &determinism);
     let survived_required_gates = gate_results
         .iter()
@@ -1075,8 +1323,8 @@ fn finalize_successful_run(
 }
 
 fn compute_metric_results(
-    profile: &BenchmarkProfile,
     execution: &SingleExecution,
+    profile: &BenchmarkProfile,
 ) -> Vec<MetricResult> {
     profile
         .metric_declarations
@@ -1095,7 +1343,7 @@ fn compute_metric_results(
                 ),
                 MetricKind::LocalCompressionGain => local_compression_gain(
                     &execution.leaf_membership,
-                    &profile.evaluation_entities,
+                    &execution.evaluation_entities,
                     &profile.compression_benchmark,
                 ),
             },
@@ -1157,12 +1405,12 @@ fn compute_gate_results(
                 label: gate.label.clone(),
                 coverage: gate.coverage.clone(),
                 research_goal_ids: gate.research_goal_ids.clone(),
-                status: bool_to_status(total_entity_count == profile.evaluation_entities.len()),
+                status: bool_to_status(total_entity_count == execution.evaluation_entities.len()),
                 observed_value: Some(total_entity_count as f64),
                 detail: format!(
                     "observed {} assigned entities for {} declared entities",
                     total_entity_count,
-                    profile.evaluation_entities.len()
+                    execution.evaluation_entities.len()
                 ),
             },
             GateKind::OneClusterPerEntity => GateResult {
@@ -1170,7 +1418,7 @@ fn compute_gate_results(
                 label: gate.label.clone(),
                 coverage: gate.coverage.clone(),
                 research_goal_ids: gate.research_goal_ids.clone(),
-                status: bool_to_status(unique_entity_count == profile.evaluation_entities.len()),
+                status: bool_to_status(unique_entity_count == execution.evaluation_entities.len()),
                 observed_value: Some(unique_entity_count as f64),
                 detail: "each evaluated entity must appear once in the leaf membership artifact"
                     .into(),
@@ -1269,16 +1517,44 @@ struct SingleExecution {
     probe_results: Vec<ProbeAssignmentResult>,
     leaf_membership: Vec<LeafMembershipRecord>,
     cluster_occupancies: Vec<ClusterOccupancy>,
+    evaluation_entities: Vec<EvaluationEntity>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ResolvedProbeWorkload {
+    workload_id: String,
+    embeddings: Vec<Embedding>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ResolvedProfileInputs {
+    training_passes: Vec<PassPlan>,
+    probe_workloads: Vec<ResolvedProbeWorkload>,
+    evaluation_entities: Vec<EvaluationEntity>,
+    source_reference_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum CandidateExecutionError {
+    Candidate(StreamingClusteringError),
+    CorpusSource(StructuredFailure),
+}
+
+impl From<StreamingClusteringError> for CandidateExecutionError {
+    fn from(value: StreamingClusteringError) -> Self {
+        Self::Candidate(value)
+    }
 }
 
 fn execute_candidate_once(
     profile: &BenchmarkProfile,
     candidate: &RegisteredCandidate,
-) -> Result<SingleExecution, StreamingClusteringError> {
+    resolved: &ResolvedProfileInputs,
+) -> Result<SingleExecution, CandidateExecutionError> {
     let streaming_config = profile.shared_candidate_config.to_streaming_config();
     let mut trainer = candidate.factory.create(&streaming_config)?;
-    let mut pass_reports = Vec::with_capacity(profile.training_passes.len());
-    for pass in &profile.training_passes {
+    let mut pass_reports = Vec::with_capacity(resolved.training_passes.len());
+    for pass in &resolved.training_passes {
         for batch in pass {
             trainer.ingest_batch(batch)?;
         }
@@ -1287,7 +1563,7 @@ fn execute_candidate_once(
     trainer.complete_training()?;
     let classifier = trainer.into_classifier()?;
 
-    let probe_results = profile
+    let probe_results = resolved
         .probe_workloads
         .iter()
         .map(|workload| {
@@ -1301,9 +1577,9 @@ fn execute_candidate_once(
                 )?,
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, StreamingClusteringError>>()?;
 
-    let leaf_membership = profile
+    let leaf_membership = resolved
         .evaluation_entities
         .iter()
         .map(|entity| {
@@ -1325,21 +1601,28 @@ fn execute_candidate_once(
     );
 
     Ok(SingleExecution {
-        provenance: build_provenance(profile, &candidate.identity),
+        provenance: build_provenance(
+            profile,
+            &candidate.identity,
+            resolved.source_reference_ids.clone(),
+        ),
         pass_reports,
         probe_results,
         leaf_membership,
         cluster_occupancies,
+        evaluation_entities: resolved.evaluation_entities.clone(),
     })
 }
 
 fn build_provenance(
     profile: &BenchmarkProfile,
     identity: &CandidateIdentity,
+    source_reference_ids: Vec<String>,
 ) -> ProvenanceManifest {
     ProvenanceManifest {
         profile_id: profile.profile_id.clone(),
         corpus_ids: profile.corpus_ids.clone(),
+        source_reference_ids,
         candidate_identity: identity.clone(),
         shared_candidate_config: profile.shared_candidate_config.clone(),
         seed_policy: profile.reproducibility.seed_policy.clone(),
@@ -1347,6 +1630,495 @@ fn build_provenance(
         floating_point_profile: profile.reproducibility.floating_point_profile.clone(),
         hardware_profile: profile.reproducibility.hardware_profile.clone(),
     }
+}
+
+fn declared_source_reference_ids(profile: &BenchmarkProfile) -> Vec<String> {
+    let mut ids = BTreeMap::<String, ()>::new();
+    for source_id in iter_declared_source_reference_ids(profile) {
+        ids.insert(source_id.to_owned(), ());
+    }
+    ids.into_keys().collect()
+}
+
+fn iter_declared_source_reference_ids(profile: &BenchmarkProfile) -> impl Iterator<Item = &str> {
+    let training = profile
+        .training_passes
+        .iter()
+        .filter_map(|pass| match pass {
+            TrainingPassSource::BlockStore { corpus, .. } => Some(corpus.source_id.as_str()),
+            TrainingPassSource::Inline { .. } => None,
+        });
+    let probes = profile
+        .probe_workloads
+        .iter()
+        .filter_map(|workload| match &workload.source {
+            EmbeddingWorkloadSource::BlockStore { corpus } => Some(corpus.source_id.as_str()),
+            EmbeddingWorkloadSource::Inline { .. } => None,
+        });
+    let evaluation = match &profile.evaluation_entities {
+        EvaluationEntitySource::BlockStore { corpora } => Some(
+            corpora
+                .iter()
+                .map(|corpus| corpus.corpus.source_id.as_str())
+                .collect::<Vec<_>>(),
+        ),
+        EvaluationEntitySource::Inline { .. } => None,
+    }
+    .into_iter()
+    .flatten();
+
+    training.chain(probes).chain(evaluation)
+}
+
+fn structured_failure_detail(failure: &StructuredFailure) -> String {
+    match failure {
+        StructuredFailure::InvalidConfiguration { message } => message.clone(),
+        StructuredFailure::InvalidCorpusSourceReference { source_id, message } => {
+            format!("invalid corpus source {source_id}: {message}")
+        }
+        StructuredFailure::CorpusSourceLoadFailure { source_id, message } => {
+            format!("failed to load corpus source {source_id}: {message}")
+        }
+        StructuredFailure::CandidateSharedContractFailure { message, .. } => message.clone(),
+        StructuredFailure::GateFailure { message, .. } => message.clone(),
+        StructuredFailure::DeferredMeasurement { message, .. } => message.clone(),
+    }
+}
+
+fn determinism_compared_fields() -> Vec<String> {
+    vec![
+        "pass_reports".into(),
+        "probe_results".into(),
+        "leaf_membership".into(),
+        "evaluation_entities".into(),
+        "provenance".into(),
+    ]
+}
+
+fn resolve_profile_inputs(
+    profile: &BenchmarkProfile,
+) -> Result<ResolvedProfileInputs, CandidateExecutionError> {
+    let mut source_reference_ids = BTreeMap::<String, ()>::new();
+
+    let training_passes = profile
+        .training_passes
+        .iter()
+        .map(|pass| match pass {
+            TrainingPassSource::Inline { batches } => Ok(batches.clone()),
+            TrainingPassSource::BlockStore { corpus, batch_size } => {
+                source_reference_ids.insert(corpus.source_id.clone(), ());
+                let embeddings = load_embeddings_from_reference(
+                    corpus,
+                    profile.shared_candidate_config.dimensions,
+                )?;
+                if embeddings.is_empty() {
+                    return Err(invalid_corpus_source_reference(
+                        &corpus.source_id,
+                        "resolved to zero embeddings".into(),
+                    ));
+                }
+                Ok(embeddings_into_batches(embeddings, *batch_size))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let probe_workloads = profile
+        .probe_workloads
+        .iter()
+        .map(|workload| {
+            let embeddings = match &workload.source {
+                EmbeddingWorkloadSource::Inline { embeddings } => embeddings.clone(),
+                EmbeddingWorkloadSource::BlockStore { corpus } => {
+                    source_reference_ids.insert(corpus.source_id.clone(), ());
+                    load_embeddings_from_reference(
+                        corpus,
+                        profile.shared_candidate_config.dimensions,
+                    )?
+                }
+            };
+            Ok(ResolvedProbeWorkload {
+                workload_id: workload.workload_id.clone(),
+                embeddings,
+            })
+        })
+        .collect::<Result<Vec<_>, CandidateExecutionError>>()?;
+
+    let evaluation_entities = match &profile.evaluation_entities {
+        EvaluationEntitySource::Inline { entities } => entities.clone(),
+        EvaluationEntitySource::BlockStore { corpora } => {
+            let mut entities = Vec::new();
+            for corpus in corpora {
+                source_reference_ids.insert(corpus.corpus.source_id.clone(), ());
+                entities.extend(load_evaluation_entities_from_reference(corpus)?);
+            }
+            entities
+        }
+    };
+
+    assert_unique(
+        evaluation_entities
+            .iter()
+            .map(|entity| entity.entity_id.as_str()),
+        "evaluation entity ids",
+    )
+    .map_err(|error| {
+        corpus_source_load_failure(
+            &evaluation_source_label(&profile.evaluation_entities),
+            error.to_string(),
+        )
+    })?;
+    validate_materialized_evaluation_entities(profile, &evaluation_entities).map_err(|error| {
+        corpus_source_load_failure(
+            &evaluation_source_label(&profile.evaluation_entities),
+            error.to_string(),
+        )
+    })?;
+
+    Ok(ResolvedProfileInputs {
+        training_passes,
+        probe_workloads,
+        evaluation_entities,
+        source_reference_ids: source_reference_ids.into_keys().collect(),
+    })
+}
+
+fn evaluation_source_label(source: &EvaluationEntitySource) -> String {
+    match source {
+        EvaluationEntitySource::Inline { .. } => "inline-evaluation-entities".into(),
+        EvaluationEntitySource::BlockStore { corpora } => corpora
+            .iter()
+            .map(|corpus| corpus.corpus.source_id.clone())
+            .collect::<Vec<_>>()
+            .join(","),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LoadedLeafRecord {
+    block_id: BlockHash,
+    embedding_spec: EmbeddingSpec,
+    entry: LeafEntry,
+}
+
+fn load_embeddings_from_reference(
+    reference: &BlockStoreCorpusReference,
+    expected_dimensions: usize,
+) -> Result<Vec<Embedding>, CandidateExecutionError> {
+    let records = load_leaf_records(reference)?;
+    records
+        .iter()
+        .map(|record| {
+            let embedding = decode_embedding_to_f32(
+                &record.entry.embedding,
+                &record.embedding_spec,
+                &format!("block {} in source {}", record.block_id, reference.source_id),
+            )
+            .map_err(|message| corpus_source_load_failure(&reference.source_id, message))?;
+            validate_embedding(&embedding, expected_dimensions).map_err(|error| {
+                corpus_source_load_failure(
+                    &reference.source_id,
+                    format!(
+                        "decoded embedding from block {} did not match expected dimensions: {error}",
+                        record.block_id
+                    ),
+                )
+            })?;
+            Ok(embedding)
+        })
+        .collect()
+}
+
+fn embeddings_into_batches(embeddings: Vec<Embedding>, batch_size: usize) -> PassPlan {
+    let mut batches = Vec::with_capacity(embeddings.len().div_ceil(batch_size));
+    let mut next_batch = Vec::with_capacity(batch_size);
+    for embedding in embeddings {
+        next_batch.push(embedding);
+        if next_batch.len() == batch_size {
+            batches.push(next_batch);
+            next_batch = Vec::with_capacity(batch_size);
+        }
+    }
+    if !next_batch.is_empty() {
+        batches.push(next_batch);
+    }
+    batches
+}
+
+fn load_evaluation_entities_from_reference(
+    source: &BlockStoreEvaluationCorpus,
+) -> Result<Vec<EvaluationEntity>, CandidateExecutionError> {
+    let records = load_leaf_records(&source.corpus)?;
+    records
+        .iter()
+        .map(|record| {
+            let entity_id = required_metadata_text(
+                &record.entry.metadata,
+                &source.entity_id_metadata_key,
+                &source.corpus.source_id,
+                record.block_id,
+            )?;
+            let synthetic = match &source.synthetic_metadata_key {
+                Some(key) => required_metadata_bool(
+                    &record.entry.metadata,
+                    key,
+                    &source.corpus.source_id,
+                    record.block_id,
+                )?,
+                None => false,
+            };
+            Ok(EvaluationEntity {
+                entity_id,
+                corpus_id: source.corpus_id.clone(),
+                embedding: decode_embedding_to_f32(
+                    &record.entry.embedding,
+                    &record.embedding_spec,
+                    &format!(
+                        "block {} in source {}",
+                        record.block_id, source.corpus.source_id
+                    ),
+                )
+                .map_err(|message| corpus_source_load_failure(&source.corpus.source_id, message))?,
+                synthetic,
+            })
+        })
+        .collect()
+}
+
+fn load_leaf_records(
+    reference: &BlockStoreCorpusReference,
+) -> Result<Vec<LoadedLeafRecord>, CandidateExecutionError> {
+    let root_block_id = parse_block_hash_hex(&reference.root_block_id)
+        .map_err(|message| invalid_corpus_source_reference(&reference.source_id, message))?;
+    let store = FilesystemBlockStore::new(&reference.store_root).map_err(|error| {
+        corpus_source_load_failure(
+            &reference.source_id,
+            format!(
+                "failed to open block store {}: {error}",
+                reference.store_root.display()
+            ),
+        )
+    })?;
+    let mut records = Vec::new();
+    let mut visited = HashSet::new();
+    collect_leaf_records(&store, reference, root_block_id, &mut visited, &mut records)?;
+    Ok(records)
+}
+
+fn collect_leaf_records(
+    store: &dyn BlockStore,
+    reference: &BlockStoreCorpusReference,
+    block_id: BlockHash,
+    visited: &mut HashSet<BlockHash>,
+    records: &mut Vec<LoadedLeafRecord>,
+) -> Result<(), CandidateExecutionError> {
+    if !visited.insert(block_id) {
+        return Err(corpus_source_load_failure(
+            &reference.source_id,
+            format!("encountered block {block_id} more than once while traversing the source"),
+        ));
+    }
+
+    let validated = store
+        .get(&block_id)
+        .map_err(|error| {
+            corpus_source_load_failure(
+                &reference.source_id,
+                format!("failed to load block {block_id}: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            corpus_source_load_failure(
+                &reference.source_id,
+                format!("referenced block {block_id} was not present in the store"),
+            )
+        })?;
+
+    match into_entries(validated) {
+        TypedEntries::Branch(_, entries) => {
+            for entry in entries {
+                collect_leaf_records(store, reference, entry.child, visited, records)?;
+            }
+        }
+        TypedEntries::Leaf(metadata, entries) => {
+            for entry in entries {
+                records.push(LoadedLeafRecord {
+                    block_id,
+                    embedding_spec: metadata.embedding_spec.clone(),
+                    entry,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn required_metadata_text(
+    metadata: &Metadata,
+    key: &str,
+    source_id: &str,
+    block_id: BlockHash,
+) -> Result<String, CandidateExecutionError> {
+    match metadata_value(metadata, key) {
+        Some(CborValue::Text(text)) => Ok(text.clone()),
+        Some(_) => Err(corpus_source_load_failure(
+            source_id,
+            format!("metadata key {key:?} in block {block_id} must be text"),
+        )),
+        None => Err(corpus_source_load_failure(
+            source_id,
+            format!("metadata key {key:?} was missing in block {block_id}"),
+        )),
+    }
+}
+
+fn required_metadata_bool(
+    metadata: &Metadata,
+    key: &str,
+    source_id: &str,
+    block_id: BlockHash,
+) -> Result<bool, CandidateExecutionError> {
+    match metadata_value(metadata, key) {
+        Some(CborValue::Bool(boolean)) => Ok(*boolean),
+        Some(_) => Err(corpus_source_load_failure(
+            source_id,
+            format!("metadata key {key:?} in block {block_id} must be boolean"),
+        )),
+        None => Err(corpus_source_load_failure(
+            source_id,
+            format!("metadata key {key:?} was missing in block {block_id}"),
+        )),
+    }
+}
+
+fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue> {
+    metadata
+        .iter()
+        .find_map(|(candidate, value)| match candidate {
+            CborValue::Text(text) if text == key => Some(value),
+            _ => None,
+        })
+}
+
+fn decode_embedding_to_f32(
+    bytes: &[u8],
+    spec: &EmbeddingSpec,
+    context: &str,
+) -> Result<Vec<f32>, String> {
+    let dims = usize::try_from(spec.dims).map_err(|_| {
+        format!(
+            "{context} declares dimensions {} that do not fit usize",
+            spec.dims
+        )
+    })?;
+    match spec.encoding.as_str() {
+        "f32le" => {
+            let expected_len =
+                checked_embedding_byte_len(dims, 4, context, spec.encoding.as_str())?;
+            if bytes.len() != expected_len {
+                return Err(format!(
+                    "{context} expected {} f32 bytes, found {}",
+                    expected_len,
+                    bytes.len()
+                ));
+            }
+            Ok(bytes
+                .chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect())
+        }
+        "f16le" => {
+            let expected_len =
+                checked_embedding_byte_len(dims, 2, context, spec.encoding.as_str())?;
+            if bytes.len() != expected_len {
+                return Err(format!(
+                    "{context} expected {} f16 bytes, found {}",
+                    expected_len,
+                    bytes.len()
+                ));
+            }
+            Ok(bytes
+                .chunks_exact(2)
+                .map(|chunk| f16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
+                .collect())
+        }
+        "i8" => {
+            if bytes.len() != dims {
+                return Err(format!(
+                    "{context} expected {} i8 bytes, found {}",
+                    dims,
+                    bytes.len()
+                ));
+            }
+            Ok(bytes.iter().map(|byte| (*byte as i8) as f32).collect())
+        }
+        other => Err(format!(
+            "{context} uses unsupported embedding encoding {other:?}; evaluator corpus sources currently require f32le, f16le, or i8"
+        )),
+    }
+}
+
+fn checked_embedding_byte_len(
+    dims: usize,
+    bytes_per_dimension: usize,
+    context: &str,
+    encoding: &str,
+) -> Result<usize, String> {
+    dims.checked_mul(bytes_per_dimension).ok_or_else(|| {
+        format!(
+            "{context} byte length overflowed usize for {dims}-dimensional {encoding} embedding"
+        )
+    })
+}
+
+fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
+    if value.len() != BlockHash::LEN * 2 {
+        return Err(format!(
+            "expected a {}-character hex block id, found {} characters",
+            BlockHash::LEN * 2,
+            value.len()
+        ));
+    }
+    let mut bytes = [0u8; BlockHash::LEN];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = hex_nibble(chunk[0]).ok_or_else(|| {
+            format!(
+                "block id contains a non-hex character at byte offset {}",
+                index * 2
+            )
+        })?;
+        let low = hex_nibble(chunk[1]).ok_or_else(|| {
+            format!(
+                "block id contains a non-hex character at byte offset {}",
+                index * 2 + 1
+            )
+        })?;
+        bytes[index] = (high << 4) | low;
+    }
+    Ok(BlockHash::from_bytes(bytes))
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn invalid_corpus_source_reference(source_id: &str, message: String) -> CandidateExecutionError {
+    CandidateExecutionError::CorpusSource(StructuredFailure::InvalidCorpusSourceReference {
+        source_id: source_id.into(),
+        message,
+    })
+}
+
+fn corpus_source_load_failure(source_id: &str, message: String) -> CandidateExecutionError {
+    CandidateExecutionError::CorpusSource(StructuredFailure::CorpusSourceLoadFailure {
+        source_id: source_id.into(),
+        message,
+    })
 }
 
 fn validate_cluster_assignments(
@@ -1419,18 +2191,17 @@ fn compare_executions(left: &SingleExecution, right: &SingleExecution) -> Determ
     if left.leaf_membership != right.leaf_membership {
         mismatch_details.push("leaf membership differed between repeated executions".into());
     }
+    if left.evaluation_entities != right.evaluation_entities {
+        mismatch_details
+            .push("materialized evaluation entities differed between repeated executions".into());
+    }
     if left.provenance != right.provenance {
         mismatch_details.push("provenance manifest differed between repeated executions".into());
     }
 
     DeterminismReport {
         deterministic: mismatch_details.is_empty(),
-        compared_fields: vec![
-            "pass_reports".into(),
-            "probe_results".into(),
-            "leaf_membership".into(),
-            "provenance".into(),
-        ],
+        compared_fields: determinism_compared_fields(),
         mismatch_details,
     }
 }
@@ -1907,4 +2678,53 @@ fn validate_fixture_config(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_embedding_to_f32, embeddings_into_batches};
+    use lexongraph_block::EmbeddingSpec;
+
+    #[test]
+    fn embeddings_into_batches_preserves_order_without_dropping_tail_items() {
+        let batches = embeddings_into_batches(
+            vec![vec![1.0], vec![2.0], vec![3.0], vec![4.0], vec![5.0]],
+            2,
+        );
+
+        assert_eq!(
+            batches,
+            vec![
+                vec![vec![1.0], vec![2.0]],
+                vec![vec![3.0], vec![4.0]],
+                vec![vec![5.0]]
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_embedding_to_f32_rejects_f32_byte_length_overflow() {
+        let spec = EmbeddingSpec {
+            dims: (usize::MAX / 4 + 1) as u64,
+            encoding: "f32le".into(),
+        };
+
+        let error = decode_embedding_to_f32(&[], &spec, "overflowing f32 corpus")
+            .expect_err("overflowing f32 dimensions should be rejected");
+
+        assert!(error.contains("overflowed usize"));
+    }
+
+    #[test]
+    fn decode_embedding_to_f32_rejects_f16_byte_length_overflow() {
+        let spec = EmbeddingSpec {
+            dims: (usize::MAX / 2 + 1) as u64,
+            encoding: "f16le".into(),
+        };
+
+        let error = decode_embedding_to_f32(&[], &spec, "overflowing f16 corpus")
+            .expect_err("overflowing f16 dimensions should be rejected");
+
+        assert!(error.contains("overflowed usize"));
+    }
 }
