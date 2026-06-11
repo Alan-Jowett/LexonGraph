@@ -202,6 +202,30 @@ fn val_zip_store_010_constructor_accepts_zip64_archives_with_max_eocd_comment() 
 }
 
 #[test]
+fn val_zip_store_010_constructor_and_read_paths_accept_prefixed_zip64_archives() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("prefixed-zip64-blocks.zip");
+    let block = sample_leaf_block("prefixed-zip64-round-trip");
+    let serialized = serialize_block(&block).unwrap();
+    write_zip64_archive(
+        &archive_path,
+        &[(
+            expected_entry_name(&serialized.hash),
+            serialized.bytes.clone(),
+        )],
+    );
+    prepend_bytes(&archive_path, b"stub-prefix");
+
+    let store = ZipBlockStore::new(&archive_path).unwrap();
+    let loaded = store.get(&serialized.hash).unwrap().unwrap();
+    let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
+
+    assert_eq!(loaded.hash, serialized.hash);
+    assert_eq!(loaded.block, block);
+    assert_eq!(enumerated, HashSet::from([serialized.hash]));
+}
+
+#[test]
 fn val_zip_store_007_duplicate_recognized_entries_fail_explicitly_for_zip64_archives() {
     let temp_dir = tempfile::tempdir().unwrap();
     let archive_path = temp_dir.path().join("zip64-duplicate-blocks.zip");
@@ -209,6 +233,7 @@ fn val_zip_store_007_duplicate_recognized_entries_fail_explicitly_for_zip64_arch
     let entry_name = expected_entry_name(&block.hash);
 
     write_zip64_archive_with_duplicate_entry(&archive_path, &entry_name, &block.bytes);
+    prepend_bytes(&archive_path, b"stub-prefix");
 
     let store = ZipBlockStore::new(&archive_path).unwrap();
 
@@ -424,6 +449,14 @@ fn replace_all_bytes(buffer: &mut [u8], needle: &[u8], replacement: &[u8]) {
         buffer[start..end].copy_from_slice(replacement);
         offset = end;
     }
+}
+
+fn prepend_bytes(path: &Path, prefix: &[u8]) {
+    let original = std::fs::read(path).unwrap();
+    let mut prefixed = Vec::with_capacity(prefix.len() + original.len());
+    prefixed.extend_from_slice(prefix);
+    prefixed.extend_from_slice(&original);
+    std::fs::write(path, prefixed).unwrap();
 }
 
 fn expect_backend_failure_contains(error: BlockStoreError, expected_fragment: &str) {

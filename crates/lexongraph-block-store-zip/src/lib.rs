@@ -145,6 +145,7 @@ fn backend_failure(message: String) -> BlockStoreError {
 }
 
 const CENTRAL_DIRECTORY_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+const CENTRAL_DIRECTORY_HEADER_LEN: usize = 46;
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 const ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
 const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
@@ -235,12 +236,6 @@ fn archive_entry_names(
                 archive_path.display()
             ))
         })?;
-    let directory_len = usize::try_from(directory_end - directory.offset).map_err(|_| {
-        backend_failure(format!(
-            "zip central directory in {} is too large to inspect on this platform",
-            archive_path.display()
-        ))
-    })?;
 
     file.seek(SeekFrom::Start(directory.offset))
         .map_err(|error| {
@@ -249,74 +244,94 @@ fn archive_entry_names(
                 archive_path.display()
             ))
         })?;
-    let mut directory_bytes = vec![0_u8; directory_len];
-    file.read_exact(&mut directory_bytes).map_err(|error| {
-        backend_failure(format!(
-            "failed to read the central directory from zip archive {}: {error}",
-            archive_path.display()
-        ))
-    })?;
 
-    let mut names = Vec::with_capacity(directory.entry_count);
-    let mut cursor = 0;
+    let mut names = Vec::new();
+    let mut cursor = directory.offset;
     for entry_index in 0..directory.entry_count {
-        if directory_bytes.get(cursor..cursor + CENTRAL_DIRECTORY_HEADER_SIGNATURE.len())
-            != Some(CENTRAL_DIRECTORY_HEADER_SIGNATURE.as_slice())
-        {
+        let header_end = cursor
+            .checked_add(CENTRAL_DIRECTORY_HEADER_LEN as u64)
+            .filter(|end| *end <= directory_end)
+            .ok_or_else(|| {
+                backend_failure(format!(
+                    "failed to bound central directory entry {entry_index} header in {}",
+                    archive_path.display()
+                ))
+            })?;
+        let mut header = [0_u8; CENTRAL_DIRECTORY_HEADER_LEN];
+        file.read_exact(&mut header).map_err(|error| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} header in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+        if !header.starts_with(&CENTRAL_DIRECTORY_HEADER_SIGNATURE) {
             return Err(backend_failure(format!(
                 "failed to parse central directory entry {entry_index} in {}",
                 archive_path.display()
             )));
         }
 
-        let name_len = read_u16_le(&directory_bytes, cursor + 28)
-            .map(usize::from)
+        let name_len = read_u16_le(&header, 28).map(usize::from).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} name length in {}",
+                archive_path.display()
+            ))
+        })?;
+        let extra_len = read_u16_le(&header, 30).map(usize::from).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} extra length in {}",
+                archive_path.display()
+            ))
+        })?;
+        let comment_len = read_u16_le(&header, 32).map(usize::from).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} comment length in {}",
+                archive_path.display()
+            ))
+        })?;
+        let variable_len = name_len
+            .checked_add(extra_len)
+            .and_then(|len| len.checked_add(comment_len))
             .ok_or_else(|| {
                 backend_failure(format!(
-                    "failed to read central directory entry {entry_index} name length in {}",
+                    "failed to bound central directory entry {entry_index} variable data in {}",
                     archive_path.display()
                 ))
             })?;
-        let extra_len = read_u16_le(&directory_bytes, cursor + 30)
-            .map(usize::from)
+        let entry_end = header_end
+            .checked_add(variable_len as u64)
+            .filter(|end| *end <= directory_end)
             .ok_or_else(|| {
                 backend_failure(format!(
-                    "failed to read central directory entry {entry_index} extra length in {}",
+                    "failed to bound central directory entry {entry_index} in {}",
                     archive_path.display()
                 ))
             })?;
-        let comment_len = read_u16_le(&directory_bytes, cursor + 32)
-            .map(usize::from)
-            .ok_or_else(|| {
-                backend_failure(format!(
-                    "failed to read central directory entry {entry_index} comment length in {}",
-                    archive_path.display()
-                ))
-            })?;
-        let name_start = cursor + 46;
-        let name_end = name_start
-            .checked_add(name_len)
-            .filter(|end| *end <= directory_bytes.len())
-            .ok_or_else(|| {
-                backend_failure(format!(
-                    "failed to bound central directory entry {entry_index} name in {}",
-                    archive_path.display()
-                ))
-            })?;
-        if let Ok(name) = std::str::from_utf8(&directory_bytes[name_start..name_end]) {
+
+        let mut name_bytes = vec![0_u8; name_len];
+        file.read_exact(&mut name_bytes).map_err(|error| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} name in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+        if let Ok(name) = std::str::from_utf8(&name_bytes) {
             names.push(name.to_string());
         }
 
-        cursor = name_end
-            .checked_add(extra_len)
-            .and_then(|next| next.checked_add(comment_len))
-            .filter(|next| *next <= directory_bytes.len())
-            .ok_or_else(|| {
-                backend_failure(format!(
-                    "failed to advance past central directory entry {entry_index} in {}",
-                    archive_path.display()
-                ))
-            })?;
+        let skip_len = i64::try_from(extra_len + comment_len).map_err(|_| {
+            backend_failure(format!(
+                "failed to advance past central directory entry {entry_index} in {}",
+                archive_path.display()
+            ))
+        })?;
+        file.seek(SeekFrom::Current(skip_len)).map_err(|error| {
+            backend_failure(format!(
+                "failed to advance past central directory entry {entry_index} in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+        cursor = entry_end;
     }
 
     Ok(names)
