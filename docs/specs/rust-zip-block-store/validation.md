@@ -30,8 +30,8 @@ archive internals beyond the supplied archive path.
 
 ### VAL-ZIP-STORE-002
 
-Attempt to construct the zip-backed store from missing, non-file, invalid-zip,
-and unsupported zip64 inputs.
+Attempt to construct the zip-backed store from missing, non-file, and invalid-zip
+inputs.
 
 **Pass condition:** construction fails explicitly as a backend failure.
 
@@ -99,6 +99,17 @@ enumerate block IDs.
 
 ### VAL-ZIP-STORE-010
 
+Construct the zip-backed store from a valid zip64 archive that contains
+recognized block entries.
+
+**Pass condition:** construction succeeds and the store can use the archive for
+read-path operations under the same recognized-entry rules as classic zip
+archives.
+
+**Traces to:** REQ-ZIP-STORE-003, REQ-ZIP-STORE-005, REQ-ZIP-STORE-006
+
+### VAL-ZIP-STORE-011
+
 Inspect the zip-backed implementation's public and verification surface.
 
 **Pass condition:** the repository includes automated verification artifacts for
@@ -107,7 +118,7 @@ conformance.
 
 **Traces to:** REQ-ZIP-STORE-008, REQ-ZIP-STORE-009
 
-### VAL-ZIP-STORE-011
+### VAL-ZIP-STORE-012
 
 Call `put` on the zip-backed store.
 

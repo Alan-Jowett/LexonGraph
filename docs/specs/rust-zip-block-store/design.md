@@ -59,9 +59,10 @@ A concrete store type owns a canonicalized filesystem path to one zip archive.
 The constructor validates that the path resolves to a file and that the file can
 be opened and parsed as a zip archive before returning an initialized store.
 
-This revision validates only classic EOCD-based central-directory metadata.
-Archives that require zip64 interpretation are rejected explicitly as unsupported
-by `ZipBlockStore`.
+This revision accepts both classic zip and zip64 archives when the selected
+zip-reader dependency can open and enumerate them successfully. `ZipBlockStore`
+maps dependency-reported archive parsing or access failures to explicit backend
+failures, including any residual dependency-specific zip64 limitations.
 
 ## Archive Recognition Model
 
@@ -79,8 +80,13 @@ considered stored blocks.
 
 ### DSG-ZIP-STORE-004 `Archive inspection model`
 
-Each `get` or enumeration operation opens the archive and inspects central
-directory entries needed for that operation.
+Each `get` or enumeration operation opens the archive file and inspects the
+archive metadata needed for recognized entry discovery.
+
+This revision may inspect central-directory metadata directly, in addition to
+using the zip-reader dependency for constructor validation and recognized entry
+reads, so that duplicate recognized block-entry paths remain observable across
+both classic zip and zip64 archives.
 
 This revision does not require the store to cache a persistent in-memory index
 across calls.
