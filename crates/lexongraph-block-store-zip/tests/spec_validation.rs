@@ -180,6 +180,28 @@ fn val_zip_store_010_constructor_and_read_paths_accept_valid_zip64_archives() {
 }
 
 #[test]
+fn val_zip_store_010_constructor_accepts_zip64_archives_with_max_eocd_comment() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("zip64-max-comment-blocks.zip");
+    let block = sample_leaf_block("zip64-max-comment");
+    let serialized = serialize_block(&block).unwrap();
+    write_zip64_archive_with_comment(
+        &archive_path,
+        &[(
+            expected_entry_name(&serialized.hash),
+            serialized.bytes.clone(),
+        )],
+        &"z".repeat(u16::MAX as usize),
+    );
+
+    let store = ZipBlockStore::new(&archive_path).unwrap();
+    let loaded = store.get(&serialized.hash).unwrap().unwrap();
+
+    assert_eq!(loaded.hash, serialized.hash);
+    assert_eq!(loaded.block, block);
+}
+
+#[test]
 fn val_zip_store_012_put_fails_explicitly_without_mutating_the_archive() {
     let temp_dir = tempfile::tempdir().unwrap();
     let archive_path = temp_dir.path().join("blocks.zip");
@@ -303,11 +325,16 @@ fn write_zip_archive(path: &Path, entries: &[(String, Vec<u8>)]) {
 }
 
 fn write_zip64_archive(path: &Path, entries: &[(String, Vec<u8>)]) {
+    write_zip64_archive_with_comment(path, entries, "");
+}
+
+fn write_zip64_archive_with_comment(path: &Path, entries: &[(String, Vec<u8>)], comment: &str) {
     let file = File::create(path).unwrap();
     let mut archive = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .large_file(true);
+    archive.set_comment(comment);
     archive.set_zip64_comment(Some("zip64"));
 
     for (name, bytes) in entries {

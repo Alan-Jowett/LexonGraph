@@ -145,6 +145,7 @@ const CENTRAL_DIRECTORY_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 const ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
 const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
+const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_LEN: usize = 20;
 
 #[derive(Debug)]
 struct CentralDirectory {
@@ -195,7 +196,9 @@ fn archive_entry_names(
             ))
         })?
         .len();
-    let eocd_tail_len = file_len.min((EOCD_LEN + usize::from(u16::MAX)) as u64) as usize;
+    let eocd_tail_len = file_len
+        .min((EOCD_LEN + usize::from(u16::MAX) + ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_LEN) as u64)
+        as usize;
     file.seek(SeekFrom::End(-(eocd_tail_len as i64)))
         .map_err(|error| {
             backend_failure(format!(
