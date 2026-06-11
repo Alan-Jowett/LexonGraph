@@ -36,6 +36,7 @@ impl std::error::Error for ZipBlockStoreInitError {}
 #[derive(Clone, Debug)]
 pub struct ZipBlockStore {
     archive_path: PathBuf,
+    archive_offset: u64,
 }
 
 impl ZipBlockStore {
@@ -66,16 +67,18 @@ impl ZipBlockStore {
 
         let file = open_archive_file(&canonical_path)
             .map_err(|error| ZipBlockStoreInitError::Open(error.to_string()))?;
-        let _ = open_archive_from_file(file, &canonical_path)
+        let archive = open_archive_from_file(file, &canonical_path)
             .map_err(|error| ZipBlockStoreInitError::Read(error.to_string()))?;
+        let archive_offset = archive.offset();
 
         let mut file = open_archive_file(&canonical_path)
             .map_err(|error| ZipBlockStoreInitError::Open(error.to_string()))?;
-        let _ = archive_entry_names(&mut file, &canonical_path)
+        let _ = archive_entry_names(&mut file, &canonical_path, archive_offset)
             .map_err(|error| ZipBlockStoreInitError::Read(error.to_string()))?;
 
         Ok(Self {
             archive_path: canonical_path,
+            archive_offset,
         })
     }
 
@@ -86,7 +89,7 @@ impl ZipBlockStore {
 
     fn enumerate_block_ids(&self) -> Result<Vec<BlockHash>, BlockStoreError> {
         let mut file = open_archive_file(&self.archive_path)?;
-        let entry_names = archive_entry_names(&mut file, &self.archive_path)?;
+        let entry_names = archive_entry_names(&mut file, &self.archive_path, self.archive_offset)?;
         let mut seen_names = HashSet::new();
         let mut block_ids = Vec::new();
         for name in entry_names {
@@ -116,7 +119,7 @@ impl BlockStore for ZipBlockStore {
     fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
         let target_name = Self::block_entry_name(block_id);
         let mut file = open_archive_file(&self.archive_path)?;
-        let match_count = archive_entry_names(&mut file, &self.archive_path)?
+        let match_count = archive_entry_names(&mut file, &self.archive_path, self.archive_offset)?
             .into_iter()
             .filter(|name| name == &target_name)
             .count();
@@ -166,19 +169,25 @@ fn backend_failure(message: String) -> BlockStoreError {
 }
 
 const CENTRAL_DIRECTORY_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+const CENTRAL_DIRECTORY_HEADER_LEN: usize = 46;
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+const ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
 const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
+const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_LEN: usize = 20;
 
 #[derive(Debug)]
 struct CentralDirectory {
     entry_count: usize,
-    offset: usize,
-    size: usize,
+    offset: u64,
+    size: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CentralDirectoryError {
-    Zip64Unsupported,
+struct EndOfCentralDirectory {
+    entry_count: u16,
+    directory_offset: u32,
+    directory_size: u32,
+    zip64_eocd_offset: Option<u64>,
 }
 
 fn open_archive_file(archive_path: &Path) -> Result<File, BlockStoreError> {
@@ -205,6 +214,7 @@ fn open_archive_from_file(
 fn archive_entry_names(
     file: &mut File,
     archive_path: &Path,
+    archive_offset: u64,
 ) -> Result<Vec<String>, BlockStoreError> {
     let file_len = file
         .metadata()
@@ -215,7 +225,9 @@ fn archive_entry_names(
             ))
         })?
         .len();
-    let eocd_tail_len = file_len.min((EOCD_LEN + usize::from(u16::MAX)) as u64) as usize;
+    let eocd_tail_len = file_len
+        .min((EOCD_LEN + usize::from(u16::MAX) + ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_LEN) as u64)
+        as usize;
     file.seek(SeekFrom::End(-(eocd_tail_len as i64)))
         .map_err(|error| {
             backend_failure(format!(
@@ -231,25 +243,17 @@ fn archive_entry_names(
         ))
     })?;
 
-    let directory = match find_end_of_central_directory(&eocd_tail) {
-        Ok(Some(directory)) => directory,
-        Ok(None) => {
-            return Err(backend_failure(format!(
-                "failed to locate the zip central directory in {}",
-                archive_path.display()
-            )));
-        }
-        Err(CentralDirectoryError::Zip64Unsupported) => {
-            return Err(backend_failure(format!(
-                "zip64 archives are not supported by ZipBlockStore in {}",
-                archive_path.display()
-            )));
-        }
-    };
+    let eocd = find_end_of_central_directory(&eocd_tail).ok_or_else(|| {
+        backend_failure(format!(
+            "failed to locate the zip central directory in {}",
+            archive_path.display()
+        ))
+    })?;
+    let directory = resolve_central_directory(file, archive_path, file_len, archive_offset, eocd)?;
     let directory_end = directory
         .offset
         .checked_add(directory.size)
-        .filter(|end| (*end as u64) <= file_len)
+        .filter(|end| *end <= file_len)
         .ok_or_else(|| {
             backend_failure(format!(
                 "failed to bound the zip central directory in {}",
@@ -257,84 +261,290 @@ fn archive_entry_names(
             ))
         })?;
 
-    file.seek(SeekFrom::Start(directory.offset as u64))
+    file.seek(SeekFrom::Start(directory.offset))
         .map_err(|error| {
             backend_failure(format!(
                 "failed to seek zip archive {} to its central directory: {error}",
                 archive_path.display()
             ))
         })?;
-    let mut directory_bytes = vec![0_u8; directory_end - directory.offset];
-    file.read_exact(&mut directory_bytes).map_err(|error| {
-        backend_failure(format!(
-            "failed to read the central directory from zip archive {}: {error}",
-            archive_path.display()
-        ))
-    })?;
 
-    let mut names = Vec::with_capacity(directory.entry_count);
-    let mut cursor = 0;
+    let mut names = Vec::new();
+    let mut cursor = directory.offset;
     for entry_index in 0..directory.entry_count {
-        if directory_bytes.get(cursor..cursor + CENTRAL_DIRECTORY_HEADER_SIGNATURE.len())
-            != Some(CENTRAL_DIRECTORY_HEADER_SIGNATURE.as_slice())
-        {
+        let header_end = cursor
+            .checked_add(CENTRAL_DIRECTORY_HEADER_LEN as u64)
+            .filter(|end| *end <= directory_end)
+            .ok_or_else(|| {
+                backend_failure(format!(
+                    "failed to bound central directory entry {entry_index} header in {}",
+                    archive_path.display()
+                ))
+            })?;
+        let mut header = [0_u8; CENTRAL_DIRECTORY_HEADER_LEN];
+        file.read_exact(&mut header).map_err(|error| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} header in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+        if !header.starts_with(&CENTRAL_DIRECTORY_HEADER_SIGNATURE) {
             return Err(backend_failure(format!(
                 "failed to parse central directory entry {entry_index} in {}",
                 archive_path.display()
             )));
         }
 
-        let name_len = read_u16_le(&directory_bytes, cursor + 28)
-            .map(usize::from)
+        let name_len = read_u16_le(&header, 28).map(usize::from).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} name length in {}",
+                archive_path.display()
+            ))
+        })?;
+        let extra_len = read_u16_le(&header, 30).map(usize::from).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} extra length in {}",
+                archive_path.display()
+            ))
+        })?;
+        let comment_len = read_u16_le(&header, 32).map(usize::from).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} comment length in {}",
+                archive_path.display()
+            ))
+        })?;
+        let variable_len = name_len
+            .checked_add(extra_len)
+            .and_then(|len| len.checked_add(comment_len))
             .ok_or_else(|| {
                 backend_failure(format!(
-                    "failed to read central directory entry {entry_index} name length in {}",
+                    "failed to bound central directory entry {entry_index} variable data in {}",
                     archive_path.display()
                 ))
             })?;
-        let extra_len = read_u16_le(&directory_bytes, cursor + 30)
-            .map(usize::from)
+        let entry_end = header_end
+            .checked_add(variable_len as u64)
+            .filter(|end| *end <= directory_end)
             .ok_or_else(|| {
                 backend_failure(format!(
-                    "failed to read central directory entry {entry_index} extra length in {}",
+                    "failed to bound central directory entry {entry_index} in {}",
                     archive_path.display()
                 ))
             })?;
-        let comment_len = read_u16_le(&directory_bytes, cursor + 32)
-            .map(usize::from)
-            .ok_or_else(|| {
-                backend_failure(format!(
-                    "failed to read central directory entry {entry_index} comment length in {}",
-                    archive_path.display()
-                ))
-            })?;
-        let name_start = cursor + 46;
-        let name_end = name_start
-            .checked_add(name_len)
-            .filter(|end| *end <= directory_bytes.len())
-            .ok_or_else(|| {
-                backend_failure(format!(
-                    "failed to bound central directory entry {entry_index} name in {}",
-                    archive_path.display()
-                ))
-            })?;
-        if let Ok(name) = std::str::from_utf8(&directory_bytes[name_start..name_end]) {
+
+        let mut name_bytes = vec![0_u8; name_len];
+        file.read_exact(&mut name_bytes).map_err(|error| {
+            backend_failure(format!(
+                "failed to read central directory entry {entry_index} name in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+        if let Ok(name) = std::str::from_utf8(&name_bytes) {
             names.push(name.to_string());
         }
 
-        cursor = name_end
-            .checked_add(extra_len)
-            .and_then(|next| next.checked_add(comment_len))
-            .filter(|next| *next <= directory_bytes.len())
-            .ok_or_else(|| {
-                backend_failure(format!(
-                    "failed to advance past central directory entry {entry_index} in {}",
-                    archive_path.display()
-                ))
-            })?;
+        let skip_len = i64::try_from(extra_len + comment_len).map_err(|_| {
+            backend_failure(format!(
+                "failed to advance past central directory entry {entry_index} in {}",
+                archive_path.display()
+            ))
+        })?;
+        file.seek(SeekFrom::Current(skip_len)).map_err(|error| {
+            backend_failure(format!(
+                "failed to advance past central directory entry {entry_index} in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+        cursor = entry_end;
     }
 
     Ok(names)
+}
+
+fn resolve_central_directory(
+    file: &mut File,
+    archive_path: &Path,
+    file_len: u64,
+    archive_offset: u64,
+    eocd: EndOfCentralDirectory,
+) -> Result<CentralDirectory, BlockStoreError> {
+    let classic_directory = classic_central_directory(archive_path, archive_offset, eocd)?;
+    let requires_zip64 = eocd.entry_count == u16::MAX
+        || eocd.directory_size == u32::MAX
+        || eocd.directory_offset == u32::MAX;
+    if !requires_zip64 {
+        if let Some(zip64_eocd_offset) = eocd.zip64_eocd_offset
+            && let Some(directory) = try_read_zip64_central_directory(
+                file,
+                archive_path,
+                file_len,
+                archive_offset,
+                zip64_eocd_offset,
+            )?
+        {
+            return Ok(directory);
+        }
+        return Ok(classic_directory);
+    }
+
+    let zip64_eocd_offset = eocd.zip64_eocd_offset.ok_or_else(|| {
+        backend_failure(format!(
+            "failed to locate the zip64 end of central directory in {}",
+            archive_path.display()
+        ))
+    })?;
+    try_read_zip64_central_directory(
+        file,
+        archive_path,
+        file_len,
+        archive_offset,
+        zip64_eocd_offset,
+    )
+    .and_then(|directory| {
+        directory.ok_or_else(|| {
+            backend_failure(format!(
+                "failed to parse the zip64 end of central directory in {}",
+                archive_path.display()
+            ))
+        })
+    })
+}
+
+fn classic_central_directory(
+    archive_path: &Path,
+    archive_offset: u64,
+    eocd: EndOfCentralDirectory,
+) -> Result<CentralDirectory, BlockStoreError> {
+    Ok(CentralDirectory {
+        entry_count: usize::from(eocd.entry_count),
+        offset: archive_offset
+            .checked_add(u64::from(eocd.directory_offset))
+            .ok_or_else(|| {
+                backend_failure(format!(
+                    "failed to bound the zip central directory in {}",
+                    archive_path.display()
+                ))
+            })?,
+        size: u64::from(eocd.directory_size),
+    })
+}
+
+fn try_read_zip64_central_directory(
+    file: &mut File,
+    archive_path: &Path,
+    file_len: u64,
+    archive_offset: u64,
+    zip64_eocd_offset: u64,
+) -> Result<Option<CentralDirectory>, BlockStoreError> {
+    let zip64_eocd_offset = archive_offset
+        .checked_add(zip64_eocd_offset)
+        .ok_or_else(|| {
+            backend_failure(format!(
+                "failed to bound the zip64 end of central directory in {}",
+                archive_path.display()
+            ))
+        })?;
+    read_zip64_central_directory(
+        file,
+        archive_path,
+        file_len,
+        archive_offset,
+        zip64_eocd_offset,
+    )
+}
+
+fn read_zip64_central_directory(
+    file: &mut File,
+    archive_path: &Path,
+    file_len: u64,
+    archive_offset: u64,
+    zip64_eocd_offset: u64,
+) -> Result<Option<CentralDirectory>, BlockStoreError> {
+    const ZIP64_EOCD_MIN_LEN: usize = 56;
+
+    let Some(zip64_eocd_end) = zip64_eocd_offset
+        .checked_add(ZIP64_EOCD_MIN_LEN as u64)
+        .filter(|end| *end <= file_len)
+    else {
+        return Ok(None);
+    };
+
+    file.seek(SeekFrom::Start(zip64_eocd_offset))
+        .map_err(|error| {
+            backend_failure(format!(
+                "failed to seek zip archive {} to its zip64 end of central directory: {error}",
+                archive_path.display()
+            ))
+        })?;
+    let mut record = [0_u8; ZIP64_EOCD_MIN_LEN];
+    file.read_exact(&mut record).map_err(|error| {
+        backend_failure(format!(
+            "failed to read the zip64 end of central directory from {}: {error}",
+            archive_path.display()
+        ))
+    })?;
+
+    if !record.starts_with(&ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+        return Ok(None);
+    }
+    let record_size = read_u64_le(&record, 4).ok_or_else(|| {
+        backend_failure(format!(
+            "failed to read the zip64 end of central directory size in {}",
+            archive_path.display()
+        ))
+    })?;
+    if record_size < 44 {
+        return Ok(None);
+    }
+    let Some(total_record_len) = zip64_eocd_offset
+        .checked_add(12)
+        .and_then(|start| start.checked_add(record_size))
+        .filter(|end| *end <= file_len)
+    else {
+        return Ok(None);
+    };
+    debug_assert_eq!(
+        zip64_eocd_end,
+        zip64_eocd_offset + ZIP64_EOCD_MIN_LEN as u64
+    );
+    if total_record_len < zip64_eocd_end {
+        return Ok(None);
+    }
+
+    let entry_count = read_u64_le(&record, 32).ok_or_else(|| {
+        backend_failure(format!(
+            "failed to read the zip64 central directory entry count in {}",
+            archive_path.display()
+        ))
+    })?;
+    let size = read_u64_le(&record, 40).ok_or_else(|| {
+        backend_failure(format!(
+            "failed to read the zip64 central directory size in {}",
+            archive_path.display()
+        ))
+    })?;
+    let offset = read_u64_le(&record, 48).ok_or_else(|| {
+        backend_failure(format!(
+            "failed to read the zip64 central directory offset in {}",
+            archive_path.display()
+        ))
+    })?;
+
+    Ok(Some(CentralDirectory {
+        entry_count: usize::try_from(entry_count).map_err(|_| {
+            backend_failure(format!(
+                "zip archive {} contains too many entries to inspect on this platform",
+                archive_path.display()
+            ))
+        })?,
+        offset: archive_offset.checked_add(offset).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to bound the zip64 central directory in {}",
+                archive_path.display()
+            ))
+        })?,
+        size,
+    }))
 }
 
 fn map_get_error(error: BlockError) -> BlockStoreError {
@@ -389,27 +599,19 @@ fn is_lower_hex_prefix(value: &str) -> bool {
 
 const EOCD_LEN: usize = 22;
 
-fn find_end_of_central_directory(
-    tail_bytes: &[u8],
-) -> Result<Option<CentralDirectory>, CentralDirectoryError> {
+fn find_end_of_central_directory(tail_bytes: &[u8]) -> Option<EndOfCentralDirectory> {
     if tail_bytes.len() < EOCD_LEN {
-        return Ok(None);
+        return None;
     }
 
     for eocd_offset in (0..=tail_bytes.len() - EOCD_LEN).rev() {
         if !tail_bytes[eocd_offset..].starts_with(END_OF_CENTRAL_DIRECTORY_SIGNATURE.as_slice()) {
             continue;
         }
-        if eocd_offset >= 20
-            && tail_bytes[eocd_offset - 20..]
-                .starts_with(ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE.as_slice())
-        {
-            return Err(CentralDirectoryError::Zip64Unsupported);
-        }
 
         let comment_len = match read_u16_le(tail_bytes, eocd_offset + 20) {
             Some(value) => usize::from(value),
-            None => continue,
+            None => return None,
         };
         let Some(record_end) = eocd_offset
             .checked_add(EOCD_LEN)
@@ -421,38 +623,24 @@ fn find_end_of_central_directory(
             continue;
         }
 
-        let entries_on_disk = match read_u16_le(tail_bytes, eocd_offset + 8) {
-            Some(value) => value,
-            None => continue,
-        };
-        let entry_count = match read_u16_le(tail_bytes, eocd_offset + 10) {
-            Some(value) => value,
-            None => continue,
-        };
-        let directory_size = match read_u32_le(tail_bytes, eocd_offset + 12) {
-            Some(value) => value,
-            None => continue,
-        };
-        let directory_offset = match read_u32_le(tail_bytes, eocd_offset + 16) {
-            Some(value) => value,
-            None => continue,
-        };
-        if entries_on_disk == u16::MAX
-            || entry_count == u16::MAX
-            || directory_size == u32::MAX
-            || directory_offset == u32::MAX
+        let zip64_eocd_offset = if eocd_offset >= 20
+            && tail_bytes[eocd_offset - 20..]
+                .starts_with(ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE.as_slice())
         {
-            return Err(CentralDirectoryError::Zip64Unsupported);
-        }
+            read_u64_le(tail_bytes, eocd_offset - 20 + 8)
+        } else {
+            None
+        };
 
-        return Ok(Some(CentralDirectory {
-            entry_count: usize::from(entry_count),
-            size: directory_size as usize,
-            offset: directory_offset as usize,
-        }));
+        return Some(EndOfCentralDirectory {
+            entry_count: read_u16_le(tail_bytes, eocd_offset + 10)?,
+            directory_size: read_u32_le(tail_bytes, eocd_offset + 12)?,
+            directory_offset: read_u32_le(tail_bytes, eocd_offset + 16)?,
+            zip64_eocd_offset,
+        });
     }
 
-    Ok(None)
+    None
 }
 
 fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -465,11 +653,20 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(chunk))
 }
 
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    let chunk: [u8; 8] = bytes.get(offset..offset + 8)?.try_into().ok()?;
+    Some(u64::from_le_bytes(chunk))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
+
     use super::{
-        CentralDirectoryError, END_OF_CENTRAL_DIRECTORY_SIGNATURE, EOCD_LEN,
+        END_OF_CENTRAL_DIRECTORY_SIGNATURE, EOCD_LEN, EndOfCentralDirectory,
         ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE, find_end_of_central_directory,
+        resolve_central_directory,
     };
 
     #[test]
@@ -487,15 +684,16 @@ mod tests {
         push_u16(&mut bytes, comment.len() as u16);
         bytes.extend_from_slice(comment);
 
-        let directory = find_end_of_central_directory(&bytes).unwrap().unwrap();
+        let directory = find_end_of_central_directory(&bytes).unwrap();
 
         assert_eq!(directory.entry_count, 0);
-        assert_eq!(directory.offset, 0);
-        assert_eq!(directory.size, 0);
+        assert_eq!(directory.directory_offset, 0);
+        assert_eq!(directory.directory_size, 0);
+        assert_eq!(directory.zip64_eocd_offset, None);
     }
 
     #[test]
-    fn find_end_of_central_directory_reports_zip64_sentinel_fields() {
+    fn find_end_of_central_directory_preserves_zip64_sentinel_fields() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&END_OF_CENTRAL_DIRECTORY_SIGNATURE);
         push_u16(&mut bytes, 0);
@@ -506,16 +704,21 @@ mod tests {
         push_u32(&mut bytes, u32::MAX);
         push_u16(&mut bytes, 0);
 
-        let error = find_end_of_central_directory(&bytes).unwrap_err();
+        let directory = find_end_of_central_directory(&bytes).unwrap();
 
-        assert_eq!(error, CentralDirectoryError::Zip64Unsupported);
+        assert_eq!(directory.entry_count, u16::MAX);
+        assert_eq!(directory.directory_size, u32::MAX);
+        assert_eq!(directory.directory_offset, u32::MAX);
+        assert_eq!(directory.zip64_eocd_offset, None);
     }
 
     #[test]
-    fn find_end_of_central_directory_reports_zip64_locator_records() {
+    fn find_end_of_central_directory_reads_zip64_locator_records() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE);
-        bytes.extend_from_slice(&[0_u8; 16]);
+        push_u32(&mut bytes, 0);
+        push_u64(&mut bytes, 0x1122_3344_5566_7788);
+        push_u32(&mut bytes, 1);
         bytes.extend_from_slice(&END_OF_CENTRAL_DIRECTORY_SIGNATURE);
         push_u16(&mut bytes, 0);
         push_u16(&mut bytes, 0);
@@ -525,9 +728,9 @@ mod tests {
         push_u32(&mut bytes, 20);
         push_u16(&mut bytes, 0);
 
-        let error = find_end_of_central_directory(&bytes).unwrap_err();
+        let directory = find_end_of_central_directory(&bytes).unwrap();
 
-        assert_eq!(error, CentralDirectoryError::Zip64Unsupported);
+        assert_eq!(directory.zip64_eocd_offset, Some(0x1122_3344_5566_7788));
     }
 
     #[test]
@@ -543,12 +746,51 @@ mod tests {
         push_u32(&mut bytes, 0);
         push_u16(&mut bytes, 0);
 
-        let directory = find_end_of_central_directory(&bytes[6..]).unwrap().unwrap();
+        let directory = find_end_of_central_directory(&bytes[6..]).unwrap();
+
+        assert_eq!(directory.entry_count, 0);
+        assert_eq!(directory.directory_offset, 0);
+        assert_eq!(directory.directory_size, 0);
+        assert_eq!(EOCD_LEN, 22);
+    }
+
+    #[test]
+    fn resolve_central_directory_falls_back_to_classic_when_locator_signature_is_garbage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let archive_path = temp_dir.path().join("classic-with-garbage-locator.zip");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE);
+        push_u32(&mut bytes, 0);
+        push_u64(&mut bytes, 3);
+        push_u32(&mut bytes, 1);
+        bytes.extend_from_slice(&END_OF_CENTRAL_DIRECTORY_SIGNATURE);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        File::create(&archive_path)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+
+        let eocd = EndOfCentralDirectory {
+            entry_count: 0,
+            directory_offset: 0,
+            directory_size: 0,
+            zip64_eocd_offset: Some(3),
+        };
+        let mut file = File::open(&archive_path).unwrap();
+
+        let directory =
+            resolve_central_directory(&mut file, &archive_path, bytes.len() as u64, 0, eocd)
+                .unwrap();
 
         assert_eq!(directory.entry_count, 0);
         assert_eq!(directory.offset, 0);
         assert_eq!(directory.size, 0);
-        assert_eq!(EOCD_LEN, 22);
     }
 
     fn push_u16(buffer: &mut Vec<u8>, value: u16) {
@@ -556,6 +798,10 @@ mod tests {
     }
 
     fn push_u32(buffer: &mut Vec<u8>, value: u32) {
+        buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u64(buffer: &mut Vec<u8>, value: u64) {
         buffer.extend_from_slice(&value.to_le_bytes());
     }
 }
