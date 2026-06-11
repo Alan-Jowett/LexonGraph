@@ -1127,9 +1127,19 @@ fn run_candidate(
     profile: &BenchmarkProfile,
     candidate: &RegisteredCandidate,
 ) -> CandidateRunReport {
-    let first_execution = execute_candidate_once(profile, candidate);
-    let second_execution = execute_candidate_once(profile, candidate);
-    match (first_execution, second_execution) {
+    let resolved = match resolve_profile_inputs(profile) {
+        Ok(resolved) => resolved,
+        Err(CandidateExecutionError::Candidate(error)) => {
+            return failed_candidate_run(profile, &candidate.identity, error);
+        }
+        Err(CandidateExecutionError::CorpusSource(failure)) => {
+            return failed_corpus_source_run(profile, &candidate.identity, failure);
+        }
+    };
+    match (
+        execute_candidate_once(profile, candidate, &resolved),
+        execute_candidate_once(profile, candidate, &resolved),
+    ) {
         (Ok(primary), Ok(repeated)) => {
             finalize_successful_run(profile, &candidate.identity, primary, repeated)
         }
@@ -1165,12 +1175,7 @@ fn failed_candidate_run(
         cluster_occupancies: Vec::new(),
         determinism: DeterminismReport {
             deterministic: false,
-            compared_fields: vec![
-                "pass_reports".into(),
-                "probe_results".into(),
-                "leaf_membership".into(),
-                "provenance".into(),
-            ],
+            compared_fields: determinism_compared_fields(),
             mismatch_details: vec!["candidate execution did not complete".into()],
         },
         metric_results: Vec::new(),
@@ -1218,12 +1223,7 @@ fn failed_corpus_source_run(
         cluster_occupancies: Vec::new(),
         determinism: DeterminismReport {
             deterministic: false,
-            compared_fields: vec![
-                "pass_reports".into(),
-                "probe_results".into(),
-                "leaf_membership".into(),
-                "provenance".into(),
-            ],
+            compared_fields: determinism_compared_fields(),
             mismatch_details: vec!["corpus source resolution did not complete".into()],
         },
         metric_results: Vec::new(),
@@ -1549,8 +1549,8 @@ impl From<StreamingClusteringError> for CandidateExecutionError {
 fn execute_candidate_once(
     profile: &BenchmarkProfile,
     candidate: &RegisteredCandidate,
+    resolved: &ResolvedProfileInputs,
 ) -> Result<SingleExecution, CandidateExecutionError> {
-    let resolved = resolve_profile_inputs(profile)?;
     let streaming_config = profile.shared_candidate_config.to_streaming_config();
     let mut trainer = candidate.factory.create(&streaming_config)?;
     let mut pass_reports = Vec::with_capacity(resolved.training_passes.len());
@@ -1601,12 +1601,16 @@ fn execute_candidate_once(
     );
 
     Ok(SingleExecution {
-        provenance: build_provenance(profile, &candidate.identity, resolved.source_reference_ids),
+        provenance: build_provenance(
+            profile,
+            &candidate.identity,
+            resolved.source_reference_ids.clone(),
+        ),
         pass_reports,
         probe_results,
         leaf_membership,
         cluster_occupancies,
-        evaluation_entities: resolved.evaluation_entities,
+        evaluation_entities: resolved.evaluation_entities.clone(),
     })
 }
 
@@ -1679,6 +1683,16 @@ fn structured_failure_detail(failure: &StructuredFailure) -> String {
         StructuredFailure::GateFailure { message, .. } => message.clone(),
         StructuredFailure::DeferredMeasurement { message, .. } => message.clone(),
     }
+}
+
+fn determinism_compared_fields() -> Vec<String> {
+    vec![
+        "pass_reports".into(),
+        "probe_results".into(),
+        "leaf_membership".into(),
+        "evaluation_entities".into(),
+        "provenance".into(),
+    ]
 }
 
 fn resolve_profile_inputs(
@@ -2187,13 +2201,7 @@ fn compare_executions(left: &SingleExecution, right: &SingleExecution) -> Determ
 
     DeterminismReport {
         deterministic: mismatch_details.is_empty(),
-        compared_fields: vec![
-            "pass_reports".into(),
-            "probe_results".into(),
-            "leaf_membership".into(),
-            "evaluation_entities".into(),
-            "provenance".into(),
-        ],
+        compared_fields: determinism_compared_fields(),
         mismatch_details,
     }
 }

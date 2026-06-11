@@ -822,6 +822,54 @@ fn regression_missing_synthetic_metadata_keys_are_rejected_for_block_store_paddi
 }
 
 #[test]
+fn regression_failed_candidate_runs_keep_evaluation_entities_in_determinism_schema() {
+    let report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &[shared_contract_failure_candidate()],
+    )
+    .expect("shared-contract failures should still produce a campaign report")
+    .run_reports
+    .into_iter()
+    .next()
+    .expect("campaign should include one candidate report");
+
+    assert_eq!(
+        report.determinism.compared_fields,
+        vec![
+            "pass_reports",
+            "probe_results",
+            "leaf_membership",
+            "evaluation_entities",
+            "provenance",
+        ]
+    );
+}
+
+#[test]
+fn regression_failed_corpus_source_runs_keep_evaluation_entities_in_determinism_schema() {
+    let report = run_evaluation_campaign(
+        &broken_block_store_profile(),
+        &balanced_and_skewed_candidates()[..1],
+    )
+    .expect("corpus source failures should still produce a campaign report")
+    .run_reports
+    .into_iter()
+    .next()
+    .expect("campaign should include one candidate report");
+
+    assert_eq!(
+        report.determinism.compared_fields,
+        vec![
+            "pass_reports",
+            "probe_results",
+            "leaf_membership",
+            "evaluation_entities",
+            "provenance",
+        ]
+    );
+}
+
+#[test]
 fn regression_non_finite_or_negative_ranking_weights_are_rejected() {
     for invalid_weight in [f64::NAN, f64::INFINITY, -0.5] {
         let mut profile = strict_alignment_profile();
