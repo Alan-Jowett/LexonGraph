@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ciborium::value::Value as CborValue;
@@ -406,11 +407,13 @@ struct StoredEntity<'a> {
 }
 
 fn unique_store_root(prefix: &str) -> PathBuf {
+    static NEXT_UNIQUE_SUFFIX: AtomicU64 = AtomicU64::new(0);
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+    let counter = NEXT_UNIQUE_SUFFIX.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("{prefix}-{unique}-{counter}"));
     std::fs::create_dir_all(&path).unwrap();
     path
 }
