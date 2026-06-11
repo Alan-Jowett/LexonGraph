@@ -1,7 +1,7 @@
-#![cfg(feature = "inject")]
-
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+#![cfg(feature = "inject")]
+
 use lexongraph_block_store::conformance::{run_contract_suite, run_full_suite};
 
 mod support;
