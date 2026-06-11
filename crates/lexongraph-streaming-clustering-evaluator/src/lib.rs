@@ -436,11 +436,7 @@ pub fn run_evaluation_campaign(
     candidates: &[RegisteredCandidate],
 ) -> Result<CampaignReport, EvaluatorError> {
     validate_profile(profile)?;
-    if candidates.is_empty() {
-        return Err(EvaluatorError::InvalidConfiguration(
-            "at least one candidate must be registered".into(),
-        ));
-    }
+    validate_candidates(candidates)?;
 
     let mut run_reports = Vec::with_capacity(candidates.len());
     for candidate in candidates {
@@ -868,6 +864,29 @@ fn assert_unique<'a>(
         }
     }
     Ok(())
+}
+
+fn validate_candidates(candidates: &[RegisteredCandidate]) -> Result<(), EvaluatorError> {
+    if candidates.is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "at least one candidate must be registered".into(),
+        ));
+    }
+
+    for candidate in candidates {
+        if candidate.identity.candidate_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "registered candidate_id must not be empty".into(),
+            ));
+        }
+    }
+
+    assert_unique(
+        candidates
+            .iter()
+            .map(|candidate| candidate.identity.candidate_id.as_str()),
+        "candidate ids",
+    )
 }
 
 fn sanitize_artifact_stem(input: &str) -> String {

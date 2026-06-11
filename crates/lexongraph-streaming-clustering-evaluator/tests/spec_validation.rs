@@ -734,6 +734,30 @@ fn regression_non_finite_gate_minima_are_rejected() {
 }
 
 #[test]
+fn regression_empty_candidate_ids_are_rejected() {
+    let mut candidates = balanced_and_skewed_candidates();
+    candidates[0].identity.candidate_id = "   ".into();
+
+    let result = run_evaluation_campaign(&strict_alignment_profile(), &candidates);
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("candidate_id must not be empty"))
+    );
+}
+
+#[test]
+fn regression_duplicate_candidate_ids_are_rejected() {
+    let mut candidates = balanced_and_skewed_candidates();
+    candidates[1].identity.candidate_id = candidates[0].identity.candidate_id.clone();
+
+    let result = run_evaluation_campaign(&strict_alignment_profile(), &candidates);
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate value in candidate ids"))
+    );
+}
+
+#[test]
 fn regression_invalid_transition_errors_report_the_original_state() {
     let config = strict_alignment_profile()
         .shared_candidate_config
