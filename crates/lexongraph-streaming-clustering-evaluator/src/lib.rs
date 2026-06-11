@@ -2435,10 +2435,11 @@ fn classify_archive_initialization_failure(
 }
 
 fn is_archive_read_failure(message: &str) -> bool {
-    !message.contains("failed to canonicalize zip archive")
-        && !message.contains("failed to stat zip archive")
-        && !message.contains("is not a file")
-        && !message.contains("failed to open zip archive")
+    !(message.contains("failed to canonicalize zip archive")
+        || (message.contains("failed to stat zip archive")
+            && !message.contains("during central-directory scan"))
+        || message.contains("is not a file")
+        || message.contains("failed to open zip archive"))
 }
 
 fn validate_cluster_assignments(
@@ -3105,6 +3106,16 @@ mod tests {
                 archive_path: PathBuf::from(r"C:\archive.zip"),
             }
         );
+    }
+
+    #[test]
+    fn archive_read_failure_classifier_treats_central_directory_stat_errors_as_read_failures() {
+        assert!(super::is_archive_read_failure(
+            "failed to stat zip archive C:\\archive.zip during central-directory scan: boom"
+        ));
+        assert!(!super::is_archive_read_failure(
+            "failed to stat zip archive C:\\archive.zip: boom"
+        ));
     }
 
     fn archive_training_profile_for_tests() -> BenchmarkProfile {
