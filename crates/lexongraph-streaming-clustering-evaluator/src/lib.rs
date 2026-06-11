@@ -165,6 +165,29 @@ pub enum BlockStoreReferenceStore {
     ZipArchive { archive_path: PathBuf },
 }
 
+pub(crate) fn normalize_cross_platform_path(path: impl AsRef<str>) -> PathBuf {
+    let raw = path.as_ref();
+    if cfg!(windows) || !raw.contains('\\') || raw.contains('/') || has_windows_drive_prefix(raw) {
+        return PathBuf::from(raw);
+    }
+    PathBuf::from(raw.replace('\\', std::path::MAIN_SEPARATOR_STR))
+}
+
+pub(crate) fn deserialize_cross_platform_pathbuf<'de, D>(
+    deserializer: D,
+) -> Result<PathBuf, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(normalize_cross_platform_path(raw))
+}
+
+fn has_windows_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'\\' && bytes[0].is_ascii_alphabetic()
+}
+
 impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -185,6 +208,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct LegacyFilesystem {
+            #[serde(deserialize_with = "deserialize_cross_platform_pathbuf")]
             store_root: PathBuf,
         }
 
@@ -192,6 +216,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         struct TaggedFilesystem {
             #[serde(rename = "store_kind")]
             _store_kind: FilesystemTag,
+            #[serde(deserialize_with = "deserialize_cross_platform_pathbuf")]
             store_root: PathBuf,
         }
 
@@ -199,6 +224,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         struct TaggedZipArchive {
             #[serde(rename = "store_kind")]
             _store_kind: ZipArchiveTag,
+            #[serde(deserialize_with = "deserialize_cross_platform_pathbuf")]
             archive_path: PathBuf,
         }
 
@@ -3101,7 +3127,7 @@ mod tests {
         assert_eq!(
             parsed,
             super::BlockStoreReferenceStore::ZipArchive {
-                archive_path: PathBuf::from(r"C:\archive.zip"),
+                archive_path: super::normalize_cross_platform_path(r"C:\archive.zip"),
             }
         );
     }

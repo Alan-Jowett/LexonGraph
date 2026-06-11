@@ -99,7 +99,9 @@ pub struct Section4GeneratedProfile {
     pub real_entity_count: usize,
     pub evaluated_entity_count: usize,
     pub cluster_count: u32,
+    #[serde(deserialize_with = "crate::deserialize_cross_platform_pathbuf")]
     pub profile_path: PathBuf,
+    #[serde(deserialize_with = "crate::deserialize_cross_platform_pathbuf")]
     pub corpus_archive_path: PathBuf,
     pub root_block_id: String,
     pub harvested_source_id: Option<String>,
