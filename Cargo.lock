@@ -1435,6 +1435,16 @@ name = "lexongraph-streaming-clustering"
 version = "0.1.0"
 
 [[package]]
+name = "lexongraph-streaming-clustering-evaluator"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "lexongraph-streaming-clustering",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lexongraph-streaming-indexer"
 version = "0.1.0"
 dependencies = [
