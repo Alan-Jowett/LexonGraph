@@ -10,6 +10,7 @@
 //! provenance, leaf-membership scoring, and scorecard generation without
 //! broadening the shared streaming clustering trainer/classifier contract.
 
+#[cfg(test)]
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -171,33 +172,45 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         }
 
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyFilesystem {
+            store_root: PathBuf,
+        }
+
+        #[derive(Deserialize)]
+        struct TaggedFilesystem {
+            #[serde(rename = "store_kind")]
+            _store_kind: FilesystemTag,
+            store_root: PathBuf,
+        }
+
+        #[derive(Deserialize)]
+        struct TaggedZipArchive {
+            #[serde(rename = "store_kind")]
+            _store_kind: ZipArchiveTag,
+            archive_path: PathBuf,
+        }
+
+        #[derive(Deserialize)]
         #[serde(untagged)]
         enum Repr {
-            LegacyFilesystem {
-                store_root: PathBuf,
-            },
-            TaggedFilesystem {
-                #[serde(rename = "store_kind")]
-                _store_kind: FilesystemTag,
-                store_root: PathBuf,
-            },
-            TaggedZipArchive {
-                #[serde(rename = "store_kind")]
-                _store_kind: ZipArchiveTag,
-                archive_path: PathBuf,
-            },
+            TaggedFilesystem(TaggedFilesystem),
+            TaggedZipArchive(TaggedZipArchive),
+            LegacyFilesystem(LegacyFilesystem),
         }
 
         match Repr::deserialize(deserializer)? {
-            Repr::LegacyFilesystem { store_root }
-            | Repr::TaggedFilesystem {
+            Repr::TaggedFilesystem(TaggedFilesystem {
+                _store_kind: _,
                 store_root,
+            })
+            | Repr::LegacyFilesystem(LegacyFilesystem { store_root }) => {
+                Ok(Self::Filesystem { store_root })
+            }
+            Repr::TaggedZipArchive(TaggedZipArchive {
                 _store_kind: _,
-            } => Ok(Self::Filesystem { store_root }),
-            Repr::TaggedZipArchive {
                 archive_path,
-                _store_kind: _,
-            } => Ok(Self::ZipArchive { archive_path }),
+            }) => Ok(Self::ZipArchive { archive_path }),
         }
     }
 }
@@ -207,6 +220,7 @@ pub struct FsOverlayZipBlockStore {
     store: OverlayBlockStore,
 }
 
+#[cfg(test)]
 thread_local! {
     static TEST_FORCE_TEMP_LAYER_FAILURE: Cell<bool> = const { Cell::new(false) };
 }
@@ -227,14 +241,9 @@ impl fmt::Display for ArchiveOverlayStoreError {
 
 impl std::error::Error for ArchiveOverlayStoreError {}
 
-#[doc(hidden)]
-pub fn set_force_temp_layer_failure_for_tests(enabled: bool) {
-    TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.set(enabled));
-}
-
 impl FsOverlayZipBlockStore {
     pub fn new(archive_path: impl AsRef<Path>) -> Result<Self, ArchiveOverlayStoreError> {
-        if TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.get()) {
+        if should_force_temp_layer_failure_for_tests() {
             return Err(ArchiveOverlayStoreError::TemporaryLayer(
                 "forced temporary writable-layer failure for tests".into(),
             ));
@@ -272,6 +281,16 @@ impl FsOverlayZipBlockStore {
     pub fn writable_layer_path(&self) -> &Path {
         self.writable_layer.path()
     }
+}
+
+#[cfg(test)]
+fn should_force_temp_layer_failure_for_tests() -> bool {
+    TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.get())
+}
+
+#[cfg(not(test))]
+fn should_force_temp_layer_failure_for_tests() -> bool {
+    false
 }
 
 impl BlockStore for FsOverlayZipBlockStore {
@@ -2974,8 +2993,18 @@ fn validate_fixture_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_embedding_to_f32, embeddings_into_batches};
+    use super::{
+        AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
+        CandidateRunStatus, CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus,
+        DeferredResearchGoal, EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource,
+        GateDeclaration, GateKind, GroundTruthNeighborhood, MetricDeclaration, MetricKind,
+        ProbeWorkload, ReproducibilityMetadata, ResearchCoverage, SharedCandidateConfig,
+        TEST_FORCE_TEMP_LAYER_FAILURE, TrainingPassSource, built_in_fixture_candidate,
+        decode_embedding_to_f32, embeddings_into_batches, run_evaluation_campaign,
+    };
     use lexongraph_block::EmbeddingSpec;
+    use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn embeddings_into_batches_preserves_order_without_dropping_tail_items() {
@@ -3018,5 +3047,186 @@ mod tests {
             .expect_err("overflowing f16 dimensions should be rejected");
 
         assert!(error.contains("overflowed usize"));
+    }
+
+    #[test]
+    fn archive_backed_resolution_reports_temporary_layer_failures_without_public_hooks() {
+        struct TempLayerFailureReset;
+        impl Drop for TempLayerFailureReset {
+            fn drop(&mut self) {
+                TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.set(false));
+            }
+        }
+
+        TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.set(true));
+        let _reset = TempLayerFailureReset;
+
+        let report = run_evaluation_campaign(
+            &archive_training_profile_for_tests(),
+            &[built_in_fixture_candidate("balanced-threshold").unwrap()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.run_reports[0].run_status,
+            CandidateRunStatus::CorpusSourceFailure
+        );
+        assert!(matches!(
+            report.run_reports[0].terminal_failure,
+            Some(super::StructuredFailure::ArchiveSourceTemporaryLayerFailure { .. })
+        ));
+        assert_eq!(
+            report.run_reports[0].deferred_research_goals[0].status,
+            DeferredMeasurementStatus::Deferred
+        );
+    }
+
+    #[test]
+    fn block_store_reference_store_prefers_tagged_forms_over_legacy_shape() {
+        let parsed: super::BlockStoreReferenceStore = serde_json::from_value(json!({
+            "store_kind": "zip-archive",
+            "archive_path": "C:\\\\archive.zip",
+            "store_root": "C:\\\\ignored-if-legacy-wins"
+        }))
+        .expect("tagged zip-archive shape should deserialize as a zip-backed reference");
+
+        assert_eq!(
+            parsed,
+            super::BlockStoreReferenceStore::ZipArchive {
+                archive_path: PathBuf::from(r"C:\archive.zip"),
+            }
+        );
+    }
+
+    fn archive_training_profile_for_tests() -> BenchmarkProfile {
+        BenchmarkProfile {
+            profile_id: "archive-temp-layer-failure".into(),
+            corpus_ids: vec!["fixture-corpus-a".into()],
+            shared_candidate_config: SharedCandidateConfig {
+                cluster_count: 2,
+                dimensions: 2,
+                balance_constraints: None,
+                random_seed: Some(7),
+            },
+            training_passes: vec![TrainingPassSource::BlockStore {
+                corpus: BlockStoreCorpusReference {
+                    source_id: "archive-training-pass".into(),
+                    root_block_id:
+                        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".into(),
+                    store: BlockStoreReferenceStore::ZipArchive {
+                        archive_path: PathBuf::from(r"C:\temp\unused-for-forced-failure.zip"),
+                    },
+                },
+                batch_size: 2,
+            }],
+            probe_workloads: vec![ProbeWorkload {
+                workload_id: "heldout-probes".into(),
+                source: EmbeddingWorkloadSource::Inline {
+                    embeddings: vec![vec![0.15, 0.0], vec![10.05, 0.0]],
+                },
+            }],
+            evaluation_entities: EvaluationEntitySource::Inline {
+                entities: vec![
+                    EvaluationEntity {
+                        entity_id: "a".into(),
+                        corpus_id: "fixture-corpus-a".into(),
+                        embedding: vec![0.0, 0.0],
+                        synthetic: false,
+                    },
+                    EvaluationEntity {
+                        entity_id: "b".into(),
+                        corpus_id: "fixture-corpus-a".into(),
+                        embedding: vec![0.3, 0.0],
+                        synthetic: false,
+                    },
+                    EvaluationEntity {
+                        entity_id: "c".into(),
+                        corpus_id: "fixture-corpus-a".into(),
+                        embedding: vec![9.9, 0.0],
+                        synthetic: false,
+                    },
+                    EvaluationEntity {
+                        entity_id: "d".into(),
+                        corpus_id: "fixture-corpus-a".into(),
+                        embedding: vec![10.2, 0.0],
+                        synthetic: false,
+                    },
+                ],
+            },
+            leaf_model: super::LeafModel {
+                leaf_size: 2,
+                declared_final_cluster_count: 2,
+                alignment_policy: AlignmentPolicy::StrictAlignment,
+            },
+            locality_ground_truth: vec![
+                GroundTruthNeighborhood {
+                    entity_id: "a".into(),
+                    neighbor_ids: vec!["b".into()],
+                },
+                GroundTruthNeighborhood {
+                    entity_id: "b".into(),
+                    neighbor_ids: vec!["a".into()],
+                },
+                GroundTruthNeighborhood {
+                    entity_id: "c".into(),
+                    neighbor_ids: vec!["d".into()],
+                },
+                GroundTruthNeighborhood {
+                    entity_id: "d".into(),
+                    neighbor_ids: vec!["c".into()],
+                },
+            ],
+            compression_benchmark: CompressionBenchmark {
+                method: CompressionMethod::ScalarQuantization8Bit,
+                global_baseline_label: "global-real-dataset-8bit".into(),
+            },
+            metric_declarations: vec![
+                MetricDeclaration {
+                    metric_id: "same-leaf-neighborhood-coherence".into(),
+                    label: "Same-leaf neighborhood coherence".into(),
+                    kind: MetricKind::SameLeafNeighborhoodCoherence,
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-LOCALITY".into()],
+                    ranking_weight: 1.0,
+                },
+                MetricDeclaration {
+                    metric_id: "local-compression-gain".into(),
+                    label: "Local compression gain".into(),
+                    kind: MetricKind::LocalCompressionGain,
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-COMPRESSION".into()],
+                    ranking_weight: 0.25,
+                },
+            ],
+            gate_declarations: vec![
+                GateDeclaration {
+                    gate_id: "exact-leaf-occupancy".into(),
+                    label: "Exact leaf occupancy".into(),
+                    kind: GateKind::ExactLeafOccupancy,
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+                },
+                GateDeclaration {
+                    gate_id: "complete-coverage".into(),
+                    label: "Complete coverage".into(),
+                    kind: GateKind::CompleteCoverage,
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-COVERAGE".into()],
+                },
+            ],
+            deferred_research_goals: vec![DeferredResearchGoal {
+                deferred_id: "deferred-hierarchy-routing".into(),
+                label: "Hierarchy routing proof".into(),
+                reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary".into(),
+                research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
+                coverage: ResearchCoverage::Deferred,
+            }],
+            reproducibility: ReproducibilityMetadata {
+                seed_policy: "fixed-seed-7".into(),
+                software_identity: "fixture-campaign-builder".into(),
+                floating_point_profile: "ieee754-deterministic-no-fma".into(),
+                hardware_profile: "fixture-cpu".into(),
+            },
+        }
     }
 }

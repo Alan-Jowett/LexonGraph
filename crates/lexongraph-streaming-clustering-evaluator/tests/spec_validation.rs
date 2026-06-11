@@ -20,7 +20,7 @@ use lexongraph_streaming_clustering_evaluator::{
     BlockStoreReferenceStore, CandidateIdentity, CandidateRunStatus, DeferredMeasurementStatus,
     EmbeddingWorkloadSource, EvaluatorError, FsOverlayZipBlockStore, GateStatus, StructuredFailure,
     TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, run_evaluation_campaign, set_force_temp_layer_failure_for_tests,
+    emit_campaign_artifacts, run_evaluation_campaign,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -546,34 +546,6 @@ fn val_stream_eval_016_invalid_profiles_and_shared_contract_failures_are_disting
     assert!(matches!(
         corrupt_archive_failure.run_reports[0].terminal_failure,
         Some(StructuredFailure::ArchiveSourceReadFailure { .. })
-    ));
-
-    struct TempLayerFailureReset;
-    impl Drop for TempLayerFailureReset {
-        fn drop(&mut self) {
-            set_force_temp_layer_failure_for_tests(false);
-        }
-    }
-
-    set_force_temp_layer_failure_for_tests(true);
-    let _reset = TempLayerFailureReset;
-    let temp_layer_failure = run_evaluation_campaign(
-        &archive_backed_profile(),
-        &[
-            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
-                "balanced-threshold",
-            )
-            .unwrap(),
-        ],
-    )
-    .unwrap();
-    assert_eq!(
-        temp_layer_failure.run_reports[0].run_status,
-        CandidateRunStatus::CorpusSourceFailure
-    );
-    assert!(matches!(
-        temp_layer_failure.run_reports[0].terminal_failure,
-        Some(StructuredFailure::ArchiveSourceTemporaryLayerFailure { .. })
     ));
 }
 
