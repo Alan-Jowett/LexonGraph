@@ -344,23 +344,23 @@ fn resolve_central_directory(
     archive_offset: u64,
     eocd: EndOfCentralDirectory,
 ) -> Result<CentralDirectory, BlockStoreError> {
-    let requires_zip64 = eocd.zip64_eocd_offset.is_some()
-        || eocd.entry_count == u16::MAX
+    let classic_directory = classic_central_directory(archive_path, archive_offset, eocd)?;
+    let requires_zip64 = eocd.entry_count == u16::MAX
         || eocd.directory_size == u32::MAX
         || eocd.directory_offset == u32::MAX;
     if !requires_zip64 {
-        return Ok(CentralDirectory {
-            entry_count: usize::from(eocd.entry_count),
-            offset: archive_offset
-                .checked_add(u64::from(eocd.directory_offset))
-                .ok_or_else(|| {
-                    backend_failure(format!(
-                        "failed to bound the zip central directory in {}",
-                        archive_path.display()
-                    ))
-                })?,
-            size: u64::from(eocd.directory_size),
-        });
+        if let Some(zip64_eocd_offset) = eocd.zip64_eocd_offset
+            && let Some(directory) = try_read_zip64_central_directory(
+                file,
+                archive_path,
+                file_len,
+                archive_offset,
+                zip64_eocd_offset,
+            )?
+        {
+            return Ok(directory);
+        }
+        return Ok(classic_directory);
     }
 
     let zip64_eocd_offset = eocd.zip64_eocd_offset.ok_or_else(|| {
@@ -369,6 +369,49 @@ fn resolve_central_directory(
             archive_path.display()
         ))
     })?;
+    try_read_zip64_central_directory(
+        file,
+        archive_path,
+        file_len,
+        archive_offset,
+        zip64_eocd_offset,
+    )
+    .and_then(|directory| {
+        directory.ok_or_else(|| {
+            backend_failure(format!(
+                "failed to parse the zip64 end of central directory in {}",
+                archive_path.display()
+            ))
+        })
+    })
+}
+
+fn classic_central_directory(
+    archive_path: &Path,
+    archive_offset: u64,
+    eocd: EndOfCentralDirectory,
+) -> Result<CentralDirectory, BlockStoreError> {
+    Ok(CentralDirectory {
+        entry_count: usize::from(eocd.entry_count),
+        offset: archive_offset
+            .checked_add(u64::from(eocd.directory_offset))
+            .ok_or_else(|| {
+                backend_failure(format!(
+                    "failed to bound the zip central directory in {}",
+                    archive_path.display()
+                ))
+            })?,
+        size: u64::from(eocd.directory_size),
+    })
+}
+
+fn try_read_zip64_central_directory(
+    file: &mut File,
+    archive_path: &Path,
+    file_len: u64,
+    archive_offset: u64,
+    zip64_eocd_offset: u64,
+) -> Result<Option<CentralDirectory>, BlockStoreError> {
     let zip64_eocd_offset = archive_offset
         .checked_add(zip64_eocd_offset)
         .ok_or_else(|| {
@@ -392,18 +435,15 @@ fn read_zip64_central_directory(
     file_len: u64,
     archive_offset: u64,
     zip64_eocd_offset: u64,
-) -> Result<CentralDirectory, BlockStoreError> {
+) -> Result<Option<CentralDirectory>, BlockStoreError> {
     const ZIP64_EOCD_MIN_LEN: usize = 56;
 
-    let zip64_eocd_end = zip64_eocd_offset
+    let Some(zip64_eocd_end) = zip64_eocd_offset
         .checked_add(ZIP64_EOCD_MIN_LEN as u64)
         .filter(|end| *end <= file_len)
-        .ok_or_else(|| {
-            backend_failure(format!(
-                "failed to bound the zip64 end of central directory in {}",
-                archive_path.display()
-            ))
-        })?;
+    else {
+        return Ok(None);
+    };
 
     file.seek(SeekFrom::Start(zip64_eocd_offset))
         .map_err(|error| {
@@ -421,10 +461,7 @@ fn read_zip64_central_directory(
     })?;
 
     if !record.starts_with(&ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
-        return Err(backend_failure(format!(
-            "failed to parse the zip64 end of central directory in {}",
-            archive_path.display()
-        )));
+        return Ok(None);
     }
     let record_size = read_u64_le(&record, 4).ok_or_else(|| {
         backend_failure(format!(
@@ -433,30 +470,21 @@ fn read_zip64_central_directory(
         ))
     })?;
     if record_size < 44 {
-        return Err(backend_failure(format!(
-            "failed to parse the zip64 end of central directory in {}",
-            archive_path.display()
-        )));
+        return Ok(None);
     }
-    let total_record_len = zip64_eocd_offset
+    let Some(total_record_len) = zip64_eocd_offset
         .checked_add(12)
         .and_then(|start| start.checked_add(record_size))
         .filter(|end| *end <= file_len)
-        .ok_or_else(|| {
-            backend_failure(format!(
-                "failed to bound the zip64 end of central directory in {}",
-                archive_path.display()
-            ))
-        })?;
+    else {
+        return Ok(None);
+    };
     debug_assert_eq!(
         zip64_eocd_end,
         zip64_eocd_offset + ZIP64_EOCD_MIN_LEN as u64
     );
     if total_record_len < zip64_eocd_end {
-        return Err(backend_failure(format!(
-            "failed to parse the zip64 end of central directory in {}",
-            archive_path.display()
-        )));
+        return Ok(None);
     }
 
     let entry_count = read_u64_le(&record, 32).ok_or_else(|| {
@@ -478,7 +506,7 @@ fn read_zip64_central_directory(
         ))
     })?;
 
-    Ok(CentralDirectory {
+    Ok(Some(CentralDirectory {
         entry_count: usize::try_from(entry_count).map_err(|_| {
             backend_failure(format!(
                 "zip archive {} contains too many entries to inspect on this platform",
@@ -492,7 +520,7 @@ fn read_zip64_central_directory(
             ))
         })?,
         size,
-    })
+    }))
 }
 
 fn map_get_error(error: BlockError) -> BlockStoreError {
@@ -608,9 +636,13 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
+
     use super::{
-        END_OF_CENTRAL_DIRECTORY_SIGNATURE, EOCD_LEN,
+        END_OF_CENTRAL_DIRECTORY_SIGNATURE, EOCD_LEN, EndOfCentralDirectory,
         ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE, find_end_of_central_directory,
+        resolve_central_directory,
     };
 
     #[test]
@@ -696,6 +728,45 @@ mod tests {
         assert_eq!(directory.directory_offset, 0);
         assert_eq!(directory.directory_size, 0);
         assert_eq!(EOCD_LEN, 22);
+    }
+
+    #[test]
+    fn resolve_central_directory_falls_back_to_classic_when_locator_signature_is_garbage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let archive_path = temp_dir.path().join("classic-with-garbage-locator.zip");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE);
+        push_u32(&mut bytes, 0);
+        push_u64(&mut bytes, 3);
+        push_u32(&mut bytes, 1);
+        bytes.extend_from_slice(&END_OF_CENTRAL_DIRECTORY_SIGNATURE);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        File::create(&archive_path)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+
+        let eocd = EndOfCentralDirectory {
+            entry_count: 0,
+            directory_offset: 0,
+            directory_size: 0,
+            zip64_eocd_offset: Some(3),
+        };
+        let mut file = File::open(&archive_path).unwrap();
+
+        let directory =
+            resolve_central_directory(&mut file, &archive_path, bytes.len() as u64, 0, eocd)
+                .unwrap();
+
+        assert_eq!(directory.entry_count, 0);
+        assert_eq!(directory.offset, 0);
+        assert_eq!(directory.size, 0);
     }
 
     fn push_u16(buffer: &mut Vec<u8>, value: u16) {

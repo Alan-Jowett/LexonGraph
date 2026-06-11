@@ -80,14 +80,13 @@ considered stored blocks.
 
 ### DSG-ZIP-STORE-004 `Archive inspection model`
 
-Each `get` or enumeration operation opens the archive through the selected
-zip-reader dependency and inspects the archive metadata needed for recognized
-entry discovery.
+Each `get` or enumeration operation opens the archive file and inspects the
+archive metadata needed for recognized entry discovery.
 
 This revision may inspect central-directory metadata directly, in addition to
-using the zip-reader dependency for archive acceptance and entry reads, so that
-duplicate recognized block-entry paths remain observable across both classic zip
-and zip64 archives.
+using the zip-reader dependency for constructor validation and recognized entry
+reads, so that duplicate recognized block-entry paths remain observable across
+both classic zip and zip64 archives.
 
 This revision does not require the store to cache a persistent in-memory index
 across calls.
