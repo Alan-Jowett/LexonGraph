@@ -1435,6 +1435,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-block-store-memory"
+version = "0.1.0"
+dependencies = [
+ "lexongraph-block",
+ "lexongraph-block-store",
+ "lexongraph-block-store-overlay",
+]
+
+[[package]]
 name = "lexongraph-block-store-overlay"
 version = "0.1.0"
 dependencies = [

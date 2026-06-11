@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-block-store-memory"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Intended for use from this crate's integration tests only.
+# Enabling this in `[dependencies]` broadens the crate's public test surface.
+inject = []
+
+[dependencies]
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-block-store-overlay = { path = "../lexongraph-block-store-overlay" }
+
+[dev-dependencies]
+lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }
