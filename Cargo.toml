@@ -8,6 +8,7 @@ members = [
     "crates/lexongraph-block-store",
     "crates/lexongraph-block-store-fs",
     "crates/lexongraph-block-store-overlay",
+    "crates/lexongraph-block-store-zip",
     "crates/lexongraph-dcbc-streaming",
     "crates/lexongraph-directional-pca",
     "crates/lexongraph-embeddings-openai",
