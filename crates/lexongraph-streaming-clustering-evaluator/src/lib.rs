@@ -25,7 +25,7 @@ use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry, Metadata, TypedEntri
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
-use lexongraph_block_store_zip::ZipBlockStore;
+use lexongraph_block_store_zip::{ZipBlockStore, ZipBlockStoreInitError};
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
@@ -230,12 +230,15 @@ thread_local! {
 pub enum ArchiveOverlayStoreError {
     TemporaryLayer(String),
     ArchiveOpen(String),
+    ArchiveRead(String),
 }
 
 impl fmt::Display for ArchiveOverlayStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TemporaryLayer(message) | Self::ArchiveOpen(message) => f.write_str(message),
+            Self::TemporaryLayer(message)
+            | Self::ArchiveOpen(message)
+            | Self::ArchiveRead(message) => f.write_str(message),
         }
     }
 }
@@ -261,17 +264,17 @@ impl FsOverlayZipBlockStore {
                 archive_path.as_ref().display()
             ))
         })?;
-        let writable_overlay_store =
-            FilesystemBlockStore::new(writable_layer.path()).map_err(|error| {
-                ArchiveOverlayStoreError::TemporaryLayer(format!(
-                    "failed to open overlay writable block-store layer for archive {}: {error}",
-                    archive_path.as_ref().display()
-                ))
+        let zip_store =
+            ZipBlockStore::new_classified(archive_path.as_ref()).map_err(|error| match error {
+                ZipBlockStoreInitError::Open(message) => {
+                    ArchiveOverlayStoreError::ArchiveOpen(message)
+                }
+                ZipBlockStoreInitError::Read(message) => {
+                    ArchiveOverlayStoreError::ArchiveRead(message)
+                }
             })?;
-        let zip_store = ZipBlockStore::new(archive_path.as_ref())
-            .map_err(|error| ArchiveOverlayStoreError::ArchiveOpen(error.to_string()))?;
         let store = OverlayBlockStore::new(vec![
-            Box::new(PassiveLayer::new(writable_overlay_store)) as Box<dyn OverlayStoreLayer>,
+            Box::new(PassiveLayer::new(writable_store.clone())) as Box<dyn OverlayStoreLayer>,
             Box::new(PassiveLayer::new(zip_store)) as Box<dyn OverlayStoreLayer>,
         ])
         .map_err(|error| {
@@ -2161,7 +2164,10 @@ fn open_corpus_store(
                         archive_source_temporary_layer_failure(&reference.source_id, message)
                     }
                     ArchiveOverlayStoreError::ArchiveOpen(message) => {
-                        classify_archive_initialization_failure(&reference.source_id, message)
+                        archive_source_open_failure(&reference.source_id, message)
+                    }
+                    ArchiveOverlayStoreError::ArchiveRead(message) => {
+                        archive_source_read_failure(&reference.source_id, message)
                     }
                 })
         }
@@ -2421,25 +2427,6 @@ fn source_store_read_failure(
             archive_source_read_failure(&reference.source_id, message)
         }
     }
-}
-
-fn classify_archive_initialization_failure(
-    source_id: &str,
-    message: String,
-) -> CandidateExecutionError {
-    if is_archive_read_failure(&message) {
-        archive_source_read_failure(source_id, message)
-    } else {
-        archive_source_open_failure(source_id, message)
-    }
-}
-
-fn is_archive_read_failure(message: &str) -> bool {
-    !(message.contains("failed to canonicalize zip archive")
-        || (message.contains("failed to stat zip archive")
-            && !message.contains("during central-directory scan"))
-        || message.contains("is not a file")
-        || message.contains("failed to open zip archive"))
 }
 
 fn validate_cluster_assignments(
@@ -3106,16 +3093,6 @@ mod tests {
                 archive_path: PathBuf::from(r"C:\archive.zip"),
             }
         );
-    }
-
-    #[test]
-    fn archive_read_failure_classifier_treats_central_directory_stat_errors_as_read_failures() {
-        assert!(super::is_archive_read_failure(
-            "failed to stat zip archive C:\\archive.zip during central-directory scan: boom"
-        ));
-        assert!(!super::is_archive_read_failure(
-            "failed to stat zip archive C:\\archive.zip: boom"
-        ));
     }
 
     fn archive_training_profile_for_tests() -> BenchmarkProfile {

@@ -17,6 +17,22 @@ use lexongraph_block::{Block, BlockError, BlockHash, ValidatedBlock, deserialize
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use zip::ZipArchive;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZipBlockStoreInitError {
+    Open(String),
+    Read(String),
+}
+
+impl std::fmt::Display for ZipBlockStoreInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Open(message) | Self::Read(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ZipBlockStoreInitError {}
+
 #[derive(Clone, Debug)]
 pub struct ZipBlockStore {
     archive_path: PathBuf,
@@ -24,31 +40,39 @@ pub struct ZipBlockStore {
 
 impl ZipBlockStore {
     pub fn new(archive_path: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
+        Self::new_classified(archive_path).map_err(|error| backend_failure(error.to_string()))
+    }
+
+    pub fn new_classified(archive_path: impl AsRef<Path>) -> Result<Self, ZipBlockStoreInitError> {
         let requested_path = archive_path.as_ref();
         let canonical_path = requested_path.canonicalize().map_err(|error| {
-            backend_failure(format!(
+            ZipBlockStoreInitError::Open(format!(
                 "failed to canonicalize zip archive {}: {error}",
                 requested_path.display()
             ))
         })?;
         let metadata = fs::metadata(&canonical_path).map_err(|error| {
-            backend_failure(format!(
+            ZipBlockStoreInitError::Open(format!(
                 "failed to stat zip archive {}: {error}",
                 canonical_path.display()
             ))
         })?;
         if !metadata.is_file() {
-            return Err(backend_failure(format!(
+            return Err(ZipBlockStoreInitError::Open(format!(
                 "zip archive {} is not a file",
                 canonical_path.display()
             )));
         }
 
-        let file = open_archive_file(&canonical_path)?;
-        let _ = open_archive_from_file(file, &canonical_path)?;
+        let file = open_archive_file(&canonical_path)
+            .map_err(|error| ZipBlockStoreInitError::Open(error.to_string()))?;
+        let _ = open_archive_from_file(file, &canonical_path)
+            .map_err(|error| ZipBlockStoreInitError::Read(error.to_string()))?;
 
-        let mut file = open_archive_file(&canonical_path)?;
-        let _ = archive_entry_names(&mut file, &canonical_path)?;
+        let mut file = open_archive_file(&canonical_path)
+            .map_err(|error| ZipBlockStoreInitError::Open(error.to_string()))?;
+        let _ = archive_entry_names(&mut file, &canonical_path)
+            .map_err(|error| ZipBlockStoreInitError::Read(error.to_string()))?;
 
         Ok(Self {
             archive_path: canonical_path,
