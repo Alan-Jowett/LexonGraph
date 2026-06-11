@@ -3,21 +3,28 @@
 
 mod support;
 
+use ciborium::value::Value as CborValue;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lexongraph_block::{Block, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block};
+use lexongraph_block_store::BlockStore;
+use lexongraph_block_store_fs::FilesystemBlockStore;
+use lexongraph_block_store_zip::ZipBlockStore;
 use lexongraph_streaming_clustering::{
     MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
     StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_embedding,
 };
 use lexongraph_streaming_clustering_evaluator::{
-    CandidateIdentity, CandidateRunStatus, DeferredMeasurementStatus, EvaluatorError, GateStatus,
-    StructuredFailure, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, run_evaluation_campaign,
+    BlockStoreReferenceStore, CandidateIdentity, CandidateRunStatus, DeferredMeasurementStatus,
+    EmbeddingWorkloadSource, EvaluatorError, FsOverlayZipBlockStore, GateStatus, StructuredFailure,
+    TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, run_evaluation_campaign, set_force_temp_layer_failure_for_tests,
 };
 use support::{
-    balanced_and_skewed_candidates, block_store_backed_profile, broken_block_store_profile,
+    archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
+    broken_archive_backed_profile, broken_block_store_profile, corrupt_archive_backed_profile,
     duplicate_evaluation_entities_block_store_profile, duplicate_source_id_profile,
     empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
     missing_synthetic_metadata_key_profile, nondeterministic_candidate,
@@ -502,6 +509,72 @@ fn val_stream_eval_016_invalid_profiles_and_shared_contract_failures_are_disting
         source_failure.run_reports[0].run_status,
         CandidateRunStatus::CorpusSourceFailure
     );
+
+    let archive_source_failure = run_evaluation_campaign(
+        &broken_archive_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        archive_source_failure.run_reports[0].run_status,
+        CandidateRunStatus::CorpusSourceFailure
+    );
+    assert!(matches!(
+        archive_source_failure.run_reports[0].terminal_failure,
+        Some(StructuredFailure::ArchiveSourceOpenFailure { .. })
+    ));
+
+    let corrupt_archive_failure = run_evaluation_campaign(
+        &corrupt_archive_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        corrupt_archive_failure.run_reports[0].run_status,
+        CandidateRunStatus::CorpusSourceFailure
+    );
+    assert!(matches!(
+        corrupt_archive_failure.run_reports[0].terminal_failure,
+        Some(StructuredFailure::ArchiveSourceReadFailure { .. })
+    ));
+
+    struct TempLayerFailureReset;
+    impl Drop for TempLayerFailureReset {
+        fn drop(&mut self) {
+            set_force_temp_layer_failure_for_tests(false);
+        }
+    }
+
+    set_force_temp_layer_failure_for_tests(true);
+    let _reset = TempLayerFailureReset;
+    let temp_layer_failure = run_evaluation_campaign(
+        &archive_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        temp_layer_failure.run_reports[0].run_status,
+        CandidateRunStatus::CorpusSourceFailure
+    );
+    assert!(matches!(
+        temp_layer_failure.run_reports[0].terminal_failure,
+        Some(StructuredFailure::ArchiveSourceTemporaryLayerFailure { .. })
+    ));
 }
 
 #[test]
@@ -616,18 +689,197 @@ fn val_stream_eval_021_inline_and_block_store_profiles_are_semantically_equivale
         ],
     )
     .unwrap();
+    let archive_report = run_evaluation_campaign(
+        &archive_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
 
     let inline_run = &inline_report.run_reports[0];
     let block_store_run = &block_store_report.run_reports[0];
+    let archive_run = &archive_report.run_reports[0];
     let mut inline_membership = inline_run.leaf_membership.clone();
     inline_membership.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
     let mut block_store_membership = block_store_run.leaf_membership.clone();
     block_store_membership.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+    let mut archive_membership = archive_run.leaf_membership.clone();
+    archive_membership.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
 
     assert_eq!(inline_run.pass_reports, block_store_run.pass_reports);
+    assert_eq!(inline_run.pass_reports, archive_run.pass_reports);
     assert_eq!(inline_run.probe_results, block_store_run.probe_results);
+    assert_eq!(inline_run.probe_results, archive_run.probe_results);
     assert_eq!(inline_membership, block_store_membership);
+    assert_eq!(inline_membership, archive_membership);
     assert_eq!(inline_run.metric_results, block_store_run.metric_results);
+    assert_eq!(inline_run.metric_results, archive_run.metric_results);
+}
+
+#[test]
+fn val_stream_eval_022_archive_backed_profiles_use_zip_archive_source_declarations() {
+    let profile = archive_backed_profile();
+    let parsed: lexongraph_streaming_clustering_evaluator::BenchmarkProfile =
+        serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+
+    let TrainingPassSource::BlockStore { corpus, .. } = &parsed.training_passes[0] else {
+        panic!("archive-backed fixture should use a block-store training pass");
+    };
+    let BlockStoreReferenceStore::ZipArchive { archive_path } = &corpus.store else {
+        panic!("archive-backed fixture should use zip archive corpus references");
+    };
+    assert!(archive_path.is_file());
+
+    let EmbeddingWorkloadSource::BlockStore { corpus } = &parsed.probe_workloads[0].source else {
+        panic!("archive-backed fixture should use a block-store probe workload");
+    };
+    assert!(matches!(
+        &corpus.store,
+        BlockStoreReferenceStore::ZipArchive { .. }
+    ));
+    let lexongraph_streaming_clustering_evaluator::EvaluationEntitySource::BlockStore { corpora } =
+        &parsed.evaluation_entities
+    else {
+        panic!("archive-backed fixture should use block-store evaluation entities");
+    };
+    assert!(corpora.iter().all(|corpus| matches!(
+        &corpus.corpus.store,
+        BlockStoreReferenceStore::ZipArchive { .. }
+    )));
+
+    let report = run_evaluation_campaign(
+        &parsed,
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        report.run_reports[0].run_status,
+        CandidateRunStatus::Succeeded
+    );
+}
+
+#[test]
+fn regression_legacy_filesystem_profile_json_still_deserializes() {
+    fn strip_store_kind(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("store_kind");
+                for child in map.values_mut() {
+                    strip_store_kind(child);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    strip_store_kind(value);
+                }
+            }
+            serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_) => {}
+        }
+    }
+
+    let mut legacy_json = serde_json::to_value(block_store_backed_profile()).unwrap();
+    strip_store_kind(&mut legacy_json);
+    let parsed: lexongraph_streaming_clustering_evaluator::BenchmarkProfile =
+        serde_json::from_value(legacy_json).unwrap();
+
+    let report = run_evaluation_campaign(
+        &parsed,
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        report.run_reports[0].run_status,
+        CandidateRunStatus::Succeeded
+    );
+}
+
+#[test]
+fn val_stream_eval_023_archive_backed_sources_cover_training_replay_and_probes() {
+    let report = run_evaluation_campaign(
+        &archive_backed_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let run_report = &report.run_reports[0];
+    assert_eq!(run_report.run_status, CandidateRunStatus::Succeeded);
+    assert_eq!(run_report.pass_reports.len(), 2);
+    assert_eq!(run_report.probe_results.len(), 1);
+    assert_eq!(run_report.leaf_membership.len(), 4);
+}
+
+#[test]
+fn val_stream_eval_024_overlay_helper_writes_new_blocks_only_to_the_mutable_fs_layer() {
+    let profile = archive_backed_profile();
+    let TrainingPassSource::BlockStore { corpus, .. } = &profile.training_passes[0] else {
+        panic!("archive-backed fixture should use a block-store training pass");
+    };
+    let BlockStoreReferenceStore::ZipArchive { archive_path } = &corpus.store else {
+        panic!("archive-backed fixture should use zip archive corpus references");
+    };
+    let store = FsOverlayZipBlockStore::new(archive_path).unwrap();
+
+    let block = Block::Leaf(
+        build_leaf_block(
+            VERSION_1,
+            EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            vec![LeafEntry {
+                embedding: [1.0f32.to_le_bytes(), 2.0f32.to_le_bytes()].concat(),
+                metadata: vec![(
+                    CborValue::Text("entity_id".into()),
+                    CborValue::Text("extra".into()),
+                )],
+                content: Content {
+                    media_type: "application/octet-stream".into(),
+                    body: Vec::new(),
+                },
+            }],
+            None,
+        )
+        .unwrap(),
+    );
+
+    let block_id = store.put(&block).unwrap();
+    assert!(store.get(&block_id).unwrap().is_some());
+    assert!(
+        FilesystemBlockStore::new(store.writable_layer_path())
+            .unwrap()
+            .get(&block_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ZipBlockStore::new(archive_path)
+            .unwrap()
+            .get(&block_id)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

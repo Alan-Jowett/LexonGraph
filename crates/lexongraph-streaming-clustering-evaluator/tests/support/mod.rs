@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,11 +18,14 @@ use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
-    CompressionBenchmark, CompressionMethod, DeferredResearchGoal, EmbeddingWorkloadSource,
-    EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind, MetricDeclaration,
-    MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
-    SharedCandidateConfig, TrainingPassSource, built_in_fixture_candidate,
+    BlockStoreReferenceStore, CompressionBenchmark, CompressionMethod, DeferredResearchGoal,
+    EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind,
+    MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata,
+    ResearchCoverage, SharedCandidateConfig, TrainingPassSource, built_in_fixture_candidate,
 };
+use zip::CompressionMethod as ZipCompressionMethod;
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 pub fn strict_alignment_profile() -> BenchmarkProfile {
     BenchmarkProfile {
@@ -331,14 +336,76 @@ pub fn block_store_backed_profile() -> BenchmarkProfile {
     }
 }
 
+pub fn archive_backed_profile() -> BenchmarkProfile {
+    let mut profile = block_store_backed_profile();
+    let mut archive_by_store_root = std::collections::BTreeMap::<PathBuf, PathBuf>::new();
+
+    for pass in &mut profile.training_passes {
+        if let TrainingPassSource::BlockStore { corpus, .. } = pass {
+            *corpus = archive_backed_reference(corpus, &mut archive_by_store_root);
+        }
+    }
+    for workload in &mut profile.probe_workloads {
+        if let EmbeddingWorkloadSource::BlockStore { corpus } = &mut workload.source {
+            *corpus = archive_backed_reference(corpus, &mut archive_by_store_root);
+        }
+    }
+    let EvaluationEntitySource::BlockStore { corpora } = &mut profile.evaluation_entities else {
+        panic!("archive-backed fixture should start from block-store evaluation entities");
+    };
+    for corpus in corpora {
+        corpus.corpus = archive_backed_reference(&corpus.corpus, &mut archive_by_store_root);
+    }
+
+    profile
+}
+
 pub fn broken_block_store_profile() -> BenchmarkProfile {
     let mut profile = block_store_backed_profile();
     profile.training_passes = vec![TrainingPassSource::BlockStore {
         corpus: BlockStoreCorpusReference {
             source_id: "missing-training-source".into(),
-            store_root: unique_store_root("streaming-clustering-evaluator-missing"),
             root_block_id: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
                 .into(),
+            store: BlockStoreReferenceStore::Filesystem {
+                store_root: unique_store_root("streaming-clustering-evaluator-missing"),
+            },
+        },
+        batch_size: 2,
+    }];
+    profile
+}
+
+pub fn broken_archive_backed_profile() -> BenchmarkProfile {
+    let mut profile = archive_backed_profile();
+    profile.training_passes = vec![TrainingPassSource::BlockStore {
+        corpus: BlockStoreCorpusReference {
+            source_id: "missing-archive-source".into(),
+            root_block_id: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .into(),
+            store: BlockStoreReferenceStore::ZipArchive {
+                archive_path: unique_store_root("streaming-clustering-evaluator-missing-archive")
+                    .join("missing-corpus.zip"),
+            },
+        },
+        batch_size: 2,
+    }];
+    profile
+}
+
+pub fn corrupt_archive_backed_profile() -> BenchmarkProfile {
+    let mut profile = archive_backed_profile();
+    let corrupt_archive_path =
+        unique_store_root("streaming-clustering-evaluator-corrupt-archive").join("corrupt.zip");
+    std::fs::write(&corrupt_archive_path, b"not a zip archive").unwrap();
+    profile.training_passes = vec![TrainingPassSource::BlockStore {
+        corpus: BlockStoreCorpusReference {
+            source_id: "corrupt-archive-source".into(),
+            root_block_id: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .into(),
+            store: BlockStoreReferenceStore::ZipArchive {
+                archive_path: corrupt_archive_path,
+            },
         },
         batch_size: 2,
     }];
@@ -504,8 +571,65 @@ fn write_corpus(
 
     BlockStoreCorpusReference {
         source_id: source_id.into(),
-        store_root: store_root.to_path_buf(),
         root_block_id: root_block_id.to_string(),
+        store: BlockStoreReferenceStore::Filesystem {
+            store_root: store_root.to_path_buf(),
+        },
+    }
+}
+
+fn archive_backed_reference(
+    reference: &BlockStoreCorpusReference,
+    archive_by_store_root: &mut std::collections::BTreeMap<PathBuf, PathBuf>,
+) -> BlockStoreCorpusReference {
+    let BlockStoreReferenceStore::Filesystem { store_root } = &reference.store else {
+        panic!("archive-backed fixture expected filesystem-backed source");
+    };
+    let archive_path = archive_by_store_root
+        .entry(store_root.clone())
+        .or_insert_with(|| write_zip_archive_from_directory(store_root))
+        .clone();
+    BlockStoreCorpusReference {
+        source_id: reference.source_id.clone(),
+        root_block_id: reference.root_block_id.clone(),
+        store: BlockStoreReferenceStore::ZipArchive { archive_path },
+    }
+}
+
+fn write_zip_archive_from_directory(store_root: &Path) -> PathBuf {
+    let archive_path =
+        unique_store_root("streaming-clustering-evaluator-archive").join("corpus.zip");
+    let file = File::create(&archive_path).unwrap();
+    let mut zip = ZipWriter::new(file);
+    write_directory_to_zip(store_root, store_root, &mut zip);
+    zip.finish().unwrap();
+    archive_path
+}
+
+fn write_directory_to_zip(root: &Path, directory: &Path, zip: &mut ZipWriter<File>) {
+    let options = SimpleFileOptions::default().compression_method(ZipCompressionMethod::Stored);
+    let mut entries = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    for path in entries {
+        if path.is_dir() {
+            write_directory_to_zip(root, &path, zip);
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        zip.start_file(relative, options).unwrap();
+        let mut file = File::open(&path).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        zip.write_all(&bytes).unwrap();
     }
 }
 

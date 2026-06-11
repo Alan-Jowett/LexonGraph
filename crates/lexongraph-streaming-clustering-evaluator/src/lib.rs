@@ -10,6 +10,7 @@
 //! provenance, leaf-membership scoring, and scorecard generation without
 //! broadening the shared streaming clustering trainer/classifier contract.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -22,12 +23,15 @@ use half::f16;
 use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry, Metadata, TypedEntries, into_entries};
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
+use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
+use lexongraph_block_store_zip::ZipBlockStore;
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
 use serde::{Deserialize, Serialize};
+use tempfile::TempDir;
 
 pub type PassPlan = Vec<Vec<Embedding>>;
 
@@ -137,8 +141,161 @@ pub struct BenchmarkProfile {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BlockStoreCorpusReference {
     pub source_id: String,
-    pub store_root: PathBuf,
     pub root_block_id: String,
+    #[serde(flatten)]
+    pub store: BlockStoreReferenceStore,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "store_kind", rename_all = "kebab-case")]
+pub enum BlockStoreReferenceStore {
+    Filesystem { store_root: PathBuf },
+    ZipArchive { archive_path: PathBuf },
+}
+
+impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        enum FilesystemTag {
+            Filesystem,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        enum ZipArchiveTag {
+            ZipArchive,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            LegacyFilesystem {
+                store_root: PathBuf,
+            },
+            TaggedFilesystem {
+                #[serde(rename = "store_kind")]
+                _store_kind: FilesystemTag,
+                store_root: PathBuf,
+            },
+            TaggedZipArchive {
+                #[serde(rename = "store_kind")]
+                _store_kind: ZipArchiveTag,
+                archive_path: PathBuf,
+            },
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::LegacyFilesystem { store_root }
+            | Repr::TaggedFilesystem {
+                store_root,
+                _store_kind: _,
+            } => Ok(Self::Filesystem { store_root }),
+            Repr::TaggedZipArchive {
+                archive_path,
+                _store_kind: _,
+            } => Ok(Self::ZipArchive { archive_path }),
+        }
+    }
+}
+
+pub struct FsOverlayZipBlockStore {
+    writable_layer: TempDir,
+    store: OverlayBlockStore,
+}
+
+thread_local! {
+    static TEST_FORCE_TEMP_LAYER_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArchiveOverlayStoreError {
+    TemporaryLayer(String),
+    ArchiveOpen(String),
+}
+
+impl fmt::Display for ArchiveOverlayStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TemporaryLayer(message) | Self::ArchiveOpen(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ArchiveOverlayStoreError {}
+
+#[doc(hidden)]
+pub fn set_force_temp_layer_failure_for_tests(enabled: bool) {
+    TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.set(enabled));
+}
+
+impl FsOverlayZipBlockStore {
+    pub fn new(archive_path: impl AsRef<Path>) -> Result<Self, ArchiveOverlayStoreError> {
+        if TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.get()) {
+            return Err(ArchiveOverlayStoreError::TemporaryLayer(
+                "forced temporary writable-layer failure for tests".into(),
+            ));
+        }
+        let writable_layer = tempfile::tempdir().map_err(|error| {
+            ArchiveOverlayStoreError::TemporaryLayer(format!(
+                "failed to create temporary writable block-store layer for archive {}: {error}",
+                archive_path.as_ref().display()
+            ))
+        })?;
+        let writable_store = FilesystemBlockStore::new(writable_layer.path()).map_err(|error| {
+            ArchiveOverlayStoreError::TemporaryLayer(format!(
+                "failed to open temporary writable block-store layer for archive {}: {error}",
+                archive_path.as_ref().display()
+            ))
+        })?;
+        let zip_store = ZipBlockStore::new(archive_path.as_ref())
+            .map_err(|error| ArchiveOverlayStoreError::ArchiveOpen(error.to_string()))?;
+        let store = OverlayBlockStore::new(vec![
+            Box::new(PassiveLayer::new(writable_store)) as Box<dyn OverlayStoreLayer>,
+            Box::new(PassiveLayer::new(zip_store)) as Box<dyn OverlayStoreLayer>,
+        ])
+        .map_err(|error| {
+            ArchiveOverlayStoreError::TemporaryLayer(format!(
+                "failed to build temporary filesystem-over-zip overlay: {error}"
+            ))
+        })?;
+
+        Ok(Self {
+            writable_layer,
+            store,
+        })
+    }
+
+    pub fn writable_layer_path(&self) -> &Path {
+        self.writable_layer.path()
+    }
+}
+
+impl BlockStore for FsOverlayZipBlockStore {
+    fn put(
+        &self,
+        block: &lexongraph_block::Block,
+    ) -> Result<BlockHash, lexongraph_block_store::BlockStoreError> {
+        self.store.put(block)
+    }
+
+    fn get(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<lexongraph_block::ValidatedBlock>, lexongraph_block_store::BlockStoreError>
+    {
+        self.store.get(block_id)
+    }
+
+    fn iter_block_ids(
+        &self,
+    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, lexongraph_block_store::BlockStoreError>
+    {
+        self.store.iter_block_ids()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -402,6 +559,18 @@ pub enum StructuredFailure {
         message: String,
     },
     CorpusSourceLoadFailure {
+        source_id: String,
+        message: String,
+    },
+    ArchiveSourceOpenFailure {
+        source_id: String,
+        message: String,
+    },
+    ArchiveSourceReadFailure {
+        source_id: String,
+        message: String,
+    },
+    ArchiveSourceTemporaryLayerFailure {
         source_id: String,
         message: String,
     },
@@ -913,11 +1082,23 @@ fn validate_corpus_reference(reference: &BlockStoreCorpusReference) -> Result<()
             "block-store corpus references must declare a non-empty source_id".into(),
         ));
     }
-    if reference.store_root.as_os_str().is_empty() {
-        return Err(EvaluatorError::InvalidConfiguration(format!(
-            "block-store corpus reference {} must declare a non-empty store_root",
-            reference.source_id
-        )));
+    match &reference.store {
+        BlockStoreReferenceStore::Filesystem { store_root } => {
+            if store_root.as_os_str().is_empty() {
+                return Err(EvaluatorError::InvalidConfiguration(format!(
+                    "block-store corpus reference {} must declare a non-empty store_root",
+                    reference.source_id
+                )));
+            }
+        }
+        BlockStoreReferenceStore::ZipArchive { archive_path } => {
+            if archive_path.as_os_str().is_empty() {
+                return Err(EvaluatorError::InvalidConfiguration(format!(
+                    "block-store corpus reference {} must declare a non-empty archive_path",
+                    reference.source_id
+                )));
+            }
+        }
     }
     parse_block_hash_hex(&reference.root_block_id).map_err(|message| {
         EvaluatorError::InvalidConfiguration(format!(
@@ -1679,6 +1860,17 @@ fn structured_failure_detail(failure: &StructuredFailure) -> String {
         StructuredFailure::CorpusSourceLoadFailure { source_id, message } => {
             format!("failed to load corpus source {source_id}: {message}")
         }
+        StructuredFailure::ArchiveSourceOpenFailure { source_id, message } => {
+            format!("failed to open archive-backed corpus source {source_id}: {message}")
+        }
+        StructuredFailure::ArchiveSourceReadFailure { source_id, message } => {
+            format!("failed to read archive-backed corpus source {source_id}: {message}")
+        }
+        StructuredFailure::ArchiveSourceTemporaryLayerFailure { source_id, message } => {
+            format!(
+                "failed to create the temporary writable layer for archive-backed corpus source {source_id}: {message}"
+            )
+        }
         StructuredFailure::CandidateSharedContractFailure { message, .. } => message.clone(),
         StructuredFailure::GateFailure { message, .. } => message.clone(),
         StructuredFailure::DeferredMeasurement { message, .. } => message.clone(),
@@ -1800,6 +1992,20 @@ struct LoadedLeafRecord {
     entry: LeafEntry,
 }
 
+enum ResolvedCorpusStore {
+    Filesystem(FilesystemBlockStore),
+    ZipOverlay(FsOverlayZipBlockStore),
+}
+
+impl ResolvedCorpusStore {
+    fn as_block_store(&self) -> &dyn BlockStore {
+        match self {
+            Self::Filesystem(store) => store,
+            Self::ZipOverlay(store) => store,
+        }
+    }
+}
+
 fn load_embeddings_from_reference(
     reference: &BlockStoreCorpusReference,
     expected_dimensions: usize,
@@ -1889,19 +2095,49 @@ fn load_leaf_records(
 ) -> Result<Vec<LoadedLeafRecord>, CandidateExecutionError> {
     let root_block_id = parse_block_hash_hex(&reference.root_block_id)
         .map_err(|message| invalid_corpus_source_reference(&reference.source_id, message))?;
-    let store = FilesystemBlockStore::new(&reference.store_root).map_err(|error| {
-        corpus_source_load_failure(
-            &reference.source_id,
-            format!(
-                "failed to open block store {}: {error}",
-                reference.store_root.display()
-            ),
-        )
-    })?;
+    let store = open_corpus_store(reference)?;
     let mut records = Vec::new();
     let mut visited = HashSet::new();
-    collect_leaf_records(&store, reference, root_block_id, &mut visited, &mut records)?;
+    collect_leaf_records(
+        store.as_block_store(),
+        reference,
+        root_block_id,
+        &mut visited,
+        &mut records,
+    )?;
     Ok(records)
+}
+
+fn open_corpus_store(
+    reference: &BlockStoreCorpusReference,
+) -> Result<ResolvedCorpusStore, CandidateExecutionError> {
+    match &reference.store {
+        BlockStoreReferenceStore::Filesystem { store_root } => {
+            FilesystemBlockStore::new(store_root)
+                .map(ResolvedCorpusStore::Filesystem)
+                .map_err(|error| {
+                    corpus_source_load_failure(
+                        &reference.source_id,
+                        format!(
+                            "failed to open block store {}: {error}",
+                            store_root.display()
+                        ),
+                    )
+                })
+        }
+        BlockStoreReferenceStore::ZipArchive { archive_path } => {
+            FsOverlayZipBlockStore::new(archive_path)
+                .map(ResolvedCorpusStore::ZipOverlay)
+                .map_err(|error| match error {
+                    ArchiveOverlayStoreError::TemporaryLayer(message) => {
+                        archive_source_temporary_layer_failure(&reference.source_id, message)
+                    }
+                    ArchiveOverlayStoreError::ArchiveOpen(message) => {
+                        classify_archive_initialization_failure(&reference.source_id, message)
+                    }
+                })
+        }
+    }
 }
 
 fn collect_leaf_records(
@@ -1921,8 +2157,8 @@ fn collect_leaf_records(
     let validated = store
         .get(&block_id)
         .map_err(|error| {
-            corpus_source_load_failure(
-                &reference.source_id,
+            source_store_read_failure(
+                reference,
                 format!("failed to load block {block_id}: {error}"),
             )
         })?
@@ -2119,6 +2355,62 @@ fn corpus_source_load_failure(source_id: &str, message: String) -> CandidateExec
         source_id: source_id.into(),
         message,
     })
+}
+
+fn archive_source_open_failure(source_id: &str, message: String) -> CandidateExecutionError {
+    CandidateExecutionError::CorpusSource(StructuredFailure::ArchiveSourceOpenFailure {
+        source_id: source_id.into(),
+        message,
+    })
+}
+
+fn archive_source_read_failure(source_id: &str, message: String) -> CandidateExecutionError {
+    CandidateExecutionError::CorpusSource(StructuredFailure::ArchiveSourceReadFailure {
+        source_id: source_id.into(),
+        message,
+    })
+}
+
+fn archive_source_temporary_layer_failure(
+    source_id: &str,
+    message: String,
+) -> CandidateExecutionError {
+    CandidateExecutionError::CorpusSource(StructuredFailure::ArchiveSourceTemporaryLayerFailure {
+        source_id: source_id.into(),
+        message,
+    })
+}
+
+fn source_store_read_failure(
+    reference: &BlockStoreCorpusReference,
+    message: String,
+) -> CandidateExecutionError {
+    match &reference.store {
+        BlockStoreReferenceStore::Filesystem { .. } => {
+            corpus_source_load_failure(&reference.source_id, message)
+        }
+        BlockStoreReferenceStore::ZipArchive { .. } => {
+            archive_source_read_failure(&reference.source_id, message)
+        }
+    }
+}
+
+fn classify_archive_initialization_failure(
+    source_id: &str,
+    message: String,
+) -> CandidateExecutionError {
+    if is_archive_read_failure(&message) {
+        archive_source_read_failure(source_id, message)
+    } else {
+        archive_source_open_failure(source_id, message)
+    }
+}
+
+fn is_archive_read_failure(message: &str) -> bool {
+    !message.contains("failed to canonicalize zip archive")
+        && !message.contains("failed to stat zip archive")
+        && !message.contains("is not a file")
+        && !message.contains("failed to open zip archive")
 }
 
 fn validate_cluster_assignments(

@@ -101,7 +101,9 @@ production, full-corpus assignment replay, and one classifier probe workload.
 construction, pass ingestion, `finish_pass()`, training completion, classifier
 production, evaluator-owned leaf membership materialization, and
 classifier-side probing according to the benchmark profile for both inline
-fixture workloads and block-store-backed referenced workloads.
+fixture workloads and block-store-backed referenced workloads, including
+zip-archive-backed sources resolved through the repository overlay and zip
+block-store implementations.
 
 **Traces to:** REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-010, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-024
 
@@ -186,8 +188,8 @@ returns a shared-contract failure.
 
 **Pass condition:** failures are surfaced deterministically and distinguish
 invalid evaluator configuration, invalid or unresolved corpus-source
-references, block-store-backed corpus-loading failures, and candidate-reported
-shared-contract failure.
+references, block-store-backed corpus-loading failures, zip-archive open or
+read failures, and candidate-reported shared-contract failure.
 
 **Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022
 
@@ -222,7 +224,8 @@ Inspect repository verification artifacts for the new crate.
 candidate execution, inline-fixture and block-store-backed corpus-source
 handling, leaf membership materialization, occupancy/locality/compression
 scoring, repeated-run determinism checks, comparative scorecard generation,
-failure classification, and deferred-goal reporting.
+failure classification, deferred-goal reporting, and archive-backed overlay
+resolution.
 
 **Traces to:** REQ-STREAM-EVAL-016, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-024
 
@@ -234,7 +237,9 @@ references.
 
 **Pass condition:** the evaluator consumes all three workload families through
 the same declared scalable corpus-source model without requiring a monolithic
-profile-embedded JSON corpus.
+profile-embedded JSON corpus, including when those references are
+zip-archive-backed and resolved through a temporary-filesystem-over-zip
+overlay.
 
 **Traces to:** REQ-STREAM-EVAL-024, REQ-STREAM-EVAL-025, REQ-STREAM-EVAL-026
 
@@ -245,6 +250,39 @@ equivalent block-store-backed benchmark fixture.
 
 **Pass condition:** both source modes remain supported, and the resulting leaf
 membership semantics and report semantics are equivalent apart from provenance
-details specific to the referenced external corpus source.
+details specific to the referenced external corpus source, whether the
+block-store-backed fixture is filesystem-root-backed or zip-archive-backed.
 
 **Traces to:** REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023
+
+### VAL-STREAM-EVAL-022
+
+Inspect one benchmark profile using archive-backed scalable corpora.
+
+**Pass condition:** the profile can declare a zip archive path plus root block
+ID for a training pass, probe workload, or evaluation corpus without requiring
+the user to declare a writable overlay directory.
+
+**Traces to:** REQ-STREAM-EVAL-027, REQ-STREAM-EVAL-029
+
+### VAL-STREAM-EVAL-023
+
+Run one campaign whose training passes, evaluation replay entities, and probe
+workloads are supplied through zip-archive-backed corpus references.
+
+**Pass condition:** the evaluator resolves each referenced archive through a
+higher-priority temporary writable filesystem layer over a lower-priority
+immutable zip layer and successfully consumes the resulting overlay-backed
+block-store view.
+
+**Traces to:** REQ-STREAM-EVAL-028, REQ-STREAM-EVAL-029
+
+### VAL-STREAM-EVAL-024
+
+Exercise the reusable filesystem-over-zip overlay helper, if present.
+
+**Pass condition:** new block creation through the helper lands in the mutable
+filesystem layer without mutating the underlying zip archive and without
+widening the parent `BlockStore` API.
+
+**Traces to:** REQ-STREAM-EVAL-030

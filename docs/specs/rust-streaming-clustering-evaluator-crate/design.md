@@ -92,6 +92,10 @@ including:
 - declared reproducibility metadata such as floating-point and hardware profile
   descriptors
 
+For scalable corpora, the source declaration may identify either a
+filesystem-root-backed block store or a zip-archive-backed block store plus the
+root block ID to traverse.
+
 ### DSG-STREAM-EVAL-006 `Shared-profile campaign execution`
 
 One evaluation campaign binds one benchmark profile to one or more registered
@@ -143,7 +147,8 @@ The evaluator defines one corpus-source abstraction that can back:
 The abstraction supports:
 
 - inline fixture payloads embedded in the benchmark profile
-- block-store-backed references that identify externally stored corpus material
+- block-store-backed references that identify externally stored corpus material,
+  including filesystem-root-backed and zip-archive-backed declarations
 
 This preserves small-fixture ergonomics while allowing large corpora to remain
 outside the profile document.
@@ -157,6 +162,45 @@ block-storage trait boundary.
 This design does not widen `BlockStore` with evaluator-specific query
 operations, whole-corpus JSON payloads, or candidate-owned shortcuts. Any
 concrete store construction inputs remain outside the parent trait boundary.
+
+The scalable path may resolve a corpus reference through composition of existing
+repository block-store implementations when needed to preserve the evaluator's
+source-neutral execution flow.
+
+### DSG-STREAM-EVAL-008C `Archive-backed corpus reference`
+
+The evaluator's corpus-source model includes an archive-backed reference form
+that carries:
+
+- source identity
+- zip archive path
+- root block ID
+
+This declaration is valid anywhere the unified corpus-source model accepts a
+block-store-backed source.
+
+### DSG-STREAM-EVAL-008D `Temporary filesystem-over-zip overlay resolution`
+
+When the evaluator resolves an archive-backed corpus reference, it:
+
+1. opens the declared archive through the zip block-store implementation
+2. creates a temporary writable filesystem block-store layer
+3. composes the writable filesystem layer above the immutable zip layer through
+   the overlay block-store implementation
+4. traverses the declared root block ID through the resulting overlay-backed
+   block-store view
+
+The writable filesystem layer is evaluator-managed lifecycle state and is not a
+required user-supplied benchmark-profile input.
+
+### DSG-STREAM-EVAL-008E `Reusable overlay helper`
+
+If the evaluator would otherwise duplicate overlay-construction logic, it may
+expose a small reusable helper or constructor for the temporary
+filesystem-over-zip composition used by archive-backed corpus sources.
+
+This helper remains subordinate to the existing overlay and zip block-store
+specifications and does not widen `BlockStore`.
 
 ### DSG-STREAM-EVAL-009 `Observable determinism checks`
 
@@ -251,7 +295,8 @@ Evaluator failures are reported through an evaluator-owned structured taxonomy
 that distinguishes invalid evaluator configuration, candidate-reported
 shared-contract failure, evaluator-owned gate failure, invalid corpus-source
 references, corpus-loading failures encountered through block-store-backed
-inputs, and incomplete or unsupported measurement due to a deferred research
+inputs, zip-archive open/read failures, temporary writable-layer creation
+failures, and incomplete or unsupported measurement due to a deferred research
 requirement.
 
 ### DSG-STREAM-EVAL-018 `Explicit non-goal boundary`
@@ -282,12 +327,15 @@ evaluator crate.
 | DSG-STREAM-EVAL-002 | REQ-STREAM-EVAL-001, REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-005 |
 | DSG-STREAM-EVAL-003 | REQ-STREAM-EVAL-003 |
 | DSG-STREAM-EVAL-004 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-005 |
-| DSG-STREAM-EVAL-005 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-026 |
+| DSG-STREAM-EVAL-005 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-026, REQ-STREAM-EVAL-027 |
 | DSG-STREAM-EVAL-006 | REQ-STREAM-EVAL-007 |
 | DSG-STREAM-EVAL-007 | REQ-STREAM-EVAL-008 |
-| DSG-STREAM-EVAL-008 | REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-024 |
-| DSG-STREAM-EVAL-008A | REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-024, REQ-STREAM-EVAL-026 |
-| DSG-STREAM-EVAL-008B | REQ-STREAM-EVAL-002, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-025 |
+| DSG-STREAM-EVAL-008 | REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-024, REQ-STREAM-EVAL-028 |
+| DSG-STREAM-EVAL-008A | REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-024, REQ-STREAM-EVAL-026, REQ-STREAM-EVAL-027 |
+| DSG-STREAM-EVAL-008B | REQ-STREAM-EVAL-002, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-025, REQ-STREAM-EVAL-028 |
+| DSG-STREAM-EVAL-008C | REQ-STREAM-EVAL-027 |
+| DSG-STREAM-EVAL-008D | REQ-STREAM-EVAL-028, REQ-STREAM-EVAL-029 |
+| DSG-STREAM-EVAL-008E | REQ-STREAM-EVAL-030 |
 | DSG-STREAM-EVAL-009 | REQ-STREAM-EVAL-011 |
 | DSG-STREAM-EVAL-010 | REQ-STREAM-EVAL-010, REQ-STREAM-EVAL-022 |
 | DSG-STREAM-EVAL-011 | REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018 |
@@ -296,6 +344,6 @@ evaluator crate.
 | DSG-STREAM-EVAL-014 | REQ-STREAM-EVAL-012, REQ-STREAM-EVAL-013 |
 | DSG-STREAM-EVAL-015 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021 |
 | DSG-STREAM-EVAL-016 | REQ-STREAM-EVAL-014 |
-| DSG-STREAM-EVAL-017 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022 |
+| DSG-STREAM-EVAL-017 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-028, REQ-STREAM-EVAL-029 |
 | DSG-STREAM-EVAL-018 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-025 |
 | DSG-STREAM-EVAL-019 | REQ-STREAM-EVAL-016 |
