@@ -10,6 +10,8 @@
 //! provenance, leaf-membership scoring, and scorecard generation without
 //! broadening the shared streaming clustering trainer/classifier contract.
 
+mod section4;
+
 #[cfg(test)]
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -33,6 +35,15 @@ use lexongraph_streaming_clustering::{
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+
+pub use section4::{
+    Section4CorpusFamily, Section4GeneratedProfile, Section4MetricContract,
+    Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
+    Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport, Section4SuiteRunProfileReport,
+    Section4SuiteRunReport, Section4SuiteSpec, generate_section4_suite_assets,
+    render_section4_suite_scorecard, resolve_registered_candidates, run_section4_suite,
+    write_section4_suite_artifacts,
+};
 
 pub type PassPlan = Vec<Vec<Embedding>>;
 
@@ -2017,10 +2028,10 @@ fn evaluation_source_label(source: &EvaluationEntitySource) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct LoadedLeafRecord {
-    block_id: BlockHash,
-    embedding_spec: EmbeddingSpec,
-    entry: LeafEntry,
+pub(crate) struct LoadedLeafRecord {
+    pub(crate) block_id: BlockHash,
+    pub(crate) embedding_spec: EmbeddingSpec,
+    pub(crate) entry: LeafEntry,
 }
 
 enum ResolvedCorpusStore {
@@ -2121,7 +2132,7 @@ fn load_evaluation_entities_from_reference(
         .collect()
 }
 
-fn load_leaf_records(
+pub(crate) fn load_leaf_records(
     reference: &BlockStoreCorpusReference,
 ) -> Result<Vec<LoadedLeafRecord>, CandidateExecutionError> {
     let root_block_id = parse_block_hash_hex(&reference.root_block_id)
@@ -2242,7 +2253,7 @@ fn required_metadata_text(
     }
 }
 
-fn required_metadata_bool(
+pub(crate) fn required_metadata_bool(
     metadata: &Metadata,
     key: &str,
     source_id: &str,
@@ -2261,7 +2272,7 @@ fn required_metadata_bool(
     }
 }
 
-fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue> {
+pub(crate) fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue> {
     metadata
         .iter()
         .find_map(|(candidate, value)| match candidate {
@@ -2270,7 +2281,7 @@ fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue
         })
 }
 
-fn decode_embedding_to_f32(
+pub(crate) fn decode_embedding_to_f32(
     bytes: &[u8],
     spec: &EmbeddingSpec,
     context: &str,
@@ -2341,7 +2352,7 @@ fn checked_embedding_byte_len(
     })
 }
 
-fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
+pub(crate) fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
     if value.len() != BlockHash::LEN * 2 {
         return Err(format!(
             "expected a {}-character hex block id, found {} characters",

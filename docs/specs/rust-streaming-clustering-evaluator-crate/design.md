@@ -319,6 +319,99 @@ materialization, occupancy/locality/compression scoring, comparative scorecard
 generation, failure classification, and deferred-goal reporting for the
 evaluator crate.
 
+### DSG-STREAM-EVAL-020 `Section-4 benchmark suite layer`
+
+Above individual benchmark profiles, the repository defines a reproducible
+section-4 benchmark suite that materializes the profiles, corpus assets, and
+supporting metadata needed for repeated leaf-stage candidate screening.
+
+The suite also declares the metric contract and fixed neighborhood size used by
+its deterministic exact-neighbor ground-truth assets and same-leaf locality
+reports.
+
+This suite remains subordinate to the evaluator's leaf-stage boundary: it
+orchestrates comparative leaf-partition studies and does not widen the crate
+into a hierarchy-construction or routing evaluator.
+
+### DSG-STREAM-EVAL-021 `Repository-owned corpus panel`
+
+The section-4 benchmark suite defines a repository-owned corpus panel whose
+benchmark identities cover the corpus families needed for leaf-stage comparison:
+
+- a real-world harvested corpus
+- well-clustered synthetic data
+- weak-cluster or uniform synthetic data
+- anisotropic or manifold synthetic data
+- near-duplicate-heavy data
+- deterministic size-scaled variants where scalability assessment is required
+
+Each panel member carries a stable corpus identity plus a deterministic
+construction or harvesting policy so that repeated candidate comparisons remain
+reproducible.
+
+### DSG-STREAM-EVAL-022 `Deterministic ground-truth assets`
+
+For any corpus used in same-leaf locality evaluation, the benchmark suite
+materializes
+deterministic exact-neighbor ground-truth assets derived from the benchmark
+entities under the suite's declared metric contract.
+
+These assets are benchmark-owned supporting artifacts rather than
+candidate-owned outputs. They remain leaf-stage artifacts and exclude synthetic
+padding entities from externally reported locality scoring.
+
+### DSG-STREAM-EVAL-023 `Deterministic real-world corpus harvesting`
+
+The suite derives a real-world benchmark corpus from repository-approved
+block-store-backed source data through a deterministic harvesting policy that
+defines:
+
+- the source identity and root block to traverse
+- the entity-identity extraction contract
+- the embedding admissibility contract
+- the deterministic subset-selection rule for any scale tiers
+
+This design keeps large benchmark corpora reproducible even when they originate
+from external block-store material rather than hand-authored fixture JSON.
+
+### DSG-STREAM-EVAL-024 `Zip-native large benchmark assets`
+
+Large repository-managed benchmark corpora are stored as `.zip` assets in the
+git tree and consumed directly through the evaluator's existing
+zip-archive-backed corpus-source path.
+
+The user workflow therefore does not require a manual pre-decompression step.
+Any writable layer needed for block-store semantics remains evaluator-managed
+temporary state provided by the existing filesystem-over-zip overlay design.
+
+### DSG-STREAM-EVAL-025 `Section-4 screening workflow`
+
+The benchmark suite can execute a section-4 screening workflow that runs the
+same compared candidates against the same corpus-panel profiles and records, at
+minimum:
+
+- exact-occupancy and related fixed-capacity invariant outcomes
+- repeated-run observable determinism
+- same-leaf locality against exact-neighbor ground truth
+- local-versus-global compression gain
+- strict-alignment versus deterministic-padding outcomes where both are
+  relevant
+
+The outputs are intended to support down-selection of candidate leaf strategies
+for later hierarchy-stage work without claiming hierarchy-stage proof.
+
+### DSG-STREAM-EVAL-026 `Leaf-stage build-cost reporting`
+
+For section-4 benchmark executions, the evaluator reports a small leaf-stage
+resource surface sufficient for comparing candidate strategies across corpus
+scale tiers.
+
+This revision keeps that resource surface narrow: deterministic reporting of
+evaluated entity count, scale-tier identity, and build time per vector or an
+equivalent benchmark-declared normalized build-cost measure is sufficient. It
+does not widen the crate into a full query-runtime or end-to-end service-level
+evaluator.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -347,3 +440,10 @@ evaluator crate.
 | DSG-STREAM-EVAL-017 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-028, REQ-STREAM-EVAL-029 |
 | DSG-STREAM-EVAL-018 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-025 |
 | DSG-STREAM-EVAL-019 | REQ-STREAM-EVAL-016 |
+| DSG-STREAM-EVAL-020 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036 |
+| DSG-STREAM-EVAL-021 | REQ-STREAM-EVAL-032 |
+| DSG-STREAM-EVAL-022 | REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-036 |
+| DSG-STREAM-EVAL-023 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-034 |
+| DSG-STREAM-EVAL-024 | REQ-STREAM-EVAL-035 |
+| DSG-STREAM-EVAL-025 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036 |
+| DSG-STREAM-EVAL-026 | REQ-STREAM-EVAL-037 |
