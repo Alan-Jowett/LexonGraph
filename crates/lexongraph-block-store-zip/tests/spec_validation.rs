@@ -11,6 +11,7 @@ use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_zip::ZipBlockStore;
+use zip::CompressionMethod;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
@@ -44,6 +45,13 @@ fn val_zip_store_002_constructor_rejects_missing_non_file_and_invalid_zip_inputs
     expect_backend_failure_contains(
         ZipBlockStore::new(&invalid).unwrap_err(),
         "failed to read zip archive",
+    );
+
+    let zip64 = temp_dir.path().join("zip64.zip");
+    write_zip64_archive(&zip64);
+    expect_backend_failure_contains(
+        ZipBlockStore::new(&zip64).unwrap_err(),
+        "zip64 archives are not supported by ZipBlockStore",
     );
 }
 
@@ -272,6 +280,19 @@ fn write_zip_archive(path: &Path, entries: &[(String, Vec<u8>)]) {
         archive.write_all(bytes).unwrap();
     }
 
+    archive.finish().unwrap();
+}
+
+fn write_zip64_archive(path: &Path) {
+    let file = File::create(path).unwrap();
+    let mut archive = ZipWriter::new(file);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .large_file(true);
+    archive.set_zip64_comment(Some("zip64"));
+
+    archive.start_file("zip64.txt", options).unwrap();
+    archive.write_all(b"zip64").unwrap();
     archive.finish().unwrap();
 }
 

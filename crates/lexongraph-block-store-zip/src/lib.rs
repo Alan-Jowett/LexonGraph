@@ -143,6 +143,7 @@ fn backend_failure(message: String) -> BlockStoreError {
 
 const CENTRAL_DIRECTORY_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
 
 #[derive(Debug)]
 struct CentralDirectory {
@@ -375,6 +376,12 @@ fn find_end_of_central_directory(
         if !tail_bytes[eocd_offset..].starts_with(END_OF_CENTRAL_DIRECTORY_SIGNATURE.as_slice()) {
             continue;
         }
+        if eocd_offset >= 20
+            && tail_bytes[eocd_offset - 20..]
+                .starts_with(ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE.as_slice())
+        {
+            return Err(CentralDirectoryError::Zip64Unsupported);
+        }
 
         let comment_len = match read_u16_le(tail_bytes, eocd_offset + 20) {
             Some(value) => usize::from(value),
@@ -438,7 +445,7 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
 mod tests {
     use super::{
         CentralDirectoryError, END_OF_CENTRAL_DIRECTORY_SIGNATURE, EOCD_LEN,
-        find_end_of_central_directory,
+        ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE, find_end_of_central_directory,
     };
 
     #[test]
@@ -473,6 +480,25 @@ mod tests {
         push_u16(&mut bytes, u16::MAX);
         push_u32(&mut bytes, u32::MAX);
         push_u32(&mut bytes, u32::MAX);
+        push_u16(&mut bytes, 0);
+
+        let error = find_end_of_central_directory(&bytes).unwrap_err();
+
+        assert_eq!(error, CentralDirectoryError::Zip64Unsupported);
+    }
+
+    #[test]
+    fn find_end_of_central_directory_reports_zip64_locator_records() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE);
+        bytes.extend_from_slice(&[0_u8; 16]);
+        bytes.extend_from_slice(&END_OF_CENTRAL_DIRECTORY_SIGNATURE);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 0);
+        push_u16(&mut bytes, 1);
+        push_u16(&mut bytes, 1);
+        push_u32(&mut bytes, 10);
+        push_u32(&mut bytes, 20);
         push_u16(&mut bytes, 0);
 
         let error = find_end_of_central_directory(&bytes).unwrap_err();
