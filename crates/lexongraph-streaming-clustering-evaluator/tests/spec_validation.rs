@@ -19,8 +19,8 @@ use lexongraph_streaming_clustering_evaluator::{
 use support::{
     balanced_and_skewed_candidates, block_store_backed_profile, broken_block_store_profile,
     duplicate_source_id_profile, empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
-    nondeterministic_candidate, shared_contract_failure_candidate, strict_alignment_profile,
-    synthetic_padding_profile,
+    missing_synthetic_metadata_key_profile, nondeterministic_candidate,
+    shared_contract_failure_candidate, strict_alignment_profile, synthetic_padding_profile,
 };
 
 #[derive(Clone, Copy)]
@@ -806,6 +806,18 @@ fn regression_empty_synthetic_metadata_keys_are_rejected() {
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must not declare an empty synthetic_metadata_key"))
+    );
+}
+
+#[test]
+fn regression_missing_synthetic_metadata_keys_are_rejected_for_block_store_padding_profiles() {
+    let result = run_evaluation_campaign(
+        &missing_synthetic_metadata_key_profile(),
+        &balanced_and_skewed_candidates(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must declare synthetic_metadata_key when using deterministic synthetic padding"))
     );
 }
 

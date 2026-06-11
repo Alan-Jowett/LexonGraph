@@ -795,6 +795,16 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
                         corpus.corpus.source_id
                     )));
                 }
+                if matches!(
+                    profile.leaf_model.alignment_policy,
+                    AlignmentPolicy::DeterministicSyntheticPadding
+                ) && corpus.synthetic_metadata_key.is_none()
+                {
+                    return Err(EvaluatorError::InvalidConfiguration(format!(
+                        "block-store evaluation corpus {} must declare synthetic_metadata_key when using deterministic synthetic padding",
+                        corpus.corpus.source_id
+                    )));
+                }
                 if !corpus_ids.contains(corpus.corpus_id.as_str()) {
                     return Err(EvaluatorError::InvalidConfiguration(format!(
                         "block-store evaluation corpus {} references unknown corpus {}",

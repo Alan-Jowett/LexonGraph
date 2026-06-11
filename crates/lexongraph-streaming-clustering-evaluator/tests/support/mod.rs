@@ -367,6 +367,16 @@ pub fn empty_synthetic_metadata_key_profile() -> BenchmarkProfile {
     profile
 }
 
+pub fn missing_synthetic_metadata_key_profile() -> BenchmarkProfile {
+    let mut profile = block_store_backed_profile();
+    profile.leaf_model.alignment_policy = AlignmentPolicy::DeterministicSyntheticPadding;
+    let EvaluationEntitySource::BlockStore { corpora } = &mut profile.evaluation_entities else {
+        panic!("expected block-store evaluation corpus");
+    };
+    corpora[0].synthetic_metadata_key = None;
+    profile
+}
+
 pub fn invalid_profile() -> BenchmarkProfile {
     let mut profile = strict_alignment_profile();
     profile
