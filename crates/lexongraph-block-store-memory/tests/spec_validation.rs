@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonGraph contributors
 use std::collections::HashSet;
 
-use lexongraph_block::serialize_block;
+use lexongraph_block::{Block, BlockHash, LeafBlock, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreError};
@@ -143,6 +143,35 @@ fn val_mem_store_011_get_miss_and_error_notifications_do_not_populate() {
         &block.hash,
         OverlayGetOutcome::Error(&BlockStoreError::BackendFailure("failed".into())),
     );
+
+    assert_eq!(resident_ids(&store), HashSet::new());
+}
+
+#[test]
+fn val_mem_store_011_invalid_get_hit_notification_is_ignored() {
+    let store = MemoryBlockStore::new(2).unwrap();
+    let invalid = lexongraph_block::ValidatedBlock {
+        block: Block::Leaf(LeafBlock {
+            version: lexongraph_block::VERSION_1,
+            level: 1,
+            embedding_spec: lexongraph_block::EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            entries: vec![lexongraph_block::LeafEntry {
+                embedding: vec![0xaa, 0xbb],
+                metadata: vec![],
+                content: lexongraph_block::Content {
+                    media_type: "text/plain".into(),
+                    body: b"invalid".to_vec(),
+                },
+            }],
+            ext: None,
+        }),
+        hash: BlockHash::from_bytes([0x55; 32]),
+    };
+
+    store.on_get_result(&invalid.hash, OverlayGetOutcome::Hit(&invalid));
 
     assert_eq!(resident_ids(&store), HashSet::new());
 }

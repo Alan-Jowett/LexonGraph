@@ -86,8 +86,9 @@ impl MemoryBlockStore {
     }
 
     fn refresh_residency_from_validated_block(&self, block: &ValidatedBlock) {
-        let serialized = serialize_block(&block.block)
-            .expect("validated blocks supplied through overlay notifications must serialize");
+        let Ok(serialized) = serialize_block(&block.block) else {
+            return;
+        };
         let mut state = self.state.lock().unwrap();
         state.insert_or_refresh(serialized.hash, serialized.bytes);
     }
