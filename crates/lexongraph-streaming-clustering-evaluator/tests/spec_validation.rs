@@ -22,9 +22,10 @@ use lexongraph_streaming_clustering_evaluator::{
     CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus, EmbeddingWorkloadSource,
     EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus,
     Section4CorpusFamily, Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec,
-    Section4SuiteSpec, StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names,
-    candidate_adapter, emit_campaign_artifacts, generate_section4_suite_assets,
-    run_evaluation_campaign, run_section4_suite, write_section4_suite_artifacts,
+    Section4SuiteManifest, Section4SuiteSpec, StructuredFailure, TrainingPassSource,
+    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
+    generate_section4_suite_assets, run_evaluation_campaign, run_section4_suite,
+    write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -220,6 +221,33 @@ fn harvested_archive_reference()
         panic!("archive-backed profile should expose block-store corpora");
     };
     corpora[0].corpus.clone()
+}
+
+fn repository_root() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+}
+
+fn checked_in_synthetic_suite_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("section4")
+        .join("synthetic-suite")
+}
+
+fn checked_in_synthetic_suite_manifest() -> Section4SuiteManifest {
+    let suite_dir = checked_in_synthetic_suite_dir();
+    let manifest_path = suite_dir.join("section4-suite-manifest.json");
+    let contents = fs::read_to_string(manifest_path).unwrap();
+    let mut manifest: Section4SuiteManifest = serde_json::from_str(&contents).unwrap();
+    let repo_root = repository_root();
+    for profile in &mut manifest.generated_profiles {
+        if profile.profile_path.is_relative() {
+            profile.profile_path = repo_root.join(&profile.profile_path);
+        }
+        if profile.corpus_archive_path.is_relative() {
+            profile.corpus_archive_path = repo_root.join(&profile.corpus_archive_path);
+        }
+    }
+    manifest
 }
 
 #[test]
@@ -1674,6 +1702,53 @@ fn regression_section4_cli_commands_execute_end_to_end() {
         report_dir
             .path()
             .join("section4-suite-scorecard.txt")
+            .exists()
+    );
+}
+
+#[test]
+fn regression_checked_in_synthetic_suite_assets_exist_and_match_the_spec() {
+    let suite_dir = checked_in_synthetic_suite_dir();
+    let suite_spec_path = suite_dir.join("section4-suite-spec.json");
+    let suite_spec: Section4SuiteSpec =
+        serde_json::from_str(&fs::read_to_string(suite_spec_path).unwrap()).unwrap();
+    let manifest = checked_in_synthetic_suite_manifest();
+    let repo_root = repository_root();
+
+    assert_eq!(suite_spec.suite_id, manifest.suite_id);
+    assert_eq!(suite_spec.profiles.len(), 6);
+    assert_eq!(manifest.generated_profiles.len(), suite_spec.profiles.len());
+    for generated in &manifest.generated_profiles {
+        assert!(generated.profile_path.exists());
+        assert!(generated.corpus_archive_path.exists());
+        assert!(generated.profile_path.starts_with(&repo_root));
+        assert!(generated.corpus_archive_path.starts_with(&repo_root));
+    }
+}
+
+#[test]
+fn regression_checked_in_synthetic_suite_assets_run_successfully() {
+    let report_dir = tempdir().unwrap();
+    let manifest = checked_in_synthetic_suite_manifest();
+    let report = run_section4_suite(
+        &manifest,
+        &balanced_and_skewed_candidates()[..1],
+        report_dir.path(),
+    )
+    .unwrap();
+
+    assert_eq!(report.suite_id, "synthetic-leaf-screening-v1");
+    assert_eq!(report.profile_reports.len(), 6);
+    assert!(
+        report
+            .profile_reports
+            .iter()
+            .all(|profile| !profile.candidate_reports.is_empty())
+    );
+    assert!(
+        report_dir
+            .path()
+            .join("well-clustered-strict-small")
             .exists()
     );
 }
