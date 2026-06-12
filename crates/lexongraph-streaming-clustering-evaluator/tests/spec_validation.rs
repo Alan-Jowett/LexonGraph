@@ -18,14 +18,15 @@ use lexongraph_streaming_clustering::{
     StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_embedding,
 };
 use lexongraph_streaming_clustering_evaluator::{
-    AlignmentPolicy, BlockStoreReferenceStore, CandidateIdentity, CandidateRunStatus,
-    CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus, EmbeddingWorkloadSource,
-    EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus,
-    Section4CorpusFamily, Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec,
-    Section4SuiteManifest, Section4SuiteSpec, StructuredFailure, TrainingPassSource,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    generate_section4_suite_assets, run_evaluation_campaign, run_section4_suite,
-    write_section4_suite_artifacts,
+    AlignmentPolicy, BlockStoreReferenceStore, CampaignReport, CandidateIdentity,
+    CandidateRunStatus, CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus,
+    EmbeddingWorkloadSource, EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore,
+    GateStatus, Section4CorpusFamily, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
+    Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
+    Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, StructuredFailure,
+    TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, generate_section4_suite_assets, run_evaluation_campaign,
+    run_section4_suite, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -163,12 +164,12 @@ fn section4_reproducibility() -> lexongraph_streaming_clustering_evaluator::Repr
 
 fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec {
     Section4SuiteSpec {
-        suite_id: "section4-readiness-suite".into(),
+        suite_id: "section4-corpus-panel-suite".into(),
         leaf_size: 2,
         dimensions: 2,
         batch_size: 2,
         metric_contract: Section4MetricContract::Euclidean,
-        neighbor_count: 1,
+        neighbor_count: 10,
         balance_constraints: None,
         random_seed: Some(11),
         compression_benchmark: CompressionBenchmark {
@@ -177,6 +178,14 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
         },
         reproducibility: section4_reproducibility(),
         profiles,
+    }
+}
+
+fn harvested_policy() -> Section4HarvestPolicy {
+    Section4HarvestPolicy {
+        embedding_admissibility:
+            Section4HarvestEmbeddingAdmissibility::FiniteF32MatchingSuiteDimensions,
+        subset_selection: Section4HarvestSubsetSelection::SortByEntityIdTakeFirst,
     }
 }
 
@@ -216,35 +225,43 @@ fn padding_synthetic_profile(
 
 fn harvested_archive_reference()
 -> lexongraph_streaming_clustering_evaluator::BlockStoreCorpusReference {
-    let profile = archive_backed_profile();
-    let EvaluationEntitySource::BlockStore { corpora } = profile.evaluation_entities else {
-        panic!("archive-backed profile should expose block-store corpora");
-    };
-    corpora[0].corpus.clone()
+    let suite_dir = checked_in_section4_suite_dir();
+    let suite_spec_path = suite_dir.join("section4-suite-spec.json");
+    let suite_spec: Section4SuiteSpec =
+        serde_json::from_str(&fs::read_to_string(suite_spec_path).unwrap()).unwrap();
+    let mut reference = suite_spec
+        .profiles
+        .into_iter()
+        .find_map(|profile| match profile.source {
+            Section4ProfileSourceSpec::Harvested { source, .. } => Some(source),
+            Section4ProfileSourceSpec::Synthetic { .. } => None,
+        })
+        .expect("checked-in section-4 suite should expose a harvested source");
+    if let BlockStoreReferenceStore::ZipArchive { archive_path } = &mut reference.store
+        && archive_path.is_relative()
+    {
+        *archive_path = suite_dir.join(&*archive_path);
+    }
+    reference
 }
 
-fn repository_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
-}
-
-fn checked_in_synthetic_suite_dir() -> std::path::PathBuf {
+fn checked_in_section4_suite_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("section4")
-        .join("synthetic-suite")
+        .join("corpus-panel-suite")
 }
 
-fn checked_in_synthetic_suite_manifest() -> Section4SuiteManifest {
-    let suite_dir = checked_in_synthetic_suite_dir();
+fn checked_in_section4_suite_manifest() -> Section4SuiteManifest {
+    let suite_dir = checked_in_section4_suite_dir();
     let manifest_path = suite_dir.join("section4-suite-manifest.json");
     let contents = fs::read_to_string(manifest_path).unwrap();
     let mut manifest: Section4SuiteManifest = serde_json::from_str(&contents).unwrap();
-    let repo_root = repository_root();
     for profile in &mut manifest.generated_profiles {
         if profile.profile_path.is_relative() {
-            profile.profile_path = repo_root.join(&profile.profile_path);
+            profile.profile_path = suite_dir.join(&profile.profile_path);
         }
         if profile.corpus_archive_path.is_relative() {
-            profile.corpus_archive_path = repo_root.join(&profile.corpus_archive_path);
+            profile.corpus_archive_path = suite_dir.join(&profile.corpus_archive_path);
         }
     }
     manifest
@@ -1338,12 +1355,12 @@ fn val_stream_eval_025_section4_suite_materializes_reproducible_leaf_stage_asset
     let spec = section4_suite_spec(vec![strict_synthetic_profile(
         "strict-leaf-tier",
         "well-clustered-small",
-        4,
+        12,
     )]);
 
     let manifest = generate_section4_suite_assets(&spec, output_dir.path()).unwrap();
 
-    assert_eq!(manifest.suite_id, "section4-readiness-suite");
+    assert_eq!(manifest.suite_id, "section4-corpus-panel-suite");
     assert!(
         output_dir
             .path()
@@ -1360,18 +1377,44 @@ fn val_stream_eval_025_section4_suite_materializes_reproducible_leaf_stage_asset
             &fs::read_to_string(&manifest.generated_profiles[0].profile_path).unwrap(),
         )
         .unwrap();
-    assert_eq!(profile.locality_ground_truth.len(), 4);
+    assert_eq!(profile.locality_ground_truth.len(), 12);
     assert!(
         profile
             .locality_ground_truth
             .iter()
-            .all(|entry| entry.neighbor_ids.len() == 1)
+            .all(|entry| entry.neighbor_ids.len() == 10)
     );
     assert!(profile.deferred_research_goals.iter().any(|goal| {
         goal.research_goal_ids
             .iter()
             .any(|goal_id| goal_id == "RG-HIERARCHY")
     }));
+}
+
+#[test]
+fn regression_section4_suite_generator_allows_non_top10_neighbor_counts_for_custom_suites() {
+    let output_dir = tempdir().unwrap();
+    let mut spec = section4_suite_spec(vec![strict_synthetic_profile(
+        "custom-neighbor-count",
+        "custom-corpus",
+        12,
+    )]);
+    spec.neighbor_count = 3;
+
+    let manifest = generate_section4_suite_assets(&spec, output_dir.path()).unwrap();
+    let profile: lexongraph_streaming_clustering_evaluator::BenchmarkProfile =
+        serde_json::from_str(
+            &fs::read_to_string(&manifest.generated_profiles[0].profile_path).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(manifest.generated_profiles[0].neighbor_count, 3);
+    assert!(
+        profile
+            .locality_ground_truth
+            .iter()
+            .all(|entry| entry.neighbor_ids.len() == 3)
+    );
 }
 
 #[test]
@@ -1387,7 +1430,8 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
                 family: Section4CorpusFamily::RealWorldHarvested,
                 source: harvested_source,
                 entity_id_metadata_key: "entity_id".into(),
-                real_entity_count: 4,
+                harvesting_policy: harvested_policy(),
+                real_entity_count: 12,
                 alignment_policy: AlignmentPolicy::StrictAlignment,
             },
         },
@@ -1397,7 +1441,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             scale_tier_id: "n-4".into(),
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::WellClusteredSynthetic,
-                real_entity_count: 4,
+                real_entity_count: 12,
                 alignment_policy: AlignmentPolicy::StrictAlignment,
             },
         },
@@ -1407,7 +1451,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             scale_tier_id: "n-4".into(),
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::WeakClusterUniform,
-                real_entity_count: 4,
+                real_entity_count: 12,
                 alignment_policy: AlignmentPolicy::StrictAlignment,
             },
         },
@@ -1417,17 +1461,17 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             scale_tier_id: "n-4".into(),
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::AnisotropicManifold,
-                real_entity_count: 4,
+                real_entity_count: 12,
                 alignment_policy: AlignmentPolicy::StrictAlignment,
             },
         },
         Section4ProfileSpec {
             profile_id: "duplicates-tier".into(),
             corpus_id: "duplicates-tier".into(),
-            scale_tier_id: "n-6".into(),
+            scale_tier_id: "n-12".into(),
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::NearDuplicateHeavy,
-                real_entity_count: 6,
+                real_entity_count: 12,
                 alignment_policy: AlignmentPolicy::StrictAlignment,
             },
         },
@@ -1461,7 +1505,7 @@ fn val_stream_eval_027_ground_truth_is_deterministic_and_excludes_synthetic_padd
     let spec = section4_suite_spec(vec![padding_synthetic_profile(
         "padding-tier",
         "near-duplicates-small",
-        3,
+        11,
     )]);
 
     let manifest = generate_section4_suite_assets(&spec, output_dir.path()).unwrap();
@@ -1474,9 +1518,9 @@ fn val_stream_eval_027_ground_truth_is_deterministic_and_excludes_synthetic_padd
     let EvaluationEntitySource::BlockStore { corpora } = &profile.evaluation_entities else {
         panic!("section-4 assets should materialize archive-backed evaluation entities");
     };
-    assert_eq!(manifest.generated_profiles[0].real_entity_count, 3);
-    assert_eq!(manifest.generated_profiles[0].evaluated_entity_count, 4);
-    assert_eq!(profile.locality_ground_truth.len(), 3);
+    assert_eq!(manifest.generated_profiles[0].real_entity_count, 11);
+    assert_eq!(manifest.generated_profiles[0].evaluated_entity_count, 12);
+    assert_eq!(profile.locality_ground_truth.len(), 11);
     assert!(profile.locality_ground_truth.iter().all(|entry| {
         !entry.entity_id.contains("-synthetic-")
             && entry
@@ -1488,6 +1532,12 @@ fn val_stream_eval_027_ground_truth_is_deterministic_and_excludes_synthetic_padd
         &corpora[0].corpus.store,
         BlockStoreReferenceStore::ZipArchive { .. }
     ));
+    assert!(
+        profile
+            .locality_ground_truth
+            .iter()
+            .all(|entry| entry.neighbor_ids.len() == 10)
+    );
 }
 
 #[test]
@@ -1503,7 +1553,8 @@ fn val_stream_eval_028_harvesting_is_deterministic_and_preserves_source_identity
             family: Section4CorpusFamily::RealWorldHarvested,
             source: harvested_source.clone(),
             entity_id_metadata_key: "entity_id".into(),
-            real_entity_count: 4,
+            harvesting_policy: harvested_policy(),
+            real_entity_count: 12,
             alignment_policy: AlignmentPolicy::StrictAlignment,
         },
     }]);
@@ -1533,6 +1584,10 @@ fn val_stream_eval_028_harvesting_is_deterministic_and_preserves_source_identity
             .as_deref(),
         Some("entity_id")
     );
+    assert_eq!(
+        manifest_a.generated_profiles[0].harvested_policy.as_ref(),
+        Some(&harvested_policy())
+    );
 }
 
 #[test]
@@ -1541,7 +1596,7 @@ fn val_stream_eval_029_generated_large_corpus_assets_run_directly_from_zip_archi
     let spec = section4_suite_spec(vec![strict_synthetic_profile(
         "archive-tier",
         "well-clustered-small",
-        4,
+        12,
     )]);
 
     let manifest = generate_section4_suite_assets(&spec, output_dir.path()).unwrap();
@@ -1574,8 +1629,21 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
     let asset_dir = tempdir().unwrap();
     let report_dir = tempdir().unwrap();
     let spec = section4_suite_spec(vec![
-        strict_synthetic_profile("strict-tier", "clustered-small", 4),
-        padding_synthetic_profile("padding-tier", "duplicate-pad", 3),
+        strict_synthetic_profile("strict-tier", "clustered-small", 12),
+        padding_synthetic_profile("padding-tier", "duplicate-pad", 11),
+        Section4ProfileSpec {
+            profile_id: "harvested-tier".into(),
+            corpus_id: "real-world-tier".into(),
+            scale_tier_id: "n-12".into(),
+            source: Section4ProfileSourceSpec::Harvested {
+                family: Section4CorpusFamily::RealWorldHarvested,
+                source: harvested_archive_reference(),
+                entity_id_metadata_key: "entity_id".into(),
+                harvesting_policy: harvested_policy(),
+                real_entity_count: 12,
+                alignment_policy: AlignmentPolicy::StrictAlignment,
+            },
+        },
     ]);
 
     let manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
@@ -1586,29 +1654,61 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
     )
     .unwrap();
 
-    assert_eq!(report.profile_reports.len(), 2);
+    assert_eq!(report.profile_reports.len(), 3);
     for profile in &report.profile_reports {
         assert_eq!(profile.candidate_reports.len(), 2);
     }
-    let strict_campaign = fs::read_to_string(
-        report_dir
-            .path()
-            .join("strict-tier")
-            .join("campaign-report.json"),
+    let strict_campaign: CampaignReport = serde_json::from_str(
+        &fs::read_to_string(
+            report_dir
+                .path()
+                .join("strict-tier")
+                .join("campaign-report.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
-    let padding_campaign = fs::read_to_string(
-        report_dir
-            .path()
-            .join("padding-tier")
-            .join("campaign-report.json"),
+    let padding_campaign: CampaignReport = serde_json::from_str(
+        &fs::read_to_string(
+            report_dir
+                .path()
+                .join("padding-tier")
+                .join("campaign-report.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
-    for contents in [&strict_campaign, &padding_campaign] {
-        assert!(contents.contains("exact-leaf-occupancy"));
-        assert!(contents.contains("same-leaf-neighborhood-coherence"));
-        assert!(contents.contains("local-compression-gain"));
-        assert!(contents.contains("deterministic"));
+    let harvested_campaign: CampaignReport = serde_json::from_str(
+        &fs::read_to_string(
+            report_dir
+                .path()
+                .join("harvested-tier")
+                .join("campaign-report.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for campaign in [&strict_campaign, &padding_campaign, &harvested_campaign] {
+        assert!(campaign.run_reports.iter().any(|run| {
+            run.gate_results
+                .iter()
+                .any(|gate| gate.gate_id == "exact-leaf-occupancy")
+        }));
+        assert!(campaign.run_reports.iter().any(|run| {
+            run.metric_results
+                .iter()
+                .any(|metric| metric.metric_id == "same-leaf-neighborhood-coherence")
+        }));
+        assert!(campaign.run_reports.iter().any(|run| {
+            run.metric_results
+                .iter()
+                .any(|metric| metric.metric_id == "local-compression-gain")
+        }));
+        assert!(campaign.run_reports.iter().any(|run| {
+            run.gate_results
+                .iter()
+                .any(|gate| gate.gate_id == "deterministic-observable-results")
+        }));
     }
 }
 
@@ -1617,8 +1717,8 @@ fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() 
     let asset_dir = tempdir().unwrap();
     let report_dir = tempdir().unwrap();
     let spec = section4_suite_spec(vec![
-        strict_synthetic_profile("tier-small", "clustered-small", 4),
-        strict_synthetic_profile("tier-medium", "clustered-medium", 6),
+        strict_synthetic_profile("tier-small", "clustered-small", 12),
+        strict_synthetic_profile("tier-medium", "clustered-medium", 14),
     ]);
 
     let manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
@@ -1655,7 +1755,7 @@ fn regression_section4_cli_commands_execute_end_to_end() {
     let suite_dir = tempdir().unwrap();
     let report_dir = tempdir().unwrap();
     let suite_path = suite_dir.path().join("suite.json");
-    let spec = section4_suite_spec(vec![strict_synthetic_profile("cli-tier", "cli-corpus", 4)]);
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("cli-tier", "cli-corpus", 12)]);
     fs::write(&suite_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
 
     let binary = env!("CARGO_BIN_EXE_lexongraph-streaming-clustering-evaluator");
@@ -1708,34 +1808,44 @@ fn regression_section4_cli_commands_execute_end_to_end() {
 }
 
 #[test]
-fn regression_checked_in_synthetic_suite_assets_exist_and_match_the_spec() {
-    let suite_dir = checked_in_synthetic_suite_dir();
+fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
+    let suite_dir = checked_in_section4_suite_dir();
     let suite_spec_path = suite_dir.join("section4-suite-spec.json");
     let suite_spec: Section4SuiteSpec =
         serde_json::from_str(&fs::read_to_string(suite_spec_path).unwrap()).unwrap();
     let manifest_contents =
         fs::read_to_string(suite_dir.join("section4-suite-manifest.json")).unwrap();
-    let manifest = checked_in_synthetic_suite_manifest();
-    let repo_root = repository_root();
+    let manifest = checked_in_section4_suite_manifest();
 
     assert_eq!(suite_spec.suite_id, manifest.suite_id);
-    assert_eq!(suite_spec.profiles.len(), 6);
+    assert_eq!(suite_spec.neighbor_count, 10);
+    assert_eq!(suite_spec.profiles.len(), 8);
     assert_eq!(manifest.generated_profiles.len(), suite_spec.profiles.len());
     assert!(!manifest_contents.contains("\\\\"));
+    assert!(
+        suite_spec
+            .profiles
+            .iter()
+            .any(|profile| matches!(&profile.source, Section4ProfileSourceSpec::Harvested { .. }))
+    );
     for generated in &manifest.generated_profiles {
         assert!(generated.profile_path.exists());
         assert!(generated.corpus_archive_path.exists());
-        assert!(generated.profile_path.starts_with(&repo_root));
-        assert!(generated.corpus_archive_path.starts_with(&repo_root));
+        assert!(generated.profile_path.starts_with(&suite_dir));
+        assert!(generated.corpus_archive_path.starts_with(&suite_dir));
         let profile_contents = fs::read_to_string(&generated.profile_path).unwrap();
         assert!(!profile_contents.contains("\\\\"));
     }
+    assert!(manifest.generated_profiles.iter().any(|profile| {
+        profile.family == Section4CorpusFamily::RealWorldHarvested
+            && profile.harvested_policy.as_ref() == Some(&harvested_policy())
+    }));
 }
 
 #[test]
-fn regression_checked_in_synthetic_suite_assets_run_successfully() {
+fn regression_checked_in_section4_suite_assets_run_successfully() {
     let report_dir = tempdir().unwrap();
-    let manifest = checked_in_synthetic_suite_manifest();
+    let manifest = checked_in_section4_suite_manifest();
     let report = run_section4_suite(
         &manifest,
         &balanced_and_skewed_candidates()[..1],
@@ -1743,8 +1853,8 @@ fn regression_checked_in_synthetic_suite_assets_run_successfully() {
     )
     .unwrap();
 
-    assert_eq!(report.suite_id, "synthetic-leaf-screening-v1");
-    assert_eq!(report.profile_reports.len(), 6);
+    assert_eq!(report.suite_id, "section4-corpus-panel-v2");
+    assert_eq!(report.profile_reports.len(), 8);
     assert!(
         report
             .profile_reports
@@ -1754,7 +1864,39 @@ fn regression_checked_in_synthetic_suite_assets_run_successfully() {
     assert!(
         report_dir
             .path()
-            .join("well-clustered-strict-small")
+            .join("real-world-harvested-strict-small")
+            .exists()
+    );
+}
+
+#[test]
+fn regression_checked_in_section4_suite_cli_runs_from_non_repo_working_directory() {
+    let report_dir = tempdir().unwrap();
+    let run_dir = tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_lexongraph-streaming-clustering-evaluator");
+    let manifest_path = checked_in_section4_suite_dir().join("section4-suite-manifest.json");
+    let run = ProcessCommand::new(binary)
+        .current_dir(run_dir.path())
+        .args([
+            "run-section4-suite",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+            "--candidate",
+            "balanced-threshold",
+            "--output-dir",
+            report_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        report_dir
+            .path()
+            .join("section4-suite-report.json")
             .exists()
     );
 }
@@ -1762,7 +1904,7 @@ fn regression_checked_in_synthetic_suite_assets_run_successfully() {
 #[test]
 fn regression_section4_suite_rejects_unsafe_profile_ids() {
     let output_dir = tempdir().unwrap();
-    let spec = section4_suite_spec(vec![strict_synthetic_profile("../escape", "unsafe", 4)]);
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("../escape", "unsafe", 12)]);
 
     let result = generate_section4_suite_assets(&spec, output_dir.path());
 
@@ -1774,10 +1916,10 @@ fn regression_section4_suite_rejects_unsafe_profile_ids() {
 #[test]
 fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
     let output_dir = tempdir().unwrap();
-    let mut duplicate = strict_synthetic_profile("duplicate-id", "corpus-a", 4);
-    duplicate.scale_tier_id = "n-4".into();
+    let mut duplicate = strict_synthetic_profile("duplicate-id", "corpus-a", 12);
+    duplicate.scale_tier_id = "n-12".into();
     let spec = section4_suite_spec(vec![
-        strict_synthetic_profile("duplicate-id", "corpus-b", 4),
+        strict_synthetic_profile("duplicate-id", "corpus-b", 12),
         duplicate,
     ]);
 
@@ -1788,7 +1930,7 @@ fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
     );
 
     let output_dir = tempdir().unwrap();
-    let mut empty_fields = strict_synthetic_profile("valid-id", "corpus-a", 4);
+    let mut empty_fields = strict_synthetic_profile("valid-id", "corpus-a", 12);
     empty_fields.corpus_id = "   ".into();
     let empty_corpus_result =
         generate_section4_suite_assets(&section4_suite_spec(vec![empty_fields]), output_dir.path());
@@ -1797,7 +1939,7 @@ fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
     );
 
     let output_dir = tempdir().unwrap();
-    let mut empty_tier = strict_synthetic_profile("valid-id", "corpus-a", 4);
+    let mut empty_tier = strict_synthetic_profile("valid-id", "corpus-a", 12);
     empty_tier.scale_tier_id = "".into();
     let empty_tier_result =
         generate_section4_suite_assets(&section4_suite_spec(vec![empty_tier]), output_dir.path());
@@ -1807,7 +1949,7 @@ fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
 
     let output_dir = tempdir().unwrap();
     let invalid_chars_result = generate_section4_suite_assets(
-        &section4_suite_spec(vec![strict_synthetic_profile("bad:name", "corpus-a", 4)]),
+        &section4_suite_spec(vec![strict_synthetic_profile("bad:name", "corpus-a", 12)]),
         output_dir.path(),
     );
     assert!(
@@ -1819,7 +1961,7 @@ fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
 fn regression_section4_suite_rejects_unsafe_profile_ids_in_manifests() {
     let asset_dir = tempdir().unwrap();
     let report_dir = tempdir().unwrap();
-    let spec = section4_suite_spec(vec![strict_synthetic_profile("safe-id", "safe-corpus", 4)]);
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("safe-id", "safe-corpus", 12)]);
     let mut manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
     manifest.generated_profiles[0].profile_id = "..\\escape".into();
 
@@ -1838,7 +1980,7 @@ fn regression_section4_suite_rejects_unsafe_profile_ids_in_manifests() {
 fn regression_section4_suite_rejects_zero_evaluated_entity_count_in_manifests() {
     let asset_dir = tempdir().unwrap();
     let report_dir = tempdir().unwrap();
-    let spec = section4_suite_spec(vec![strict_synthetic_profile("safe-id", "safe-corpus", 4)]);
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("safe-id", "safe-corpus", 12)]);
     let mut manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
     manifest.generated_profiles[0].evaluated_entity_count = 0;
 

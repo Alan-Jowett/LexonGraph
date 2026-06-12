@@ -5,10 +5,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use lexongraph_streaming_clustering_evaluator::{
-    BenchmarkProfile, EvaluatorError, built_in_fixture_candidate, built_in_fixture_candidate_names,
-    emit_campaign_artifacts, generate_section4_suite_assets, resolve_registered_candidates,
-    run_evaluation_campaign, run_section4_suite, write_campaign_artifacts,
-    write_section4_suite_artifacts,
+    BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
+    built_in_fixture_candidate, built_in_fixture_candidate_names, emit_campaign_artifacts,
+    generate_section4_suite_assets, resolve_profile_block_store_paths,
+    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_evaluation_campaign, run_section4_suite,
+    write_campaign_artifacts, write_section4_suite_artifacts,
 };
 
 #[derive(Parser, Debug)]
@@ -82,6 +84,10 @@ fn run() -> Result<(), EvaluatorError> {
                     profile_path.display()
                 ))
             })?;
+            let mut profile = profile;
+            if let Some(profile_dir) = profile_path.parent() {
+                resolve_profile_block_store_paths(&mut profile, profile_dir);
+            }
 
             let mut registered_candidates = Vec::with_capacity(candidates.len());
             for candidate_name in candidates {
@@ -110,13 +116,16 @@ fn run() -> Result<(), EvaluatorError> {
                     suite_path.display()
                 ))
             })?;
-            let suite: lexongraph_streaming_clustering_evaluator::Section4SuiteSpec =
-                serde_json::from_str(&suite).map_err(|error| {
-                    EvaluatorError::Json(format!(
-                        "failed to parse section-4 suite spec {}: {error}",
-                        suite_path.display()
-                    ))
-                })?;
+            let suite: Section4SuiteSpec = serde_json::from_str(&suite).map_err(|error| {
+                EvaluatorError::Json(format!(
+                    "failed to parse section-4 suite spec {}: {error}",
+                    suite_path.display()
+                ))
+            })?;
+            let mut suite = suite;
+            if let Some(suite_dir) = suite_path.parent() {
+                resolve_section4_suite_spec_paths(&mut suite, suite_dir);
+            }
             let manifest = generate_section4_suite_assets(&suite, &output_dir)?;
             let manifest_path = output_dir.join("section4-suite-manifest.json");
             println!("{}", manifest_path.display());
@@ -138,13 +147,17 @@ fn run() -> Result<(), EvaluatorError> {
                     manifest_path.display()
                 ))
             })?;
-            let manifest: lexongraph_streaming_clustering_evaluator::Section4SuiteManifest =
+            let manifest: Section4SuiteManifest =
                 serde_json::from_str(&manifest).map_err(|error| {
                     EvaluatorError::Json(format!(
                         "failed to parse section-4 suite manifest {}: {error}",
                         manifest_path.display()
                     ))
                 })?;
+            let mut manifest = manifest;
+            if let Some(manifest_dir) = manifest_path.parent() {
+                resolve_section4_suite_manifest_paths(&mut manifest, manifest_dir);
+            }
             let candidates = resolve_registered_candidates(&candidates)?;
             let report = run_section4_suite(&manifest, &candidates, &output_dir)?;
             let artifacts = write_section4_suite_artifacts(&report, &output_dir)?;

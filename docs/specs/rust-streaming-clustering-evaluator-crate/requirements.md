@@ -393,6 +393,9 @@ strategies under the shared evaluator boundary.
 The suite shall also declare the metric contract and fixed neighborhood size
 used for exact-neighbor ground-truth generation and same-leaf locality scoring.
 
+For the repository-owned checked-in section-4 screening panel in this revision,
+that fixed neighborhood size shall be top-10.
+
 This suite remains leaf-stage only: it prepares and executes comparative
 leaf-formation campaigns and does not claim to validate hierarchy construction,
 parent summaries, persisted routing, or full end-to-end index conformance.
@@ -410,6 +413,11 @@ to leaf-stage comparison:
 - a near-duplicate-heavy corpus
 - deterministic size-scaled subsets where scalability assessment is required
 
+For the first complete checked-in section-4 screening panel in this revision,
+the repository shall include at least one checked-in profile for each listed
+family plus stable scale-tier identities for the profiles used in repeated
+comparison.
+
 For each family used by the suite, the repository shall declare the corpus
 identity, construction or harvesting policy, and any scale-tier identities used
 for repeated comparisons.
@@ -419,6 +427,9 @@ for repeated comparisons.
 For benchmark corpora used in section-4 locality evaluation, the repository
 shall define deterministic exact-neighbor ground-truth assets computed from the
 benchmark entities under the benchmark-declared metric contract.
+
+For the checked-in section-4 screening panel in this revision, these
+ground-truth assets shall be top-10 neighborhoods.
 
 These ground-truth assets shall:
 
@@ -434,6 +445,9 @@ real-world benchmark corpus from repository-approved block-store-backed source
 data, including deterministic extraction of embeddings, entity identities, and
 scale-tier subsets used for comparative leaf-stage campaigns.
 
+This revision shall include at least one checked-in harvested benchmark corpus
+asset derived through that workflow.
+
 The harvesting policy shall define:
 
 - the source identity and root block ID or equivalent source locator
@@ -447,6 +461,9 @@ Large benchmark corpora managed by the repository for section-4 execution shall
 be stored in the git tree as `.zip` assets and consumed directly through the
 evaluator's zip-archive-backed corpus-source path without requiring a
 pre-decompression step.
+
+The checked-in harvested benchmark corpus asset required by this revision shall
+also follow this zip-native storage and direct-consumption rule.
 
 Any writable layer needed to satisfy block-store semantics remains
 evaluator-managed temporary state rather than a user-prepared extracted corpus
@@ -465,6 +482,10 @@ reports, at minimum:
 - strict-alignment and deterministic-synthetic-padding outcomes where both are
   applicable to the evaluated corpus family
 
+For the checked-in section-4 screening panel in this revision, the workflow
+shall execute across the expanded synthetic-plus-harvested profile set and
+shall use top-10 exact-neighbor ground truth for locality-scored profiles.
+
 The resulting comparative outputs shall be sufficient to down-select candidate
 leaf strategies for later hierarchy-stage work without claiming hierarchy-stage
 proof.
@@ -481,6 +502,9 @@ At minimum, this revision shall support deterministic reporting of:
 - scale-tier identity
 - build time per vector or an equivalent normalized leaf-stage build-cost
   measure declared by the benchmark suite
+
+These reports shall remain consistent across the scale-tier set used by the
+checked-in section-4 screening panel in this revision.
 
 ## Out of Scope
 

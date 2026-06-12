@@ -329,6 +329,9 @@ The suite also declares the metric contract and fixed neighborhood size used by
 its deterministic exact-neighbor ground-truth assets and same-leaf locality
 reports.
 
+For the repository-owned checked-in section-4 screening panel in this revision,
+that fixed neighborhood size is top-10.
+
 This suite remains subordinate to the evaluator's leaf-stage boundary: it
 orchestrates comparative leaf-partition studies and does not widen the crate
 into a hierarchy-construction or routing evaluator.
@@ -345,6 +348,10 @@ benchmark identities cover the corpus families needed for leaf-stage comparison:
 - near-duplicate-heavy data
 - deterministic size-scaled variants where scalability assessment is required
 
+The first complete checked-in panel in this revision includes at least one
+checked-in profile for each required family plus stable scale-tier identities
+for the profiles used in repeated comparison.
+
 Each panel member carries a stable corpus identity plus a deterministic
 construction or harvesting policy so that repeated candidate comparisons remain
 reproducible.
@@ -352,9 +359,11 @@ reproducible.
 ### DSG-STREAM-EVAL-022 `Deterministic ground-truth assets`
 
 For any corpus used in same-leaf locality evaluation, the benchmark suite
-materializes
-deterministic exact-neighbor ground-truth assets derived from the benchmark
-entities under the suite's declared metric contract.
+materializes deterministic exact-neighbor ground-truth assets derived from the
+benchmark entities under the suite's declared metric contract.
+
+For the checked-in section-4 screening panel in this revision, those assets are
+top-10 neighborhoods.
 
 These assets are benchmark-owned supporting artifacts rather than
 candidate-owned outputs. They remain leaf-stage artifacts and exclude synthetic
@@ -371,6 +380,10 @@ defines:
 - the embedding admissibility contract
 - the deterministic subset-selection rule for any scale tiers
 
+This revision checks in at least one harvested benchmark corpus asset produced
+through that deterministic workflow so the repository-owned screening panel is
+not synthetic-only.
+
 This design keeps large benchmark corpora reproducible even when they originate
 from external block-store material rather than hand-authored fixture JSON.
 
@@ -379,6 +392,9 @@ from external block-store material rather than hand-authored fixture JSON.
 Large repository-managed benchmark corpora are stored as `.zip` assets in the
 git tree and consumed directly through the evaluator's existing
 zip-archive-backed corpus-source path.
+
+The checked-in harvested benchmark corpus asset required by this revision uses
+that same zip-native direct-consumption path.
 
 The user workflow therefore does not require a manual pre-decompression step.
 Any writable layer needed for block-store semantics remains evaluator-managed
@@ -397,6 +413,10 @@ minimum:
 - strict-alignment versus deterministic-padding outcomes where both are
   relevant
 
+For the checked-in section-4 screening panel in this revision, the workflow
+executes across the expanded synthetic-plus-harvested profile set and uses
+top-10 exact-neighbor ground truth for locality-scored profiles.
+
 The outputs are intended to support down-selection of candidate leaf strategies
 for later hierarchy-stage work without claiming hierarchy-stage proof.
 
@@ -408,9 +428,9 @@ scale tiers.
 
 This revision keeps that resource surface narrow: deterministic reporting of
 evaluated entity count, scale-tier identity, and build time per vector or an
-equivalent benchmark-declared normalized build-cost measure is sufficient. It
-does not widen the crate into a full query-runtime or end-to-end service-level
-evaluator.
+equivalent benchmark-declared normalized build-cost measure is sufficient
+across the checked-in section-4 panel's scale tiers. It does not widen the
+crate into a full query-runtime or end-to-end service-level evaluator.
 
 ## Traceability
 

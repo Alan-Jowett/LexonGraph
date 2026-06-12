@@ -1,0 +1,132 @@
+{
+  "suite_id": "section4-corpus-panel-v2",
+  "leaf_size": 2,
+  "dimensions": 2,
+  "batch_size": 2,
+  "metric_contract": "Euclidean",
+  "neighbor_count": 10,
+  "balance_constraints": null,
+  "random_seed": 11,
+  "compression_benchmark": {
+    "method": "ScalarQuantization8Bit",
+    "global_baseline_label": "global-real-dataset-8bit"
+  },
+  "reproducibility": {
+    "seed_policy": "fixed-seed-11",
+    "software_identity": "section4-corpus-panel-v2",
+    "floating_point_profile": "ieee754-deterministic-no-fma",
+    "hardware_profile": "fixture-cpu"
+  },
+  "profiles": [
+    {
+      "profile_id": "real-world-harvested-strict-small",
+      "corpus_id": "real-world-harvested-small",
+      "scale_tier_id": "n-12",
+      "source": {
+        "source_kind": "harvested",
+        "family": "RealWorldHarvested",
+        "source": {
+          "source_id": "repository-docs-harvest-source",
+          "root_block_id": "ac6835a64f6f07eebaf6dd6cbb7524064a5fb849f833c9c5989ad176cd40a2e3",
+          "store_kind": "zip-archive",
+          "archive_path": "sources/repository-docs-source.zip"
+        },
+        "entity_id_metadata_key": "entity_id",
+        "harvesting_policy": {
+          "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
+          "subset_selection": "SortByEntityIdTakeFirst"
+        },
+        "real_entity_count": 12,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "real-world-harvested-strict-medium",
+      "corpus_id": "real-world-harvested-medium",
+      "scale_tier_id": "n-14",
+      "source": {
+        "source_kind": "harvested",
+        "family": "RealWorldHarvested",
+        "source": {
+          "source_id": "repository-docs-harvest-source",
+          "root_block_id": "ac6835a64f6f07eebaf6dd6cbb7524064a5fb849f833c9c5989ad176cd40a2e3",
+          "store_kind": "zip-archive",
+          "archive_path": "sources/repository-docs-source.zip"
+        },
+        "entity_id_metadata_key": "entity_id",
+        "harvesting_policy": {
+          "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
+          "subset_selection": "SortByEntityIdTakeFirst"
+        },
+        "real_entity_count": 14,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "well-clustered-strict-small",
+      "corpus_id": "well-clustered-small",
+      "scale_tier_id": "n-12",
+      "source": {
+        "source_kind": "synthetic",
+        "family": "WellClusteredSynthetic",
+        "real_entity_count": 12,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "well-clustered-strict-medium",
+      "corpus_id": "well-clustered-medium",
+      "scale_tier_id": "n-14",
+      "source": {
+        "source_kind": "synthetic",
+        "family": "WellClusteredSynthetic",
+        "real_entity_count": 14,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "weak-uniform-strict-small",
+      "corpus_id": "weak-uniform-small",
+      "scale_tier_id": "n-12",
+      "source": {
+        "source_kind": "synthetic",
+        "family": "WeakClusterUniform",
+        "real_entity_count": 12,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "anisotropic-strict-small",
+      "corpus_id": "anisotropic-small",
+      "scale_tier_id": "n-12",
+      "source": {
+        "source_kind": "synthetic",
+        "family": "AnisotropicManifold",
+        "real_entity_count": 12,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "near-duplicate-strict-small",
+      "corpus_id": "near-duplicate-small",
+      "scale_tier_id": "n-12",
+      "source": {
+        "source_kind": "synthetic",
+        "family": "NearDuplicateHeavy",
+        "real_entity_count": 12,
+        "alignment_policy": "StrictAlignment"
+      }
+    },
+    {
+      "profile_id": "near-duplicate-padding-small",
+      "corpus_id": "near-duplicate-padding-small",
+      "scale_tier_id": "n-11-padded",
+      "source": {
+        "source_kind": "synthetic",
+        "family": "NearDuplicateHeavy",
+        "real_entity_count": 11,
+        "alignment_policy": "DeterministicSyntheticPadding"
+      }
+    }
+  ]
+}

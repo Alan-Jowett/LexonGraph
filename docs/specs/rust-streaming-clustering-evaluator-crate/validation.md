@@ -295,8 +295,8 @@ leaf-stage screening.
 **Pass condition:** the repository defines a reproducible benchmark-suite
 workflow that can materialize the benchmark profiles and supporting assets used
 to compare candidate leaf-partition strategies, declares the metric contract and
-fixed neighborhood size used for exact-neighbor ground truth, and does not
-claim hierarchy-stage coverage.
+top-10 fixed neighborhood size used for exact-neighbor ground truth in the
+checked-in screening panel, and does not claim hierarchy-stage coverage.
 
 **Traces to:** REQ-STREAM-EVAL-031
 
@@ -304,8 +304,8 @@ claim hierarchy-stage coverage.
 
 Inspect the benchmark-suite corpus panel.
 
-**Pass condition:** the suite defines stable benchmark identities for the
-required corpus families relevant to leaf-stage screening, including a
+**Pass condition:** the checked-in suite defines stable benchmark identities for
+the required corpus families relevant to leaf-stage screening, including a
 real-world harvested corpus, a well-clustered synthetic corpus, a weak-cluster
 or uniform corpus, an anisotropic or manifold corpus, a near-duplicate-heavy
 corpus, and any deterministic scale-tier variants used for repeated
@@ -319,8 +319,9 @@ Inspect one corpus used for locality scoring together with its supporting
 ground-truth artifact.
 
 **Pass condition:** the exact-neighbor ground truth is deterministically tied to
-the corpus identity and metric contract and excludes synthetic padding entities
-from externally reported locality scoring.
+the corpus identity, scale-tier identity, and metric contract, uses top-10
+neighbors for the checked-in screening panel, and excludes synthetic padding
+entities from externally reported locality scoring.
 
 **Traces to:** REQ-STREAM-EVAL-033
 
@@ -331,8 +332,9 @@ block-store-backed source data.
 
 **Pass condition:** the harvesting workflow deterministically extracts
 embeddings and entity identities from the declared source, emits any declared
-scale-tier subsets reproducibly, and preserves the source identity needed to
-reconstruct the harvested benchmark asset.
+scale-tier subsets reproducibly, preserves the source identity needed to
+reconstruct the harvested benchmark asset, and the repository includes at least
+one checked-in harvested benchmark asset produced by that workflow.
 
 **Traces to:** REQ-STREAM-EVAL-034
 
@@ -341,22 +343,23 @@ reconstruct the harvested benchmark asset.
 Inspect one large repository-managed benchmark corpus asset and execute one
 campaign against it through the archive-backed corpus-source path.
 
-**Pass condition:** the large corpus is stored in the git tree as a `.zip`
-asset, the campaign consumes it directly from the archive-backed declaration,
-and no manual pre-decompression step is required.
+**Pass condition:** the checked-in harvested corpus is stored in the git tree as
+a `.zip` asset, the campaign consumes it directly from the archive-backed
+declaration, and no manual pre-decompression step is required.
 
 **Traces to:** REQ-STREAM-EVAL-035
 
 ### VAL-STREAM-EVAL-030
 
 Run the section-4 leaf-stage screening workflow against at least one strict
-alignment corpus and one deterministic-padding corpus with at least two
-candidate strategies.
+alignment corpus, one deterministic-padding corpus, and one harvested real-world
+corpus with at least two candidate strategies.
 
 **Pass condition:** the resulting outputs include fixed-capacity invariant
-outcomes, repeated-run determinism, same-leaf locality against exact-neighbor
-ground truth, local-versus-global compression gain, and the distinct outcomes
-for strict alignment versus deterministic padding where both are applicable.
+outcomes, repeated-run determinism, same-leaf locality against top-10
+exact-neighbor ground truth, local-versus-global compression gain, and the
+distinct outcomes for strict alignment versus deterministic padding where both
+are applicable.
 
 **Traces to:** REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036
 
@@ -367,6 +370,7 @@ scale tier.
 
 **Pass condition:** the report includes the evaluated entity count or equivalent
 corpus-size measure, the scale-tier identity, and build time per vector or the
-suite's declared equivalent normalized build-cost measure.
+suite's declared equivalent normalized build-cost measure across more than one
+checked-in scale tier.
 
 **Traces to:** REQ-STREAM-EVAL-037

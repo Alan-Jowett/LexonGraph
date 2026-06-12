@@ -37,12 +37,14 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 pub use section4::{
-    Section4CorpusFamily, Section4GeneratedProfile, Section4MetricContract,
+    Section4CorpusFamily, Section4GeneratedProfile, Section4HarvestEmbeddingAdmissibility,
+    Section4HarvestPolicy, Section4HarvestSubsetSelection, Section4MetricContract,
     Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
     Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport, Section4SuiteRunProfileReport,
     Section4SuiteRunReport, Section4SuiteSpec, generate_section4_suite_assets,
-    render_section4_suite_scorecard, resolve_registered_candidates, run_section4_suite,
-    write_section4_suite_artifacts,
+    render_section4_suite_scorecard, resolve_profile_block_store_paths,
+    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_section4_suite, write_section4_suite_artifacts,
 };
 
 pub type PassPlan = Vec<Vec<Embedding>>;
@@ -3006,7 +3008,11 @@ impl StreamingClusterClassifier for FixtureClassifier {
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
         validate_embedding(embedding, self.config.dimensions)?;
         match self.mode {
-            FixtureMode::BalancedThreshold => Ok(if embedding[0] < 5.0 { 0 } else { 1 }),
+            FixtureMode::BalancedThreshold => Ok(if self.config.cluster_count == 2 {
+                if embedding[0] < 5.0 { 0 } else { 1 }
+            } else {
+                hashed_fixture_assignment(embedding, self.config.cluster_count, 0)
+            }),
             FixtureMode::SkewedGateFail => Ok(0),
             FixtureMode::SharedContractFailure => {
                 Err(StreamingClusteringError::InvalidTransition {
@@ -3015,12 +3021,20 @@ impl StreamingClusterClassifier for FixtureClassifier {
                 })
             }
             FixtureMode::NondeterministicProbe => {
-                let threshold = if self.assignment_variant == 0 {
-                    5.0
+                if self.config.cluster_count == 2 {
+                    let threshold = if self.assignment_variant == 0 {
+                        5.0
+                    } else {
+                        0.15
+                    };
+                    Ok(if embedding[0] < threshold { 0 } else { 1 })
                 } else {
-                    0.15
-                };
-                Ok(if embedding[0] < threshold { 0 } else { 1 })
+                    Ok(hashed_fixture_assignment(
+                        embedding,
+                        self.config.cluster_count,
+                        self.assignment_variant as u64 + 1,
+                    ))
+                }
             }
         }
     }
@@ -3030,12 +3044,21 @@ fn validate_fixture_config(
     config: &StreamingClusteringConfig,
 ) -> Result<(), StreamingClusteringError> {
     validate_config(config)?;
-    if config.cluster_count != 2 || config.dimensions != 2 {
+    if config.dimensions != 2 {
         return Err(StreamingClusteringError::InvalidConfiguration {
-            message: "fixture candidates require cluster_count = 2 and dimensions = 2".into(),
+            message: "fixture candidates require dimensions = 2".into(),
         });
     }
     Ok(())
+}
+
+fn hashed_fixture_assignment(embedding: &[f32], cluster_count: u32, seed: u64) -> ClusterId {
+    let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ seed;
+    for value in embedding {
+        hash = hash.rotate_left(13) ^ u64::from(value.to_bits());
+        hash = hash.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    }
+    (hash % u64::from(cluster_count)) as ClusterId
 }
 
 #[cfg(test)]
