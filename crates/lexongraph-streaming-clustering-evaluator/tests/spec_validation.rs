@@ -1803,6 +1803,15 @@ fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
     assert!(
         matches!(empty_tier_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty scale_tier_id"))
     );
+
+    let output_dir = tempdir().unwrap();
+    let invalid_chars_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![strict_synthetic_profile("bad:name", "corpus-a", 4)]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(invalid_chars_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("portable pattern"))
+    );
 }
 
 #[test]
@@ -1821,5 +1830,24 @@ fn regression_section4_suite_rejects_unsafe_profile_ids_in_manifests() {
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("profile_id"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_zero_evaluated_entity_count_in_manifests() {
+    let asset_dir = tempdir().unwrap();
+    let report_dir = tempdir().unwrap();
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("safe-id", "safe-corpus", 4)]);
+    let mut manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
+    manifest.generated_profiles[0].evaluated_entity_count = 0;
+
+    let result = run_section4_suite(
+        &manifest,
+        &balanced_and_skewed_candidates()[..1],
+        report_dir.path(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("evaluated_entity_count"))
     );
 }

@@ -30,7 +30,8 @@ use crate::{
     ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
     SharedBalanceConstraints, SharedCandidateConfig, TrainingPassSource,
     built_in_fixture_candidate, decode_embedding_to_f32, emit_campaign_artifacts,
-    load_leaf_records, metadata_value, run_evaluation_campaign, write_campaign_artifacts,
+    load_leaf_records, metadata_value, rank_candidates, run_candidate, validate_candidates,
+    validate_profile, write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,11 +323,7 @@ pub fn run_section4_suite(
     candidates: &[RegisteredCandidate],
     output_dir: &Path,
 ) -> Result<Section4SuiteRunReport, EvaluatorError> {
-    if candidates.is_empty() {
-        return Err(EvaluatorError::InvalidConfiguration(
-            "at least one candidate must be registered".into(),
-        ));
-    }
+    validate_candidates(candidates)?;
     std::fs::create_dir_all(output_dir).map_err(|error| {
         EvaluatorError::Io(format!(
             "failed to create suite report directory {}: {error}",
@@ -337,6 +334,12 @@ pub fn run_section4_suite(
     let mut profile_reports = Vec::with_capacity(manifest.generated_profiles.len());
     for generated in &manifest.generated_profiles {
         validate_profile_id(&generated.profile_id)?;
+        if generated.evaluated_entity_count == 0 {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "profile {} must declare a positive evaluated_entity_count",
+                generated.profile_id
+            )));
+        }
         let profile_contents =
             std::fs::read_to_string(&generated.profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -346,24 +349,31 @@ pub fn run_section4_suite(
             })?;
         let profile: BenchmarkProfile = serde_json::from_str(&profile_contents)
             .map_err(|error| EvaluatorError::Json(error.to_string()))?;
+        validate_profile(&profile)?;
 
         let mut timings = HashMap::new();
+        let mut run_reports = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let started = Instant::now();
-            let single_report = run_evaluation_campaign(&profile, std::slice::from_ref(candidate))?;
+            let run_report = run_candidate(&profile, candidate);
             let elapsed = started.elapsed().as_nanos();
             timings.insert(
                 candidate.identity.candidate_id.clone(),
                 (
                     elapsed,
-                    single_report.run_reports[0].run_status.clone(),
-                    single_report.run_reports[0].survived_required_gates,
-                    single_report.run_reports[0].ranking_score,
+                    run_report.run_status.clone(),
+                    run_report.survived_required_gates,
+                    run_report.ranking_score,
                 ),
             );
+            run_reports.push(run_report);
         }
 
-        let comparative_report = run_evaluation_campaign(&profile, candidates)?;
+        let comparative_report = crate::CampaignReport {
+            profile_id: profile.profile_id.clone(),
+            ranking: rank_candidates(&run_reports),
+            run_reports,
+        };
         let comparative_artifacts = emit_campaign_artifacts(&comparative_report)?;
         let profile_output_dir = output_dir.join(&generated.profile_id);
         write_campaign_artifacts(&profile_output_dir, &comparative_artifacts)?;
@@ -556,6 +566,20 @@ fn validate_profile_id(profile_id: &str) -> Result<(), EvaluatorError> {
     {
         return Err(EvaluatorError::InvalidConfiguration(format!(
             "section-4 suite profile_id {:?} must not contain path separators or dot segments",
+            profile_id
+        )));
+    }
+    let mut chars = profile_id.chars();
+    let Some(first) = chars.next() else {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite profile_id must not be empty".into(),
+        ));
+    };
+    if !first.is_ascii_alphanumeric()
+        || !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-4 suite profile_id {:?} must match the portable pattern [A-Za-z0-9][A-Za-z0-9._-]*",
             profile_id
         )));
     }
@@ -789,7 +813,7 @@ fn compute_ground_truth(
     }
     let mut ground_truth = Vec::with_capacity(real_entities.len());
     for (entity_index, entity) in real_entities.iter().enumerate() {
-        let mut distances = Vec::with_capacity(real_entities.len() - 1);
+        let mut nearest = Vec::with_capacity(neighbor_count);
         for (neighbor_index, neighbor) in real_entities.iter().enumerate() {
             if entity_index == neighbor_index {
                 continue;
@@ -802,24 +826,45 @@ fn compute_ground_truth(
                     euclidean_distance(&entity.embedding, &neighbor.embedding)?
                 }
             };
-            distances.push((distance, neighbor.entity_id.clone()));
+            insert_nearest_neighbor(
+                &mut nearest,
+                neighbor_count,
+                distance,
+                neighbor.entity_id.clone(),
+            );
         }
-        distances.sort_by(|left, right| {
-            left.0
-                .partial_cmp(&right.0)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| left.1.cmp(&right.1))
-        });
         ground_truth.push(GroundTruthNeighborhood {
             entity_id: entity.entity_id.clone(),
-            neighbor_ids: distances
+            neighbor_ids: nearest
                 .into_iter()
-                .take(neighbor_count)
                 .map(|(_, neighbor_id)| neighbor_id)
                 .collect(),
         });
     }
     Ok(ground_truth)
+}
+
+fn insert_nearest_neighbor(
+    nearest: &mut Vec<(f64, String)>,
+    neighbor_count: usize,
+    distance: f64,
+    neighbor_id: String,
+) {
+    let insert_at = nearest
+        .binary_search_by(|(existing_distance, existing_id)| {
+            existing_distance
+                .partial_cmp(&distance)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| existing_id.cmp(&neighbor_id))
+        })
+        .unwrap_or_else(|index| index);
+    if insert_at >= neighbor_count {
+        return;
+    }
+    nearest.insert(insert_at, (distance, neighbor_id));
+    if nearest.len() > neighbor_count {
+        nearest.pop();
+    }
 }
 
 fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f64, EvaluatorError> {
@@ -857,7 +902,8 @@ fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, EvaluatorError
             let delta = *left_value as f64 - *right_value as f64;
             delta * delta
         })
-        .sum())
+        .sum::<f64>()
+        .sqrt())
 }
 
 fn materialize_corpus_archive(
@@ -1157,7 +1203,7 @@ pub fn resolve_registered_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::cosine_distance;
+    use super::{cosine_distance, euclidean_distance};
     use crate::EvaluatorError;
 
     #[test]
@@ -1169,5 +1215,12 @@ mod tests {
             Err(EvaluatorError::InvalidConfiguration(message))
                 if message.contains("equal dimensions")
         ));
+    }
+
+    #[test]
+    fn euclidean_distance_matches_l2_distance() {
+        let distance = euclidean_distance(&[0.0, 0.0], &[3.0, 4.0]).unwrap();
+
+        assert_eq!(distance, 5.0);
     }
 }
