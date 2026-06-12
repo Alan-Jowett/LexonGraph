@@ -13,7 +13,30 @@
     },
     "declared_search_target": "TNN Recall@10 >= 90% under later routing evaluation",
     "beam_width_policy": "beam width 1 by default; 2, 4, and 8 reserved for later routing fallback studies",
+    "transformed_metric_policy": "no transformed metric; build, locality, compression, and later routing all use the declared Euclidean metric directly",
+    "build_metric_role": "section-4 compares leaf-stage candidate behavior under the declared Euclidean metric",
+    "locality_metric_role": "same-leaf top-10 neighborhood coherence is computed directly under the declared Euclidean metric",
+    "compression_metric_role": "local-versus-global scalar quantization compares real-entity reconstruction error under the declared Euclidean track",
+    "deferred_routing_metric_role": "later routing studies must preserve the declared Euclidean ordering and search-target interpretation",
+    "metric_contract_consistency_checks": [
+      "build, locality, compression, and deferred routing all declare the Euclidean metric",
+      "no transformed metric is permitted on this track, so ordering preservation is vacuously satisfied"
+    ],
+    "metric_contract_audit_result": "metric contract is consistent across build, locality, compression, and deferred routing obligations",
+    "dispersion_functional": "variance under the declared Euclidean metric",
     "candidate_threading_model": "single-threaded section-4 screening",
+    "reduction_order_strategy": "single-thread sequential reduction order",
+    "one_thread_vs_n_thread_identity_proof_surface": "Deferred",
+    "later_phase_identities": [
+      {
+        "identity_id": "real-world-harvested-medium-heldout-queries",
+        "label": "Held-out routing query set for harvested medium corpus",
+        "kind": "HeldOutQuerySet",
+        "corpus_id": "real-world-harvested-medium",
+        "scale_tier_id": "n-14",
+        "later_evaluation_line": "future hierarchy-routing evaluator"
+      }
+    ],
     "frozen_items": [
       {
         "item_id": "metric-family",
@@ -44,6 +67,11 @@
         "item_id": "threading-reproducibility",
         "label": "Multi-thread reproducibility obligation",
         "proof_surface": "Deferred"
+      },
+      {
+        "item_id": "loaded-index-memory",
+        "label": "Loaded index memory obligation",
+        "proof_surface": "Deferred"
       }
     ]
   },
@@ -72,7 +100,8 @@
       "harvested_policy": {
         "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
         "subset_selection": "SortByEntityIdTakeFirst"
-      }
+      },
+      "later_phase_identity_ids": []
     },
     {
       "profile_id": "real-world-harvested-strict-medium",
@@ -97,7 +126,10 @@
       "harvested_policy": {
         "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
         "subset_selection": "SortByEntityIdTakeFirst"
-      }
+      },
+      "later_phase_identity_ids": [
+        "real-world-harvested-medium-heldout-queries"
+      ]
     },
     {
       "profile_id": "well-clustered-strict-small",
@@ -119,7 +151,8 @@
       "harvested_source_id": null,
       "harvested_source_root_block_id": null,
       "harvested_entity_id_metadata_key": null,
-      "harvested_policy": null
+      "harvested_policy": null,
+      "later_phase_identity_ids": []
     },
     {
       "profile_id": "well-clustered-strict-medium",
@@ -141,7 +174,8 @@
       "harvested_source_id": null,
       "harvested_source_root_block_id": null,
       "harvested_entity_id_metadata_key": null,
-      "harvested_policy": null
+      "harvested_policy": null,
+      "later_phase_identity_ids": []
     },
     {
       "profile_id": "weak-uniform-strict-small",
@@ -163,7 +197,8 @@
       "harvested_source_id": null,
       "harvested_source_root_block_id": null,
       "harvested_entity_id_metadata_key": null,
-      "harvested_policy": null
+      "harvested_policy": null,
+      "later_phase_identity_ids": []
     },
     {
       "profile_id": "anisotropic-strict-small",
@@ -185,7 +220,8 @@
       "harvested_source_id": null,
       "harvested_source_root_block_id": null,
       "harvested_entity_id_metadata_key": null,
-      "harvested_policy": null
+      "harvested_policy": null,
+      "later_phase_identity_ids": []
     },
     {
       "profile_id": "near-duplicate-strict-small",
@@ -207,7 +243,8 @@
       "harvested_source_id": null,
       "harvested_source_root_block_id": null,
       "harvested_entity_id_metadata_key": null,
-      "harvested_policy": null
+      "harvested_policy": null,
+      "later_phase_identity_ids": []
     },
     {
       "profile_id": "near-duplicate-padding-small",
@@ -229,7 +266,8 @@
       "harvested_source_id": null,
       "harvested_source_root_block_id": null,
       "harvested_entity_id_metadata_key": null,
-      "harvested_policy": null
+      "harvested_policy": null,
+      "later_phase_identity_ids": []
     }
   ]
 }

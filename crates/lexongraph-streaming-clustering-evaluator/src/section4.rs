@@ -27,11 +27,11 @@ use crate::{
     BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
     EvaluationEntity, EvaluationEntitySource, EvaluatorError, GateDeclaration, GateKind,
-    GroundTruthNeighborhood, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
-    ReproducibilityMetadata, ResearchCoverage, SharedBalanceConstraints, SharedCandidateConfig,
-    TrainingPassSource, decode_embedding_to_f32, emit_campaign_artifacts, load_leaf_records,
-    metadata_value, rank_candidates, run_candidate, validate_candidates, validate_profile,
-    write_campaign_artifacts,
+    GroundTruthNeighborhood, LaterPhaseIdentity, LaterPhaseIdentityKind, MetricDeclaration,
+    MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
+    SharedBalanceConstraints, SharedCandidateConfig, TrainingPassSource, decode_embedding_to_f32,
+    emit_campaign_artifacts, load_leaf_records, metadata_value, rank_candidates, run_candidate,
+    validate_candidates, validate_profile, write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,7 +75,29 @@ pub struct Section4ExperimentTrackContract {
     pub dimensionality_contract: Section4DimensionalityContract,
     pub declared_search_target: Option<String>,
     pub beam_width_policy: Option<String>,
+    #[serde(default)]
+    pub transformed_metric_policy: Option<String>,
+    #[serde(default)]
+    pub build_metric_role: String,
+    #[serde(default)]
+    pub locality_metric_role: String,
+    #[serde(default)]
+    pub compression_metric_role: String,
+    #[serde(default)]
+    pub deferred_routing_metric_role: String,
+    #[serde(default)]
+    pub metric_contract_consistency_checks: Vec<String>,
+    #[serde(default)]
+    pub metric_contract_audit_result: String,
+    #[serde(default)]
+    pub dispersion_functional: String,
     pub candidate_threading_model: String,
+    #[serde(default)]
+    pub reduction_order_strategy: String,
+    #[serde(default)]
+    pub one_thread_vs_n_thread_identity_proof_surface: Option<Section4ProofSurface>,
+    #[serde(default)]
+    pub later_phase_identities: Vec<LaterPhaseIdentity>,
     pub frozen_items: Vec<Section4FrozenContractItem>,
 }
 
@@ -178,6 +200,8 @@ pub struct Section4GeneratedProfile {
     pub harvested_source_root_block_id: Option<String>,
     pub harvested_entity_id_metadata_key: Option<String>,
     pub harvested_policy: Option<Section4HarvestPolicy>,
+    #[serde(default)]
+    pub later_phase_identity_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -196,6 +220,7 @@ pub struct Section4SuiteRunCandidateReport {
     pub ranking_score: Option<f64>,
     pub campaign_elapsed_nanos: u128,
     pub campaign_time_per_vector_nanos: f64,
+    pub peak_build_memory_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -208,6 +233,8 @@ pub struct Section4SuiteRunProfileReport {
     pub scale_tier_kind: Section4ScaleTierKind,
     pub real_entity_count: usize,
     pub evaluated_entity_count: usize,
+    pub preserved_deferred_goal_ids: Vec<String>,
+    pub preserved_later_phase_identity_ids: Vec<String>,
     pub survivor_candidate_ids: Vec<String>,
     pub candidate_reports: Vec<Section4SuiteRunCandidateReport>,
 }
@@ -308,6 +335,8 @@ pub fn generate_section4_suite_assets(
             spec.metric_contract.clone(),
             spec.neighbor_count,
         )?;
+        let later_phase_identities =
+            later_phase_identities_for_profile(&spec.experiment_track_contract, profile_spec);
         let profile = BenchmarkProfile {
             profile_id: profile_spec.profile_id.clone(),
             corpus_ids: vec![profile_spec.corpus_id.clone()],
@@ -345,6 +374,7 @@ pub fn generate_section4_suite_assets(
             metric_declarations: section4_metric_declarations(),
             gate_declarations: section4_gate_declarations(),
             deferred_research_goals: default_deferred_research_goals(),
+            later_phase_identities: later_phase_identities.clone(),
             reproducibility: spec.reproducibility.clone(),
         };
         let profile_path = profiles_dir.join(format!("{}.json", profile_spec.profile_id));
@@ -403,6 +433,10 @@ pub fn generate_section4_suite_assets(
             harvested_source_root_block_id: harvested_source_metadata.1,
             harvested_entity_id_metadata_key: harvested_source_metadata.2,
             harvested_policy: harvested_source_metadata.3,
+            later_phase_identity_ids: later_phase_identities
+                .iter()
+                .map(|identity| identity.identity_id.clone())
+                .collect(),
         });
     }
 
@@ -488,9 +522,12 @@ pub fn run_section4_suite(
         let mut timings = HashMap::new();
         let mut run_reports = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let started = Instant::now();
-            let run_report = run_candidate(&profile, candidate);
-            let elapsed = started.elapsed().as_nanos();
+            let ((run_report, elapsed), peak_build_memory_bytes) =
+                measure_peak_build_memory(|| {
+                    let started = Instant::now();
+                    let run_report = run_candidate(&profile, candidate);
+                    (run_report, started.elapsed().as_nanos())
+                });
             timings.insert(
                 candidate.identity.candidate_id.clone(),
                 (
@@ -498,6 +535,7 @@ pub fn run_section4_suite(
                     run_report.run_status.clone(),
                     run_report.survived_required_gates,
                     run_report.ranking_score,
+                    peak_build_memory_bytes,
                 ),
             );
             run_reports.push(run_report);
@@ -514,7 +552,7 @@ pub fn run_section4_suite(
 
         let mut candidate_reports = Vec::with_capacity(comparative_report.run_reports.len());
         for run_report in &comparative_report.run_reports {
-            let (elapsed, status, survived, ranking_score) = timings
+            let (elapsed, status, survived, ranking_score, peak_build_memory_bytes) = timings
                 .get(&run_report.candidate_identity.candidate_id)
                 .cloned()
                 .ok_or_else(|| {
@@ -531,13 +569,24 @@ pub fn run_section4_suite(
                 campaign_elapsed_nanos: elapsed,
                 campaign_time_per_vector_nanos: elapsed as f64
                     / generated.evaluated_entity_count as f64,
+                peak_build_memory_bytes,
             });
         }
 
-        let survivor_candidate_ids = candidate_reports
+        let survivor_candidate_ids = comparative_report
+            .ranking
             .iter()
-            .filter(|candidate| candidate.survived_required_gates)
             .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        let preserved_deferred_goal_ids = profile
+            .deferred_research_goals
+            .iter()
+            .map(|goal| goal.deferred_id.clone())
+            .collect();
+        let preserved_later_phase_identity_ids = profile
+            .later_phase_identities
+            .iter()
+            .map(|identity| identity.identity_id.clone())
             .collect();
 
         profile_reports.push(Section4SuiteRunProfileReport {
@@ -549,6 +598,8 @@ pub fn run_section4_suite(
             scale_tier_kind: generated.scale_tier_kind.clone(),
             real_entity_count: generated.real_entity_count,
             evaluated_entity_count: generated.evaluated_entity_count,
+            preserved_deferred_goal_ids,
+            preserved_later_phase_identity_ids,
             survivor_candidate_ids,
             candidate_reports,
         });
@@ -584,11 +635,12 @@ pub fn render_section4_suite_scorecard(report: &Section4SuiteRunReport) -> Strin
         ));
         for candidate in &profile.candidate_reports {
             lines.push(format!(
-                "  candidate {}: {:?}, survived={}, campaign_time_per_vector_nanos={:.3}",
+                "  candidate {}: {:?}, survived={}, campaign_time_per_vector_nanos={:.3}, peak_build_memory_bytes={}",
                 candidate.candidate_id,
                 candidate.run_status,
                 candidate.survived_required_gates,
-                candidate.campaign_time_per_vector_nanos
+                candidate.campaign_time_per_vector_nanos,
+                candidate.peak_build_memory_bytes
             ));
         }
     }
@@ -635,6 +687,109 @@ pub fn write_section4_suite_artifacts(
         scorecard_path,
         profile_output_dirs,
     })
+}
+
+fn measure_peak_build_memory<T>(run: impl FnOnce() -> T) -> (T, u64) {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+    };
+    use std::thread;
+    use std::time::Duration;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let peak = Arc::new(AtomicU64::new(current_process_memory_bytes().unwrap_or(0)));
+    let stop_flag = Arc::clone(&stop);
+    let peak_value = Arc::clone(&peak);
+    let sampler = thread::spawn(move || {
+        while !stop_flag.load(AtomicOrdering::Relaxed) {
+            if let Some(memory_bytes) = current_process_memory_bytes() {
+                peak_value.fetch_max(memory_bytes, AtomicOrdering::Relaxed);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if let Some(memory_bytes) = current_process_memory_bytes() {
+            peak_value.fetch_max(memory_bytes, AtomicOrdering::Relaxed);
+        }
+    });
+
+    let result = catch_unwind(AssertUnwindSafe(run));
+    stop.store(true, AtomicOrdering::Relaxed);
+    let _ = sampler.join();
+    let peak_bytes = peak.load(AtomicOrdering::Relaxed);
+    match result {
+        Ok(result) => (result, peak_bytes),
+        Err(payload) => resume_unwind(payload),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn current_process_memory_bytes() -> Option<u64> {
+    #[repr(C)]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn K32GetProcessMemoryInfo(
+            process: *mut std::ffi::c_void,
+            counters: *mut ProcessMemoryCounters,
+            size: u32,
+        ) -> i32;
+    }
+
+    let mut counters = ProcessMemoryCounters {
+        cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+        page_fault_count: 0,
+        peak_working_set_size: 0,
+        working_set_size: 0,
+        quota_peak_paged_pool_usage: 0,
+        quota_paged_pool_usage: 0,
+        quota_peak_non_paged_pool_usage: 0,
+        quota_non_paged_pool_usage: 0,
+        pagefile_usage: 0,
+        peak_pagefile_usage: 0,
+    };
+    // SAFETY: The buffer is initialized with the correct size and points to writable memory
+    // for the lifetime of the call.
+    let success = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            &mut counters,
+            std::mem::size_of::<ProcessMemoryCounters>() as u32,
+        )
+    };
+    if success == 0 {
+        None
+    } else {
+        Some(counters.working_set_size as u64)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn current_process_memory_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?.trim();
+        let kibibytes = value.split_whitespace().next()?.parse::<u64>().ok()?;
+        Some(kibibytes * 1024)
+    })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn current_process_memory_bytes() -> Option<u64> {
+    None
 }
 
 fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
@@ -740,6 +895,114 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite candidate_threading_model must not be empty".into(),
         ));
     }
+    if spec
+        .experiment_track_contract
+        .reduction_order_strategy
+        .trim()
+        .is_empty()
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite reduction_order_strategy must not be empty".into(),
+        ));
+    }
+    for (label, value) in [
+        (
+            "build_metric_role",
+            spec.experiment_track_contract.build_metric_role.as_str(),
+        ),
+        (
+            "locality_metric_role",
+            spec.experiment_track_contract.locality_metric_role.as_str(),
+        ),
+        (
+            "compression_metric_role",
+            spec.experiment_track_contract
+                .compression_metric_role
+                .as_str(),
+        ),
+        (
+            "deferred_routing_metric_role",
+            spec.experiment_track_contract
+                .deferred_routing_metric_role
+                .as_str(),
+        ),
+        (
+            "metric_contract_audit_result",
+            spec.experiment_track_contract
+                .metric_contract_audit_result
+                .as_str(),
+        ),
+        (
+            "dispersion_functional",
+            spec.experiment_track_contract
+                .dispersion_functional
+                .as_str(),
+        ),
+    ] {
+        if value.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite {label} must not be empty"
+            )));
+        }
+    }
+    if spec
+        .experiment_track_contract
+        .metric_contract_consistency_checks
+        .is_empty()
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite must declare at least one metric_contract_consistency_check".into(),
+        ));
+    }
+    if spec
+        .experiment_track_contract
+        .metric_contract_consistency_checks
+        .iter()
+        .any(|check| check.trim().is_empty())
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite metric_contract_consistency_checks must not contain empty entries"
+                .into(),
+        ));
+    }
+    if spec
+        .experiment_track_contract
+        .one_thread_vs_n_thread_identity_proof_surface
+        .is_none()
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite must declare one_thread_vs_n_thread_identity_proof_surface".into(),
+        ));
+    }
+    for identity in &spec.experiment_track_contract.later_phase_identities {
+        if identity.identity_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "section-4 suite later-phase identities must declare a non-empty identity_id"
+                    .into(),
+            ));
+        }
+        if identity.label.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} must declare a non-empty label",
+                identity.identity_id
+            )));
+        }
+        if identity.later_evaluation_line.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} must declare later_evaluation_line",
+                identity.identity_id
+            )));
+        }
+    }
+    let mut seen_later_phase_identity_ids = HashSet::new();
+    for identity in &spec.experiment_track_contract.later_phase_identities {
+        if !seen_later_phase_identity_ids.insert(identity.identity_id.as_str()) {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite declares duplicate later-phase identity_id {:?}",
+                identity.identity_id
+            )));
+        }
+    }
     if spec.experiment_track_contract.frozen_items.is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-4 suite must declare frozen benchmark-contract items".into(),
@@ -767,6 +1030,9 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
         }
     }
     let mut seen_profile_ids = HashSet::new();
+    let mut declared_corpus_ids = HashSet::new();
+    let mut declared_scale_tier_ids = HashSet::new();
+    let mut declared_profile_coordinates = HashSet::new();
     for profile in &spec.profiles {
         validate_profile_id(&profile.profile_id)?;
         if profile.corpus_id.trim().is_empty() {
@@ -787,6 +1053,10 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
                 profile.profile_id
             )));
         }
+        declared_corpus_ids.insert(profile.corpus_id.as_str());
+        declared_scale_tier_ids.insert(profile.scale_tier_id.as_str());
+        declared_profile_coordinates
+            .insert((profile.corpus_id.as_str(), profile.scale_tier_id.as_str()));
         let real_entity_count = match &profile.source {
             Section4ProfileSourceSpec::Synthetic {
                 real_entity_count, ..
@@ -799,6 +1069,42 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "profile {} must declare more than {} real entities to compute exact-neighbor ground truth",
                 profile.profile_id, spec.neighbor_count
+            )));
+        }
+    }
+    for identity in &spec.experiment_track_contract.later_phase_identities {
+        if let Some(corpus_id) = &identity.corpus_id
+            && !declared_corpus_ids.contains(corpus_id.as_str())
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} references unknown corpus {}",
+                identity.identity_id, corpus_id
+            )));
+        }
+        if let Some(scale_tier_id) = &identity.scale_tier_id
+            && !declared_scale_tier_ids.contains(scale_tier_id.as_str())
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} references unknown scale_tier_id {}",
+                identity.identity_id, scale_tier_id
+            )));
+        }
+        if matches!(identity.kind, LaterPhaseIdentityKind::HeldOutQuerySet)
+            && (identity.corpus_id.is_none() || identity.scale_tier_id.is_none())
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite held-out query-set identity {} must declare corpus_id and scale_tier_id",
+                identity.identity_id
+            )));
+        }
+        if let (Some(corpus_id), Some(scale_tier_id)) = (
+            identity.corpus_id.as_deref(),
+            identity.scale_tier_id.as_deref(),
+        ) && !declared_profile_coordinates.contains(&(corpus_id, scale_tier_id))
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} references undeclared corpus_id/scale_tier_id pair ({}, {})",
+                identity.identity_id, corpus_id, scale_tier_id
             )));
         }
     }
@@ -836,6 +1142,27 @@ fn validate_profile_id(profile_id: &str) -> Result<(), EvaluatorError> {
         )));
     }
     Ok(())
+}
+
+fn later_phase_identities_for_profile(
+    contract: &Section4ExperimentTrackContract,
+    profile_spec: &Section4ProfileSpec,
+) -> Vec<LaterPhaseIdentity> {
+    contract
+        .later_phase_identities
+        .iter()
+        .filter(|identity| {
+            identity
+                .corpus_id
+                .as_ref()
+                .is_none_or(|corpus_id| corpus_id == &profile_spec.corpus_id)
+                && identity
+                    .scale_tier_id
+                    .as_ref()
+                    .is_none_or(|scale_tier_id| scale_tier_id == &profile_spec.scale_tier_id)
+        })
+        .cloned()
+        .collect()
 }
 
 fn materialize_real_entities(
@@ -1038,6 +1365,10 @@ fn apply_alignment_policy(
             let target_total = real_entities.len().div_ceil(leaf_size) * leaf_size;
             let mut entities = real_entities.to_vec();
             let padding_needed = target_total - entities.len();
+            let mut seen_entity_ids = entities
+                .iter()
+                .map(|entity| entity.entity_id.clone())
+                .collect::<HashSet<_>>();
             let max_abs = real_entities
                 .iter()
                 .flat_map(|entity| entity.embedding.iter().copied())
@@ -1047,11 +1378,15 @@ fn apply_alignment_policy(
                 for dim in 0..real_entities[0].embedding.len() {
                     embedding.push(max_abs + 10.0 + padding_index as f32 + dim as f32 * 0.125);
                 }
+                let mut entity_id = format!(
+                    "{}-synthetic-{padding_index:06}",
+                    real_entities[0].corpus_id
+                );
+                while !seen_entity_ids.insert(entity_id.clone()) {
+                    entity_id = format!("{entity_id}-pad");
+                }
                 entities.push(EvaluationEntity {
-                    entity_id: format!(
-                        "{}-synthetic-{padding_index:06}",
-                        real_entities[0].corpus_id
-                    ),
+                    entity_id,
                     corpus_id: real_entities[0].corpus_id.clone(),
                     embedding,
                     synthetic: true,
@@ -1500,6 +1835,7 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
             reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
             research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future hierarchy-routing evaluator".into(),
         },
         DeferredResearchGoal {
             deferred_id: "deferred-same-or-sibling-locality".into(),
@@ -1507,6 +1843,7 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
             reason: "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line".into(),
             research_goal_ids: vec!["RG-LOCALITY".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future hierarchy-locality evaluator".into(),
         },
         DeferredResearchGoal {
             deferred_id: "deferred-bounded-tree-shape".into(),
@@ -1514,6 +1851,7 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
             reason: "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line".into(),
             research_goal_ids: vec!["RG-HIERARCHY".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future hierarchy-shape evaluator".into(),
         },
         DeferredResearchGoal {
             deferred_id: "deferred-parent-summaries".into(),
@@ -1521,6 +1859,15 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
             reason: "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line".into(),
             research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future hierarchy-summary evaluator".into(),
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-refinement-contract".into(),
+            label: "Refinement and dispersion contract".into(),
+            reason: "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface".into(),
+            research_goal_ids: vec!["RG-HIERARCHY".into()],
+            coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future hierarchy-summary evaluator".into(),
         },
         DeferredResearchGoal {
             deferred_id: "deferred-persistence-roundtrip".into(),
@@ -1528,6 +1875,15 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
             reason: "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line".into(),
             research_goal_ids: vec!["RG-HIERARCHY".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future persistence evaluator".into(),
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-loaded-index-memory".into(),
+            label: "Loaded index memory".into(),
+            reason: "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line".into(),
+            research_goal_ids: vec!["RG-HIERARCHY".into()],
+            coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future persistence evaluator".into(),
         },
         DeferredResearchGoal {
             deferred_id: "deferred-threading-reproducibility".into(),
@@ -1535,6 +1891,7 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
             reason: "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation".into(),
             research_goal_ids: vec!["RG-DETERMINISM".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future execution-profile evaluator".into(),
         },
     ]
 }

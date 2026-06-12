@@ -68,8 +68,9 @@ Inspect one benchmark profile definition.
 **Pass condition:** the profile fixes corpus identities, streaming pass inputs,
 classifier-side probe workloads, the declared source mode for each workload, the
 leaf model, metric declarations, gate declarations, comparative ranking
-weights, deferred research-goal records, and reproducibility metadata for one
-campaign.
+weights, deferred research-goal records, any declared later-phase workload or
+artifact identities that section-4 must carry forward, and reproducibility
+metadata for one campaign.
 
 **Traces to:** REQ-STREAM-EVAL-006
 
@@ -131,7 +132,10 @@ the leaf membership artifact, enforces exact final occupancy against the padded
 evaluated set, and excludes synthetic entities from externally reported
 locality and compression metrics, while also reporting whether synthetic
 padding is concentrated into the minimum possible number of final clusters
-permitted by the deterministic procedure.
+permitted by the deterministic procedure. Synthetic padding identities are
+stably tagged, do not collide with real-entity identities in the evaluated
+corpus, and are not misreported as real benchmark members in externally visible
+evaluator entity listings.
 
 **Traces to:** REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018
 
@@ -152,7 +156,9 @@ method and global baseline.
 
 **Pass condition:** the evaluator computes local per-cluster compression quality
 versus the declared global real-dataset baseline from the leaf membership
-artifact.
+artifact, reports the declared local-versus-global delta semantics, and emits
+the per-cluster or per-bucket distribution needed to interpret that aggregate
+comparison. The declared global baseline excludes synthetic padding entities.
 
 **Traces to:** REQ-STREAM-EVAL-020
 
@@ -173,7 +179,9 @@ corresponding campaign report.
 
 **Pass condition:** each declared metric, gate, or deferred research-goal
 record traces to one or more research goals and is tagged as direct, proxy, or
-deferred.
+deferred. When a deferred record corresponds to a frozen section-1 benchmark
+item, the report also identifies the later proof surface expected to discharge
+it.
 
 **Traces to:** REQ-STREAM-EVAL-013
 
@@ -192,10 +200,13 @@ scorecard summarizing pass/fail status, metric values, and survivor ranking.
 Run the evaluator with an invalid benchmark profile and with a candidate that
 returns a shared-contract failure.
 
-**Pass condition:** failures are surfaced deterministically and distinguish
-invalid evaluator configuration, invalid or unresolved corpus-source
-references, block-store-backed corpus-loading failures, zip-archive open or
-read failures, and candidate-reported shared-contract failure.
+**Pass condition:** failures are surfaced deterministically with a stable error
+code and deterministic human-readable message and distinguish invalid evaluator
+configuration, invalid or unresolved corpus-source references,
+block-store-backed corpus-loading failures, zip-archive open or read failures,
+and candidate-reported shared-contract failure. A failed section-4
+candidate/configuration execution does not expose success-shaped completed
+artifacts beyond the point of failure.
 
 **Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022
 
@@ -373,7 +384,9 @@ outcomes, repeated-run determinism, same-leaf locality against top-10
 exact-neighbor ground truth, local-versus-global compression gain, and the
 distinct outcomes for strict alignment versus deterministic padding where both
 are applicable, including deterministic rejection of non-divisible strict
-alignment and impossible or degenerate deterministic-padding inputs.
+alignment and impossible or degenerate deterministic-padding inputs, together
+with the declared normalized build-cost comparison used to judge the
+alignment-policy tradeoff.
 
 **Traces to:** REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-048
 
@@ -383,9 +396,12 @@ Inspect one completed section-4 screening report spanning more than one corpus
 scale tier.
 
 **Pass condition:** the report includes the evaluated entity count or equivalent
-corpus-size measure, the scale-tier identity, and build time per vector or the
-suite's declared equivalent normalized build-cost measure across more than one
-checked-in scale tier.
+corpus-size measure, the scale-tier identity, build time per vector or the
+suite's declared equivalent normalized build-cost measure, and peak build
+memory across more than one checked-in scale tier. If the experiment track
+declares a later-phase loaded-index memory obligation that section-4 does not
+directly measure, the report preserves that obligation as deferred rather than
+omitting it.
 
 **Traces to:** REQ-STREAM-EVAL-037
 
@@ -444,9 +460,10 @@ policy, the primary `leaf_size` and any declared sensitivity sizes, the
 dimensionality contract, the alignment-policy family, the quantization or
 compression baseline policy over real entities only, any declared search-target
 threshold and beam-width policy carried forward to later routing phases, the
-declared floating-point profile, the declared candidate-threading model, and
-the declared hardware profile; the artifacts also label which of those frozen
-items are measured directly during section-4 versus deferred.
+declared floating-point profile, the declared candidate-threading model, the
+declared reduction-order strategy, and the declared hardware profile; the
+artifacts also label which of those frozen items are measured directly during
+section-4 versus deferred.
 
 **Traces to:** REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043
 
@@ -459,8 +476,11 @@ at the leaf-stage boundary is preserved as an explicit deferred record rather
 than omitted, including where applicable same-or-sibling locality targets,
 routing targets or routing assumptions, beam-width policies or related routing-
 study assumptions, bounded fanout or depth constraints, parent-summary
-obligations, serialization or persisted-artifact obligations, and multi-thread
-reproducibility obligations beyond the direct section-4 observable boundary.
+obligations, parent-summary metric or dispersion-contract obligations,
+refinement-contract obligations, serialization or persisted-artifact
+obligations, multi-thread reproducibility obligations beyond the direct
+section-4 observable boundary, and any declared held-out query-set or later-
+phase routing-workload identities.
 
 **Traces to:** REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-044
 
@@ -474,6 +494,10 @@ scale-tier identities or deterministic nearest-practical equivalents, declares
 the tier-growth rule for repeated comparison, ties each tier to its corpus and
 any exact-neighbor ground-truth asset, and includes at least one checked-in
 harvested real-world corpus family within that same tiered comparison surface.
+For any corpus family intended to carry forward into later routing studies, the
+same contract also declares held-out query-set identities, including at least
+one such identity for a checked-in harvested real-world corpus family in the
+first complete checked-in section-4 panel.
 
 **Traces to:** REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045
 
@@ -485,7 +509,52 @@ one configuration.
 **Pass condition:** the evaluator stops further comparative metric evaluation
 for that candidate/configuration pair, emits deterministic failure-classified
 artifacts without presenting a success-shaped completed result for the rejected
-configuration, and the comparative outputs still identify which candidates, if
+configuration, includes artifact-hygiene evidence that later comparative
+metrics and success-shaped completion artifacts were not exposed after the
+failing gate, and the comparative outputs still identify which candidates, if
 any, survive to carry forward into later hierarchy-stage comparison.
 
 **Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046
+
+### VAL-STREAM-EVAL-040
+
+Inspect one checked-in section-4 experiment track contract together with one
+campaign report produced from that track.
+
+**Pass condition:** the experiment track declares the exact build, locality,
+compression, and deferred-routing metric roles, any transformed-metric
+ordering-preservation obligation, the metric-contract consistency checks and
+reported audit results, the compatible dispersion functional for any deferred
+summary or refinement obligation, the threading model and deterministic
+reduction-order strategy, and whether 1-thread versus N-thread bitwise
+observable identity is measured directly or deferred.
+
+**Traces to:** REQ-STREAM-EVAL-051
+
+### VAL-STREAM-EVAL-041
+
+Inspect one frozen section-4 contract that carries later-phase obligations and
+the corresponding deferred-ledger records.
+
+**Pass condition:** when the experiment track declares held-out query-set,
+later routing-workload, hierarchy, summary, or persistence artifact identities,
+the suite preserves those identities together with the later evaluation line
+expected to consume each one even if section-4 execution does not directly use
+them. For the first complete checked-in section-4 panel, that preserved set
+includes at least one held-out query-set identity for a harvested real-world
+corpus family expected to feed later routing phases.
+
+**Traces to:** REQ-STREAM-EVAL-052
+
+### VAL-STREAM-EVAL-042
+
+Inspect one completed section-4 campaign with more than one surviving
+candidate/configuration pair.
+
+**Pass condition:** the workflow's carry-forward decision rule rejects hard-gate
+failures first, ranks surviving candidates using same-leaf locality evidence,
+declared compression benefit, and normalized build-cost evidence, and applies a
+deterministic tie-break when survivors remain otherwise indistinguishable on
+the declared comparison surface.
+
+**Traces to:** REQ-STREAM-EVAL-053

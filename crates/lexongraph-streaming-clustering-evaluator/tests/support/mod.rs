@@ -20,9 +20,10 @@ use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
     BlockStoreReferenceStore, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
-    EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind, MetricDeclaration,
-    MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
-    SharedCandidateConfig, TrainingPassSource, built_in_fixture_candidate,
+    EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind, LaterPhaseIdentity,
+    LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
+    ReproducibilityMetadata, ResearchCoverage, SharedCandidateConfig, TrainingPassSource,
+    built_in_fixture_candidate,
 };
 use zip::CompressionMethod as ZipCompressionMethod;
 use zip::ZipWriter;
@@ -194,6 +195,15 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
             reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
             research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
             coverage: ResearchCoverage::Deferred,
+            later_evaluation_line: "future hierarchy-routing evaluator".into(),
+        }],
+        later_phase_identities: vec![LaterPhaseIdentity {
+            identity_id: "fixture-heldout-query-set".into(),
+            label: "Fixture held-out query set".into(),
+            kind: LaterPhaseIdentityKind::HeldOutQuerySet,
+            corpus_id: Some("fixture-corpus-a".into()),
+            scale_tier_id: None,
+            later_evaluation_line: "future hierarchy-routing evaluator".into(),
         }],
         reproducibility: ReproducibilityMetadata {
             seed_policy: "fixed-seed-7".into(),

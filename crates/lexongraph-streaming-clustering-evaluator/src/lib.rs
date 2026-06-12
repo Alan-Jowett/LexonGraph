@@ -146,6 +146,26 @@ impl From<PassReport> for ObservablePassReport {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LaterPhaseIdentityKind {
+    HeldOutQuerySet,
+    RoutingWorkload,
+    HierarchyArtifact,
+    SummaryArtifact,
+    PersistenceArtifact,
+    ServiceLevelArtifact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaterPhaseIdentity {
+    pub identity_id: String,
+    pub label: String,
+    pub kind: LaterPhaseIdentityKind,
+    pub corpus_id: Option<String>,
+    pub scale_tier_id: Option<String>,
+    pub later_evaluation_line: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkProfile {
     pub profile_id: String,
@@ -160,6 +180,8 @@ pub struct BenchmarkProfile {
     pub metric_declarations: Vec<MetricDeclaration>,
     pub gate_declarations: Vec<GateDeclaration>,
     pub deferred_research_goals: Vec<DeferredResearchGoal>,
+    #[serde(default)]
+    pub later_phase_identities: Vec<LaterPhaseIdentity>,
     pub reproducibility: ReproducibilityMetadata,
 }
 
@@ -533,6 +555,8 @@ pub struct DeferredResearchGoal {
     pub reason: String,
     pub research_goal_ids: Vec<String>,
     pub coverage: ResearchCoverage,
+    #[serde(default)]
+    pub later_evaluation_line: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -641,6 +665,32 @@ pub struct DeferredResearchGoalResult {
     pub research_goal_ids: Vec<String>,
     pub coverage: ResearchCoverage,
     pub status: DeferredMeasurementStatus,
+    pub later_evaluation_line: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompressionBucketReport {
+    pub cluster_id: ClusterId,
+    pub real_entity_count: usize,
+    pub reconstruction_error: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompressionAnalysis {
+    pub baseline_label: String,
+    pub global_real_entity_count: usize,
+    pub global_reconstruction_error: f64,
+    pub local_reconstruction_error_sum: f64,
+    pub reported_gain: f64,
+    pub delta_semantics: String,
+    pub bucket_reports: Vec<CompressionBucketReport>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactHygieneEvidence {
+    pub comparative_metrics_emitted: bool,
+    pub success_shaped_completion_artifacts_emitted: bool,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -692,6 +742,24 @@ pub enum StructuredFailure {
     },
 }
 
+impl StructuredFailure {
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            Self::InvalidConfiguration { .. } => "invalid-configuration",
+            Self::InvalidCorpusSourceReference { .. } => "invalid-corpus-source-reference",
+            Self::CorpusSourceLoadFailure { .. } => "corpus-source-load-failure",
+            Self::ArchiveSourceOpenFailure { .. } => "archive-source-open-failure",
+            Self::ArchiveSourceReadFailure { .. } => "archive-source-read-failure",
+            Self::ArchiveSourceTemporaryLayerFailure { .. } => {
+                "archive-source-temporary-layer-failure"
+            }
+            Self::CandidateSharedContractFailure { .. } => "candidate-shared-contract-failure",
+            Self::GateFailure { .. } => "gate-failure",
+            Self::DeferredMeasurement { .. } => "deferred-measurement",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CandidateRunReport {
     pub candidate_identity: CandidateIdentity,
@@ -703,12 +771,16 @@ pub struct CandidateRunReport {
     pub cluster_occupancies: Vec<ClusterOccupancy>,
     pub synthetic_padding_concentration: Option<SyntheticPaddingConcentrationReport>,
     pub determinism: DeterminismReport,
+    pub compression_analysis: Option<CompressionAnalysis>,
     pub metric_results: Vec<MetricResult>,
     pub gate_results: Vec<GateResult>,
     pub deferred_research_goals: Vec<DeferredResearchGoalResult>,
+    pub artifact_hygiene: ArtifactHygieneEvidence,
     pub run_status: CandidateRunStatus,
     pub survived_required_gates: bool,
     pub ranking_score: Option<f64>,
+    pub terminal_failure_code: Option<String>,
+    pub terminal_failure_message: Option<String>,
     pub terminal_failure: Option<StructuredFailure>,
 }
 
@@ -997,6 +1069,13 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
     )?;
     assert_unique(
         profile
+            .later_phase_identities
+            .iter()
+            .map(|identity| identity.identity_id.as_str()),
+        "later-phase identity ids",
+    )?;
+    assert_unique(
+        profile
             .probe_workloads
             .iter()
             .map(|workload| workload.workload_id.as_str()),
@@ -1146,6 +1225,39 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "deferred goal {} must trace to at least one research goal",
                 declaration.deferred_id
+            )));
+        }
+        if declaration.later_evaluation_line.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "deferred goal {} must declare later_evaluation_line",
+                declaration.deferred_id
+            )));
+        }
+    }
+    for identity in &profile.later_phase_identities {
+        if identity.identity_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "later-phase identities must declare a non-empty identity_id".into(),
+            ));
+        }
+        if identity.label.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "later-phase identity {} must declare a non-empty label",
+                identity.identity_id
+            )));
+        }
+        if identity.later_evaluation_line.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "later-phase identity {} must declare later_evaluation_line",
+                identity.identity_id
+            )));
+        }
+        if let Some(corpus_id) = &identity.corpus_id
+            && !corpus_ids.contains(corpus_id.as_str())
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "later-phase identity {} references unknown corpus {}",
+                identity.identity_id, corpus_id
             )));
         }
     }
@@ -1457,6 +1569,10 @@ fn failed_candidate_run(
     error: StreamingClusteringError,
 ) -> CandidateRunReport {
     let provenance = build_provenance(profile, identity, declared_source_reference_ids(profile));
+    let terminal_failure = StructuredFailure::CandidateSharedContractFailure {
+        candidate_id: identity.candidate_id.clone(),
+        message: error.to_string(),
+    };
     CandidateRunReport {
         candidate_identity: identity.clone(),
         provenance,
@@ -1476,6 +1592,7 @@ fn failed_candidate_run(
             compared_fields: determinism_compared_fields(),
             mismatch_details: vec!["candidate execution did not complete".into()],
         },
+        compression_analysis: None,
         metric_results: Vec::new(),
         gate_results: Vec::new(),
         deferred_research_goals: profile
@@ -1488,15 +1605,22 @@ fn failed_candidate_run(
                 research_goal_ids: goal.research_goal_ids.clone(),
                 coverage: goal.coverage.clone(),
                 status: DeferredMeasurementStatus::Deferred,
+                later_evaluation_line: goal.later_evaluation_line.clone(),
             })
             .collect(),
+        artifact_hygiene: ArtifactHygieneEvidence {
+            comparative_metrics_emitted: false,
+            success_shaped_completion_artifacts_emitted: false,
+            detail:
+                "candidate execution failed before comparative metrics or success-shaped completion artifacts could be emitted"
+                    .into(),
+        },
         run_status: CandidateRunStatus::CandidateSharedContractFailure,
         survived_required_gates: false,
         ranking_score: None,
-        terminal_failure: Some(StructuredFailure::CandidateSharedContractFailure {
-            candidate_id: identity.candidate_id.clone(),
-            message: error.to_string(),
-        }),
+        terminal_failure_code: Some(terminal_failure.error_code().into()),
+        terminal_failure_message: Some(structured_failure_detail(&terminal_failure)),
+        terminal_failure: Some(terminal_failure),
     }
 }
 
@@ -1506,6 +1630,8 @@ fn failed_corpus_source_run(
     failure: StructuredFailure,
 ) -> CandidateRunReport {
     let provenance = build_provenance(profile, identity, declared_source_reference_ids(profile));
+    let terminal_failure_code = failure.error_code().to_string();
+    let terminal_failure_message = structured_failure_detail(&failure);
     CandidateRunReport {
         candidate_identity: identity.clone(),
         provenance,
@@ -1525,6 +1651,7 @@ fn failed_corpus_source_run(
             compared_fields: determinism_compared_fields(),
             mismatch_details: vec!["corpus source resolution did not complete".into()],
         },
+        compression_analysis: None,
         metric_results: Vec::new(),
         gate_results: Vec::new(),
         deferred_research_goals: profile
@@ -1537,11 +1664,21 @@ fn failed_corpus_source_run(
                 research_goal_ids: goal.research_goal_ids.clone(),
                 coverage: goal.coverage.clone(),
                 status: DeferredMeasurementStatus::Deferred,
+                later_evaluation_line: goal.later_evaluation_line.clone(),
             })
             .collect(),
+        artifact_hygiene: ArtifactHygieneEvidence {
+            comparative_metrics_emitted: false,
+            success_shaped_completion_artifacts_emitted: false,
+            detail:
+                "corpus-source resolution failed before comparative metrics or success-shaped completion artifacts could be emitted"
+                    .into(),
+        },
         run_status: CandidateRunStatus::CorpusSourceFailure,
         survived_required_gates: false,
         ranking_score: None,
+        terminal_failure_code: Some(terminal_failure_code),
+        terminal_failure_message: Some(terminal_failure_message),
         terminal_failure: Some(failure),
     }
 }
@@ -1559,12 +1696,23 @@ fn finalize_successful_run(
         .iter()
         .find(|gate| gate.status == GateStatus::Failed)
         .cloned();
+    let hard_gate_failed = failed_hard_gate.is_some();
     let synthetic_padding_concentration =
         compute_synthetic_padding_concentration(&primary.cluster_occupancies, profile);
+    let compression_analysis = if hard_gate_failed {
+        None
+    } else {
+        compute_compression_analysis(
+            &primary.leaf_membership,
+            &primary.evaluation_entities,
+            &profile.compression_benchmark,
+        )
+    };
     let (metric_results, gate_results) = if failed_hard_gate.is_some() {
         (Vec::new(), hard_gate_results)
     } else {
-        let metric_results = compute_metric_results(&primary, profile);
+        let metric_results =
+            compute_metric_results(&primary, profile, compression_analysis.as_ref());
         let gate_results = compute_gate_results(profile, &primary, &metric_results, &determinism);
         (metric_results, gate_results)
     };
@@ -1597,6 +1745,35 @@ fn finalize_successful_run(
             message: failed_gate.detail,
         })
     };
+    let artifact_hygiene = if hard_gate_failed {
+        ArtifactHygieneEvidence {
+            comparative_metrics_emitted: false,
+            success_shaped_completion_artifacts_emitted: false,
+            detail:
+                "a hard invariant gate failed, so later comparative metrics and success-shaped completion artifacts were not emitted"
+                    .into(),
+        }
+    } else if survived_required_gates {
+        ArtifactHygieneEvidence {
+            comparative_metrics_emitted: !metric_results.is_empty(),
+            success_shaped_completion_artifacts_emitted: true,
+            detail:
+                "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+                    .into(),
+        }
+    } else {
+        ArtifactHygieneEvidence {
+            comparative_metrics_emitted: !metric_results.is_empty(),
+            success_shaped_completion_artifacts_emitted: false,
+            detail:
+                "comparative metrics were emitted before a non-hard gate failed, but no success-shaped completion artifact was emitted for the rejected run"
+                    .into(),
+        }
+    };
+    let terminal_failure_code = terminal_failure
+        .as_ref()
+        .map(|failure| failure.error_code().to_string());
+    let terminal_failure_message = terminal_failure.as_ref().map(structured_failure_detail);
 
     CandidateRunReport {
         candidate_identity: identity.clone(),
@@ -1613,6 +1790,7 @@ fn finalize_successful_run(
         cluster_occupancies: primary.cluster_occupancies,
         synthetic_padding_concentration,
         determinism,
+        compression_analysis,
         metric_results,
         gate_results,
         deferred_research_goals: profile
@@ -1625,8 +1803,10 @@ fn finalize_successful_run(
                 research_goal_ids: goal.research_goal_ids.clone(),
                 coverage: goal.coverage.clone(),
                 status: DeferredMeasurementStatus::Deferred,
+                later_evaluation_line: goal.later_evaluation_line.clone(),
             })
             .collect(),
+        artifact_hygiene,
         run_status: if survived_required_gates {
             CandidateRunStatus::Succeeded
         } else {
@@ -1634,6 +1814,8 @@ fn finalize_successful_run(
         },
         survived_required_gates,
         ranking_score,
+        terminal_failure_code,
+        terminal_failure_message,
         terminal_failure,
     }
 }
@@ -1641,6 +1823,7 @@ fn finalize_successful_run(
 fn compute_metric_results(
     execution: &SingleExecution,
     profile: &BenchmarkProfile,
+    compression_analysis: Option<&CompressionAnalysis>,
 ) -> Vec<MetricResult> {
     profile
         .metric_declarations
@@ -1657,11 +1840,9 @@ fn compute_metric_results(
                     &execution.leaf_membership,
                     &profile.locality_ground_truth,
                 ),
-                MetricKind::LocalCompressionGain => local_compression_gain(
-                    &execution.leaf_membership,
-                    &execution.evaluation_entities,
-                    &profile.compression_benchmark,
-                ),
+                MetricKind::LocalCompressionGain => compression_analysis
+                    .map(|analysis| analysis.reported_gain)
+                    .unwrap_or(0.0),
             },
         })
         .collect()
@@ -2698,11 +2879,11 @@ fn same_leaf_neighborhood_coherence(
     }
 }
 
-fn local_compression_gain(
+fn compute_compression_analysis(
     leaf_membership: &[LeafMembershipRecord],
     evaluation_entities: &[EvaluationEntity],
     compression_benchmark: &CompressionBenchmark,
-) -> f64 {
+) -> Option<CompressionAnalysis> {
     match compression_benchmark.method {
         CompressionMethod::ScalarQuantization8Bit => {
             let real_entities = evaluation_entities
@@ -2710,12 +2891,7 @@ fn local_compression_gain(
                 .filter(|entity| !entity.synthetic)
                 .collect::<Vec<_>>();
             if real_entities.is_empty() {
-                return 0.0;
-            }
-
-            let global_error = scalar_quantization_error(&real_entities);
-            if global_error == 0.0 {
-                return 0.0;
+                return None;
             }
 
             let entity_lookup = evaluation_entities
@@ -2734,13 +2910,45 @@ fn local_compression_gain(
                         .push(*entity);
                 }
             }
-
-            let local_error_sum = entities_by_cluster
-                .values()
-                .map(|entities| scalar_quantization_error(entities))
+            let bucket_reports = entities_by_cluster
+                .iter()
+                .map(|(cluster_id, entities)| CompressionBucketReport {
+                    cluster_id: *cluster_id,
+                    real_entity_count: entities.len(),
+                    reconstruction_error: scalar_quantization_error(entities),
+                })
+                .collect::<Vec<_>>();
+            let local_error_sum = bucket_reports
+                .iter()
+                .map(|bucket| bucket.reconstruction_error)
                 .sum::<f64>();
 
-            1.0 - (local_error_sum / global_error)
+            let global_error = scalar_quantization_error(&real_entities);
+            if global_error == 0.0 {
+                return Some(CompressionAnalysis {
+                    baseline_label: compression_benchmark.global_baseline_label.clone(),
+                    global_real_entity_count: real_entities.len(),
+                    global_reconstruction_error: global_error,
+                    local_reconstruction_error_sum: local_error_sum,
+                    reported_gain: 0.0,
+                    delta_semantics:
+                        "reported_gain = 0 when global_reconstruction_error == 0; local_reconstruction_error_sum is reported directly"
+                            .into(),
+                    bucket_reports,
+                });
+            }
+
+            Some(CompressionAnalysis {
+                baseline_label: compression_benchmark.global_baseline_label.clone(),
+                global_real_entity_count: real_entities.len(),
+                global_reconstruction_error: global_error,
+                local_reconstruction_error_sum: local_error_sum,
+                reported_gain: 1.0 - (local_error_sum / global_error),
+                delta_semantics:
+                    "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error"
+                        .into(),
+                bucket_reports,
+            })
         }
     }
 }
@@ -3229,10 +3437,11 @@ mod tests {
         CandidateRunStatus, CompressionBenchmark, CompressionMethod,
         DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, DeferredResearchGoal,
         EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, GateDeclaration,
-        GateKind, GroundTruthNeighborhood, MetricDeclaration, MetricKind, ProbeWorkload,
-        ReproducibilityMetadata, ResearchCoverage, SharedCandidateConfig,
-        TEST_FORCE_TEMP_LAYER_FAILURE, TrainingPassSource, built_in_fixture_candidate,
-        decode_embedding_to_f32, embeddings_into_batches, run_evaluation_campaign,
+        GateKind, GroundTruthNeighborhood, LaterPhaseIdentity, LaterPhaseIdentityKind,
+        MetricDeclaration, MetricKind, ProbeWorkload, ReproducibilityMetadata, ResearchCoverage,
+        SharedCandidateConfig, TEST_FORCE_TEMP_LAYER_FAILURE, TrainingPassSource,
+        built_in_fixture_candidate, decode_embedding_to_f32, embeddings_into_batches,
+        run_evaluation_campaign,
     };
     use lexongraph_block::EmbeddingSpec;
     use serde_json::json;
@@ -3452,6 +3661,15 @@ mod tests {
                 reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
                 research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
                 coverage: ResearchCoverage::Deferred,
+                later_evaluation_line: "future hierarchy-routing evaluator".into(),
+            }],
+            later_phase_identities: vec![LaterPhaseIdentity {
+                identity_id: "fixture-heldout-query-set".into(),
+                label: "Fixture held-out query set".into(),
+                kind: LaterPhaseIdentityKind::HeldOutQuerySet,
+                corpus_id: Some("fixture-corpus-a".into()),
+                scale_tier_id: None,
+                later_evaluation_line: "future hierarchy-routing evaluator".into(),
             }],
             reproducibility: ReproducibilityMetadata {
                 seed_policy: "fixed-seed-7".into(),
