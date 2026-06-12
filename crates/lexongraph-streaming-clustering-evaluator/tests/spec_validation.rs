@@ -744,17 +744,12 @@ fn val_stream_eval_014_metric_gate_and_deferred_records_trace_to_research_goals(
 fn val_stream_eval_015_emits_machine_readable_reports_and_a_human_scorecard() {
     let report = run_evaluation_campaign(
         &synthetic_padding_profile(),
-        &[
-            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
-                "balanced-threshold",
-            )
-            .unwrap(),
-        ],
+        &balanced_and_skewed_candidates(),
     )
     .unwrap();
     let artifacts = emit_campaign_artifacts(&report).unwrap();
 
-    assert_eq!(artifacts.per_candidate_reports.len(), 1);
+    assert_eq!(artifacts.per_candidate_reports.len(), 2);
     assert!(
         artifacts
             .campaign_report
