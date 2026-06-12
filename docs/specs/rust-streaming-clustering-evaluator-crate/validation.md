@@ -298,9 +298,11 @@ leaf-stage screening.
 workflow that can materialize the benchmark profiles and supporting assets used
 to compare candidate leaf-partition strategies, declares the metric contract and
 top-10 fixed neighborhood size used for exact-neighbor ground truth in the
-checked-in screening panel, and does not claim hierarchy-stage coverage.
+checked-in screening panel, rejects malformed suite-level configuration such as
+empty `suite_id`, zero-valued positive-count controls, and empty profile sets,
+and does not claim hierarchy-stage coverage.
 
-**Traces to:** REQ-STREAM-EVAL-031
+**Traces to:** REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-047
 
 ### VAL-STREAM-EVAL-026
 
@@ -322,10 +324,11 @@ ground-truth artifact.
 
 **Pass condition:** the exact-neighbor ground truth is deterministically tied to
 the corpus identity, scale-tier identity, and metric contract, uses top-10
-neighbors for the checked-in screening panel, and excludes synthetic padding
-entities from externally reported locality scoring.
+neighbors for the checked-in screening panel, excludes synthetic padding
+entities from externally reported locality scoring, and rejects too-small
+corpora plus cosine-metric zero-norm embeddings deterministically.
 
-**Traces to:** REQ-STREAM-EVAL-033
+**Traces to:** REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-050
 
 ### VAL-STREAM-EVAL-028
 
@@ -335,10 +338,12 @@ block-store-backed source data.
 **Pass condition:** the harvesting workflow deterministically extracts
 embeddings and entity identities from the declared source, emits any declared
 scale-tier subsets reproducibly, preserves the source identity needed to
-reconstruct the harvested benchmark asset, and the repository includes at least
-one checked-in harvested benchmark asset produced by that workflow.
+reconstruct the harvested benchmark asset, rejects malformed metadata,
+inadmissible embeddings, and underfilled retained-real-entity sets
+deterministically, and the repository includes at least one checked-in
+harvested benchmark asset produced by that workflow.
 
-**Traces to:** REQ-STREAM-EVAL-034
+**Traces to:** REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-049
 
 ### VAL-STREAM-EVAL-029
 
@@ -361,9 +366,10 @@ corpus with at least two candidate strategies.
 outcomes, repeated-run determinism, same-leaf locality against top-10
 exact-neighbor ground truth, local-versus-global compression gain, and the
 distinct outcomes for strict alignment versus deterministic padding where both
-are applicable.
+are applicable, including deterministic rejection of non-divisible strict
+alignment and impossible or degenerate deterministic-padding inputs.
 
-**Traces to:** REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036
+**Traces to:** REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-048
 
 ### VAL-STREAM-EVAL-031
 

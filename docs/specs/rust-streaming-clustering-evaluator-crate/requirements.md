@@ -557,6 +557,58 @@ shall include all repository-owned registered section-4 candidates so they can
 be listed, selected, and exercised through ordinary campaign and section-4
 suite execution paths.
 
+### REQ-STREAM-EVAL-047
+
+The section-4 validation surface shall exercise deterministic rejection of
+malformed suite-level configuration that remains unrepresented in the checked-in
+regression set.
+
+At minimum, this revision shall cover rejection of:
+
+- empty `suite_id`
+- zero `leaf_size`
+- zero `dimensions`
+- zero `batch_size`
+- zero `neighbor_count`
+- an empty declared profile set
+
+### REQ-STREAM-EVAL-048
+
+The section-4 validation surface shall exercise deterministic rejection of
+invalid alignment-policy inputs before candidate comparison proceeds.
+
+At minimum, this revision shall cover:
+
+- strict-alignment corpora whose real-entity count is not divisible by
+  `leaf_size`
+- deterministic-padding corpora with no real entities
+- deterministic-padding corpora whose real-entity count is already divisible by
+  `leaf_size`
+
+### REQ-STREAM-EVAL-049
+
+The section-4 validation surface shall exercise deterministic rejection of
+malformed harvested-corpus inputs.
+
+At minimum, this revision shall cover:
+
+- missing or non-text entity-identity metadata
+- non-boolean `synthetic` metadata
+- harvested embeddings that fail the declared admissibility contract
+- harvested sources with too few remaining real entities after synthetic
+  filtering
+
+### REQ-STREAM-EVAL-050
+
+The section-4 validation surface shall exercise deterministic rejection of
+invalid exact-neighbor ground-truth inputs beyond the large-corpus brute-force
+cap.
+
+At minimum, this revision shall cover:
+
+- corpora with too few real entities for the declared `neighbor_count`
+- cosine-metric inputs containing zero-norm embeddings
+
 ## Out of Scope
 
 This crate does not define or own:

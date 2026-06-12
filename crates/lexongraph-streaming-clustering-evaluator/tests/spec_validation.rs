@@ -7,9 +7,13 @@ use ciborium::value::Value as CborValue;
 use std::fs;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lexongraph_block::{Block, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block};
+use lexongraph_block::{
+    Block, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_branch_block,
+    build_leaf_block,
+};
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_zip::ZipBlockStore;
@@ -18,16 +22,16 @@ use lexongraph_streaming_clustering::{
     StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_embedding,
 };
 use lexongraph_streaming_clustering_evaluator::{
-    AlignmentPolicy, BenchmarkProfile, BlockStoreReferenceStore, CampaignReport, CandidateIdentity,
-    CandidateRunStatus, CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus,
-    EmbeddingWorkloadSource, EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore,
-    GateStatus, Section4CorpusFamily, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
-    Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
-    Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, SharedBalanceConstraints,
-    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
-    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
-    write_section4_suite_artifacts,
+    AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
+    CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
+    DeferredMeasurementStatus, EmbeddingWorkloadSource, EvaluationEntitySource, EvaluatorError,
+    FsOverlayZipBlockStore, GateStatus, Section4CorpusFamily,
+    Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
+    Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
+    Section4SuiteSpec, SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
+    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
+    generate_section4_suite_assets, registered_candidate_names, resolve_registered_candidates,
+    run_evaluation_campaign, run_section4_suite, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -298,6 +302,121 @@ fn checked_in_section4_suite_manifest() -> Section4SuiteManifest {
         }
     }
     manifest
+}
+
+struct HarvestedFixtureRecord {
+    entity_id_metadata: Option<CborValue>,
+    synthetic_metadata: Option<CborValue>,
+    embedding: Vec<f32>,
+}
+
+fn unique_section4_store_root(prefix: &str) -> std::path::PathBuf {
+    static NEXT_UNIQUE_SUFFIX: AtomicU64 = AtomicU64::new(0);
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let counter = NEXT_UNIQUE_SUFFIX.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("{prefix}-{unique}-{counter}"));
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn encode_f32_embedding(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn harvested_fixture_reference(
+    source_id: &str,
+    records: impl IntoIterator<Item = HarvestedFixtureRecord>,
+) -> BlockStoreCorpusReference {
+    let store_root = unique_section4_store_root("section4-harvested-fixture");
+    let store = FilesystemBlockStore::new(&store_root).unwrap();
+    let spec = EmbeddingSpec {
+        dims: 2,
+        encoding: "f32le".into(),
+    };
+    let mut leaves = Vec::new();
+    for record in records {
+        let mut metadata = Vec::new();
+        if let Some(entity_id) = record.entity_id_metadata {
+            metadata.push((CborValue::Text("entity_id".into()), entity_id));
+        }
+        if let Some(synthetic) = record.synthetic_metadata {
+            metadata.push((CborValue::Text("synthetic".into()), synthetic));
+        }
+        let encoded_embedding = encode_f32_embedding(&record.embedding);
+        let leaf = build_leaf_block(
+            VERSION_1,
+            spec.clone(),
+            vec![LeafEntry {
+                embedding: encoded_embedding.clone(),
+                metadata,
+                content: Content {
+                    media_type: "application/octet-stream".into(),
+                    body: Vec::new(),
+                },
+            }],
+            None,
+        )
+        .unwrap();
+        let block_id = store.put(&Block::Leaf(leaf)).unwrap();
+        leaves.push((block_id, encoded_embedding));
+    }
+
+    let root_block_id = if leaves.len() == 1 {
+        leaves[0].0
+    } else {
+        store
+            .put(&Block::Branch(
+                build_branch_block(
+                    VERSION_1,
+                    1,
+                    spec,
+                    leaves
+                        .iter()
+                        .map(|(block_id, embedding)| BranchEntry {
+                            embedding: embedding.clone(),
+                            child: *block_id,
+                        })
+                        .collect(),
+                    None,
+                )
+                .unwrap(),
+            ))
+            .unwrap()
+    };
+
+    BlockStoreCorpusReference {
+        source_id: source_id.into(),
+        root_block_id: root_block_id.to_string(),
+        store: BlockStoreReferenceStore::Filesystem { store_root },
+    }
+}
+
+fn harvested_profile(
+    profile_id: &str,
+    corpus_id: &str,
+    source: BlockStoreCorpusReference,
+    real_entity_count: usize,
+    alignment_policy: AlignmentPolicy,
+) -> Section4ProfileSpec {
+    Section4ProfileSpec {
+        profile_id: profile_id.into(),
+        corpus_id: corpus_id.into(),
+        scale_tier_id: format!("n-{real_entity_count}"),
+        source: Section4ProfileSourceSpec::Harvested {
+            family: Section4CorpusFamily::RealWorldHarvested,
+            source,
+            entity_id_metadata_key: "entity_id".into(),
+            harvesting_policy: harvested_policy(),
+            real_entity_count,
+            alignment_policy,
+        },
+    }
 }
 
 #[test]
@@ -2229,5 +2348,264 @@ fn regression_section4_suite_rejects_bruteforce_ground_truth_on_large_corpora() 
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("brute-force exact neighbors"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_empty_suite_and_zero_controls() {
+    let output_dir = tempdir().unwrap();
+    let mut empty_suite_id =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    empty_suite_id.suite_id = "   ".into();
+    let empty_suite_result = generate_section4_suite_assets(&empty_suite_id, output_dir.path());
+    assert!(
+        matches!(empty_suite_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("suite_id"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut zero_leaf_size =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    zero_leaf_size.leaf_size = 0;
+    let zero_leaf_result = generate_section4_suite_assets(&zero_leaf_size, output_dir.path());
+    assert!(
+        matches!(zero_leaf_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("leaf_size"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut zero_dimensions =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    zero_dimensions.dimensions = 0;
+    let zero_dimensions_result =
+        generate_section4_suite_assets(&zero_dimensions, output_dir.path());
+    assert!(
+        matches!(zero_dimensions_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("dimensions"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut zero_batch_size =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    zero_batch_size.batch_size = 0;
+    let zero_batch_result = generate_section4_suite_assets(&zero_batch_size, output_dir.path());
+    assert!(
+        matches!(zero_batch_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("batch_size"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut zero_neighbor_count =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    zero_neighbor_count.neighbor_count = 0;
+    let zero_neighbor_result =
+        generate_section4_suite_assets(&zero_neighbor_count, output_dir.path());
+    assert!(
+        matches!(zero_neighbor_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("neighbor_count"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let empty_profiles_result =
+        generate_section4_suite_assets(&section4_suite_spec(vec![]), output_dir.path());
+    assert!(
+        matches!(empty_profiles_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("at least one profile"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_invalid_alignment_policy_preconditions() {
+    let output_dir = tempdir().unwrap();
+    let strict_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![strict_synthetic_profile(
+            "strict-bad",
+            "strict-bad",
+            11,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(strict_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("not divisible by leaf_size"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let padding_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![padding_synthetic_profile(
+            "padding-bad",
+            "padding-bad",
+            12,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(padding_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("already divisible by leaf_size"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_too_small_ground_truth_corpora() {
+    let output_dir = tempdir().unwrap();
+    let result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![strict_synthetic_profile("too-small", "small", 10)]),
+        output_dir.path(),
+    );
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("more than 10 real entities"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_zero_norm_cosine_ground_truth_inputs() {
+    let output_dir = tempdir().unwrap();
+    let source = harvested_fixture_reference(
+        "zero-norm-cosine",
+        (0..12).map(|index| HarvestedFixtureRecord {
+            entity_id_metadata: Some(CborValue::Text(format!("entity-{index:02}"))),
+            synthetic_metadata: Some(CborValue::Bool(false)),
+            embedding: if index == 0 {
+                vec![0.0, 0.0]
+            } else {
+                vec![index as f32, 1.0]
+            },
+        }),
+    );
+    let mut spec = section4_suite_spec(vec![harvested_profile(
+        "cosine-zero-norm",
+        "cosine-zero-norm",
+        source,
+        12,
+        AlignmentPolicy::StrictAlignment,
+    )]);
+    spec.metric_contract = Section4MetricContract::Cosine;
+
+    let result = generate_section4_suite_assets(&spec, output_dir.path());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("zero-norm embeddings"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_malformed_harvested_metadata() {
+    let output_dir = tempdir().unwrap();
+    let missing_entity_id_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![harvested_profile(
+            "missing-entity-id",
+            "harvested-missing-entity-id",
+            harvested_fixture_reference(
+                "missing-entity-id-source",
+                (0..11).map(|index| HarvestedFixtureRecord {
+                    entity_id_metadata: (index != 0)
+                        .then(|| CborValue::Text(format!("entity-{index:02}"))),
+                    synthetic_metadata: Some(CborValue::Bool(false)),
+                    embedding: vec![index as f32 + 1.0, 1.0],
+                }),
+            ),
+            11,
+            AlignmentPolicy::StrictAlignment,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(missing_entity_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("was missing"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let non_text_entity_id_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![harvested_profile(
+            "non-text-entity-id",
+            "harvested-non-text-entity-id",
+            harvested_fixture_reference(
+                "non-text-entity-id-source",
+                (0..11).map(|index| HarvestedFixtureRecord {
+                    entity_id_metadata: Some(if index == 0 {
+                        CborValue::Bool(true)
+                    } else {
+                        CborValue::Text(format!("entity-{index:02}"))
+                    }),
+                    synthetic_metadata: Some(CborValue::Bool(false)),
+                    embedding: vec![index as f32 + 1.0, 1.0],
+                }),
+            ),
+            11,
+            AlignmentPolicy::StrictAlignment,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(non_text_entity_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must be text"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let invalid_synthetic_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![harvested_profile(
+            "invalid-synthetic",
+            "harvested-invalid-synthetic",
+            harvested_fixture_reference(
+                "invalid-synthetic-source",
+                (0..11).map(|index| HarvestedFixtureRecord {
+                    entity_id_metadata: Some(CborValue::Text(format!("entity-{index:02}"))),
+                    synthetic_metadata: Some(if index == 0 {
+                        CborValue::Text("not-bool".into())
+                    } else {
+                        CborValue::Bool(false)
+                    }),
+                    embedding: vec![index as f32 + 1.0, 1.0],
+                }),
+            ),
+            11,
+            AlignmentPolicy::StrictAlignment,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(invalid_synthetic_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("must be boolean"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_invalid_harvested_embeddings_and_underfilled_sources() {
+    let output_dir = tempdir().unwrap();
+    let invalid_embedding_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![harvested_profile(
+            "invalid-embedding",
+            "harvested-invalid-embedding",
+            harvested_fixture_reference(
+                "invalid-embedding-source",
+                (0..12).map(|index| HarvestedFixtureRecord {
+                    entity_id_metadata: Some(CborValue::Text(format!("entity-{index:02}"))),
+                    synthetic_metadata: Some(CborValue::Bool(false)),
+                    embedding: if index == 0 {
+                        vec![f32::NAN, 1.0]
+                    } else {
+                        vec![index as f32 + 1.0, 1.0]
+                    },
+                }),
+            ),
+            12,
+            AlignmentPolicy::StrictAlignment,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(invalid_embedding_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("failed embedding validation"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let underfilled_result = generate_section4_suite_assets(
+        &section4_suite_spec(vec![harvested_profile(
+            "underfilled-harvest",
+            "harvested-underfilled",
+            harvested_fixture_reference(
+                "underfilled-source",
+                (0..11).map(|index| HarvestedFixtureRecord {
+                    entity_id_metadata: Some(CborValue::Text(format!("entity-{index:02}"))),
+                    synthetic_metadata: Some(CborValue::Bool(true)),
+                    embedding: vec![index as f32 + 1.0, 1.0],
+                }),
+            ),
+            11,
+            AlignmentPolicy::StrictAlignment,
+        )]),
+        output_dir.path(),
+    );
+    assert!(
+        matches!(underfilled_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("contains only 0 real entities"))
     );
 }
