@@ -44,9 +44,11 @@ candidates.
 
 **Pass condition:** one executable campaign evaluates the candidates through a
 shared leaf-stage benchmark profile and emits comparative outputs without
-requiring an algorithm-specific candidate API.
+requiring an algorithm-specific candidate API. At least one such campaign uses
+one repository-owned reusable non-fixture candidate alongside another
+registered candidate.
 
-**Traces to:** REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-005, REQ-STREAM-EVAL-007
+**Traces to:** REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-005, REQ-STREAM-EVAL-007, REQ-STREAM-EVAL-038
 
 ### VAL-STREAM-EVAL-004
 
@@ -374,3 +376,25 @@ suite's declared equivalent normalized build-cost measure across more than one
 checked-in scale tier.
 
 **Traces to:** REQ-STREAM-EVAL-037
+
+### VAL-STREAM-EVAL-032
+
+Run the checked-in section-4 suite with the repository-owned
+`lexongraph-pca-chunking` candidate.
+
+**Pass condition:** the candidate enters through the shared streaming
+trainer/classifier contract and emits ordinary section-4 evaluator artifacts
+under a stable repository-owned candidate identity.
+
+**Traces to:** REQ-STREAM-EVAL-038
+
+### VAL-STREAM-EVAL-033
+
+Compare one evaluator-local fixture candidate and the repository-owned
+`lexongraph-pca-chunking` candidate within the same campaign.
+
+**Pass condition:** both candidates use the same evaluator-owned registration
+and report model, and the repository-owned concrete candidate does not require
+evaluator-private algorithm hooks.
+
+**Traces to:** REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-038

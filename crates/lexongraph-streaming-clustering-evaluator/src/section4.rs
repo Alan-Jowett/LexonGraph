@@ -28,10 +28,9 @@ use crate::{
     EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, EvaluatorError,
     GateDeclaration, GateKind, GroundTruthNeighborhood, MetricDeclaration, MetricKind,
     ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
-    SharedBalanceConstraints, SharedCandidateConfig, TrainingPassSource,
-    built_in_fixture_candidate, decode_embedding_to_f32, emit_campaign_artifacts,
-    load_leaf_records, metadata_value, rank_candidates, run_candidate, validate_candidates,
-    validate_profile, write_campaign_artifacts,
+    SharedBalanceConstraints, SharedCandidateConfig, TrainingPassSource, decode_embedding_to_f32,
+    emit_campaign_artifacts, load_leaf_records, metadata_value, rank_candidates, run_candidate,
+    validate_candidates, validate_profile, write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1359,10 +1358,10 @@ pub fn resolve_registered_candidates(
 ) -> Result<Vec<RegisteredCandidate>, EvaluatorError> {
     let mut registered = Vec::with_capacity(candidate_names.len());
     for candidate_name in candidate_names {
-        let Some(candidate) = built_in_fixture_candidate(candidate_name) else {
+        let Some(candidate) = crate::registered_candidate(candidate_name) else {
             return Err(EvaluatorError::InvalidConfiguration(format!(
-                "unknown registered candidate {candidate_name}; available fixture candidates: {}",
-                crate::built_in_fixture_candidate_names().join(", ")
+                "unknown registered candidate {candidate_name}; available candidates: {}",
+                crate::registered_candidate_names().join(", ")
             )));
         };
         registered.push(candidate);

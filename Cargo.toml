@@ -15,6 +15,7 @@ members = [
     "crates/lexongraph-embeddings-openai",
     "crates/lexongraph-embeddings-trait",
     "crates/lexongraph-pca",
+    "crates/lexongraph-pca-chunking",
     "crates/lexongraph-search",
     "crates/lexongraph-streaming-clustering",
     "crates/lexongraph-streaming-clustering-evaluator",

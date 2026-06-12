@@ -1504,6 +1504,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-pca-chunking"
+version = "0.1.0"
+dependencies = [
+ "lexongraph-pca",
+ "lexongraph-streaming-clustering",
+ "sha2",
+]
+
+[[package]]
 name = "lexongraph-search"
 version = "0.1.0"
 dependencies = [
@@ -1527,6 +1536,7 @@ dependencies = [
  "lexongraph-block-store-fs",
  "lexongraph-block-store-overlay",
  "lexongraph-block-store-zip",
+ "lexongraph-pca-chunking",
  "lexongraph-streaming-clustering",
  "serde",
  "serde_json",

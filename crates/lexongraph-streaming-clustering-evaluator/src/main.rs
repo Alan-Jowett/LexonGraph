@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lexongraph_streaming_clustering_evaluator::{
     BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
-    built_in_fixture_candidate, built_in_fixture_candidate_names, emit_campaign_artifacts,
-    generate_section4_suite_assets, resolve_profile_block_store_paths,
-    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
-    resolve_section4_suite_spec_paths, run_evaluation_campaign, run_section4_suite,
-    write_campaign_artifacts, write_section4_suite_artifacts,
+    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    resolve_profile_block_store_paths, resolve_registered_candidates,
+    resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
+    run_evaluation_campaign, run_section4_suite, write_campaign_artifacts,
+    write_section4_suite_artifacts,
 };
 
 #[derive(Parser, Debug)]
@@ -22,9 +22,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// List the built-in fixture candidates that this executable can run.
-    ListFixtureCandidates,
-    /// Run one benchmark profile against one or more built-in fixture candidates.
+    /// List the registered candidates that this executable can run.
+    #[command(alias = "list-fixture-candidates")]
+    ListCandidates,
+    /// Run one benchmark profile against one or more registered candidates.
     Run {
         #[arg(long, value_name = "PATH")]
         profile: PathBuf,
@@ -60,8 +61,8 @@ fn main() {
 
 fn run() -> Result<(), EvaluatorError> {
     match Cli::parse().command {
-        Command::ListFixtureCandidates => {
-            for candidate in built_in_fixture_candidate_names() {
+        Command::ListCandidates => {
+            for candidate in registered_candidate_names() {
                 println!("{candidate}");
             }
             Ok(())
@@ -89,17 +90,7 @@ fn run() -> Result<(), EvaluatorError> {
                 resolve_profile_block_store_paths(&mut profile, profile_dir);
             }
 
-            let mut registered_candidates = Vec::with_capacity(candidates.len());
-            for candidate_name in candidates {
-                let Some(candidate) = built_in_fixture_candidate(&candidate_name) else {
-                    return Err(EvaluatorError::InvalidConfiguration(format!(
-                        "unknown built-in fixture candidate {candidate_name}; available: {}",
-                        built_in_fixture_candidate_names().join(", ")
-                    )));
-                };
-                registered_candidates.push(candidate);
-            }
-
+            let registered_candidates = resolve_registered_candidates(&candidates)?;
             let report = run_evaluation_campaign(&profile, &registered_candidates)?;
             let artifacts = emit_campaign_artifacts(&report)?;
             let paths = write_campaign_artifacts(&output_dir, &artifacts)?;

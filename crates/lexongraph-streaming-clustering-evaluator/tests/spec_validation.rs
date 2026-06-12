@@ -25,8 +25,9 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
     Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, StructuredFailure,
     TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, generate_section4_suite_assets, run_evaluation_campaign,
-    run_section4_suite, write_section4_suite_artifacts,
+    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
+    write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -295,16 +296,23 @@ fn val_stream_eval_002_public_surface_remains_subordinate_to_the_shared_contract
 
 #[test]
 fn val_stream_eval_003_campaign_runs_two_registered_candidates_under_one_profile() {
-    let report = run_evaluation_campaign(
-        &strict_alignment_profile(),
-        &balanced_and_skewed_candidates(),
-    )
+    let candidates = resolve_registered_candidates(&[
+        "balanced-threshold".to_string(),
+        "pca-sort-exact-chunking".to_string(),
+    ])
     .unwrap();
+    let report = run_evaluation_campaign(&strict_alignment_profile(), &candidates).unwrap();
 
     assert_eq!(report.run_reports.len(), 2);
     assert_eq!(
         report.run_reports[0].provenance.profile_id,
         "strict-alignment-campaign"
+    );
+    assert!(
+        report
+            .run_reports
+            .iter()
+            .any(|run| run.candidate_identity.candidate_id == "pca-sort-exact-chunking")
     );
 }
 
@@ -314,6 +322,7 @@ fn val_stream_eval_004_candidate_registration_uses_adapter_or_factory_to_constru
     assert!(source.contains("pub fn candidate_adapter"));
     assert!(source.contains("Fn(&StreamingClusteringConfig)"));
     assert!(source.contains("T: StreamingClusterTrainer"));
+    assert!(source.contains("registered_candidate("));
 }
 
 #[test]
@@ -1748,6 +1757,59 @@ fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() 
                     && candidate.campaign_time_per_vector_nanos > 0.0)
             )
     );
+}
+
+#[test]
+fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_pca_chunking_candidate()
+{
+    let manifest = checked_in_section4_suite_manifest();
+    let report_dir = tempdir().unwrap();
+    let candidates =
+        resolve_registered_candidates(&["pca-sort-exact-chunking".to_string()]).unwrap();
+
+    let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
+
+    assert_eq!(report.profile_reports.len(), 8);
+    assert!(report.profile_reports.iter().all(|profile| {
+        profile
+            .candidate_reports
+            .iter()
+            .any(|candidate| candidate.candidate_id == "pca-sort-exact-chunking")
+    }));
+}
+
+#[test]
+fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_model() {
+    let candidates = resolve_registered_candidates(&[
+        "balanced-threshold".to_string(),
+        "pca-sort-exact-chunking".to_string(),
+    ])
+    .unwrap();
+    let report = run_evaluation_campaign(&strict_alignment_profile(), &candidates).unwrap();
+
+    let fixture = report
+        .run_reports
+        .iter()
+        .find(|run| run.candidate_identity.candidate_id == "balanced-threshold")
+        .unwrap();
+    let concrete = report
+        .run_reports
+        .iter()
+        .find(|run| run.candidate_identity.candidate_id == "pca-sort-exact-chunking")
+        .unwrap();
+
+    assert_eq!(
+        fixture.provenance.profile_id,
+        concrete.provenance.profile_id
+    );
+    assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+    assert!(
+        concrete
+            .candidate_identity
+            .software_identity
+            .starts_with("lexongraph-pca-chunking-v")
+    );
+    assert!(registered_candidate_names().contains(&"pca-sort-exact-chunking"));
 }
 
 #[test]

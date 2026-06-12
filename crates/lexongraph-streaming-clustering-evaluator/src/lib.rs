@@ -28,6 +28,9 @@ use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
 use lexongraph_block_store_zip::{ZipBlockStore, ZipBlockStoreInitError};
+use lexongraph_pca_chunking::{
+    PCA_CHUNKING_SOFTWARE_IDENTITY, PcaChunkingParams, PcaChunkingStreamingTrainer,
+};
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
@@ -2777,6 +2780,12 @@ pub fn built_in_fixture_candidate_names() -> Vec<&'static str> {
     ]
 }
 
+pub fn registered_candidate_names() -> Vec<&'static str> {
+    let mut names = built_in_fixture_candidate_names();
+    names.push("pca-sort-exact-chunking");
+    names
+}
+
 pub fn built_in_fixture_candidate(name: &str) -> Option<RegisteredCandidate> {
     match name {
         "balanced-threshold" => Some(candidate_adapter(
@@ -2816,6 +2825,28 @@ pub fn built_in_fixture_candidate(name: &str) -> Option<RegisteredCandidate> {
         }
         _ => None,
     }
+}
+
+pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
+    built_in_fixture_candidate(name).or_else(|| match name {
+        "pca-sort-exact-chunking" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "pca-sort-exact-chunking".into(),
+                implementation_label: "Repository-owned PCA sort + exact chunking".into(),
+                software_identity: PCA_CHUNKING_SOFTWARE_IDENTITY.into(),
+            },
+            |config| {
+                PcaChunkingStreamingTrainer::new(
+                    config.clone(),
+                    PcaChunkingParams {
+                        retained_dimension_count: 1,
+                        variance_exponent: 1.0,
+                    },
+                )
+            },
+        )),
+        _ => None,
+    })
 }
 
 #[derive(Clone)]

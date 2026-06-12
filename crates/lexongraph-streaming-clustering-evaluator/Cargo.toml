@@ -14,6 +14,7 @@ lexongraph-block-store = { path = "../lexongraph-block-store" }
 lexongraph-block-store-fs = { path = "../lexongraph-block-store-fs" }
 lexongraph-block-store-overlay = { path = "../lexongraph-block-store-overlay" }
 lexongraph-block-store-zip = { path = "../lexongraph-block-store-zip" }
+lexongraph-pca-chunking = { path = "../lexongraph-pca-chunking" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

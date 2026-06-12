@@ -85,7 +85,11 @@ malformed input.
 
 The public contract shall remain dataset-size independent by avoiding API
 shapes that require full-dataset retention or full-dataset materialization by
-callers or implementers.
+callers or as an observable shared-contract obligation.
+
+Concrete implementations may retain pass-scoped internal state when their
+documented algorithm requires it, provided that doing so does not widen the
+shared public API into a whole-dataset ownership contract.
 
 ### REQ-STREAM-TRAIT-012
 
