@@ -32,11 +32,11 @@ Inspect the repository artifacts for the new crate.
 
 Inspect the crate's public surface and its specification references.
 
-**Pass condition:** the crate exposes an adaptive planning-policy settings and
-selector surface for the streaming indexer's built-in planning path, remains
-subordinate to the streaming indexer, directional-PCA, and streaming DCBC
-specification packages, and does not redefine the shared streaming clustering
-contract.
+**Pass condition:** the crate exposes adaptive planning-policy settings together
+with a selector surface for the streaming indexer's built-in planning path,
+remains subordinate to the streaming indexer, directional-PCA, and streaming
+DCBC specification packages, and does not redefine the shared streaming
+clustering contract.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-002, REQ-ADAPTIVE-POLICY-003
 

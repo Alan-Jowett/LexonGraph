@@ -48,8 +48,9 @@ contract.
 
 ### DSG-ADAPTIVE-POLICY-002 `Adaptive selector boundary`
 
-The crate exposes one adaptive planning-policy settings and selector surface
-intended for the streaming indexer's built-in planning-selection surface.
+The crate exposes adaptive planning-policy settings together with a selector
+surface intended for the streaming indexer's built-in planning-selection
+surface.
 
 Within this specification package, later references to the `adaptive
 realization` mean this selector surface together with its internal
