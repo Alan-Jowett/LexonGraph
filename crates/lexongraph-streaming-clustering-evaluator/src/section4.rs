@@ -41,6 +41,45 @@ pub enum Section4MetricContract {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Section4ProofSurface {
+    Direct,
+    Deferred,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Section4ScaleTierKind {
+    Small,
+    Medium,
+    Large,
+    DeterministicNearestPracticalEquivalent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section4DimensionalityContract {
+    pub min_dimensions: usize,
+    pub max_dimensions: usize,
+    pub out_of_range_behavior: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section4FrozenContractItem {
+    pub item_id: String,
+    pub label: String,
+    pub proof_surface: Section4ProofSurface,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section4ExperimentTrackContract {
+    pub track_id: String,
+    pub sensitivity_leaf_sizes: Vec<usize>,
+    pub dimensionality_contract: Section4DimensionalityContract,
+    pub declared_search_target: Option<String>,
+    pub beam_width_policy: Option<String>,
+    pub candidate_threading_model: String,
+    pub frozen_items: Vec<Section4FrozenContractItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Section4CorpusFamily {
     RealWorldHarvested,
     WellClusteredSynthetic,
@@ -88,12 +127,15 @@ pub struct Section4ProfileSpec {
     pub profile_id: String,
     pub corpus_id: String,
     pub scale_tier_id: String,
+    pub scale_tier_kind: Section4ScaleTierKind,
     pub source: Section4ProfileSourceSpec,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Section4SuiteSpec {
     pub suite_id: String,
+    pub experiment_track_contract: Section4ExperimentTrackContract,
+    pub tier_growth_rule: String,
     pub leaf_size: usize,
     pub dimensions: usize,
     pub batch_size: usize,
@@ -110,8 +152,11 @@ pub struct Section4SuiteSpec {
 pub struct Section4GeneratedProfile {
     pub profile_id: String,
     pub corpus_id: String,
+    pub experiment_track_id: String,
     pub family: Section4CorpusFamily,
     pub scale_tier_id: String,
+    pub scale_tier_kind: Section4ScaleTierKind,
+    pub tier_growth_rule: String,
     pub alignment_policy: AlignmentPolicy,
     pub metric_contract: Section4MetricContract,
     pub neighbor_count: usize,
@@ -138,6 +183,8 @@ pub struct Section4GeneratedProfile {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Section4SuiteManifest {
     pub suite_id: String,
+    pub experiment_track_contract: Section4ExperimentTrackContract,
+    pub tier_growth_rule: String,
     pub generated_profiles: Vec<Section4GeneratedProfile>,
 }
 
@@ -155,16 +202,21 @@ pub struct Section4SuiteRunCandidateReport {
 pub struct Section4SuiteRunProfileReport {
     pub profile_id: String,
     pub corpus_id: String,
+    pub experiment_track_id: String,
     pub family: Section4CorpusFamily,
     pub scale_tier_id: String,
+    pub scale_tier_kind: Section4ScaleTierKind,
     pub real_entity_count: usize,
     pub evaluated_entity_count: usize,
+    pub survivor_candidate_ids: Vec<String>,
     pub candidate_reports: Vec<Section4SuiteRunCandidateReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Section4SuiteRunReport {
     pub suite_id: String,
+    pub experiment_track_id: String,
+    pub tier_growth_rule: String,
     pub profile_reports: Vec<Section4SuiteRunProfileReport>,
 }
 
@@ -333,8 +385,11 @@ pub fn generate_section4_suite_assets(
         generated_profiles.push(Section4GeneratedProfile {
             profile_id: profile_spec.profile_id.clone(),
             corpus_id: profile_spec.corpus_id.clone(),
+            experiment_track_id: spec.experiment_track_contract.track_id.clone(),
             family,
             scale_tier_id: profile_spec.scale_tier_id.clone(),
+            scale_tier_kind: profile_spec.scale_tier_kind.clone(),
+            tier_growth_rule: spec.tier_growth_rule.clone(),
             alignment_policy,
             metric_contract: spec.metric_contract.clone(),
             neighbor_count: spec.neighbor_count,
@@ -353,11 +408,15 @@ pub fn generate_section4_suite_assets(
 
     let manifest = Section4SuiteManifest {
         suite_id: spec.suite_id.clone(),
+        experiment_track_contract: spec.experiment_track_contract.clone(),
+        tier_growth_rule: spec.tier_growth_rule.clone(),
         generated_profiles,
     };
     let manifest_path = output_dir.join("section4-suite-manifest.json");
     let stored_manifest = Section4SuiteManifest {
         suite_id: manifest.suite_id.clone(),
+        experiment_track_contract: manifest.experiment_track_contract.clone(),
+        tier_growth_rule: manifest.tier_growth_rule.clone(),
         generated_profiles: manifest
             .generated_profiles
             .iter()
@@ -475,33 +534,53 @@ pub fn run_section4_suite(
             });
         }
 
+        let survivor_candidate_ids = candidate_reports
+            .iter()
+            .filter(|candidate| candidate.survived_required_gates)
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+
         profile_reports.push(Section4SuiteRunProfileReport {
             profile_id: generated.profile_id.clone(),
             corpus_id: generated.corpus_id.clone(),
+            experiment_track_id: generated.experiment_track_id.clone(),
             family: generated.family.clone(),
             scale_tier_id: generated.scale_tier_id.clone(),
+            scale_tier_kind: generated.scale_tier_kind.clone(),
             real_entity_count: generated.real_entity_count,
             evaluated_entity_count: generated.evaluated_entity_count,
+            survivor_candidate_ids,
             candidate_reports,
         });
     }
 
     Ok(Section4SuiteRunReport {
         suite_id: manifest.suite_id.clone(),
+        experiment_track_id: manifest.experiment_track_contract.track_id.clone(),
+        tier_growth_rule: manifest.tier_growth_rule.clone(),
         profile_reports,
     })
 }
 
 pub fn render_section4_suite_scorecard(report: &Section4SuiteRunReport) -> String {
-    let mut lines = vec![format!("Section-4 suite scorecard for {}", report.suite_id)];
+    let mut lines = vec![format!(
+        "Section-4 suite scorecard for {} [{}; growth={}]",
+        report.suite_id, report.experiment_track_id, report.tier_growth_rule
+    )];
     for profile in &report.profile_reports {
         lines.push(format!(
-            "- {} [{} / {} / real={} / evaluated={}]",
+            "- {} [{} / {} / {:?} / real={} / evaluated={} / survivors={}]",
             profile.profile_id,
             family_label(&profile.family),
             profile.scale_tier_id,
+            profile.scale_tier_kind,
             profile.real_entity_count,
-            profile.evaluated_entity_count
+            profile.evaluated_entity_count,
+            if profile.survivor_candidate_ids.is_empty() {
+                "none".into()
+            } else {
+                profile.survivor_candidate_ids.join(", ")
+            }
         ));
         for candidate in &profile.candidate_reports {
             lines.push(format!(
@@ -564,6 +643,16 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "suite_id must not be empty".into(),
         ));
     }
+    if spec.experiment_track_contract.track_id.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite experiment track_id must not be empty".into(),
+        ));
+    }
+    if spec.tier_growth_rule.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite tier_growth_rule must not be empty".into(),
+        ));
+    }
     if spec.leaf_size == 0 {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-4 suite leaf_size must be positive".into(),
@@ -587,6 +676,73 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
     if spec.profiles.is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-4 suite must declare at least one profile".into(),
+        ));
+    }
+    if spec
+        .experiment_track_contract
+        .sensitivity_leaf_sizes
+        .is_empty()
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite must declare at least one sensitivity leaf size".into(),
+        ));
+    }
+    if spec
+        .experiment_track_contract
+        .sensitivity_leaf_sizes
+        .contains(&0)
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite sensitivity leaf sizes must be positive".into(),
+        ));
+    }
+    if !spec
+        .experiment_track_contract
+        .sensitivity_leaf_sizes
+        .contains(&spec.leaf_size)
+    {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-4 suite sensitivity leaf sizes must include leaf_size {}",
+            spec.leaf_size
+        )));
+    }
+    let dimensionality = &spec.experiment_track_contract.dimensionality_contract;
+    if dimensionality.min_dimensions == 0 || dimensionality.max_dimensions == 0 {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite dimensionality contract must be positive".into(),
+        ));
+    }
+    if dimensionality.min_dimensions > dimensionality.max_dimensions {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite dimensionality contract min must be <= max".into(),
+        ));
+    }
+    if spec.dimensions < dimensionality.min_dimensions
+        || spec.dimensions > dimensionality.max_dimensions
+    {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-4 suite dimensions {} fall outside the declared dimensionality contract {}..={}",
+            spec.dimensions, dimensionality.min_dimensions, dimensionality.max_dimensions
+        )));
+    }
+    if dimensionality.out_of_range_behavior.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite dimensionality contract must declare out_of_range_behavior".into(),
+        ));
+    }
+    if spec
+        .experiment_track_contract
+        .candidate_threading_model
+        .trim()
+        .is_empty()
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite candidate_threading_model must not be empty".into(),
+        ));
+    }
+    if spec.experiment_track_contract.frozen_items.is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite must declare frozen benchmark-contract items".into(),
         ));
     }
     let mut seen_profile_ids = HashSet::new();
@@ -1316,13 +1472,50 @@ fn section4_gate_declarations() -> Vec<GateDeclaration> {
 }
 
 fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
-    vec![DeferredResearchGoal {
-        deferred_id: "deferred-hierarchy-routing".into(),
-        label: "Hierarchy routing proof".into(),
-        reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
-        research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
-        coverage: ResearchCoverage::Deferred,
-    }]
+    vec![
+        DeferredResearchGoal {
+            deferred_id: "deferred-hierarchy-routing".into(),
+            label: "Hierarchy routing proof".into(),
+            reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
+            research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
+            coverage: ResearchCoverage::Deferred,
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-same-or-sibling-locality".into(),
+            label: "Same-or-sibling locality target".into(),
+            reason: "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line".into(),
+            research_goal_ids: vec!["RG-LOCALITY".into()],
+            coverage: ResearchCoverage::Deferred,
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-bounded-tree-shape".into(),
+            label: "Bounded fanout and depth".into(),
+            reason: "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line".into(),
+            research_goal_ids: vec!["RG-HIERARCHY".into()],
+            coverage: ResearchCoverage::Deferred,
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-parent-summaries".into(),
+            label: "Parent summary accuracy and stability".into(),
+            reason: "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line".into(),
+            research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
+            coverage: ResearchCoverage::Deferred,
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-persistence-roundtrip".into(),
+            label: "Persisted artifact durability".into(),
+            reason: "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line".into(),
+            research_goal_ids: vec!["RG-HIERARCHY".into()],
+            coverage: ResearchCoverage::Deferred,
+        },
+        DeferredResearchGoal {
+            deferred_id: "deferred-threading-reproducibility".into(),
+            label: "Multi-thread reproducibility".into(),
+            reason: "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation".into(),
+            research_goal_ids: vec!["RG-DETERMINISM".into()],
+            coverage: ResearchCoverage::Deferred,
+        },
+    ]
 }
 
 fn family_label(family: &Section4CorpusFamily) -> &'static str {

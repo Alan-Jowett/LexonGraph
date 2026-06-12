@@ -142,7 +142,16 @@ campaign:
 - must-pass gates and any comparative ranking weights
 - deferred research-goal records for requirements that cannot be proven at this
   boundary
+- the benchmark-declared metric contract and any transformed-metric policy used
+  by build, locality scoring, compression scoring, and any later carried-forward
+  routing obligations
 - deterministic execution-profile metadata needed to interpret reproducibility
+
+For section-4 screening profiles, this fixed campaign contract shall remain
+consistent with the repository-owned benchmark-suite contract for the selected
+experiment track rather than allowing per-candidate reinterpretation of metric
+family, dimensionality contract, quantization baseline policy, alignment-policy
+family, or declared execution environment.
 
 ### REQ-STREAM-EVAL-007
 
@@ -223,6 +232,10 @@ coverage is:
 - direct
 - proxy
 - deferred because the research goal cannot be proven at this boundary
+
+When a frozen benchmark-contract item is not directly measured during section-4
+screening, the evaluator shall still carry it forward as an explicit deferred
+proof obligation rather than dropping it from the campaign contract.
 
 ### REQ-STREAM-EVAL-014
 
@@ -323,6 +336,20 @@ deferments constrain only what this evaluator revision may claim as direct
 evidence. They do not narrow the parent end-state obligations defined by
 `docs/research/clustering.md` and staged by `docs/research/clustering_plan.md`.
 
+For section-4 screening in this revision, the evaluator shall preserve at least
+the following as explicit later-phase proof obligations whenever the benchmark
+contract freezes them for the experiment track:
+
+- the declared end-state locality target, including same-or-sibling semantics
+- the declared routing target, including any threshold values, and the routing-
+  procedure assumptions needed to interpret that target
+- any declared beam-width policy that later routing phases must evaluate
+- bounded fanout and depth constraints
+- parent-summary accuracy and stability obligations
+- serialization round-trip and persisted-artifact durability obligations
+- any declared multi-thread reproducibility obligation that exceeds the direct
+  section-4 observable boundary
+
 ### REQ-STREAM-EVAL-022
 
 The evaluator shall support benchmark corpora supplied by block-store-backed
@@ -420,6 +447,20 @@ Instead, it provides the repository-owned leaf-stage evidence slice that feeds
 the later hierarchy, summary, routing, and persistence phases in
 `docs/research/clustering_plan.md`.
 
+The suite shall freeze, per experiment track, the benchmark-contract items that
+section-4 candidate comparisons are not allowed to reinterpret, including:
+
+- the declared metric family and any transformed-metric policy
+- the primary `leaf_size` and any declared sensitivity sizes
+- the dimensionality contract used by the selected corpus panel
+- the alignment-policy family
+- the quantization or compression baseline policy over real entities
+- any declared search-target threshold and beam-width policy that must carry
+  forward to later routing phases
+- the declared floating-point profile
+- the declared candidate-threading model
+- the declared hardware profile
+
 ### REQ-STREAM-EVAL-032
 
 The section-4 benchmark suite shall realize a repository-owned corpus panel
@@ -441,6 +482,11 @@ comparison.
 For each family used by the suite, the repository shall declare the corpus
 identity, construction or harvesting policy, and any scale-tier identities used
 for repeated comparisons.
+
+For the checked-in panel in this revision, the suite shall define stable
+small, medium, and large scale-tier identities or deterministic nearest-
+practical equivalents for each corpus family that participates in repeated
+size-tier comparison.
 
 ### REQ-STREAM-EVAL-033
 
@@ -579,9 +625,6 @@ shall include all repository-owned registered section-4 candidates so they can
 be listed, selected, and exercised through ordinary campaign and section-4
 suite execution paths.
 
-REQ-STREAM-EVAL-043 through REQ-STREAM-EVAL-046 are intentionally unused in
-this revision.
-
 ### REQ-STREAM-EVAL-047
 
 The section-4 validation surface shall exercise deterministic rejection of
@@ -633,6 +676,92 @@ At minimum, this revision shall cover:
 
 - corpora with too few real entities for the declared `neighbor_count`
 - cosine-metric inputs containing zero-norm embeddings
+
+### REQ-STREAM-EVAL-043
+
+The repository-owned section-4 benchmark suite shall define a frozen benchmark
+contract for each experiment track that keeps candidate comparisons comparable
+across repeated runs and later phases.
+
+At minimum, that frozen contract shall declare:
+
+- the metric family and any transformed-metric policy
+- the primary `leaf_size` and any declared sensitivity sizes
+- the dimensionality contract, including deterministic out-of-range rejection
+  semantics where applicable
+- the alignment-policy family
+- the quantization or compression baseline policy over real entities only,
+  excluding synthetic padding
+- the declared floating-point profile
+- the declared candidate-threading model for the track
+- the declared hardware profile
+
+The suite shall also label which frozen items are measured directly during
+section-4 screening versus carried forward as deferred obligations.
+
+### REQ-STREAM-EVAL-044
+
+When a frozen benchmark-contract item from
+`docs/research/clustering_plan.md` section 1 cannot be directly proven by the
+leaf-stage evaluator boundary, the suite and emitted campaign artifacts shall
+preserve it as an explicit later-phase proof obligation.
+
+At minimum, this revision shall preserve explicit deferred records for any
+frozen:
+
+- same-or-sibling locality target not directly proven by same-leaf scoring
+- routing target or routing-procedure assumption
+- beam-width policy or related routing-study assumption
+- bounded fanout or depth constraint
+- parent-summary accuracy or stability obligation
+- serialization round-trip or persisted-artifact durability obligation
+- multi-thread reproducibility obligation beyond the direct section-4
+  observable boundary
+
+Each deferred record shall identify the frozen target or constraint, why
+section-4 does not directly prove it, and the later evaluation surface expected
+to discharge it.
+
+### REQ-STREAM-EVAL-045
+
+For corpus families used in repeated section-4 comparison, the benchmark suite
+shall define a deterministic scale-tier contract that keeps corpus-size studies
+comparable across candidates and reruns.
+
+At minimum, this revision shall support:
+
+- stable small, medium, and large tier identities, or deterministic nearest-
+  practical equivalents when exact target sizes are infeasible
+- a declared tier-growth rule that makes the large tier materially larger than
+  the small tier for the same family
+- deterministic ties among each tier identity, its corpus asset, and any
+  exact-neighbor ground-truth asset used for locality scoring
+- participation of at least one checked-in harvested real-world corpus family
+  in the same tiered comparison surface used by the synthetic families
+
+This scale-tier contract may also declare held-out query-set identities for
+later routing phases, but section-4 execution in this revision shall not depend
+on consuming those later-phase query assets.
+
+### REQ-STREAM-EVAL-046
+
+The section-4 evaluator and benchmark suite shall enforce hard-gate termination
+and artifact hygiene for each candidate/configuration execution.
+
+At minimum:
+
+- if a candidate fails a hard invariant gate for a configuration, the evaluator
+  shall stop further comparative metric evaluation for that candidate under that
+  configuration
+- the emitted artifact set for that failed execution shall preserve the
+  deterministic failure classification without presenting a success-shaped
+  completed result for the rejected configuration
+- section-4 comparative outputs shall identify the surviving candidates, if
+  any, that remain eligible to carry forward into later hierarchy-stage
+  comparison
+
+This requirement constrains candidate-comparison semantics; it does not require
+section-4 to perform later hierarchy-stage execution itself.
 
 ## Out of Scope
 
