@@ -94,6 +94,9 @@ including:
 - metric declarations, gate declarations, and comparative ranking weights
 - explicit deferred research-goal records for goals that cannot be proven at
   this boundary
+- any later-phase workload or artifact identities that section-4 must carry
+  forward without directly executing, including held-out query-set identities
+  when the experiment track declares them
 - declared reproducibility metadata such as floating-point and hardware profile
   descriptors
 
@@ -253,7 +256,9 @@ evaluator adds or consumes the declared synthetic entities before scoring and
 still requires exact final occupancy against the combined evaluated entity set.
 The same padding-aware scoring step also reports whether synthetic padding
 concentrates into the minimum possible number of final clusters permitted by
-the deterministic procedure.
+the deterministic procedure. Synthetic padding identities remain stably tagged,
+collision-free with real-entity identities in the evaluated corpus, and
+externally distinguishable from real benchmark members.
 
 ### DSG-STREAM-EVAL-012 `Leaf-stage locality scoring`
 
@@ -271,6 +276,10 @@ benchmark-declared compression or quantization method per final cluster and
 comparing the resulting real-entity reconstruction quality against the declared
 global baseline over the real benchmark dataset.
 
+The same scoring surface records the declared local-versus-global delta
+semantics and the per-cluster or per-bucket distribution needed to explain
+whether compression benefit is broad or concentrated.
+
 ### DSG-STREAM-EVAL-014 `Result taxonomy`
 
 The evaluator result model separates:
@@ -280,7 +289,9 @@ The evaluator result model separates:
 - comparative metrics used to rank only surviving candidates
 
 Each metric, gate, or deferred research-goal record carries traceability to its
-motivating research goal and is tagged as direct, proxy, or deferred.
+motivating research goal and is tagged as direct, proxy, or deferred. When a
+deferred record corresponds to a frozen section-1 benchmark-contract item, the
+same result model also names the later proof surface expected to discharge it.
 
 ### DSG-STREAM-EVAL-015 `Deferred research requirement handling`
 
@@ -318,6 +329,11 @@ references, corpus-loading failures encountered through block-store-backed
 inputs, zip-archive open/read failures, temporary writable-layer creation
 failures, and incomplete or unsupported measurement due to a deferred research
 requirement.
+
+Each structured failure also carries a stable error code, deterministic
+human-readable message, and enough artifact-hygiene state to prove that a
+failed section-4 execution did not expose success-shaped completion artifacts or
+later comparative metrics beyond the gate that failed.
 
 ### DSG-STREAM-EVAL-018 `Explicit non-goal boundary`
 
@@ -461,7 +477,8 @@ minimum:
 - same-leaf locality against exact-neighbor ground truth
 - local-versus-global compression gain
 - strict-alignment versus deterministic-padding outcomes where both are
-  relevant
+  relevant, including the declared normalized build-cost comparison used to
+  judge the alignment-policy tradeoff
 
 For the checked-in section-4 screening panel in this revision, the workflow
 executes across the expanded synthetic-plus-harvested profile set and uses
@@ -488,10 +505,15 @@ resource surface sufficient for comparing candidate strategies across corpus
 scale tiers.
 
 This revision keeps that resource surface narrow: deterministic reporting of
-evaluated entity count, scale-tier identity, and build time per vector or an
-equivalent benchmark-declared normalized build-cost measure is sufficient
-across the checked-in section-4 panel's scale tiers. It does not widen the
-crate into a full query-runtime or end-to-end service-level evaluator.
+evaluated entity count, scale-tier identity, build time per vector or an
+equivalent benchmark-declared normalized build-cost measure, and peak build
+memory is sufficient across the checked-in section-4 panel's scale tiers.
+
+When the frozen experiment-track contract carries a later-phase loaded-index
+memory obligation but section-4 does not materialize a persisted loadable
+artifact, the workflow preserves that obligation as deferred rather than
+omitting it. This does not widen the crate into a full query-runtime or
+end-to-end service-level evaluator.
 
 ### DSG-STREAM-EVAL-027 `Repository-owned concrete section-4 candidates`
 
@@ -549,6 +571,8 @@ goalposts.
 That contract records:
 
 - the metric family and any transformed-metric policy
+- the exact role of the metric family in build-time comparison, compression
+  scoring, deferred summary obligations, and any later routing obligations
 - the primary `leaf_size` and any declared sensitivity sizes
 - the dimensionality contract, including deterministic out-of-range rejection
   semantics where applicable
@@ -558,6 +582,8 @@ That contract records:
   later routing phases
 - the declared floating-point profile
 - the declared candidate-threading model
+- the declared reduction-order strategy for any deterministic aggregate
+  computation permitted by the track
 - the declared hardware profile
 
 Each item is also labeled as either directly measured during section-4
@@ -576,9 +602,13 @@ In this revision, the ledger can record at least:
 - beam-width policies or related routing-study assumptions
 - bounded fanout and depth constraints
 - parent-summary accuracy or stability obligations
+- parent-summary metric or dispersion-contract obligations
+- refinement-contract obligations such as `beta = Disp(C) / Disp(P)` semantics
+  and any declared penultimate-layer exception
 - serialization round-trip and persisted-artifact durability obligations
 - multi-thread reproducibility obligations beyond the direct section-4
   observable boundary
+- held-out query-set or equivalent later-phase routing-workload identities
 
 Each ledger entry names the deferred target, why section-4 cannot discharge it,
 and which later evaluation line is expected to prove it.
@@ -597,9 +627,16 @@ defines a deterministic scale-tier contract that binds:
 The same contract allows a checked-in harvested real-world corpus family to
 participate in the same tiered comparison surface used by synthetic families.
 
-Later routing phases may reuse these tier identities and may declare held-out
-query-set identities, but section-4 execution does not depend on consuming
-those later-phase query assets.
+Later routing phases may reuse these tier identities. For any corpus family
+intended to carry forward into those routing phases, the scale-tier contract
+declares held-out query-set identities even though section-4 execution does not
+depend on consuming those later-phase query assets.
+
+The first complete checked-in section-4 panel in this revision includes at
+least one such held-out query-set identity for a harvested real-world corpus
+family. When the experiment track declares later-phase identities, the suite
+preserves them in the frozen contract and deferred ledger rather than dropping
+them from the section-4 artifact model.
 
 ### DSG-STREAM-EVAL-034 `Hard-gate termination and artifact hygiene`
 
@@ -612,8 +649,62 @@ When a candidate fails such a gate, the workflow:
    configuration
 2. emits deterministic failure-classified artifacts without presenting a
    success-shaped completed result for the rejected configuration
-3. preserves enough campaign state to identify which candidates, if any, remain
+3. records artifact-hygiene evidence showing that later comparative metrics and
+   success-shaped completion artifacts were not exposed after the failing gate
+4. preserves enough campaign state to identify which candidates, if any, remain
    survivors eligible for later hierarchy-stage comparison
+
+### DSG-STREAM-EVAL-035 `Metric and execution semantics contract`
+
+In addition to naming frozen benchmark items, each section-4 experiment track
+defines the semantic rules needed to interpret candidate-comparable metrics and
+execution behavior.
+
+This contract names:
+
+- the exact build, locality, compression, and deferred-routing metric roles
+- any ordering-preservation obligation attached to a transformed metric policy
+- the metric-contract consistency checks and reported audit results that show
+  build-time comparison, compression scoring, deferred summary obligations, and
+  any carried-forward routing obligations use the declared metric coherently
+- the compatible dispersion functional used by deferred summary or refinement
+  obligations
+- the threading model and deterministic reduction-order strategy used by the
+  track
+- whether 1-thread versus N-thread bitwise observable identity is measured
+  directly in section-4 or carried as a deferred obligation
+
+### DSG-STREAM-EVAL-036 `Later-phase obligation identities`
+
+When section-4 freezes obligations that a later evaluator line must discharge,
+the suite preserves the artifact and workload identities needed to continue the
+proof chain.
+
+This includes, when declared by the experiment track:
+
+- held-out query-set or later routing-workload identities
+- later-phase hierarchy, summary, persistence, or service-level artifact
+  identities
+- the later evaluation line expected to consume each preserved identity
+
+For the first complete checked-in section-4 panel in this revision, the
+preserved identity set includes at least one held-out query-set identity for a
+harvested real-world corpus family that later routing phases are expected to
+consume.
+
+### DSG-STREAM-EVAL-037 `Deterministic survivor-selection rule`
+
+The section-4 workflow applies a deterministic carry-forward rule after hard
+gates and direct measurements have been recorded.
+
+That rule:
+
+1. rejects any candidate/configuration that fails a hard invariant gate
+2. ranks surviving candidates using same-leaf locality evidence, declared local
+   compression benefit, and normalized leaf-stage build-cost evidence
+3. prevents build-cost comparisons from rescuing a hard-gate failure
+4. defines deterministic tie-breaking when surviving candidates remain otherwise
+   indistinguishable on the declared comparison surface
 
 ## Traceability
 
@@ -658,3 +749,6 @@ When a candidate fails such a gate, the workflow:
 | DSG-STREAM-EVAL-032 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-044 |
 | DSG-STREAM-EVAL-033 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045 |
 | DSG-STREAM-EVAL-034 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046 |
+| DSG-STREAM-EVAL-035 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-043, REQ-STREAM-EVAL-051 |
+| DSG-STREAM-EVAL-036 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-044, REQ-STREAM-EVAL-045, REQ-STREAM-EVAL-052 |
+| DSG-STREAM-EVAL-037 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046, REQ-STREAM-EVAL-053 |

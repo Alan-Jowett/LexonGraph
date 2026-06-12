@@ -25,15 +25,16 @@ use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
     CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
-    EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus,
-    Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
-    Section4FrozenContractItem, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
-    Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
-    Section4ProfileSpec, Section4ProofSurface, Section4ScaleTierKind, Section4SuiteManifest,
-    Section4SuiteSpec, SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    generate_section4_suite_assets, registered_candidate_names, resolve_registered_candidates,
-    run_evaluation_campaign, run_section4_suite, write_section4_suite_artifacts,
+    EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus, LaterPhaseIdentity,
+    LaterPhaseIdentityKind, Section4CorpusFamily, Section4DimensionalityContract,
+    Section4ExperimentTrackContract, Section4FrozenContractItem,
+    Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
+    Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
+    Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec, SharedBalanceConstraints,
+    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
+    write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -170,6 +171,20 @@ fn section4_reproducibility() -> lexongraph_streaming_clustering_evaluator::Repr
 }
 
 fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec {
+    let later_phase_identities = if profiles.iter().any(|profile| {
+        profile.corpus_id == "real-world-harvested-medium" && profile.scale_tier_id == "n-14"
+    }) {
+        vec![LaterPhaseIdentity {
+            identity_id: "real-world-harvested-medium-heldout-queries".into(),
+            label: "Held-out routing query set for harvested medium corpus".into(),
+            kind: LaterPhaseIdentityKind::HeldOutQuerySet,
+            corpus_id: Some("real-world-harvested-medium".into()),
+            scale_tier_id: Some("n-14".into()),
+            later_evaluation_line: "future hierarchy-routing evaluator".into(),
+        }]
+    } else {
+        Vec::new()
+    };
     Section4SuiteSpec {
         suite_id: "section4-corpus-panel-suite".into(),
         experiment_track_contract: Section4ExperimentTrackContract {
@@ -182,7 +197,21 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
             },
             declared_search_target: Some("TNN Recall@10 >= 90% under later routing evaluation".into()),
             beam_width_policy: Some("beam width 1 by default; 2, 4, and 8 reserved for later routing fallback studies".into()),
+            transformed_metric_policy: Some("no transformed metric; build, locality, compression, and later routing all use the declared Euclidean metric directly".into()),
+            build_metric_role: "section-4 compares leaf-stage candidate behavior under the declared Euclidean metric".into(),
+            locality_metric_role: "same-leaf top-10 neighborhood coherence is computed directly under the declared Euclidean metric".into(),
+            compression_metric_role: "local-versus-global scalar quantization compares real-entity reconstruction error under the declared Euclidean track".into(),
+            deferred_routing_metric_role: "later routing studies must preserve the declared Euclidean ordering and search-target interpretation".into(),
+            metric_contract_consistency_checks: vec![
+                "build, locality, compression, and deferred routing all declare the Euclidean metric".into(),
+                "no transformed metric is permitted on this track, so ordering preservation is vacuously satisfied".into(),
+            ],
+            metric_contract_audit_result: "metric contract is consistent across build, locality, compression, and deferred routing obligations".into(),
+            dispersion_functional: "variance under the declared Euclidean metric".into(),
             candidate_threading_model: "single-threaded section-4 screening".into(),
+            reduction_order_strategy: "single-thread sequential reduction order".into(),
+            one_thread_vs_n_thread_identity_proof_surface: Some(Section4ProofSurface::Deferred),
+            later_phase_identities,
             frozen_items: vec![
                 Section4FrozenContractItem {
                     item_id: "metric-family".into(),
@@ -212,6 +241,11 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
                 Section4FrozenContractItem {
                     item_id: "threading-reproducibility".into(),
                     label: "Multi-thread reproducibility obligation".into(),
+                    proof_surface: Section4ProofSurface::Deferred,
+                },
+                Section4FrozenContractItem {
+                    item_id: "loaded-index-memory".into(),
+                    label: "Loaded index memory obligation".into(),
                     proof_surface: Section4ProofSurface::Deferred,
                 },
             ],
@@ -539,6 +573,11 @@ fn val_stream_eval_005_benchmark_profile_declares_the_required_campaign_fields()
     assert_eq!(profile.metric_declarations.len(), 2);
     assert!(!profile.gate_declarations.is_empty());
     assert!(!profile.deferred_research_goals.is_empty());
+    assert_eq!(profile.later_phase_identities.len(), 1);
+    assert_eq!(
+        profile.later_phase_identities[0].identity_id,
+        "fixture-heldout-query-set"
+    );
     assert_eq!(profile.reproducibility.seed_policy, "fixed-seed-7");
 }
 
@@ -727,8 +766,18 @@ fn val_stream_eval_012_local_compression_metric_compares_local_and_global_baseli
         .iter()
         .find(|metric| metric.metric_id == "local-compression-gain")
         .unwrap();
+    let analysis = report.run_reports[0]
+        .compression_analysis
+        .as_ref()
+        .expect("compression metric should include compression analysis");
 
     assert!(metric.value > 0.05);
+    assert_eq!(analysis.baseline_label, "global-real-dataset-8bit");
+    assert_eq!(
+        analysis.delta_semantics,
+        "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error"
+    );
+    assert!(!analysis.bucket_reports.is_empty());
 }
 
 #[test]
@@ -786,7 +835,9 @@ fn val_stream_eval_014_metric_gate_and_deferred_records_trace_to_research_goals(
             .all(|gate| !gate.research_goal_ids.is_empty())
     );
     assert!(run_report.deferred_research_goals.iter().all(|goal| {
-        !goal.research_goal_ids.is_empty() && goal.status == DeferredMeasurementStatus::Deferred
+        !goal.research_goal_ids.is_empty()
+            && goal.status == DeferredMeasurementStatus::Deferred
+            && !goal.later_evaluation_line.trim().is_empty()
     }));
 }
 
@@ -1961,7 +2012,13 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
                             | "deterministic-observable-results"
                     )
             );
-            !hard_gate_failed || (run.metric_results.is_empty() && run.ranking_score.is_none())
+            !hard_gate_failed
+                || (run.metric_results.is_empty()
+                    && run.ranking_score.is_none()
+                    && !run.artifact_hygiene.comparative_metrics_emitted
+                    && !run
+                        .artifact_hygiene
+                        .success_shaped_completion_artifacts_emitted)
         }));
     }
 }
@@ -2002,6 +2059,17 @@ fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() 
                     && candidate.campaign_time_per_vector_nanos > 0.0)
             )
     );
+    assert!(report.profile_reports.iter().all(|profile| {
+        profile
+            .candidate_reports
+            .iter()
+            .all(|candidate| candidate.peak_build_memory_bytes > 0)
+    }));
+    assert!(report.profile_reports.iter().all(|profile| {
+        profile
+            .preserved_deferred_goal_ids
+            .contains(&"deferred-loaded-index-memory".to_string())
+    }));
 }
 
 #[test]
@@ -2037,6 +2105,15 @@ fn val_stream_eval_036_section4_track_contract_freezes_declared_direct_and_defer
             .any(|item| item.item_id == "routing-target"
                 && item.proof_surface == Section4ProofSurface::Deferred)
     );
+    assert_eq!(
+        spec.experiment_track_contract.reduction_order_strategy,
+        "single-thread sequential reduction order"
+    );
+    assert_eq!(
+        spec.experiment_track_contract
+            .one_thread_vs_n_thread_identity_proof_surface,
+        Some(Section4ProofSurface::Deferred)
+    );
 }
 
 #[test]
@@ -2066,8 +2143,16 @@ fn val_stream_eval_037_section4_profiles_preserve_explicit_deferred_obligations(
     assert!(deferred_ids.contains(&"deferred-hierarchy-routing"));
     assert!(deferred_ids.contains(&"deferred-bounded-tree-shape"));
     assert!(deferred_ids.contains(&"deferred-parent-summaries"));
+    assert!(deferred_ids.contains(&"deferred-refinement-contract"));
     assert!(deferred_ids.contains(&"deferred-persistence-roundtrip"));
+    assert!(deferred_ids.contains(&"deferred-loaded-index-memory"));
     assert!(deferred_ids.contains(&"deferred-threading-reproducibility"));
+    assert!(
+        profile
+            .deferred_research_goals
+            .iter()
+            .all(|goal| { !goal.later_evaluation_line.trim().is_empty() })
+    );
 }
 
 #[test]
@@ -2096,6 +2181,9 @@ fn val_stream_eval_038_section4_generated_profiles_preserve_tier_kind_and_growth
                 .tier_growth_rule
                 .contains("small-to-medium-to-large")
     }));
+    assert!(manifest.generated_profiles.iter().any(|profile| {
+        profile.profile_id == "tier-medium" && profile.later_phase_identity_ids.is_empty()
+    }));
 }
 
 #[test]
@@ -2111,20 +2199,149 @@ fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
         asset_dir.path(),
     )
     .unwrap();
-    let report = run_section4_suite(
-        &manifest,
-        &balanced_and_skewed_candidates(),
-        report_dir.path(),
-    )
-    .unwrap();
+    let mut candidates =
+        resolve_registered_candidates(&["pca-sort-exact-chunking".to_string()]).unwrap();
+    candidates.push(
+        lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate("skewed-gate-fail")
+            .unwrap(),
+    );
+    let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
 
     let profile = &report.profile_reports[0];
-    assert!(profile.survivor_candidate_ids.is_empty());
+    assert_eq!(
+        profile.survivor_candidate_ids,
+        vec!["pca-sort-exact-chunking"]
+    );
     assert!(profile.candidate_reports.iter().any(|candidate| {
         candidate.candidate_id == "skewed-gate-fail"
             && candidate.run_status == CandidateRunStatus::GateFailed
             && !candidate.survived_required_gates
     }));
+}
+
+#[test]
+fn val_stream_eval_040_section4_track_contract_declares_metric_execution_semantics() {
+    let spec = section4_suite_spec(vec![strict_synthetic_profile(
+        "semantics-check",
+        "freeze",
+        12,
+    )]);
+
+    assert_eq!(
+        spec.experiment_track_contract.build_metric_role,
+        "section-4 compares leaf-stage candidate behavior under the declared Euclidean metric"
+    );
+    assert_eq!(
+        spec.experiment_track_contract
+            .metric_contract_consistency_checks
+            .len(),
+        2
+    );
+    assert!(
+        spec.experiment_track_contract
+            .metric_contract_audit_result
+            .contains("consistent")
+    );
+    assert_eq!(
+        spec.experiment_track_contract
+            .one_thread_vs_n_thread_identity_proof_surface,
+        Some(Section4ProofSurface::Deferred)
+    );
+}
+
+#[test]
+fn val_stream_eval_041_section4_suite_preserves_later_phase_identities() {
+    let output_dir = tempdir().unwrap();
+    let report_dir = tempdir().unwrap();
+    let manifest = generate_section4_suite_assets(
+        &section4_suite_spec(vec![
+            strict_synthetic_profile("strict-tier", "clustered-small", 12),
+            Section4ProfileSpec {
+                profile_id: "harvested-tier".into(),
+                corpus_id: "real-world-harvested-medium".into(),
+                scale_tier_id: "n-14".into(),
+                scale_tier_kind: Section4ScaleTierKind::Medium,
+                source: Section4ProfileSourceSpec::Harvested {
+                    family: Section4CorpusFamily::RealWorldHarvested,
+                    source: harvested_archive_reference(),
+                    entity_id_metadata_key: "entity_id".into(),
+                    harvesting_policy: harvested_policy(),
+                    real_entity_count: 14,
+                    alignment_policy: AlignmentPolicy::StrictAlignment,
+                },
+            },
+        ]),
+        output_dir.path(),
+    )
+    .unwrap();
+    let report = run_section4_suite(
+        &manifest,
+        &balanced_and_skewed_candidates()[..1],
+        report_dir.path(),
+    )
+    .unwrap();
+
+    let harvested_profile = report
+        .profile_reports
+        .iter()
+        .find(|profile| profile.profile_id == "harvested-tier")
+        .unwrap();
+    assert_eq!(
+        harvested_profile.preserved_later_phase_identity_ids,
+        vec!["real-world-harvested-medium-heldout-queries"]
+    );
+}
+
+#[test]
+fn val_stream_eval_042_section4_suite_orders_survivors_by_the_deterministic_ranking_rule() {
+    let asset_dir = tempdir().unwrap();
+    let report_dir = tempdir().unwrap();
+    let manifest = generate_section4_suite_assets(
+        &section4_suite_spec(vec![strict_synthetic_profile(
+            "ranking-check",
+            "ranking",
+            12,
+        )]),
+        asset_dir.path(),
+    )
+    .unwrap();
+    let report = run_section4_suite(
+        &manifest,
+        &resolve_registered_candidates(&[
+            "pca-sort-exact-chunking".to_string(),
+            "directional-pca".to_string(),
+            "dcbc-streaming".to_string(),
+        ])
+        .unwrap(),
+        report_dir.path(),
+    )
+    .unwrap();
+
+    let profile = &report.profile_reports[0];
+    let mut expected = profile
+        .candidate_reports
+        .iter()
+        .filter_map(|candidate| {
+            candidate
+                .ranking_score
+                .map(|ranking_score| (candidate.candidate_id.as_str(), ranking_score))
+        })
+        .collect::<Vec<_>>();
+    expected.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap()
+            .then_with(|| left.0.cmp(right.0))
+    });
+
+    assert_eq!(
+        profile.survivor_candidate_ids,
+        expected
+            .into_iter()
+            .map(|(candidate_id, _)| candidate_id.to_string())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

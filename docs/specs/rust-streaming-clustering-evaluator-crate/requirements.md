@@ -145,6 +145,9 @@ campaign:
 - the benchmark-declared metric contract and any transformed-metric policy used
   by build, locality scoring, compression scoring, and any later carried-forward
   routing obligations
+- any later-phase workload or artifact identities that section-4 must carry
+  forward without directly executing, including held-out query-set identities
+  when the experiment track declares them
 - deterministic execution-profile metadata needed to interpret reproducibility
 
 For section-4 screening profiles, this fixed campaign contract shall remain
@@ -233,6 +236,10 @@ coverage is:
 - proxy
 - deferred because the research goal cannot be proven at this boundary
 
+When a metric, gate, or deferred record corresponds to a frozen section-1
+benchmark-contract item, the evaluator shall also identify the later proof
+surface expected to discharge any deferred obligation.
+
 When a frozen benchmark-contract item is not directly measured during section-4
 screening, the evaluator shall still carry it forward as an explicit deferred
 proof obligation rather than dropping it from the campaign contract.
@@ -253,8 +260,9 @@ reported evaluator results.
 
 ### REQ-STREAM-EVAL-015
 
-The evaluator shall surface deterministic structured failures that distinguish
-at least:
+The evaluator shall surface deterministic structured failures with a stable
+error code and deterministic human-readable message and shall distinguish at
+least:
 
 - invalid evaluator or benchmark-profile configuration
 - invalid or unresolved corpus-source references
@@ -268,6 +276,10 @@ at least:
 - evaluator-owned gate failure
 - incomplete or unsupported measurement caused by a deferred research
   requirement
+
+For failures that terminate a section-4 candidate/configuration execution, the
+evaluator shall also preserve artifact-hygiene evidence showing that no
+success-shaped completed artifact set was exposed for the failed execution.
 
 ### REQ-STREAM-EVAL-016
 
@@ -302,6 +314,11 @@ by the deterministic procedure. At this boundary, that concentration result is
 part of the leaf-stage fixed-capacity evidence surface rather than a separate
 hierarchy-stage claim.
 
+The evaluator shall also require synthetic padding entities to carry stable
+synthetic identity tagging that does not collide with real-entity identities in
+the same evaluated corpus and shall ensure that externally reported evaluator
+entity listings do not misclassify synthetic padding as real benchmark members.
+
 ### REQ-STREAM-EVAL-019
 
 The evaluator shall directly compute leaf-stage locality metrics from the leaf
@@ -320,6 +337,16 @@ The evaluator shall directly compute leaf-stage compression-friendliness metrics
 from the leaf membership artifact by comparing evaluator-declared local
 per-cluster compression quality against a declared global baseline over the real
 benchmark dataset.
+
+At minimum, the declared comparison shall define:
+
+- the reconstruction-error or equivalent compression-quality functional used for
+  both the local and global measurements
+- the global baseline over the unpadded real benchmark dataset only, excluding
+  synthetic padding entities
+- the reported local-versus-global delta semantics
+- the per-cluster or per-bucket distribution reported alongside the aggregate
+  comparison
 
 ### REQ-STREAM-EVAL-021
 
@@ -459,6 +486,8 @@ section-4 candidate comparisons are not allowed to reinterpret, including:
   forward to later routing phases
 - the declared floating-point profile
 - the declared candidate-threading model
+- the declared reduction-order strategy for any deterministic parallel or
+  aggregate computation permitted by the track
 - the declared hardware profile
 
 ### REQ-STREAM-EVAL-032
@@ -558,6 +587,11 @@ proof. The workflow therefore serves the broader end-state requirements from
 `docs/research/clustering.md` by staged screening rather than by redefining
 those requirements at the evaluator boundary.
 
+Where both strict-alignment and deterministic-padding configurations are
+applicable to the same corpus family or comparison study, the workflow shall
+report their distinct invariant and metric outcomes together with the declared
+normalized build-cost comparison used to judge the alignment-policy tradeoff.
+
 ### REQ-STREAM-EVAL-037
 
 For section-4 benchmark executions, the evaluator shall report leaf-stage
@@ -570,6 +604,12 @@ At minimum, this revision shall support deterministic reporting of:
 - scale-tier identity
 - build time per vector or an equivalent normalized leaf-stage build-cost
   measure declared by the benchmark suite
+- peak build memory during section-4 execution
+
+When the frozen experiment-track contract carries a later-phase loaded-index
+memory obligation but section-4 does not materialize a persisted loadable
+artifact, the evaluator shall record that memory obligation as deferred rather
+than omitting it.
 
 These reports shall remain consistent across the scale-tier set used by the
 checked-in section-4 screening panel in this revision.
@@ -686,6 +726,9 @@ across repeated runs and later phases.
 At minimum, that frozen contract shall declare:
 
 - the metric family and any transformed-metric policy
+- the exact role of the declared metric family in build-time comparison,
+  compression scoring, deferred summary obligations, and any later routing
+  obligations
 - the primary `leaf_size` and any declared sensitivity sizes
 - the dimensionality contract, including deterministic out-of-range rejection
   semantics where applicable
@@ -694,6 +737,8 @@ At minimum, that frozen contract shall declare:
   excluding synthetic padding
 - the declared floating-point profile
 - the declared candidate-threading model for the track
+- the declared reduction-order strategy for any deterministic aggregate
+  computation permitted by the track
 - the declared hardware profile
 
 The suite shall also label which frozen items are measured directly during
@@ -714,9 +759,15 @@ frozen:
 - beam-width policy or related routing-study assumption
 - bounded fanout or depth constraint
 - parent-summary accuracy or stability obligation
+- parent-summary metric or dispersion-contract obligation needed to interpret a
+  later summary-quality proof
+- refinement-contract obligations such as `beta = Disp(C) / Disp(P)` semantics
+  and any declared penultimate-layer exception
 - serialization round-trip or persisted-artifact durability obligation
 - multi-thread reproducibility obligation beyond the direct section-4
   observable boundary
+- held-out query-set or equivalent later-phase routing-workload identity needed
+  to discharge a deferred routing obligation
 
 Each deferred record shall identify the frozen target or constraint, why
 section-4 does not directly prove it, and the later evaluation surface expected
@@ -739,9 +790,14 @@ At minimum, this revision shall support:
 - participation of at least one checked-in harvested real-world corpus family
   in the same tiered comparison surface used by the synthetic families
 
-This scale-tier contract may also declare held-out query-set identities for
-later routing phases, but section-4 execution in this revision shall not depend
-on consuming those later-phase query assets.
+For any corpus family intended to carry forward into later routing phases, this
+scale-tier contract shall declare held-out query-set identities for those later
+studies even though section-4 execution in this revision shall not depend on
+consuming those later-phase query assets.
+
+The first complete checked-in section-4 panel in this revision shall include at
+least one such held-out query-set identity for a checked-in harvested
+real-world corpus family carried forward beyond leaf-stage screening.
 
 ### REQ-STREAM-EVAL-046
 
@@ -754,14 +810,76 @@ At minimum:
   shall stop further comparative metric evaluation for that candidate under that
   configuration
 - the emitted artifact set for that failed execution shall preserve the
-  deterministic failure classification without presenting a success-shaped
-  completed result for the rejected configuration
+  deterministic failure classification, including the failure's stable error
+  code and message, without presenting a success-shaped completed result for the
+  rejected configuration
+- the emitted artifact set for that failed execution shall include
+  artifact-hygiene evidence showing that later comparative metrics and
+  success-shaped completion artifacts were not exposed for the rejected
+  configuration
 - section-4 comparative outputs shall identify the surviving candidates, if
   any, that remain eligible to carry forward into later hierarchy-stage
   comparison
 
 This requirement constrains candidate-comparison semantics; it does not require
 section-4 to perform later hierarchy-stage execution itself.
+
+### REQ-STREAM-EVAL-051
+
+In addition to naming the frozen section-1 benchmark-contract items, each
+section-4 experiment track shall define the metric and execution-semantics
+contract needed to interpret comparable results.
+
+At minimum, this revision shall declare:
+
+- the exact build, locality, compression, and deferred-routing metric roles
+- any transformed-metric policy together with the ordering-preservation
+  obligation needed for later routing interpretation
+- the metric-contract consistency checks and reported audit results needed to
+  show that build, compression, deferred summary obligations, and any carried-
+  forward routing obligations interpret the declared metric consistently
+- the compatible dispersion functional used by any deferred summary or
+  refinement obligation
+- the declared threading model together with the deterministic reduction-order
+  strategy for the track
+- whether 1-thread versus N-thread bitwise observable identity is measured
+  directly by section-4 or preserved as a deferred obligation
+
+### REQ-STREAM-EVAL-052
+
+When section-4 freezes obligations that must be discharged by later hierarchy,
+summary, routing, persistence, or service-level evaluation lines, the benchmark
+suite shall preserve the artifact and workload identities needed to continue
+that proof chain.
+
+At minimum, this revision shall support preserving:
+
+- held-out query-set or later routing-workload identities
+- later-phase summary, persistence, or hierarchy artifact identities when the
+  experiment track declares them
+- the later evaluation line expected to consume each preserved identity
+
+Section-4 execution in this revision may leave those identities unused, but it
+shall not omit them from the frozen contract when the experiment track declares
+them. The first complete checked-in section-4 panel shall include at least one
+preserved held-out query-set identity for a harvested real-world corpus family
+that later routing phases are expected to consume.
+
+### REQ-STREAM-EVAL-053
+
+The section-4 workflow shall define a deterministic carry-forward rule for
+choosing which candidates survive leaf-stage screening for later hierarchy-stage
+comparison.
+
+At minimum, the rule shall:
+
+- reject any candidate/configuration that fails a hard invariant gate
+- rank surviving candidates using same-leaf locality evidence, declared local
+  compression benefit, and normalized leaf-stage build-cost evidence
+- prefer the highest-quality surviving candidates without allowing build-cost
+  comparisons to rescue a hard-gate failure
+- define deterministic tie-breaking behavior when surviving candidates remain
+  otherwise indistinguishable on the declared comparison surface
 
 ## Out of Scope
 

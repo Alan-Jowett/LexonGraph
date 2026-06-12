@@ -303,7 +303,8 @@
         "RG-HIERARCHY",
         "RG-ROUTING"
       ],
-      "coverage": "Deferred"
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-routing evaluator"
     },
     {
       "deferred_id": "deferred-same-or-sibling-locality",
@@ -312,7 +313,8 @@
       "research_goal_ids": [
         "RG-LOCALITY"
       ],
-      "coverage": "Deferred"
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-locality evaluator"
     },
     {
       "deferred_id": "deferred-bounded-tree-shape",
@@ -321,7 +323,8 @@
       "research_goal_ids": [
         "RG-HIERARCHY"
       ],
-      "coverage": "Deferred"
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-shape evaluator"
     },
     {
       "deferred_id": "deferred-parent-summaries",
@@ -331,7 +334,18 @@
         "RG-HIERARCHY",
         "RG-ROUTING"
       ],
-      "coverage": "Deferred"
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-refinement-contract",
+      "label": "Refinement and dispersion contract",
+      "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
     },
     {
       "deferred_id": "deferred-persistence-roundtrip",
@@ -340,7 +354,18 @@
       "research_goal_ids": [
         "RG-HIERARCHY"
       ],
-      "coverage": "Deferred"
+      "coverage": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-loaded-index-memory",
+      "label": "Loaded index memory",
+      "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
     },
     {
       "deferred_id": "deferred-threading-reproducibility",
@@ -349,9 +374,11 @@
       "research_goal_ids": [
         "RG-DETERMINISM"
       ],
-      "coverage": "Deferred"
+      "coverage": "Deferred",
+      "later_evaluation_line": "future execution-profile evaluator"
     }
   ],
+  "later_phase_identities": [],
   "reproducibility": {
     "seed_policy": "fixed-seed-11",
     "software_identity": "section4-corpus-panel-v2",
