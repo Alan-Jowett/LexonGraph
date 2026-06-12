@@ -584,12 +584,6 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite neighbor_count must be positive".into(),
         ));
     }
-    if spec.neighbor_count != 10 {
-        return Err(EvaluatorError::InvalidConfiguration(
-            "section-4 suite neighbor_count must be exactly 10 for the checked-in section-4 contract"
-                .into(),
-        ));
-    }
     if spec.profiles.is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-4 suite must declare at least one profile".into(),
@@ -1205,7 +1199,7 @@ fn clone_reference_with_store_path(
     }
 }
 
-fn resolve_profile_block_store_paths(profile: &mut BenchmarkProfile, base_dir: &Path) {
+pub fn resolve_profile_block_store_paths(profile: &mut BenchmarkProfile, base_dir: &Path) {
     for pass in &mut profile.training_passes {
         if let TrainingPassSource::BlockStore { corpus, .. } = pass {
             resolve_corpus_reference_paths(corpus, base_dir);
@@ -1234,6 +1228,28 @@ fn resolve_corpus_reference_paths(reference: &mut BlockStoreCorpusReference, bas
             if archive_path.is_relative() {
                 *archive_path = base_dir.join(&*archive_path);
             }
+        }
+    }
+}
+
+pub fn resolve_section4_suite_spec_paths(spec: &mut Section4SuiteSpec, base_dir: &Path) {
+    for profile in &mut spec.profiles {
+        if let Section4ProfileSourceSpec::Harvested { source, .. } = &mut profile.source {
+            resolve_corpus_reference_paths(source, base_dir);
+        }
+    }
+}
+
+pub fn resolve_section4_suite_manifest_paths(
+    manifest: &mut Section4SuiteManifest,
+    base_dir: &Path,
+) {
+    for profile in &mut manifest.generated_profiles {
+        if profile.profile_path.is_relative() {
+            profile.profile_path = base_dir.join(&profile.profile_path);
+        }
+        if profile.corpus_archive_path.is_relative() {
+            profile.corpus_archive_path = base_dir.join(&profile.corpus_archive_path);
         }
     }
 }

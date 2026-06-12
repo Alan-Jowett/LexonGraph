@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use lexongraph_streaming_clustering_evaluator::{
-    BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore, EmbeddingWorkloadSource,
-    EvaluationEntitySource, EvaluatorError, Section4ProfileSourceSpec, Section4SuiteManifest,
-    Section4SuiteSpec, TrainingPassSource, built_in_fixture_candidate,
-    built_in_fixture_candidate_names, emit_campaign_artifacts, generate_section4_suite_assets,
-    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
+    BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
+    built_in_fixture_candidate, built_in_fixture_candidate_names, emit_campaign_artifacts,
+    generate_section4_suite_assets, resolve_profile_block_store_paths,
+    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_evaluation_campaign, run_section4_suite,
     write_campaign_artifacts, write_section4_suite_artifacts,
 };
 
@@ -86,7 +86,7 @@ fn run() -> Result<(), EvaluatorError> {
             })?;
             let mut profile = profile;
             if let Some(profile_dir) = profile_path.parent() {
-                resolve_benchmark_profile_paths(&mut profile, profile_dir);
+                resolve_profile_block_store_paths(&mut profile, profile_dir);
             }
 
             let mut registered_candidates = Vec::with_capacity(candidates.len());
@@ -167,64 +167,6 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
-    }
-}
-
-fn resolve_section4_suite_spec_paths(spec: &mut Section4SuiteSpec, base_dir: &std::path::Path) {
-    for profile in &mut spec.profiles {
-        if let Section4ProfileSourceSpec::Harvested { source, .. } = &mut profile.source {
-            resolve_corpus_reference_paths(source, base_dir);
-        }
-    }
-}
-
-fn resolve_section4_suite_manifest_paths(
-    manifest: &mut Section4SuiteManifest,
-    base_dir: &std::path::Path,
-) {
-    for profile in &mut manifest.generated_profiles {
-        if profile.profile_path.is_relative() {
-            profile.profile_path = base_dir.join(&profile.profile_path);
-        }
-        if profile.corpus_archive_path.is_relative() {
-            profile.corpus_archive_path = base_dir.join(&profile.corpus_archive_path);
-        }
-    }
-}
-
-fn resolve_benchmark_profile_paths(profile: &mut BenchmarkProfile, base_dir: &std::path::Path) {
-    for pass in &mut profile.training_passes {
-        if let TrainingPassSource::BlockStore { corpus, .. } = pass {
-            resolve_corpus_reference_paths(corpus, base_dir);
-        }
-    }
-    for workload in &mut profile.probe_workloads {
-        if let EmbeddingWorkloadSource::BlockStore { corpus } = &mut workload.source {
-            resolve_corpus_reference_paths(corpus, base_dir);
-        }
-    }
-    if let EvaluationEntitySource::BlockStore { corpora } = &mut profile.evaluation_entities {
-        for corpus in corpora {
-            resolve_corpus_reference_paths(&mut corpus.corpus, base_dir);
-        }
-    }
-}
-
-fn resolve_corpus_reference_paths(
-    reference: &mut BlockStoreCorpusReference,
-    base_dir: &std::path::Path,
-) {
-    match &mut reference.store {
-        BlockStoreReferenceStore::Filesystem { store_root } => {
-            if store_root.is_relative() {
-                *store_root = base_dir.join(&*store_root);
-            }
-        }
-        BlockStoreReferenceStore::ZipArchive { archive_path } => {
-            if archive_path.is_relative() {
-                *archive_path = base_dir.join(&*archive_path);
-            }
         }
     }
 }

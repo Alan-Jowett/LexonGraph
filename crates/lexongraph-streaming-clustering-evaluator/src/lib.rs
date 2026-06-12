@@ -42,8 +42,9 @@ pub use section4::{
     Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
     Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport, Section4SuiteRunProfileReport,
     Section4SuiteRunReport, Section4SuiteSpec, generate_section4_suite_assets,
-    render_section4_suite_scorecard, resolve_registered_candidates, run_section4_suite,
-    write_section4_suite_artifacts,
+    render_section4_suite_scorecard, resolve_profile_block_store_paths,
+    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_section4_suite, write_section4_suite_artifacts,
 };
 
 pub type PassPlan = Vec<Vec<Embedding>>;

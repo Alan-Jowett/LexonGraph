@@ -1392,6 +1392,32 @@ fn val_stream_eval_025_section4_suite_materializes_reproducible_leaf_stage_asset
 }
 
 #[test]
+fn regression_section4_suite_generator_allows_non_top10_neighbor_counts_for_custom_suites() {
+    let output_dir = tempdir().unwrap();
+    let mut spec = section4_suite_spec(vec![strict_synthetic_profile(
+        "custom-neighbor-count",
+        "custom-corpus",
+        12,
+    )]);
+    spec.neighbor_count = 3;
+
+    let manifest = generate_section4_suite_assets(&spec, output_dir.path()).unwrap();
+    let profile: lexongraph_streaming_clustering_evaluator::BenchmarkProfile =
+        serde_json::from_str(
+            &fs::read_to_string(&manifest.generated_profiles[0].profile_path).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(manifest.generated_profiles[0].neighbor_count, 3);
+    assert!(
+        profile
+            .locality_ground_truth
+            .iter()
+            .all(|entry| entry.neighbor_ids.len() == 3)
+    );
+}
+
+#[test]
 fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_tiers() {
     let output_dir = tempdir().unwrap();
     let harvested_source = harvested_archive_reference();
