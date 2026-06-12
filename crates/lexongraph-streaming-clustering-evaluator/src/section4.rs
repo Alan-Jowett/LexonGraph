@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonGraph contributors
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -128,8 +128,8 @@ pub struct Section4SuiteRunCandidateReport {
     pub run_status: CandidateRunStatus,
     pub survived_required_gates: bool,
     pub ranking_score: Option<f64>,
-    pub build_elapsed_nanos: u128,
-    pub build_time_per_vector_nanos: f64,
+    pub campaign_elapsed_nanos: u128,
+    pub campaign_time_per_vector_nanos: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -336,6 +336,7 @@ pub fn run_section4_suite(
 
     let mut profile_reports = Vec::with_capacity(manifest.generated_profiles.len());
     for generated in &manifest.generated_profiles {
+        validate_profile_id(&generated.profile_id)?;
         let profile_contents =
             std::fs::read_to_string(&generated.profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -383,8 +384,8 @@ pub fn run_section4_suite(
                 run_status: status,
                 survived_required_gates: survived,
                 ranking_score,
-                build_elapsed_nanos: elapsed,
-                build_time_per_vector_nanos: elapsed as f64
+                campaign_elapsed_nanos: elapsed,
+                campaign_time_per_vector_nanos: elapsed as f64
                     / generated.evaluated_entity_count as f64,
             });
         }
@@ -419,11 +420,11 @@ pub fn render_section4_suite_scorecard(report: &Section4SuiteRunReport) -> Strin
         ));
         for candidate in &profile.candidate_reports {
             lines.push(format!(
-                "  candidate {}: {:?}, survived={}, build_time_per_vector_nanos={:.3}",
+                "  candidate {}: {:?}, survived={}, campaign_time_per_vector_nanos={:.3}",
                 candidate.candidate_id,
                 candidate.run_status,
                 candidate.survived_required_gates,
-                candidate.build_time_per_vector_nanos
+                candidate.campaign_time_per_vector_nanos
             ));
         }
     }
@@ -503,8 +504,27 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite must declare at least one profile".into(),
         ));
     }
+    let mut seen_profile_ids = HashSet::new();
     for profile in &spec.profiles {
         validate_profile_id(&profile.profile_id)?;
+        if profile.corpus_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "profile {} must declare a non-empty corpus_id",
+                profile.profile_id
+            )));
+        }
+        if profile.scale_tier_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "profile {} must declare a non-empty scale_tier_id",
+                profile.profile_id
+            )));
+        }
+        if !seen_profile_ids.insert(profile.profile_id.as_str()) {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite declares duplicate profile_id {:?}",
+                profile.profile_id
+            )));
+        }
         let real_entity_count = match &profile.source {
             Section4ProfileSourceSpec::Synthetic {
                 real_entity_count, ..
@@ -803,6 +823,11 @@ fn compute_ground_truth(
 }
 
 fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f64, EvaluatorError> {
+    if left.len() != right.len() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "cosine ground-truth generation requires equal dimensions".into(),
+        ));
+    }
     let mut dot = 0.0f64;
     let mut left_norm = 0.0f64;
     let mut right_norm = 0.0f64;
@@ -1128,4 +1153,21 @@ pub fn resolve_registered_candidates(
         registered.push(candidate);
     }
     Ok(registered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cosine_distance;
+    use crate::EvaluatorError;
+
+    #[test]
+    fn cosine_distance_rejects_dimension_mismatch() {
+        let result = cosine_distance(&[1.0, 2.0], &[1.0]);
+
+        assert!(matches!(
+            result,
+            Err(EvaluatorError::InvalidConfiguration(message))
+                if message.contains("equal dimensions")
+        ));
+    }
 }

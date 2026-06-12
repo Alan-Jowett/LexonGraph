@@ -1642,9 +1642,9 @@ fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() 
             .iter()
             .all(
                 |profile| profile.candidate_reports.iter().all(|candidate| candidate
-                    .build_time_per_vector_nanos
+                    .campaign_time_per_vector_nanos
                     .is_finite()
-                    && candidate.build_time_per_vector_nanos > 0.0)
+                    && candidate.campaign_time_per_vector_nanos > 0.0)
             )
     );
 }
@@ -1764,6 +1764,60 @@ fn regression_section4_suite_rejects_unsafe_profile_ids() {
     let spec = section4_suite_spec(vec![strict_synthetic_profile("../escape", "unsafe", 4)]);
 
     let result = generate_section4_suite_assets(&spec, output_dir.path());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("profile_id"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_duplicate_profile_ids_and_empty_ids() {
+    let output_dir = tempdir().unwrap();
+    let mut duplicate = strict_synthetic_profile("duplicate-id", "corpus-a", 4);
+    duplicate.scale_tier_id = "n-4".into();
+    let spec = section4_suite_spec(vec![
+        strict_synthetic_profile("duplicate-id", "corpus-b", 4),
+        duplicate,
+    ]);
+
+    let duplicate_result = generate_section4_suite_assets(&spec, output_dir.path());
+
+    assert!(
+        matches!(duplicate_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate profile_id"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut empty_fields = strict_synthetic_profile("valid-id", "corpus-a", 4);
+    empty_fields.corpus_id = "   ".into();
+    let empty_corpus_result =
+        generate_section4_suite_assets(&section4_suite_spec(vec![empty_fields]), output_dir.path());
+    assert!(
+        matches!(empty_corpus_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty corpus_id"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut empty_tier = strict_synthetic_profile("valid-id", "corpus-a", 4);
+    empty_tier.scale_tier_id = "".into();
+    let empty_tier_result =
+        generate_section4_suite_assets(&section4_suite_spec(vec![empty_tier]), output_dir.path());
+    assert!(
+        matches!(empty_tier_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty scale_tier_id"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_unsafe_profile_ids_in_manifests() {
+    let asset_dir = tempdir().unwrap();
+    let report_dir = tempdir().unwrap();
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("safe-id", "safe-corpus", 4)]);
+    let mut manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
+    manifest.generated_profiles[0].profile_id = "..\\escape".into();
+
+    let result = run_section4_suite(
+        &manifest,
+        &balanced_and_skewed_candidates()[..1],
+        report_dir.path(),
+    );
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("profile_id"))
