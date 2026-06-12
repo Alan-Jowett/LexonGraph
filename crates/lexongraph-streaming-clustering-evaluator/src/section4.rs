@@ -49,6 +49,22 @@ pub enum Section4CorpusFamily {
     NearDuplicateHeavy,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Section4HarvestEmbeddingAdmissibility {
+    FiniteF32MatchingSuiteDimensions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Section4HarvestSubsetSelection {
+    SortByEntityIdTakeFirst,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section4HarvestPolicy {
+    pub embedding_admissibility: Section4HarvestEmbeddingAdmissibility,
+    pub subset_selection: Section4HarvestSubsetSelection,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source_kind", rename_all = "kebab-case")]
 pub enum Section4ProfileSourceSpec {
@@ -61,6 +77,7 @@ pub enum Section4ProfileSourceSpec {
         family: Section4CorpusFamily,
         source: BlockStoreCorpusReference,
         entity_id_metadata_key: String,
+        harvesting_policy: Section4HarvestPolicy,
         real_entity_count: usize,
         alignment_policy: AlignmentPolicy,
     },
@@ -115,6 +132,7 @@ pub struct Section4GeneratedProfile {
     pub harvested_source_id: Option<String>,
     pub harvested_source_root_block_id: Option<String>,
     pub harvested_entity_id_metadata_key: Option<String>,
+    pub harvested_policy: Option<Section4HarvestPolicy>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -188,15 +206,17 @@ pub fn generate_section4_suite_assets(
         let family = profile_spec.source.family().clone();
         let alignment_policy = profile_spec.source.alignment_policy().clone();
         let harvested_source_metadata = match &profile_spec.source {
-            Section4ProfileSourceSpec::Synthetic { .. } => (None, None, None),
+            Section4ProfileSourceSpec::Synthetic { .. } => (None, None, None, None),
             Section4ProfileSourceSpec::Harvested {
                 source,
                 entity_id_metadata_key,
+                harvesting_policy,
                 ..
             } => (
                 Some(source.source_id.clone()),
                 Some(source.root_block_id.clone()),
                 Some(entity_id_metadata_key.clone()),
+                Some(harvesting_policy.clone()),
             ),
         };
         let real_entities = materialize_real_entities(profile_spec, spec)?;
@@ -221,6 +241,15 @@ pub fn generate_section4_suite_assets(
         let training_reference =
             clone_reference_with_source_id(&corpus_reference, &training_source_id);
         let probe_reference = clone_reference_with_source_id(&corpus_reference, &probe_source_id);
+        let stored_corpus_relative_path = PathBuf::from("..")
+            .join("corpora")
+            .join(format!("{}.zip", profile_spec.profile_id));
+        let stored_corpus_reference =
+            clone_reference_with_store_path(&corpus_reference, &stored_corpus_relative_path);
+        let stored_training_reference =
+            clone_reference_with_source_id(&stored_corpus_reference, &training_source_id);
+        let stored_probe_reference =
+            clone_reference_with_source_id(&stored_corpus_reference, &probe_source_id);
 
         let locality_ground_truth = compute_ground_truth(
             &real_entities,
@@ -267,9 +296,31 @@ pub fn generate_section4_suite_assets(
             reproducibility: spec.reproducibility.clone(),
         };
         let profile_path = profiles_dir.join(format!("{}.json", profile_spec.profile_id));
+        let mut stored_profile = profile.clone();
+        stored_profile.training_passes = vec![TrainingPassSource::BlockStore {
+            corpus: stored_training_reference,
+            batch_size: spec.batch_size,
+        }];
+        stored_profile.probe_workloads = vec![ProbeWorkload {
+            workload_id: format!("{}-probes", profile_spec.profile_id),
+            source: EmbeddingWorkloadSource::BlockStore {
+                corpus: stored_probe_reference,
+            },
+        }];
+        stored_profile.evaluation_entities = EvaluationEntitySource::BlockStore {
+            corpora: vec![BlockStoreEvaluationCorpus {
+                corpus_id: profile_spec.corpus_id.clone(),
+                corpus: clone_reference_with_source_id(
+                    &stored_corpus_reference,
+                    &evaluation_source_id,
+                ),
+                entity_id_metadata_key: "entity_id".into(),
+                synthetic_metadata_key: Some("synthetic".into()),
+            }],
+        };
         std::fs::write(
             &profile_path,
-            serde_json::to_string_pretty(&profile)
+            serde_json::to_string_pretty(&stored_profile)
                 .map_err(|error| EvaluatorError::Json(error.to_string()))?,
         )
         .map_err(|error| {
@@ -296,6 +347,7 @@ pub fn generate_section4_suite_assets(
             harvested_source_id: harvested_source_metadata.0,
             harvested_source_root_block_id: harvested_source_metadata.1,
             harvested_entity_id_metadata_key: harvested_source_metadata.2,
+            harvested_policy: harvested_source_metadata.3,
         });
     }
 
@@ -304,9 +356,24 @@ pub fn generate_section4_suite_assets(
         generated_profiles,
     };
     let manifest_path = output_dir.join("section4-suite-manifest.json");
+    let stored_manifest = Section4SuiteManifest {
+        suite_id: manifest.suite_id.clone(),
+        generated_profiles: manifest
+            .generated_profiles
+            .iter()
+            .cloned()
+            .map(|mut profile| {
+                profile.profile_path =
+                    PathBuf::from("profiles").join(format!("{}.json", profile.profile_id));
+                profile.corpus_archive_path =
+                    PathBuf::from("corpora").join(format!("{}.zip", profile.profile_id));
+                profile
+            })
+            .collect(),
+    };
     std::fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest)
+        serde_json::to_string_pretty(&stored_manifest)
             .map_err(|error| EvaluatorError::Json(error.to_string()))?,
     )
     .map_err(|error| {
@@ -349,6 +416,14 @@ pub fn run_section4_suite(
             })?;
         let profile: BenchmarkProfile = serde_json::from_str(&profile_contents)
             .map_err(|error| EvaluatorError::Json(error.to_string()))?;
+        let mut profile = profile;
+        let profile_base_dir = generated.profile_path.parent().ok_or_else(|| {
+            EvaluatorError::InvalidConfiguration(format!(
+                "generated profile path {} has no parent directory",
+                generated.profile_path.display()
+            ))
+        })?;
+        resolve_profile_block_store_paths(&mut profile, profile_base_dir);
         validate_profile(&profile)?;
 
         let mut timings = HashMap::new();
@@ -509,6 +584,12 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite neighbor_count must be positive".into(),
         ));
     }
+    if spec.neighbor_count != 10 {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite neighbor_count must be exactly 10 for the checked-in section-4 contract"
+                .into(),
+        ));
+    }
     if spec.profiles.is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-4 suite must declare at least one profile".into(),
@@ -604,11 +685,13 @@ fn materialize_real_entities(
         Section4ProfileSourceSpec::Harvested {
             source,
             entity_id_metadata_key,
+            harvesting_policy,
             real_entity_count,
             ..
         } => harvest_real_entities(
             source,
             entity_id_metadata_key,
+            harvesting_policy,
             profile_spec.corpus_id.as_str(),
             *real_entity_count,
             suite_spec.dimensions,
@@ -678,6 +761,7 @@ fn generate_synthetic_entities(
 fn harvest_real_entities(
     source: &BlockStoreCorpusReference,
     entity_id_metadata_key: &str,
+    harvesting_policy: &Section4HarvestPolicy,
     corpus_id: &str,
     count: usize,
     dimensions: usize,
@@ -714,12 +798,16 @@ fn harvest_real_entities(
                 &format!("harvested source {} block {}", source.source_id, record.block_id),
             )
             .map_err(EvaluatorError::InvalidConfiguration)?;
-            validate_embedding(&embedding, dimensions).map_err(|error| {
-                EvaluatorError::InvalidConfiguration(format!(
-                    "harvested source {} block {} failed embedding validation: {error}",
-                    source.source_id, record.block_id
-                ))
-            })?;
+            match harvesting_policy.embedding_admissibility {
+                Section4HarvestEmbeddingAdmissibility::FiniteF32MatchingSuiteDimensions => {
+                    validate_embedding(&embedding, dimensions).map_err(|error| {
+                        EvaluatorError::InvalidConfiguration(format!(
+                            "harvested source {} block {} failed embedding validation: {error}",
+                            source.source_id, record.block_id
+                        ))
+                    })?;
+                }
+            }
             Ok(EvaluationEntity {
                 entity_id,
                 corpus_id: corpus_id.into(),
@@ -729,7 +817,11 @@ fn harvest_real_entities(
         })
         .collect::<Result<Vec<_>, _>>()?;
     entities.retain(|entity| !entity.synthetic);
-    entities.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+    match harvesting_policy.subset_selection {
+        Section4HarvestSubsetSelection::SortByEntityIdTakeFirst => {
+            entities.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+        }
+    }
     if entities.len() < count {
         return Err(EvaluatorError::InvalidConfiguration(format!(
             "harvested source {} contains only {} real entities, requested {}",
@@ -1091,6 +1183,58 @@ fn clone_reference_with_source_id(
         source_id: source_id.into(),
         root_block_id: reference.root_block_id.clone(),
         store: reference.store.clone(),
+    }
+}
+
+fn clone_reference_with_store_path(
+    reference: &BlockStoreCorpusReference,
+    store_path: &Path,
+) -> BlockStoreCorpusReference {
+    let store = match &reference.store {
+        BlockStoreReferenceStore::Filesystem { .. } => BlockStoreReferenceStore::Filesystem {
+            store_root: store_path.to_path_buf(),
+        },
+        BlockStoreReferenceStore::ZipArchive { .. } => BlockStoreReferenceStore::ZipArchive {
+            archive_path: store_path.to_path_buf(),
+        },
+    };
+    BlockStoreCorpusReference {
+        source_id: reference.source_id.clone(),
+        root_block_id: reference.root_block_id.clone(),
+        store,
+    }
+}
+
+fn resolve_profile_block_store_paths(profile: &mut BenchmarkProfile, base_dir: &Path) {
+    for pass in &mut profile.training_passes {
+        if let TrainingPassSource::BlockStore { corpus, .. } = pass {
+            resolve_corpus_reference_paths(corpus, base_dir);
+        }
+    }
+    for workload in &mut profile.probe_workloads {
+        if let EmbeddingWorkloadSource::BlockStore { corpus } = &mut workload.source {
+            resolve_corpus_reference_paths(corpus, base_dir);
+        }
+    }
+    if let EvaluationEntitySource::BlockStore { corpora } = &mut profile.evaluation_entities {
+        for corpus in corpora {
+            resolve_corpus_reference_paths(&mut corpus.corpus, base_dir);
+        }
+    }
+}
+
+fn resolve_corpus_reference_paths(reference: &mut BlockStoreCorpusReference, base_dir: &Path) {
+    match &mut reference.store {
+        BlockStoreReferenceStore::Filesystem { store_root } => {
+            if store_root.is_relative() {
+                *store_root = base_dir.join(&*store_root);
+            }
+        }
+        BlockStoreReferenceStore::ZipArchive { archive_path } => {
+            if archive_path.is_relative() {
+                *archive_path = base_dir.join(&*archive_path);
+            }
+        }
     }
 }
 

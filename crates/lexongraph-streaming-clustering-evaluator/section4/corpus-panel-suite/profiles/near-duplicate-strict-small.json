@@ -1,0 +1,330 @@
+{
+  "profile_id": "near-duplicate-strict-small",
+  "corpus_ids": [
+    "near-duplicate-small"
+  ],
+  "shared_candidate_config": {
+    "cluster_count": 6,
+    "dimensions": 2,
+    "balance_constraints": null,
+    "random_seed": 11
+  },
+  "training_passes": [
+    {
+      "source_kind": "block-store",
+      "corpus": {
+        "source_id": "near-duplicate-strict-small-training",
+        "root_block_id": "368fcb8a664da3cad6c66dfd56d99aa56b6accfa33d53f6fbc63735b2869fb61",
+        "store_kind": "zip-archive",
+        "archive_path": "../corpora/near-duplicate-strict-small.zip"
+      },
+      "batch_size": 2
+    }
+  ],
+  "probe_workloads": [
+    {
+      "workload_id": "near-duplicate-strict-small-probes",
+      "source_kind": "block-store",
+      "corpus": {
+        "source_id": "near-duplicate-strict-small-probe",
+        "root_block_id": "368fcb8a664da3cad6c66dfd56d99aa56b6accfa33d53f6fbc63735b2869fb61",
+        "store_kind": "zip-archive",
+        "archive_path": "../corpora/near-duplicate-strict-small.zip"
+      }
+    }
+  ],
+  "evaluation_entities": {
+    "source_kind": "block-store",
+    "corpora": [
+      {
+        "corpus_id": "near-duplicate-small",
+        "corpus": {
+          "source_id": "near-duplicate-strict-small-evaluation",
+          "root_block_id": "368fcb8a664da3cad6c66dfd56d99aa56b6accfa33d53f6fbc63735b2869fb61",
+          "store_kind": "zip-archive",
+          "archive_path": "../corpora/near-duplicate-strict-small.zip"
+        },
+        "entity_id_metadata_key": "entity_id",
+        "synthetic_metadata_key": "synthetic"
+      }
+    ]
+  },
+  "leaf_model": {
+    "leaf_size": 2,
+    "declared_final_cluster_count": 6,
+    "alignment_policy": "StrictAlignment"
+  },
+  "locality_ground_truth": [
+    {
+      "entity_id": "near-duplicate-small-real-000000",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000004"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000001",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000000",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000004"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000002",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000000",
+        "near-duplicate-small-real-000004"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000003",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000004",
+        "near-duplicate-small-real-000009",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000004",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000009",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000005",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000000",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000004"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000006",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000000",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000004"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000007",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000004",
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000009"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000008",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000004",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000009",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000009",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000004",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000010",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000000",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000011",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000004"
+      ]
+    },
+    {
+      "entity_id": "near-duplicate-small-real-000011",
+      "neighbor_ids": [
+        "near-duplicate-small-real-000006",
+        "near-duplicate-small-real-000001",
+        "near-duplicate-small-real-000002",
+        "near-duplicate-small-real-000007",
+        "near-duplicate-small-real-000010",
+        "near-duplicate-small-real-000005",
+        "near-duplicate-small-real-000000",
+        "near-duplicate-small-real-000003",
+        "near-duplicate-small-real-000008",
+        "near-duplicate-small-real-000004"
+      ]
+    }
+  ],
+  "compression_benchmark": {
+    "method": "ScalarQuantization8Bit",
+    "global_baseline_label": "global-real-dataset-8bit"
+  },
+  "metric_declarations": [
+    {
+      "metric_id": "same-leaf-neighborhood-coherence",
+      "label": "Same-leaf neighborhood coherence",
+      "kind": "SameLeafNeighborhoodCoherence",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-LOCALITY"
+      ],
+      "ranking_weight": 1.0
+    },
+    {
+      "metric_id": "local-compression-gain",
+      "label": "Local compression gain",
+      "kind": "LocalCompressionGain",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COMPRESSION"
+      ],
+      "ranking_weight": 0.5
+    }
+  ],
+  "gate_declarations": [
+    {
+      "gate_id": "exact-leaf-occupancy",
+      "label": "Exact leaf occupancy",
+      "kind": "ExactLeafOccupancy",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-FIXED-LEAF-SIZE"
+      ]
+    },
+    {
+      "gate_id": "complete-coverage",
+      "label": "Complete coverage",
+      "kind": "CompleteCoverage",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COVERAGE"
+      ]
+    },
+    {
+      "gate_id": "one-cluster-per-entity",
+      "label": "One cluster per entity",
+      "kind": "OneClusterPerEntity",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COVERAGE"
+      ]
+    },
+    {
+      "gate_id": "no-empty-declared-clusters",
+      "label": "No empty declared clusters",
+      "kind": "NoEmptyDeclaredClusters",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-FIXED-LEAF-SIZE"
+      ]
+    },
+    {
+      "gate_id": "deterministic-observable-results",
+      "label": "Deterministic observable results",
+      "kind": "DeterministicObservableResults",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-DETERMINISM"
+      ]
+    }
+  ],
+  "deferred_research_goals": [
+    {
+      "deferred_id": "deferred-hierarchy-routing",
+      "label": "Hierarchy routing proof",
+      "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred"
+    }
+  ],
+  "reproducibility": {
+    "seed_policy": "fixed-seed-11",
+    "software_identity": "section4-corpus-panel-v2",
+    "floating_point_profile": "ieee754-deterministic-no-fma",
+    "hardware_profile": "fixture-cpu"
+  }
+}

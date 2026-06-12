@@ -1,0 +1,93 @@
+{
+  "source_id": "repository-docs-harvest-source",
+  "description": "Repository-owned real-world sample source built from checked-in LexonGraph documentation entities.",
+  "entity_id_metadata_key": "entity_id",
+  "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
+  "subset_selection": "SortByEntityIdTakeFirst",
+  "entities": [
+    {
+      "entity_id": "01-clustering-overview",
+      "source_path": "docs/research/clustering.md",
+      "source_label": "Clustering research overview",
+      "embedding": [0.0, 0.0]
+    },
+    {
+      "entity_id": "02-section4-plan",
+      "source_path": "docs/research/clustering_plan.md",
+      "source_label": "Section 4 candidate plan",
+      "embedding": [0.2, 0.1]
+    },
+    {
+      "entity_id": "03-streaming-clustering-arch",
+      "source_path": "docs/arch/streaming-clustering.md",
+      "source_label": "Streaming clustering architecture",
+      "embedding": [0.4, -0.1]
+    },
+    {
+      "entity_id": "04-evaluator-spec-scope",
+      "source_path": "docs/specs/rust-streaming-clustering-evaluator-crate/requirements.md",
+      "source_label": "Evaluator scope requirements",
+      "embedding": [0.6, 0.2]
+    },
+    {
+      "entity_id": "05-indexing-protocol",
+      "source_path": "docs/protocol/indexing.md",
+      "source_label": "Indexing protocol",
+      "embedding": [10.0, 0.0]
+    },
+    {
+      "entity_id": "06-search-protocol",
+      "source_path": "docs/protocol/search.md",
+      "source_label": "Search protocol",
+      "embedding": [10.2, 0.1]
+    },
+    {
+      "entity_id": "07-blocks-protocol",
+      "source_path": "docs/protocol/blocks.md",
+      "source_label": "Block protocol",
+      "embedding": [10.4, -0.1]
+    },
+    {
+      "entity_id": "08-vision-overview",
+      "source_path": "docs/vision.md",
+      "source_label": "Vision overview",
+      "embedding": [10.6, 0.2]
+    },
+    {
+      "entity_id": "09-indexer-reqs",
+      "source_path": "docs/specs/rust-streaming-indexer-crate/requirements.md",
+      "source_label": "Indexer requirements",
+      "embedding": [20.0, 0.0]
+    },
+    {
+      "entity_id": "10-indexer-design",
+      "source_path": "docs/specs/rust-streaming-indexer-crate/design.md",
+      "source_label": "Indexer design",
+      "embedding": [20.2, 0.1]
+    },
+    {
+      "entity_id": "11-indexer-validation",
+      "source_path": "docs/specs/rust-streaming-indexer-crate/validation.md",
+      "source_label": "Indexer validation",
+      "embedding": [20.4, -0.1]
+    },
+    {
+      "entity_id": "12-search-reqs",
+      "source_path": "docs/specs/rust-search-crate/requirements.md",
+      "source_label": "Search requirements",
+      "embedding": [20.6, 0.2]
+    },
+    {
+      "entity_id": "13-semantic-compression",
+      "source_path": "docs/arch/semantic-compression.md",
+      "source_label": "Semantic compression architecture",
+      "embedding": [30.0, 0.0]
+    },
+    {
+      "entity_id": "14-pca-arch",
+      "source_path": "docs/arch/pca.md",
+      "source_label": "PCA architecture",
+      "embedding": [30.2, 0.1]
+    }
+  ]
+}
