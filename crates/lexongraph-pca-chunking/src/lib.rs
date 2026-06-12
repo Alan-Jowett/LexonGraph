@@ -58,6 +58,13 @@ struct SortKey {
     embedding: Embedding,
 }
 
+#[derive(Clone, Debug)]
+struct SortRecord {
+    projection_key: f32,
+    retained_coordinates: Vec<f32>,
+    embedding_index: usize,
+}
+
 impl PcaChunkingStreamingTrainer {
     pub fn new(
         config: StreamingClusteringConfig,
@@ -245,22 +252,22 @@ fn fit_pass_model(
         .truncate(params.retained_dimension_count)
         .map_err(map_pca_error)?;
     let projection_weights = projection_weights(&truncated, params.variance_exponent);
-    let sort_keys = embeddings
+    let sort_records = embeddings
         .iter()
-        .map(|embedding| {
+        .enumerate()
+        .map(|(embedding_index, embedding)| {
             let coordinates = truncated.apply(embedding).map_err(map_pca_error)?;
-            build_sort_key(
-                embedding.as_slice(),
-                coordinates,
-                projection_weights.as_slice(),
-            )
+            build_sort_record(embedding_index, coordinates, projection_weights.as_slice())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let sorted_indices = sort_indices(sort_keys.as_slice());
+    let sorted_indices = sort_indices(sort_records.as_slice(), embeddings);
     let chunk_members =
         contiguous_chunk_members(sorted_indices.as_slice(), config.cluster_count as usize)?;
-    let chunk_upper_bounds =
-        derive_chunk_upper_bounds(sort_keys.as_slice(), chunk_members.as_slice())?;
+    let chunk_upper_bounds = derive_chunk_upper_bounds(
+        sort_records.as_slice(),
+        embeddings,
+        chunk_members.as_slice(),
+    )?;
     let quality_metric = compute_quality_metric(embeddings, chunk_members.as_slice())?;
     Ok(PcaChunkingModel {
         transform: truncated,
@@ -336,28 +343,32 @@ fn scalar_projection_key(
     Ok(key)
 }
 
-fn build_sort_key(
-    embedding: &[f32],
+fn build_sort_record(
+    embedding_index: usize,
     retained_coordinates: Vec<f32>,
     weights: &[f32],
-) -> Result<SortKey, StreamingClusteringError> {
+) -> Result<SortRecord, StreamingClusteringError> {
     let projection_key = scalar_projection_key(retained_coordinates.as_slice(), weights)?;
-    Ok(SortKey {
+    Ok(SortRecord {
         projection_key,
         retained_coordinates,
-        embedding: embedding.to_vec(),
+        embedding_index,
     })
 }
 
-fn sort_indices(sort_keys: &[SortKey]) -> Vec<usize> {
-    let mut keyed = sort_keys.iter().enumerate().collect::<Vec<_>>();
+fn sort_indices(sort_records: &[SortRecord], embeddings: &[Embedding]) -> Vec<usize> {
+    let mut keyed = sort_records.iter().enumerate().collect::<Vec<_>>();
     keyed.sort_by(|left, right| {
-        compare_sort_keys(left.1, right.1).then_with(|| left.0.cmp(&right.0))
+        compare_sort_records(left.1, right.1, embeddings).then_with(|| left.0.cmp(&right.0))
     });
     keyed.into_iter().map(|(index, _)| index).collect()
 }
 
-fn compare_sort_keys(left: &SortKey, right: &SortKey) -> std::cmp::Ordering {
+fn compare_sort_records(
+    left: &SortRecord,
+    right: &SortRecord,
+    embeddings: &[Embedding],
+) -> std::cmp::Ordering {
     left.projection_key
         .total_cmp(&right.projection_key)
         .then_with(|| {
@@ -366,7 +377,12 @@ fn compare_sort_keys(left: &SortKey, right: &SortKey) -> std::cmp::Ordering {
                 right.retained_coordinates.as_slice(),
             )
         })
-        .then_with(|| compare_f32_slices(left.embedding.as_slice(), right.embedding.as_slice()))
+        .then_with(|| {
+            compare_f32_slices(
+                embeddings[left.embedding_index].as_slice(),
+                embeddings[right.embedding_index].as_slice(),
+            )
+        })
 }
 
 fn compare_sort_key_parts(
@@ -424,7 +440,8 @@ fn contiguous_chunk_members(
 }
 
 fn derive_chunk_upper_bounds(
-    sort_keys: &[SortKey],
+    sort_records: &[SortRecord],
+    embeddings: &[Embedding],
     chunk_members: &[Vec<usize>],
 ) -> Result<Vec<SortKey>, StreamingClusteringError> {
     let mut upper_bounds = Vec::with_capacity(chunk_members.len().saturating_sub(1));
@@ -435,18 +452,26 @@ fn derive_chunk_upper_bounds(
         let right_min = pair[1].first().copied().ok_or_else(|| {
             unsatisfiable_constraint("chunk boundary encountered an empty right chunk")
         })?;
-        let left_key = sort_keys.get(left_max).ok_or_else(|| {
-            malformed_input(format!("sorted member index {left_max} is out of range"))
+        let left_key = sort_records.get(left_max).ok_or_else(|| {
+            malformed_input(format!(
+                "chunk boundary item index {left_max} is out of range"
+            ))
         })?;
-        let right_key = sort_keys.get(right_min).ok_or_else(|| {
-            malformed_input(format!("sorted member index {right_min} is out of range"))
+        let right_key = sort_records.get(right_min).ok_or_else(|| {
+            malformed_input(format!(
+                "chunk boundary item index {right_min} is out of range"
+            ))
         })?;
-        if compare_sort_keys(left_key, right_key).is_eq() {
+        if compare_sort_records(left_key, right_key, embeddings).is_eq() {
             return Err(unsatisfiable_constraint(
                 "exact chunking would split identical classifier sort keys across a boundary",
             ));
         }
-        upper_bounds.push(left_key.clone());
+        upper_bounds.push(SortKey {
+            projection_key: left_key.projection_key,
+            retained_coordinates: left_key.retained_coordinates.clone(),
+            embedding: embeddings[left_key.embedding_index].clone(),
+        });
     }
     Ok(upper_bounds)
 }

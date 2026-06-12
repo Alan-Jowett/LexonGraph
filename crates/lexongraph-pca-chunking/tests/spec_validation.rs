@@ -223,7 +223,7 @@ fn val_pca_chunk_006_execution_path_uses_pca_and_contiguous_sort_chunking() {
     .unwrap();
     assert!(source.contains("use lexongraph_pca"));
     assert!(source.contains("fit("));
-    assert!(source.contains("compare_sort_keys"));
+    assert!(source.contains("compare_sort_key_parts"));
     assert!(source.contains("partition_point"));
 }
 

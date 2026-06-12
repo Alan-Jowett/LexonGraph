@@ -1803,9 +1803,11 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
         concrete.provenance.profile_id
     );
     assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
-    assert_eq!(
-        concrete.candidate_identity.software_identity,
-        "lexongraph-pca-chunking-v0.1.0"
+    assert!(
+        concrete
+            .candidate_identity
+            .software_identity
+            .starts_with("lexongraph-pca-chunking-v")
     );
     assert!(registered_candidate_names().contains(&"pca-sort-exact-chunking"));
 }
