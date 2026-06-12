@@ -71,6 +71,9 @@ The crate shall expose a deterministic adaptive planning-policy configuration
 and selector surface consumable by the streaming indexer's built-in planning
 path.
 
+Within this specification package, `adaptive realization` refers to that
+selector surface together with its internal deterministic switch logic.
+
 This selector surface shall remain internal to built-in planning selection rather
 than introducing a caller-visible interactive "choose the next algorithm after
 each layer" lifecycle.

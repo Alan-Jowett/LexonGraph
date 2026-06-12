@@ -51,6 +51,10 @@ contract.
 The crate exposes one adaptive planning-policy settings and selector surface
 intended for the streaming indexer's built-in planning-selection surface.
 
+Within this specification package, later references to the `adaptive
+realization` mean this selector surface together with its internal
+deterministic switch logic.
+
 The caller chooses the adaptive mode up front; the crate then owns the
 algorithm-switch logic internally rather than requiring a caller-driven
 per-layer conversation.
