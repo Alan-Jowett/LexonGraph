@@ -99,6 +99,10 @@ The projection-key sort order shall be deterministic.
 Projected-value ties shall be resolved through a documented total-order rule
 whose final tie-break preserves pass dataset order.
 
+If exact chunking would otherwise split fully identical classifier sort keys
+across a chunk boundary, the crate shall fail explicitly rather than claim a
+classifier boundary model that cannot reproduce the trained membership.
+
 ### REQ-PCA-CHUNK-009
 
 Low-rank, duplicate-heavy, or tied-projection completed passes shall not by

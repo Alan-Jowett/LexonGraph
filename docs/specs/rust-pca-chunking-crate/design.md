@@ -82,10 +82,18 @@ corresponding explained variance raised to the configured variance exponent.
 The pass realization deterministically sorts embeddings by:
 
 1. scalar projection key
-2. original pass dataset order as the final tie-break
+2. retained PCA coordinates under lexicographic comparison
+3. the original embedding values under lexicographic comparison
+4. original pass dataset order as the final tie-break
 
 This ordering remains valid even when many embeddings share equal projection
 keys because the pass-order tie-break defines a total order.
+
+The classifier boundary model is defined only over the reproducible portion of
+that ordering. If exact chunking would require splitting members whose
+classifier sort keys remain fully identical after removing pass-order position,
+the crate fails explicitly instead of learning a boundary the classifier cannot
+replay.
 
 ### DSG-PCA-CHUNK-007 `Exact contiguous chunk formation`
 
@@ -116,8 +124,9 @@ a classifier that reuses:
 - the learned scalar chunk boundaries
 
 The classifier maps valid embeddings into `[0, K)` by computing the same scalar
-projection key and applying the learned boundary thresholds. Boundary ties are
-resolved toward the earliest matching chunk.
+projection key plus the same classifier-visible lexicographic tie-break fields
+and applying the learned chunk upper bounds. Boundary ties are resolved toward
+the earliest matching chunk.
 
 ### DSG-PCA-CHUNK-010 `Pass reports`
 

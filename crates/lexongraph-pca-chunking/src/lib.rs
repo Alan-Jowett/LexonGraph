@@ -41,7 +41,7 @@ pub struct PcaChunkingStreamingClassifier {
 struct PcaChunkingModel {
     transform: PcaTransform,
     projection_weights: Vec<f32>,
-    chunk_boundaries: Vec<f32>,
+    chunk_upper_bounds: Vec<SortKey>,
     quality_metric: f64,
 }
 
@@ -49,6 +49,13 @@ struct PcaChunkingModel {
 struct PassFingerprint {
     observed_count: usize,
     digest: [u8; 32],
+}
+
+#[derive(Clone, Debug)]
+struct SortKey {
+    projection_key: f32,
+    retained_coordinates: Vec<f32>,
+    embedding: Embedding,
 }
 
 impl PcaChunkingStreamingTrainer {
@@ -208,14 +215,15 @@ impl StreamingClusterClassifier for PcaChunkingStreamingClassifier {
             .transform
             .apply(embedding)
             .map_err(map_pca_error)?;
-        let projection_key = scalar_projection_key(
-            coordinates.as_slice(),
+        let sort_key = build_sort_key(
+            embedding,
+            coordinates,
             self.model.projection_weights.as_slice(),
         )?;
         let cluster_index = self
             .model
-            .chunk_boundaries
-            .partition_point(|boundary| projection_key > *boundary);
+            .chunk_upper_bounds
+            .partition_point(|upper_bound| compare_sort_keys(&sort_key, upper_bound).is_gt());
         Ok(cluster_index as ClusterId)
     }
 }
@@ -230,20 +238,27 @@ fn fit_pass_model(
         .truncate(params.retained_dimension_count)
         .map_err(map_pca_error)?;
     let projection_weights = projection_weights(&truncated, params.variance_exponent);
-    let coordinates = embeddings
+    let sort_keys = embeddings
         .iter()
-        .map(|embedding| truncated.apply(embedding).map_err(map_pca_error))
+        .map(|embedding| {
+            let coordinates = truncated.apply(embedding).map_err(map_pca_error)?;
+            build_sort_key(
+                embedding.as_slice(),
+                coordinates,
+                projection_weights.as_slice(),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let sorted_indices = sort_indices_by_projection_key(&coordinates, &projection_weights)?;
+    let sorted_indices = sort_indices(sort_keys.as_slice());
     let chunk_members =
         contiguous_chunk_members(sorted_indices.as_slice(), config.cluster_count as usize)?;
-    let chunk_boundaries =
-        derive_chunk_boundaries(&coordinates, &projection_weights, chunk_members.as_slice())?;
+    let chunk_upper_bounds =
+        derive_chunk_upper_bounds(sort_keys.as_slice(), chunk_members.as_slice())?;
     let quality_metric = compute_quality_metric(embeddings, chunk_members.as_slice())?;
     Ok(PcaChunkingModel {
         transform: truncated,
         projection_weights,
-        chunk_boundaries,
+        chunk_upper_bounds,
         quality_metric,
     })
 }
@@ -314,23 +329,45 @@ fn scalar_projection_key(
     Ok(key)
 }
 
-fn sort_indices_by_projection_key(
-    coordinates: &[Vec<f32>],
+fn build_sort_key(
+    embedding: &[f32],
+    retained_coordinates: Vec<f32>,
     weights: &[f32],
-) -> Result<Vec<usize>, StreamingClusteringError> {
-    let mut keyed = coordinates
-        .iter()
-        .enumerate()
-        .map(|(index, coordinate)| {
-            scalar_projection_key(coordinate.as_slice(), weights).map(|key| (index, key))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+) -> Result<SortKey, StreamingClusteringError> {
+    let projection_key = scalar_projection_key(retained_coordinates.as_slice(), weights)?;
+    Ok(SortKey {
+        projection_key,
+        retained_coordinates,
+        embedding: embedding.to_vec(),
+    })
+}
+
+fn sort_indices(sort_keys: &[SortKey]) -> Vec<usize> {
+    let mut keyed = sort_keys.iter().enumerate().collect::<Vec<_>>();
     keyed.sort_by(|left, right| {
-        left.1
-            .total_cmp(&right.1)
-            .then_with(|| left.0.cmp(&right.0))
+        compare_sort_keys(left.1, right.1).then_with(|| left.0.cmp(&right.0))
     });
-    Ok(keyed.into_iter().map(|(index, _)| index).collect())
+    keyed.into_iter().map(|(index, _)| index).collect()
+}
+
+fn compare_sort_keys(left: &SortKey, right: &SortKey) -> std::cmp::Ordering {
+    left.projection_key
+        .total_cmp(&right.projection_key)
+        .then_with(|| {
+            compare_f32_slices(
+                left.retained_coordinates.as_slice(),
+                right.retained_coordinates.as_slice(),
+            )
+        })
+        .then_with(|| compare_f32_slices(left.embedding.as_slice(), right.embedding.as_slice()))
+}
+
+fn compare_f32_slices(left: &[f32], right: &[f32]) -> std::cmp::Ordering {
+    left.iter()
+        .zip(right.iter())
+        .map(|(lhs, rhs)| lhs.total_cmp(rhs))
+        .find(|ordering| !ordering.is_eq())
+        .unwrap_or_else(|| left.len().cmp(&right.len()))
 }
 
 fn contiguous_chunk_members(
@@ -362,12 +399,11 @@ fn contiguous_chunk_members(
     Ok(chunks)
 }
 
-fn derive_chunk_boundaries(
-    coordinates: &[Vec<f32>],
-    weights: &[f32],
+fn derive_chunk_upper_bounds(
+    sort_keys: &[SortKey],
     chunk_members: &[Vec<usize>],
-) -> Result<Vec<f32>, StreamingClusteringError> {
-    let mut boundaries = Vec::with_capacity(chunk_members.len().saturating_sub(1));
+) -> Result<Vec<SortKey>, StreamingClusteringError> {
+    let mut upper_bounds = Vec::with_capacity(chunk_members.len().saturating_sub(1));
     for pair in chunk_members.windows(2) {
         let left_max = pair[0].last().copied().ok_or_else(|| {
             unsatisfiable_constraint("chunk boundary encountered an empty left chunk")
@@ -375,17 +411,20 @@ fn derive_chunk_boundaries(
         let right_min = pair[1].first().copied().ok_or_else(|| {
             unsatisfiable_constraint("chunk boundary encountered an empty right chunk")
         })?;
-        let left_key = scalar_projection_key(coordinates[left_max].as_slice(), weights)?;
-        let right_key = scalar_projection_key(coordinates[right_min].as_slice(), weights)?;
-        let boundary = ((f64::from(left_key) + f64::from(right_key)) / 2.0) as f32;
-        if !boundary.is_finite() {
+        let left_key = sort_keys.get(left_max).ok_or_else(|| {
+            malformed_input(format!("sorted member index {left_max} is out of range"))
+        })?;
+        let right_key = sort_keys.get(right_min).ok_or_else(|| {
+            malformed_input(format!("sorted member index {right_min} is out of range"))
+        })?;
+        if compare_sort_keys(left_key, right_key).is_eq() {
             return Err(unsatisfiable_constraint(
-                "chunk boundary became non-finite during PCA chunking",
+                "exact chunking would split identical classifier sort keys across a boundary",
             ));
         }
-        boundaries.push(boundary);
+        upper_bounds.push(left_key.clone());
     }
-    Ok(boundaries)
+    Ok(upper_bounds)
 }
 
 fn compute_quality_metric(

@@ -223,7 +223,7 @@ fn val_pca_chunk_006_execution_path_uses_pca_and_contiguous_sort_chunking() {
     .unwrap();
     assert!(source.contains("use lexongraph_pca"));
     assert!(source.contains("fit("));
-    assert!(source.contains("sort_by"));
+    assert!(source.contains("compare_sort_keys"));
     assert!(source.contains("partition_point"));
 }
 
@@ -277,15 +277,34 @@ fn val_pca_chunk_009_duplicate_heavy_inputs_remain_deterministic() {
     let mut run_b = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
     let duplicate_batch = vec![
         vec![1.0, 1.0],
-        vec![1.0, 1.0],
-        vec![1.0, 1.0],
-        vec![1.0, 1.0],
+        vec![1.0, 1.05],
+        vec![1.05, 1.0],
+        vec![1.05, 1.05],
     ];
     run_a.ingest_batch(duplicate_batch.as_slice()).unwrap();
     run_b.ingest_batch(duplicate_batch.as_slice()).unwrap();
     let report_a = run_a.finish_pass().unwrap();
     let report_b = run_b.finish_pass().unwrap();
     assert_eq!(report_a, report_b);
+}
+
+#[test]
+fn regression_exact_identical_embeddings_that_cross_a_boundary_fail_explicitly() {
+    let mut trainer = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
+    trainer
+        .ingest_batch(&[
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+        ])
+        .unwrap();
+
+    assert!(matches!(
+        trainer.finish_pass(),
+        Err(StreamingClusteringError::UnsatisfiableConstraint { message })
+            if message.contains("identical classifier sort keys")
+    ));
 }
 
 #[test]

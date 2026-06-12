@@ -102,6 +102,16 @@ repeated identical executions remain observable-identical.
 
 **Traces to:** REQ-PCA-CHUNK-008, REQ-PCA-CHUNK-009, REQ-PCA-CHUNK-013
 
+### VAL-PCA-CHUNK-009A
+
+Use a fixture where exact chunking would split fully identical classifier sort
+keys across a chunk boundary.
+
+**Pass condition:** the crate fails explicitly rather than claiming a classifier
+boundary model that cannot replay the trained membership.
+
+**Traces to:** REQ-PCA-CHUNK-008, REQ-PCA-CHUNK-014
+
 ### VAL-PCA-CHUNK-010
 
 Inspect pass reports across repeated identical runs.

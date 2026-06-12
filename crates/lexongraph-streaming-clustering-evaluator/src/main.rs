@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lexongraph_streaming_clustering_evaluator::{
     BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
-    built_in_fixture_candidate_names, emit_campaign_artifacts, generate_section4_suite_assets,
+    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
     resolve_profile_block_store_paths, resolve_registered_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
     run_evaluation_campaign, run_section4_suite, write_campaign_artifacts,
@@ -22,8 +22,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// List the built-in fixture candidates that this executable can run.
-    ListFixtureCandidates,
+    /// List the registered candidates that this executable can run.
+    #[command(alias = "list-fixture-candidates")]
+    ListCandidates,
     /// Run one benchmark profile against one or more registered candidates.
     Run {
         #[arg(long, value_name = "PATH")]
@@ -60,8 +61,8 @@ fn main() {
 
 fn run() -> Result<(), EvaluatorError> {
     match Cli::parse().command {
-        Command::ListFixtureCandidates => {
-            for candidate in built_in_fixture_candidate_names() {
+        Command::ListCandidates => {
+            for candidate in registered_candidate_names() {
                 println!("{candidate}");
             }
             Ok(())
