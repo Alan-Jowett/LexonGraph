@@ -11,7 +11,8 @@ block-storage contract using volatile in-memory residency.
 
 These validation entries define the expected verification surface for the
 memory-backed implementation in addition to the parent protocol, block, and
-block-store trait requirements it depends on.
+block-store trait requirements it depends on, including the overlay
+notification semantics layered in from `docs/specs/rust-overlay-block-store/`.
 
 ## Validation Entries
 
@@ -134,8 +135,11 @@ contract.
 Inspect the implementation's public and behavioral boundary.
 
 **Pass condition:** the crate exposes a standalone volatile backend with
-optional overlay read-population support, but does not claim durable lower-layer
-write propagation.
+optional overlay read-population support, remains subordinate to
+`docs/protocol/blocks.md`, `docs/specs/rust-block-crate/`,
+`docs/specs/rust-block-storage-trait/`, and
+`docs/specs/rust-overlay-block-store/` for their owned concerns, and does not
+claim durable lower-layer write propagation.
 
-**Traces to:** REQ-MEM-STORE-004, REQ-MEM-STORE-010, REQ-MEM-STORE-011,
-REQ-MEM-STORE-012
+**Traces to:** REQ-MEM-STORE-002, REQ-MEM-STORE-004, REQ-MEM-STORE-010,
+REQ-MEM-STORE-011, REQ-MEM-STORE-012

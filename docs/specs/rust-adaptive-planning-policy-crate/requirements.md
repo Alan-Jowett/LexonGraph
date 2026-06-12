@@ -4,9 +4,9 @@
 
 ## Status
 
-Draft specification for a Rust crate that composes streaming directional PCA and
-streaming DCBC behind one deterministic adaptive built-in planning realization
-for the LexonGraph streaming indexer.
+Draft specification for a Rust crate that defines adaptive planning-policy
+settings, deterministic switch selection, and structured diagnostics for the
+LexonGraph streaming indexer's adaptive built-in planning path.
 
 ## Scope
 
@@ -14,11 +14,12 @@ This document specifies the crate-level requirements for a Rust crate that:
 
 - defines an adaptive aggregate planning-policy crate at
   `crates/lexongraph-adaptive-planning-policy`
-- composes `docs/specs/rust-directional-pca-crate/` and
+- depends on and selects between the realizations specified by
+  `docs/specs/rust-directional-pca-crate/` and
   `docs/specs/rust-dcbc-streaming-crate/`
 - is consumed by `docs/specs/rust-streaming-indexer-crate/` as one built-in
-  planning realization
-- starts planning with directional PCA and switches deterministically to DCBC
+  adaptive planning-policy input
+- selects directional PCA first and later switches deterministically to DCBC
   when configured PCA-collapse criteria are met
 
 This document does not redefine the shared streaming clustering contract, block
@@ -66,10 +67,11 @@ algorithm-specific mechanics already owned by those subordinate crates.
 
 ### REQ-ADAPTIVE-POLICY-003
 
-The crate shall expose a deterministic aggregate planning realization or factory
-consumable by the streaming indexer's built-in planning path.
+The crate shall expose a deterministic adaptive planning-policy configuration
+and selector surface consumable by the streaming indexer's built-in planning
+path.
 
-This realization shall remain internal to built-in planning selection rather
+This selector surface shall remain internal to built-in planning selection rather
 than introducing a caller-visible interactive "choose the next algorithm after
 each layer" lifecycle.
 
@@ -84,7 +86,7 @@ The adaptive policy configuration shall accept, at minimum:
 
 ### REQ-ADAPTIVE-POLICY-005
 
-For each adaptive planning flow, the realization shall begin with the streaming
+For each adaptive planning flow, the selector shall begin with the streaming
 directional-PCA path before any switch to DCBC is considered.
 
 ### REQ-ADAPTIVE-POLICY-006
@@ -129,11 +131,12 @@ realization.
 
 ### REQ-ADAPTIVE-POLICY-011
 
-The adaptive realization shall preserve compatibility with the indexer's
-existing finalized partition hierarchy abstraction.
+The adaptive planning-policy crate shall preserve compatibility with the
+indexer's existing finalized partition hierarchy abstraction.
 
-Both its pre-switch directional-PCA output and post-switch DCBC output shall be
-normalized into that same hierarchy abstraction before final materialization.
+Its selected active-algorithm outputs and structured diagnostics shall be
+consumable by indexer-owned planning and normalization logic without requiring a
+different finalized partition hierarchy or final materialization contract.
 
 ### REQ-ADAPTIVE-POLICY-012
 
@@ -160,14 +163,15 @@ substituting a different algorithm, threshold interpretation, or direction.
 
 The repository shall include automated verification artifacts covering:
 
-- construction of the adaptive realization through the intended built-in path
+- construction of the adaptive selector surface with the intended settings model
 - deterministic no-switch directional-PCA behavior
 - deterministic PCA-to-DCBC switch behavior
 - deterministic switch-boundary reproduction
 - deterministic below-threshold and above-threshold mean-cluster-radius
   behavior using a current threshold assumption of `0.25`
 - support for both `Divisive` and `Agglomerative` direction modes
-- compatibility with the existing finalized partition hierarchy abstraction
+- deterministic structured diagnostics compatible with the indexer's existing
+  finalized partition hierarchy abstraction
 
 ## Out of Scope
 
