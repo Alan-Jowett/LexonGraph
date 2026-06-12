@@ -24,14 +24,15 @@ use lexongraph_streaming_clustering::{
 use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
     CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
-    DeferredMeasurementStatus, EmbeddingWorkloadSource, EvaluationEntitySource, EvaluatorError,
-    FsOverlayZipBlockStore, GateStatus, Section4CorpusFamily,
-    Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
-    Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
-    Section4SuiteSpec, SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    generate_section4_suite_assets, registered_candidate_names, resolve_registered_candidates,
-    run_evaluation_campaign, run_section4_suite, write_section4_suite_artifacts,
+    DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
+    EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus,
+    Section4CorpusFamily, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
+    Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
+    Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, SharedBalanceConstraints,
+    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
+    write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -881,9 +882,7 @@ fn val_stream_eval_018_deferred_hierarchy_and_search_goals_remain_explicitly_def
     .unwrap();
 
     let reason = &report.run_reports[0].deferred_research_goals[0].reason;
-    assert!(reason.contains("outside the leaf-stage evaluator boundary"));
-    assert!(reason.contains("staged leaf-stage evidence toward docs/research/clustering.md"));
-    assert!(reason.contains("future end-to-end evaluator"));
+    assert_eq!(reason, DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON);
 }
 
 #[test]
