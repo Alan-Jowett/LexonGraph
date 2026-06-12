@@ -10,6 +10,8 @@
 //! provenance, leaf-membership scoring, and scorecard generation without
 //! broadening the shared streaming clustering trainer/classifier contract.
 
+mod section4;
+
 #[cfg(test)]
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -33,6 +35,15 @@ use lexongraph_streaming_clustering::{
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+
+pub use section4::{
+    Section4CorpusFamily, Section4GeneratedProfile, Section4MetricContract,
+    Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
+    Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport, Section4SuiteRunProfileReport,
+    Section4SuiteRunReport, Section4SuiteSpec, generate_section4_suite_assets,
+    render_section4_suite_scorecard, resolve_registered_candidates, run_section4_suite,
+    write_section4_suite_artifacts,
+};
 
 pub type PassPlan = Vec<Vec<Embedding>>;
 
@@ -150,8 +161,44 @@ pub struct BlockStoreCorpusReference {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "store_kind", rename_all = "kebab-case")]
 pub enum BlockStoreReferenceStore {
-    Filesystem { store_root: PathBuf },
-    ZipArchive { archive_path: PathBuf },
+    Filesystem {
+        #[serde(serialize_with = "serialize_portable_pathbuf")]
+        store_root: PathBuf,
+    },
+    ZipArchive {
+        #[serde(serialize_with = "serialize_portable_pathbuf")]
+        archive_path: PathBuf,
+    },
+}
+
+pub(crate) fn normalize_cross_platform_path(path: impl AsRef<str>) -> PathBuf {
+    let raw = path.as_ref();
+    if cfg!(windows) || !raw.contains('\\') || raw.contains('/') || has_windows_drive_prefix(raw) {
+        return PathBuf::from(raw);
+    }
+    PathBuf::from(raw.replace('\\', std::path::MAIN_SEPARATOR_STR))
+}
+
+pub(crate) fn deserialize_cross_platform_pathbuf<'de, D>(
+    deserializer: D,
+) -> Result<PathBuf, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(normalize_cross_platform_path(raw))
+}
+
+pub(crate) fn serialize_portable_pathbuf<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&path.to_string_lossy().replace('\\', "/"))
+}
+
+fn has_windows_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'\\' && bytes[0].is_ascii_alphabetic()
 }
 
 impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
@@ -174,6 +221,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct LegacyFilesystem {
+            #[serde(deserialize_with = "deserialize_cross_platform_pathbuf")]
             store_root: PathBuf,
         }
 
@@ -181,6 +229,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         struct TaggedFilesystem {
             #[serde(rename = "store_kind")]
             _store_kind: FilesystemTag,
+            #[serde(deserialize_with = "deserialize_cross_platform_pathbuf")]
             store_root: PathBuf,
         }
 
@@ -188,6 +237,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
         struct TaggedZipArchive {
             #[serde(rename = "store_kind")]
             _store_kind: ZipArchiveTag,
+            #[serde(deserialize_with = "deserialize_cross_platform_pathbuf")]
             archive_path: PathBuf,
         }
 
@@ -2017,10 +2067,10 @@ fn evaluation_source_label(source: &EvaluationEntitySource) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct LoadedLeafRecord {
-    block_id: BlockHash,
-    embedding_spec: EmbeddingSpec,
-    entry: LeafEntry,
+pub(crate) struct LoadedLeafRecord {
+    pub(crate) block_id: BlockHash,
+    pub(crate) embedding_spec: EmbeddingSpec,
+    pub(crate) entry: LeafEntry,
 }
 
 enum ResolvedCorpusStore {
@@ -2121,7 +2171,7 @@ fn load_evaluation_entities_from_reference(
         .collect()
 }
 
-fn load_leaf_records(
+pub(crate) fn load_leaf_records(
     reference: &BlockStoreCorpusReference,
 ) -> Result<Vec<LoadedLeafRecord>, CandidateExecutionError> {
     let root_block_id = parse_block_hash_hex(&reference.root_block_id)
@@ -2242,7 +2292,7 @@ fn required_metadata_text(
     }
 }
 
-fn required_metadata_bool(
+pub(crate) fn required_metadata_bool(
     metadata: &Metadata,
     key: &str,
     source_id: &str,
@@ -2261,7 +2311,7 @@ fn required_metadata_bool(
     }
 }
 
-fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue> {
+pub(crate) fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue> {
     metadata
         .iter()
         .find_map(|(candidate, value)| match candidate {
@@ -2270,7 +2320,7 @@ fn metadata_value<'a>(metadata: &'a Metadata, key: &str) -> Option<&'a CborValue
         })
 }
 
-fn decode_embedding_to_f32(
+pub(crate) fn decode_embedding_to_f32(
     bytes: &[u8],
     spec: &EmbeddingSpec,
     context: &str,
@@ -2341,7 +2391,7 @@ fn checked_embedding_byte_len(
     })
 }
 
-fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
+pub(crate) fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
     if value.len() != BlockHash::LEN * 2 {
         return Err(format!(
             "expected a {}-character hex block id, found {} characters",
@@ -3090,7 +3140,7 @@ mod tests {
         assert_eq!(
             parsed,
             super::BlockStoreReferenceStore::ZipArchive {
-                archive_path: PathBuf::from(r"C:\archive.zip"),
+                archive_path: super::normalize_cross_platform_path(r"C:\archive.zip"),
             }
         );
     }

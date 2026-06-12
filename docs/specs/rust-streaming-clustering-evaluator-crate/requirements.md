@@ -383,6 +383,105 @@ If doing so reduces implementation duplication without widening the parent
 `BlockStore` API, the repository may expose a reusable helper or constructor for
 the mutable-filesystem-over-immutable-zip overlay used by the evaluator.
 
+### REQ-STREAM-EVAL-031
+
+The repository shall define a reproducible section-4 benchmark-suite workflow
+for the streaming clustering evaluator that can materialize the benchmark
+profiles and supporting assets needed to compare candidate leaf-partition
+strategies under the shared evaluator boundary.
+
+The suite shall also declare the metric contract and fixed neighborhood size
+used for exact-neighbor ground-truth generation and same-leaf locality scoring.
+
+This suite remains leaf-stage only: it prepares and executes comparative
+leaf-formation campaigns and does not claim to validate hierarchy construction,
+parent summaries, persisted routing, or full end-to-end index conformance.
+
+### REQ-STREAM-EVAL-032
+
+The section-4 benchmark suite shall realize a repository-owned corpus panel
+whose benchmark identities trace to the research-plan corpus families relevant
+to leaf-stage comparison:
+
+- a real-world sample corpus harvested from repository-approved source data
+- a well-clustered synthetic corpus
+- a weak-cluster or uniform synthetic corpus
+- an anisotropic or manifold synthetic corpus
+- a near-duplicate-heavy corpus
+- deterministic size-scaled subsets where scalability assessment is required
+
+For each family used by the suite, the repository shall declare the corpus
+identity, construction or harvesting policy, and any scale-tier identities used
+for repeated comparisons.
+
+### REQ-STREAM-EVAL-033
+
+For benchmark corpora used in section-4 locality evaluation, the repository
+shall define deterministic exact-neighbor ground-truth assets computed from the
+benchmark entities under the benchmark-declared metric contract.
+
+These ground-truth assets shall:
+
+- identify the corpus identity and scale tier to which they apply
+- exclude synthetic padding entities from externally reported locality scoring
+- remain reproducible from the benchmark corpus contents and the declared metric
+  configuration
+
+### REQ-STREAM-EVAL-034
+
+The section-4 benchmark suite shall support deterministic harvesting of a
+real-world benchmark corpus from repository-approved block-store-backed source
+data, including deterministic extraction of embeddings, entity identities, and
+scale-tier subsets used for comparative leaf-stage campaigns.
+
+The harvesting policy shall define:
+
+- the source identity and root block ID or equivalent source locator
+- the entity-identity extraction contract
+- the embedding extraction and admissibility contract
+- the deterministic subset-selection rule used for any size-scaled variants
+
+### REQ-STREAM-EVAL-035
+
+Large benchmark corpora managed by the repository for section-4 execution shall
+be stored in the git tree as `.zip` assets and consumed directly through the
+evaluator's zip-archive-backed corpus-source path without requiring a
+pre-decompression step.
+
+Any writable layer needed to satisfy block-store semantics remains
+evaluator-managed temporary state rather than a user-prepared extracted corpus
+tree.
+
+### REQ-STREAM-EVAL-036
+
+The section-4 benchmark suite shall define a leaf-stage screening workflow that
+executes each compared candidate against the same corpus-panel profiles and
+reports, at minimum:
+
+- exact leaf-size compliance and related leaf-stage invariant gates
+- repeated-run observable determinism
+- same-leaf neighborhood coherence over exact-neighbor ground truth
+- local-versus-global compression gain
+- strict-alignment and deterministic-synthetic-padding outcomes where both are
+  applicable to the evaluated corpus family
+
+The resulting comparative outputs shall be sufficient to down-select candidate
+leaf strategies for later hierarchy-stage work without claiming hierarchy-stage
+proof.
+
+### REQ-STREAM-EVAL-037
+
+For section-4 benchmark executions, the evaluator shall report leaf-stage
+build-cost measurements sufficient to compare candidate strategies across corpus
+scale tiers.
+
+At minimum, this revision shall support deterministic reporting of:
+
+- corpus size or evaluated entity count
+- scale-tier identity
+- build time per vector or an equivalent normalized leaf-stage build-cost
+  measure declared by the benchmark suite
+
 ## Out of Scope
 
 This crate does not define or own:
