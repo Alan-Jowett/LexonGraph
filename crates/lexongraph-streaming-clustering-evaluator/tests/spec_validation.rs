@@ -7,6 +7,7 @@ use ciborium::value::Value as CborValue;
 use std::fs;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lexongraph_block::{
@@ -310,11 +311,13 @@ struct HarvestedFixtureRecord {
 }
 
 fn unique_section4_store_root(prefix: &str) -> std::path::PathBuf {
+    static NEXT_UNIQUE_SUFFIX: AtomicU64 = AtomicU64::new(0);
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+    let counter = NEXT_UNIQUE_SUFFIX.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("{prefix}-{unique}-{counter}"));
     fs::create_dir_all(&path).unwrap();
     path
 }
