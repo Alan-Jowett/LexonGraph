@@ -13,6 +13,9 @@ use lexongraph_streaming_clustering::{
 };
 use sha2::{Digest, Sha256};
 
+pub const DIRECTIONAL_PCA_SOFTWARE_IDENTITY: &str =
+    concat!("lexongraph-directional-pca-v", env!("CARGO_PKG_VERSION"));
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaParams {
     pub retained_dimension_count: usize,

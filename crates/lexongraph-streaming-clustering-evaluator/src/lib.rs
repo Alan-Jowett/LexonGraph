@@ -28,6 +28,10 @@ use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
 use lexongraph_block_store_zip::{ZipBlockStore, ZipBlockStoreInitError};
+use lexongraph_dcbc_streaming::{DCBC_STREAMING_SOFTWARE_IDENTITY, DcbcStreamingTrainer};
+use lexongraph_directional_pca::{
+    DIRECTIONAL_PCA_SOFTWARE_IDENTITY, DirectionalPcaParams, DirectionalPcaStreamingTrainer,
+};
 use lexongraph_pca_chunking::{
     PCA_CHUNKING_SOFTWARE_IDENTITY, PcaChunkingParams, PcaChunkingStreamingTrainer,
 };
@@ -2783,7 +2787,20 @@ pub fn built_in_fixture_candidate_names() -> Vec<&'static str> {
 pub fn registered_candidate_names() -> Vec<&'static str> {
     let mut names = built_in_fixture_candidate_names();
     names.push("pca-sort-exact-chunking");
+    names.push("directional-pca");
+    names.push("dcbc-streaming");
     names
+}
+
+fn default_directional_pca_params() -> DirectionalPcaParams {
+    DirectionalPcaParams {
+        retained_dimension_count: 1,
+        variance_exponent: 1.0,
+        temperature: 1.0,
+        min_input_count: 2,
+        min_effective_rank: 1,
+        min_cumulative_variance: 0.0,
+    }
 }
 
 pub fn built_in_fixture_candidate(name: &str) -> Option<RegisteredCandidate> {
@@ -2844,6 +2861,27 @@ pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
                     },
                 )
             },
+        )),
+        "directional-pca" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "directional-pca".into(),
+                implementation_label: "Repository-owned directional PCA clustering".into(),
+                software_identity: DIRECTIONAL_PCA_SOFTWARE_IDENTITY.into(),
+            },
+            |config| {
+                DirectionalPcaStreamingTrainer::new(
+                    config.clone(),
+                    default_directional_pca_params(),
+                )
+            },
+        )),
+        "dcbc-streaming" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "dcbc-streaming".into(),
+                implementation_label: "Repository-owned streaming DCBC clustering".into(),
+                software_identity: DCBC_STREAMING_SOFTWARE_IDENTITY.into(),
+            },
+            |config| DcbcStreamingTrainer::new(config.clone()),
         )),
         _ => None,
     })

@@ -1536,6 +1536,8 @@ dependencies = [
  "lexongraph-block-store-fs",
  "lexongraph-block-store-overlay",
  "lexongraph-block-store-zip",
+ "lexongraph-dcbc-streaming",
+ "lexongraph-directional-pca",
  "lexongraph-pca-chunking",
  "lexongraph-streaming-clustering",
  "serde",

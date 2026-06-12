@@ -18,13 +18,13 @@ use lexongraph_streaming_clustering::{
     StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_embedding,
 };
 use lexongraph_streaming_clustering_evaluator::{
-    AlignmentPolicy, BlockStoreReferenceStore, CampaignReport, CandidateIdentity,
+    AlignmentPolicy, BenchmarkProfile, BlockStoreReferenceStore, CampaignReport, CandidateIdentity,
     CandidateRunStatus, CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus,
     EmbeddingWorkloadSource, EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore,
     GateStatus, Section4CorpusFamily, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
     Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
-    Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, StructuredFailure,
-    TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, SharedBalanceConstraints,
+    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
     emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
     resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
     write_section4_suite_artifacts,
@@ -222,6 +222,38 @@ fn padding_synthetic_profile(
             alignment_policy: AlignmentPolicy::DeterministicSyntheticPadding,
         },
     }
+}
+
+fn non_zero_strict_alignment_profile() -> BenchmarkProfile {
+    let mut profile = strict_alignment_profile();
+    for pass in &mut profile.training_passes {
+        if let TrainingPassSource::Inline { batches } = pass {
+            for batch in batches {
+                for embedding in batch {
+                    if embedding.iter().all(|value| *value == 0.0) {
+                        embedding[0] = 0.1;
+                    }
+                }
+            }
+        }
+    }
+    for workload in &mut profile.probe_workloads {
+        if let EmbeddingWorkloadSource::Inline { embeddings } = &mut workload.source {
+            for embedding in embeddings {
+                if embedding.iter().all(|value| *value == 0.0) {
+                    embedding[0] = 0.1;
+                }
+            }
+        }
+    }
+    if let EvaluationEntitySource::Inline { entities } = &mut profile.evaluation_entities {
+        for entity in entities {
+            if entity.embedding.iter().all(|value| *value == 0.0) {
+                entity.embedding[0] = 0.1;
+            }
+        }
+    }
+    profile
 }
 
 fn harvested_archive_reference()
@@ -1760,21 +1792,26 @@ fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() 
 }
 
 #[test]
-fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_pca_chunking_candidate()
-{
+fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_candidates() {
     let manifest = checked_in_section4_suite_manifest();
     let report_dir = tempdir().unwrap();
-    let candidates =
-        resolve_registered_candidates(&["pca-sort-exact-chunking".to_string()]).unwrap();
+    let candidate_ids = [
+        "pca-sort-exact-chunking".to_string(),
+        "directional-pca".to_string(),
+        "dcbc-streaming".to_string(),
+    ];
+    let candidates = resolve_registered_candidates(&candidate_ids).unwrap();
 
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
 
     assert_eq!(report.profile_reports.len(), 8);
     assert!(report.profile_reports.iter().all(|profile| {
-        profile
-            .candidate_reports
-            .iter()
-            .any(|candidate| candidate.candidate_id == "pca-sort-exact-chunking")
+        candidate_ids.iter().all(|candidate_id| {
+            profile
+                .candidate_reports
+                .iter()
+                .any(|candidate| &candidate.candidate_id == candidate_id)
+        })
     }));
 }
 
@@ -1783,33 +1820,132 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
     let candidates = resolve_registered_candidates(&[
         "balanced-threshold".to_string(),
         "pca-sort-exact-chunking".to_string(),
+        "directional-pca".to_string(),
+        "dcbc-streaming".to_string(),
     ])
     .unwrap();
-    let report = run_evaluation_campaign(&strict_alignment_profile(), &candidates).unwrap();
+    let report =
+        run_evaluation_campaign(&non_zero_strict_alignment_profile(), &candidates).unwrap();
 
     let fixture = report
         .run_reports
         .iter()
         .find(|run| run.candidate_identity.candidate_id == "balanced-threshold")
         .unwrap();
-    let concrete = report
-        .run_reports
-        .iter()
-        .find(|run| run.candidate_identity.candidate_id == "pca-sort-exact-chunking")
-        .unwrap();
+    let expected_identities = [
+        ("pca-sort-exact-chunking", "lexongraph-pca-chunking-v"),
+        ("directional-pca", "lexongraph-directional-pca-v"),
+        ("dcbc-streaming", "lexongraph-dcbc-streaming-v"),
+    ];
+    for (candidate_id, software_prefix) in expected_identities {
+        let concrete = report
+            .run_reports
+            .iter()
+            .find(|run| run.candidate_identity.candidate_id == candidate_id)
+            .unwrap();
+        assert_eq!(
+            fixture.provenance.profile_id,
+            concrete.provenance.profile_id
+        );
+        assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+        assert!(
+            concrete
+                .candidate_identity
+                .software_identity
+                .starts_with(software_prefix)
+        );
+        assert!(registered_candidate_names().contains(&candidate_id));
+    }
+}
 
-    assert_eq!(
-        fixture.provenance.profile_id,
-        concrete.provenance.profile_id
-    );
-    assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+#[test]
+fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_candidates() {
+    let names = registered_candidate_names();
+    assert!(names.contains(&"pca-sort-exact-chunking"));
+    assert!(names.contains(&"directional-pca"));
+    assert!(names.contains(&"dcbc-streaming"));
+
+    let binary = env!("CARGO_BIN_EXE_lexongraph-streaming-clustering-evaluator");
+    let output = ProcessCommand::new(binary)
+        .arg("list-candidates")
+        .output()
+        .unwrap();
     assert!(
-        concrete
-            .candidate_identity
-            .software_identity
-            .starts_with("lexongraph-pca-chunking-v")
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert!(registered_candidate_names().contains(&"pca-sort-exact-chunking"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("pca-sort-exact-chunking"));
+    assert!(stdout.contains("directional-pca"));
+    assert!(stdout.contains("dcbc-streaming"));
+}
+
+#[test]
+fn val_stream_eval_035_candidate_incompatibilities_are_reported_explicitly() {
+    let mut directional_profile = strict_alignment_profile();
+    directional_profile
+        .shared_candidate_config
+        .balance_constraints = Some(SharedBalanceConstraints {
+        min_cluster_occupancy: Some(1),
+        max_cluster_occupancy: None,
+        max_cluster_size_ratio: None,
+        soft_balance_penalty: None,
+    });
+    let directional_candidates =
+        resolve_registered_candidates(&["directional-pca".to_string()]).unwrap();
+    let directional_report =
+        run_evaluation_campaign(&directional_profile, &directional_candidates).unwrap();
+    let directional_run = &directional_report.run_reports[0];
+    assert_eq!(
+        directional_run.run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(matches!(
+        directional_run.terminal_failure.as_ref(),
+        Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
+            if candidate_id == "directional-pca"
+                && message.contains("balance constraints")
+    ));
+
+    let zero_norm_candidates =
+        resolve_registered_candidates(&["dcbc-streaming".to_string()]).unwrap();
+    let zero_norm_report =
+        run_evaluation_campaign(&strict_alignment_profile(), &zero_norm_candidates).unwrap();
+    let zero_norm_run = &zero_norm_report.run_reports[0];
+    assert_eq!(
+        zero_norm_run.run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(matches!(
+        zero_norm_run.terminal_failure.as_ref(),
+        Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
+            if candidate_id == "dcbc-streaming"
+                && message.contains("non-zero Euclidean norm")
+    ));
+
+    let mut unsupported_balance_profile = non_zero_strict_alignment_profile();
+    unsupported_balance_profile
+        .shared_candidate_config
+        .balance_constraints = Some(SharedBalanceConstraints {
+        min_cluster_occupancy: None,
+        max_cluster_occupancy: None,
+        max_cluster_size_ratio: Some(1.5),
+        soft_balance_penalty: None,
+    });
+    let unsupported_balance_report =
+        run_evaluation_campaign(&unsupported_balance_profile, &zero_norm_candidates).unwrap();
+    let unsupported_balance_run = &unsupported_balance_report.run_reports[0];
+    assert_eq!(
+        unsupported_balance_run.run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(matches!(
+        unsupported_balance_run.terminal_failure.as_ref(),
+        Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
+            if candidate_id == "dcbc-streaming"
+                && message.contains("max_cluster_size_ratio")
+    ));
 }
 
 #[test]

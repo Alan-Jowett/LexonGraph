@@ -12,6 +12,9 @@ use lexongraph_streaming_clustering::{
 };
 use solver::solve_lexicographic_assignment;
 
+pub const DCBC_STREAMING_SOFTWARE_IDENTITY: &str =
+    concat!("lexongraph-dcbc-streaming-v", env!("CARGO_PKG_VERSION"));
+
 pub const EPSILON: f64 = 1e-12;
 
 type DenseVectors = Vec<Vec<f64>>;
