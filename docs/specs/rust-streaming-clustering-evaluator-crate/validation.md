@@ -48,7 +48,7 @@ requiring an algorithm-specific candidate API. At least one such campaign uses
 one repository-owned reusable non-fixture candidate alongside another
 registered candidate.
 
-**Traces to:** REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-005, REQ-STREAM-EVAL-007
+**Traces to:** REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-005, REQ-STREAM-EVAL-007, REQ-STREAM-EVAL-038
 
 ### VAL-STREAM-EVAL-004
 
