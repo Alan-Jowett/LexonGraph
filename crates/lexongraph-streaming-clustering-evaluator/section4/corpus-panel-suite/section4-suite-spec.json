@@ -1,5 +1,53 @@
 {
   "suite_id": "section4-corpus-panel-v2",
+  "experiment_track_contract": {
+    "track_id": "leaf-screening-euclidean",
+    "sensitivity_leaf_sizes": [
+      2,
+      4
+    ],
+    "dimensionality_contract": {
+      "min_dimensions": 2,
+      "max_dimensions": 2,
+      "out_of_range_behavior": "deterministically reject out-of-range embedding dimensions"
+    },
+    "declared_search_target": "TNN Recall@10 >= 90% under later routing evaluation",
+    "beam_width_policy": "beam width 1 by default; 2, 4, and 8 reserved for later routing fallback studies",
+    "candidate_threading_model": "single-threaded section-4 screening",
+    "frozen_items": [
+      {
+        "item_id": "metric-family",
+        "label": "Metric family",
+        "proof_surface": "Direct"
+      },
+      {
+        "item_id": "leaf-size",
+        "label": "Primary leaf size and sensitivity sizes",
+        "proof_surface": "Direct"
+      },
+      {
+        "item_id": "compression-baseline",
+        "label": "Quantization baseline over real entities only",
+        "proof_surface": "Direct"
+      },
+      {
+        "item_id": "same-or-sibling-locality-target",
+        "label": "Same-or-sibling locality target",
+        "proof_surface": "Deferred"
+      },
+      {
+        "item_id": "routing-target",
+        "label": "Routing target and beam-width policy",
+        "proof_surface": "Deferred"
+      },
+      {
+        "item_id": "threading-reproducibility",
+        "label": "Multi-thread reproducibility obligation",
+        "proof_surface": "Deferred"
+      }
+    ]
+  },
+  "tier_growth_rule": "small-to-medium-to-large nearest practical tiers with deterministic corpus identity reuse",
   "leaf_size": 2,
   "dimensions": 2,
   "batch_size": 2,
@@ -22,6 +70,7 @@
       "profile_id": "real-world-harvested-strict-small",
       "corpus_id": "real-world-harvested-small",
       "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
       "source": {
         "source_kind": "harvested",
         "family": "RealWorldHarvested",
@@ -44,6 +93,7 @@
       "profile_id": "real-world-harvested-strict-medium",
       "corpus_id": "real-world-harvested-medium",
       "scale_tier_id": "n-14",
+      "scale_tier_kind": "Medium",
       "source": {
         "source_kind": "harvested",
         "family": "RealWorldHarvested",
@@ -66,6 +116,7 @@
       "profile_id": "well-clustered-strict-small",
       "corpus_id": "well-clustered-small",
       "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
       "source": {
         "source_kind": "synthetic",
         "family": "WellClusteredSynthetic",
@@ -77,6 +128,7 @@
       "profile_id": "well-clustered-strict-medium",
       "corpus_id": "well-clustered-medium",
       "scale_tier_id": "n-14",
+      "scale_tier_kind": "Medium",
       "source": {
         "source_kind": "synthetic",
         "family": "WellClusteredSynthetic",
@@ -88,6 +140,7 @@
       "profile_id": "weak-uniform-strict-small",
       "corpus_id": "weak-uniform-small",
       "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
       "source": {
         "source_kind": "synthetic",
         "family": "WeakClusterUniform",
@@ -99,6 +152,7 @@
       "profile_id": "anisotropic-strict-small",
       "corpus_id": "anisotropic-small",
       "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
       "source": {
         "source_kind": "synthetic",
         "family": "AnisotropicManifold",
@@ -110,6 +164,7 @@
       "profile_id": "near-duplicate-strict-small",
       "corpus_id": "near-duplicate-small",
       "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
       "source": {
         "source_kind": "synthetic",
         "family": "NearDuplicateHeavy",
@@ -121,6 +176,7 @@
       "profile_id": "near-duplicate-padding-small",
       "corpus_id": "near-duplicate-padding-small",
       "scale_tier_id": "n-11-padded",
+      "scale_tier_kind": "Small",
       "source": {
         "source_kind": "synthetic",
         "family": "NearDuplicateHeavy",

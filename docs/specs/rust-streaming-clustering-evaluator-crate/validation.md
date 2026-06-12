@@ -433,3 +433,59 @@ rejection of shared balance constraints and DCBC rejection of zero-norm
 embeddings plus unsupported shared balance settings.
 
 **Traces to:** REQ-STREAM-EVAL-041
+
+### VAL-STREAM-EVAL-036
+
+Inspect one checked-in section-4 experiment track contract together with one
+derived benchmark profile.
+
+**Pass condition:** the suite freezes the metric family, any transformed-metric
+policy, the primary `leaf_size` and any declared sensitivity sizes, the
+dimensionality contract, the alignment-policy family, the quantization or
+compression baseline policy over real entities only, any declared search-target
+threshold and beam-width policy carried forward to later routing phases, the
+declared floating-point profile, the declared candidate-threading model, and
+the declared hardware profile; the artifacts also label which of those frozen
+items are measured directly during section-4 versus deferred.
+
+**Traces to:** REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043
+
+### VAL-STREAM-EVAL-037
+
+Inspect one section-4 campaign report and its deferred-goal records.
+
+**Pass condition:** any frozen section-1 obligation that is not directly proven
+at the leaf-stage boundary is preserved as an explicit deferred record rather
+than omitted, including where applicable same-or-sibling locality targets,
+routing targets or routing assumptions, beam-width policies or related routing-
+study assumptions, bounded fanout or depth constraints, parent-summary
+obligations, serialization or persisted-artifact obligations, and multi-thread
+reproducibility obligations beyond the direct section-4 observable boundary.
+
+**Traces to:** REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-044
+
+### VAL-STREAM-EVAL-038
+
+Inspect the checked-in corpus panel and one locality-scored tiered corpus
+family.
+
+**Pass condition:** the suite defines stable small, medium, and large
+scale-tier identities or deterministic nearest-practical equivalents, declares
+the tier-growth rule for repeated comparison, ties each tier to its corpus and
+any exact-neighbor ground-truth asset, and includes at least one checked-in
+harvested real-world corpus family within that same tiered comparison surface.
+
+**Traces to:** REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045
+
+### VAL-STREAM-EVAL-039
+
+Run a section-4 campaign in which one candidate fails a hard invariant gate for
+one configuration.
+
+**Pass condition:** the evaluator stops further comparative metric evaluation
+for that candidate/configuration pair, emits deterministic failure-classified
+artifacts without presenting a success-shaped completed result for the rejected
+configuration, and the comparative outputs still identify which candidates, if
+any, survive to carry forward into later hierarchy-stage comparison.
+
+**Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046

@@ -26,13 +26,14 @@ use lexongraph_streaming_clustering_evaluator::{
     CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
     EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus,
-    Section4CorpusFamily, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
+    Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
+    Section4FrozenContractItem, Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
     Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
-    Section4ProfileSpec, Section4SuiteManifest, Section4SuiteSpec, SharedBalanceConstraints,
-    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
-    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
-    write_section4_suite_artifacts,
+    Section4ProfileSpec, Section4ProofSurface, Section4ScaleTierKind, Section4SuiteManifest,
+    Section4SuiteSpec, SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
+    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
+    generate_section4_suite_assets, registered_candidate_names, resolve_registered_candidates,
+    run_evaluation_campaign, run_section4_suite, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -171,6 +172,51 @@ fn section4_reproducibility() -> lexongraph_streaming_clustering_evaluator::Repr
 fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec {
     Section4SuiteSpec {
         suite_id: "section4-corpus-panel-suite".into(),
+        experiment_track_contract: Section4ExperimentTrackContract {
+            track_id: "leaf-screening-euclidean".into(),
+            sensitivity_leaf_sizes: vec![2, 4],
+            dimensionality_contract: Section4DimensionalityContract {
+                min_dimensions: 2,
+                max_dimensions: 2,
+                out_of_range_behavior: "deterministically reject out-of-range embedding dimensions".into(),
+            },
+            declared_search_target: Some("TNN Recall@10 >= 90% under later routing evaluation".into()),
+            beam_width_policy: Some("beam width 1 by default; 2, 4, and 8 reserved for later routing fallback studies".into()),
+            candidate_threading_model: "single-threaded section-4 screening".into(),
+            frozen_items: vec![
+                Section4FrozenContractItem {
+                    item_id: "metric-family".into(),
+                    label: "Metric family".into(),
+                    proof_surface: Section4ProofSurface::Direct,
+                },
+                Section4FrozenContractItem {
+                    item_id: "leaf-size".into(),
+                    label: "Primary leaf size and sensitivity sizes".into(),
+                    proof_surface: Section4ProofSurface::Direct,
+                },
+                Section4FrozenContractItem {
+                    item_id: "compression-baseline".into(),
+                    label: "Quantization baseline over real entities only".into(),
+                    proof_surface: Section4ProofSurface::Direct,
+                },
+                Section4FrozenContractItem {
+                    item_id: "same-or-sibling-locality-target".into(),
+                    label: "Same-or-sibling locality target".into(),
+                    proof_surface: Section4ProofSurface::Deferred,
+                },
+                Section4FrozenContractItem {
+                    item_id: "routing-target".into(),
+                    label: "Routing target and beam-width policy".into(),
+                    proof_surface: Section4ProofSurface::Deferred,
+                },
+                Section4FrozenContractItem {
+                    item_id: "threading-reproducibility".into(),
+                    label: "Multi-thread reproducibility obligation".into(),
+                    proof_surface: Section4ProofSurface::Deferred,
+                },
+            ],
+        },
+        tier_growth_rule: "small-to-medium-to-large nearest practical tiers with deterministic corpus identity reuse".into(),
         leaf_size: 2,
         dimensions: 2,
         batch_size: 2,
@@ -204,6 +250,7 @@ fn strict_synthetic_profile(
         profile_id: profile_id.into(),
         corpus_id: corpus_id.into(),
         scale_tier_id: format!("n-{real_entity_count}"),
+        scale_tier_kind: Section4ScaleTierKind::Small,
         source: Section4ProfileSourceSpec::Synthetic {
             family: Section4CorpusFamily::WellClusteredSynthetic,
             real_entity_count,
@@ -221,6 +268,7 @@ fn padding_synthetic_profile(
         profile_id: profile_id.into(),
         corpus_id: corpus_id.into(),
         scale_tier_id: format!("n-{real_entity_count}"),
+        scale_tier_kind: Section4ScaleTierKind::Small,
         source: Section4ProfileSourceSpec::Synthetic {
             family: Section4CorpusFamily::NearDuplicateHeavy,
             real_entity_count,
@@ -409,6 +457,7 @@ fn harvested_profile(
         profile_id: profile_id.into(),
         corpus_id: corpus_id.into(),
         scale_tier_id: format!("n-{real_entity_count}"),
+        scale_tier_kind: Section4ScaleTierKind::Small,
         source: Section4ProfileSourceSpec::Harvested {
             family: Section4CorpusFamily::RealWorldHarvested,
             source,
@@ -1544,6 +1593,17 @@ fn val_stream_eval_025_section4_suite_materializes_reproducible_leaf_stage_asset
         manifest.generated_profiles[0].metric_contract,
         Section4MetricContract::Euclidean
     );
+    assert_eq!(
+        manifest.experiment_track_contract.track_id,
+        "leaf-screening-euclidean"
+    );
+    assert!(
+        manifest
+            .experiment_track_contract
+            .frozen_items
+            .iter()
+            .any(|item| item.proof_surface == Section4ProofSurface::Deferred)
+    );
     let profile: lexongraph_streaming_clustering_evaluator::BenchmarkProfile =
         serde_json::from_str(
             &fs::read_to_string(&manifest.generated_profiles[0].profile_path).unwrap(),
@@ -1560,6 +1620,10 @@ fn val_stream_eval_025_section4_suite_materializes_reproducible_leaf_stage_asset
         goal.research_goal_ids
             .iter()
             .any(|goal_id| goal_id == "RG-HIERARCHY")
+    }));
+    assert!(profile.deferred_research_goals.iter().any(|goal| {
+        goal.deferred_id == "deferred-threading-reproducibility"
+            && goal.reason.contains("1-thread versus N-thread")
     }));
 }
 
@@ -1598,6 +1662,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             profile_id: "harvested-tier".into(),
             corpus_id: "real-world-tier".into(),
             scale_tier_id: "n-4".into(),
+            scale_tier_kind: Section4ScaleTierKind::Small,
             source: Section4ProfileSourceSpec::Harvested {
                 family: Section4CorpusFamily::RealWorldHarvested,
                 source: harvested_source,
@@ -1611,6 +1676,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             profile_id: "clustered-tier".into(),
             corpus_id: "clustered-tier".into(),
             scale_tier_id: "n-4".into(),
+            scale_tier_kind: Section4ScaleTierKind::Small,
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::WellClusteredSynthetic,
                 real_entity_count: 12,
@@ -1621,6 +1687,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             profile_id: "weak-tier".into(),
             corpus_id: "weak-tier".into(),
             scale_tier_id: "n-4".into(),
+            scale_tier_kind: Section4ScaleTierKind::Small,
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::WeakClusterUniform,
                 real_entity_count: 12,
@@ -1631,6 +1698,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             profile_id: "manifold-tier".into(),
             corpus_id: "manifold-tier".into(),
             scale_tier_id: "n-4".into(),
+            scale_tier_kind: Section4ScaleTierKind::Small,
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::AnisotropicManifold,
                 real_entity_count: 12,
@@ -1641,6 +1709,7 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             profile_id: "duplicates-tier".into(),
             corpus_id: "duplicates-tier".into(),
             scale_tier_id: "n-12".into(),
+            scale_tier_kind: Section4ScaleTierKind::Medium,
             source: Section4ProfileSourceSpec::Synthetic {
                 family: Section4CorpusFamily::NearDuplicateHeavy,
                 real_entity_count: 12,
@@ -1668,6 +1737,12 @@ fn val_stream_eval_026_section4_suite_covers_required_corpus_families_and_scale_
             .iter()
             .all(|profile| !profile.profile_id.trim().is_empty()
                 && !profile.scale_tier_id.trim().is_empty())
+    );
+    assert!(
+        manifest
+            .generated_profiles
+            .iter()
+            .all(|profile| !profile.tier_growth_rule.trim().is_empty())
     );
 }
 
@@ -1721,6 +1796,7 @@ fn val_stream_eval_028_harvesting_is_deterministic_and_preserves_source_identity
         profile_id: "harvested-tier".into(),
         corpus_id: "real-world-tier".into(),
         scale_tier_id: "n-4".into(),
+        scale_tier_kind: Section4ScaleTierKind::Small,
         source: Section4ProfileSourceSpec::Harvested {
             family: Section4CorpusFamily::RealWorldHarvested,
             source: harvested_source.clone(),
@@ -1807,6 +1883,7 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
             profile_id: "harvested-tier".into(),
             corpus_id: "real-world-tier".into(),
             scale_tier_id: "n-12".into(),
+            scale_tier_kind: Section4ScaleTierKind::Medium,
             source: Section4ProfileSourceSpec::Harvested {
                 family: Section4CorpusFamily::RealWorldHarvested,
                 source: harvested_archive_reference(),
@@ -1867,19 +1944,24 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
                 .any(|gate| gate.gate_id == "exact-leaf-occupancy")
         }));
         assert!(campaign.run_reports.iter().any(|run| {
-            run.metric_results
-                .iter()
-                .any(|metric| metric.metric_id == "same-leaf-neighborhood-coherence")
-        }));
-        assert!(campaign.run_reports.iter().any(|run| {
-            run.metric_results
-                .iter()
-                .any(|metric| metric.metric_id == "local-compression-gain")
-        }));
-        assert!(campaign.run_reports.iter().any(|run| {
             run.gate_results
                 .iter()
                 .any(|gate| gate.gate_id == "deterministic-observable-results")
+        }));
+        assert!(campaign.run_reports.iter().all(|run| {
+            let hard_gate_failed = matches!(
+                &run.terminal_failure,
+                Some(StructuredFailure::GateFailure { gate_id, .. })
+                    if matches!(
+                        gate_id.as_str(),
+                        "exact-leaf-occupancy"
+                            | "complete-coverage"
+                            | "one-cluster-per-entity"
+                            | "no-empty-declared-clusters"
+                            | "deterministic-observable-results"
+                    )
+            );
+            !hard_gate_failed || (run.metric_results.is_empty() && run.ranking_score.is_none())
         }));
     }
 }
@@ -1888,10 +1970,10 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
 fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() {
     let asset_dir = tempdir().unwrap();
     let report_dir = tempdir().unwrap();
-    let spec = section4_suite_spec(vec![
-        strict_synthetic_profile("tier-small", "clustered-small", 12),
-        strict_synthetic_profile("tier-medium", "clustered-medium", 14),
-    ]);
+    let small = strict_synthetic_profile("tier-small", "clustered-small", 12);
+    let mut medium = strict_synthetic_profile("tier-medium", "clustered-medium", 14);
+    medium.scale_tier_kind = Section4ScaleTierKind::Medium;
+    let spec = section4_suite_spec(vec![small, medium]);
 
     let manifest = generate_section4_suite_assets(&spec, asset_dir.path()).unwrap();
     let report = run_section4_suite(
@@ -1920,6 +2002,129 @@ fn val_stream_eval_031_section4_reports_scale_tiers_and_build_time_per_vector() 
                     && candidate.campaign_time_per_vector_nanos > 0.0)
             )
     );
+}
+
+#[test]
+fn val_stream_eval_036_section4_track_contract_freezes_declared_direct_and_deferred_items() {
+    let spec = section4_suite_spec(vec![strict_synthetic_profile("freeze-check", "freeze", 12)]);
+
+    assert_eq!(
+        spec.experiment_track_contract.track_id,
+        "leaf-screening-euclidean"
+    );
+    assert!(
+        spec.experiment_track_contract
+            .sensitivity_leaf_sizes
+            .contains(&spec.leaf_size)
+    );
+    assert_eq!(
+        spec.experiment_track_contract
+            .dimensionality_contract
+            .min_dimensions,
+        spec.dimensions
+    );
+    assert!(
+        spec.experiment_track_contract
+            .frozen_items
+            .iter()
+            .any(|item| item.item_id == "metric-family"
+                && item.proof_surface == Section4ProofSurface::Direct)
+    );
+    assert!(
+        spec.experiment_track_contract
+            .frozen_items
+            .iter()
+            .any(|item| item.item_id == "routing-target"
+                && item.proof_surface == Section4ProofSurface::Deferred)
+    );
+}
+
+#[test]
+fn val_stream_eval_037_section4_profiles_preserve_explicit_deferred_obligations() {
+    let output_dir = tempdir().unwrap();
+    let manifest = generate_section4_suite_assets(
+        &section4_suite_spec(vec![strict_synthetic_profile(
+            "deferred-check",
+            "deferred",
+            12,
+        )]),
+        output_dir.path(),
+    )
+    .unwrap();
+    let profile: lexongraph_streaming_clustering_evaluator::BenchmarkProfile =
+        serde_json::from_str(
+            &fs::read_to_string(&manifest.generated_profiles[0].profile_path).unwrap(),
+        )
+        .unwrap();
+
+    let deferred_ids = profile
+        .deferred_research_goals
+        .iter()
+        .map(|goal| goal.deferred_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(deferred_ids.contains(&"deferred-same-or-sibling-locality"));
+    assert!(deferred_ids.contains(&"deferred-hierarchy-routing"));
+    assert!(deferred_ids.contains(&"deferred-bounded-tree-shape"));
+    assert!(deferred_ids.contains(&"deferred-parent-summaries"));
+    assert!(deferred_ids.contains(&"deferred-persistence-roundtrip"));
+    assert!(deferred_ids.contains(&"deferred-threading-reproducibility"));
+}
+
+#[test]
+fn val_stream_eval_038_section4_generated_profiles_preserve_tier_kind_and_growth_rule() {
+    let output_dir = tempdir().unwrap();
+    let small = strict_synthetic_profile("tier-small", "clustered-small", 12);
+    let mut medium = strict_synthetic_profile("tier-medium", "clustered-medium", 14);
+    medium.scale_tier_kind = Section4ScaleTierKind::Medium;
+    let manifest = generate_section4_suite_assets(
+        &section4_suite_spec(vec![small, medium]),
+        output_dir.path(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        manifest.generated_profiles[0].scale_tier_kind,
+        Section4ScaleTierKind::Small
+    );
+    assert_eq!(
+        manifest.generated_profiles[1].scale_tier_kind,
+        Section4ScaleTierKind::Medium
+    );
+    assert!(manifest.generated_profiles.iter().all(|profile| {
+        profile.experiment_track_id == "leaf-screening-euclidean"
+            && profile
+                .tier_growth_rule
+                .contains("small-to-medium-to-large")
+    }));
+}
+
+#[test]
+fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
+    let asset_dir = tempdir().unwrap();
+    let report_dir = tempdir().unwrap();
+    let manifest = generate_section4_suite_assets(
+        &section4_suite_spec(vec![strict_synthetic_profile(
+            "survivor-check",
+            "survivor",
+            12,
+        )]),
+        asset_dir.path(),
+    )
+    .unwrap();
+    let report = run_section4_suite(
+        &manifest,
+        &balanced_and_skewed_candidates(),
+        report_dir.path(),
+    )
+    .unwrap();
+
+    let profile = &report.profile_reports[0];
+    assert!(profile.survivor_candidate_ids.is_empty());
+    assert!(profile.candidate_reports.iter().any(|candidate| {
+        candidate.candidate_id == "skewed-gate-fail"
+            && candidate.run_status == CandidateRunStatus::GateFailed
+            && !candidate.survived_required_gates
+    }));
 }
 
 #[test]
@@ -2173,6 +2378,14 @@ fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
     assert_eq!(suite_spec.neighbor_count, 10);
     assert_eq!(suite_spec.profiles.len(), 8);
     assert_eq!(manifest.generated_profiles.len(), suite_spec.profiles.len());
+    assert!(
+        !suite_spec
+            .experiment_track_contract
+            .track_id
+            .trim()
+            .is_empty()
+    );
+    assert!(!suite_spec.tier_growth_rule.trim().is_empty());
     assert!(!manifest_contents.contains("\\\\"));
     assert!(
         suite_spec
@@ -2206,12 +2419,19 @@ fn regression_checked_in_section4_suite_assets_run_successfully() {
     .unwrap();
 
     assert_eq!(report.suite_id, "section4-corpus-panel-v2");
+    assert_eq!(report.experiment_track_id, "leaf-screening-euclidean");
     assert_eq!(report.profile_reports.len(), 8);
     assert!(
         report
             .profile_reports
             .iter()
             .all(|profile| !profile.candidate_reports.is_empty())
+    );
+    assert!(
+        report
+            .profile_reports
+            .iter()
+            .all(|profile| profile.survivor_candidate_ids.len() <= profile.candidate_reports.len())
     );
     assert!(
         report_dir
@@ -2417,6 +2637,40 @@ fn regression_section4_suite_rejects_empty_suite_and_zero_controls() {
         generate_section4_suite_assets(&section4_suite_spec(vec![]), output_dir.path());
     assert!(
         matches!(empty_profiles_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("at least one profile"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_malformed_frozen_contract_items() {
+    let output_dir = tempdir().unwrap();
+    let mut empty_item_id =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    empty_item_id.experiment_track_contract.frozen_items[0].item_id = "   ".into();
+    let empty_item_id_result = generate_section4_suite_assets(&empty_item_id, output_dir.path());
+    assert!(
+        matches!(empty_item_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty item_id"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut empty_label =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    empty_label.experiment_track_contract.frozen_items[0].label = "".into();
+    let empty_label_result = generate_section4_suite_assets(&empty_label, output_dir.path());
+    assert!(
+        matches!(empty_label_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty label"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut duplicate_item_id =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    duplicate_item_id.experiment_track_contract.frozen_items[1].item_id =
+        duplicate_item_id.experiment_track_contract.frozen_items[0]
+            .item_id
+            .clone();
+    let duplicate_item_id_result =
+        generate_section4_suite_assets(&duplicate_item_id, output_dir.path());
+    assert!(
+        matches!(duplicate_item_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate frozen benchmark-contract item_id"))
     );
 }
 

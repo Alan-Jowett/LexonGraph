@@ -44,14 +44,16 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 pub use section4::{
-    Section4CorpusFamily, Section4GeneratedProfile, Section4HarvestEmbeddingAdmissibility,
+    Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
+    Section4FrozenContractItem, Section4GeneratedProfile, Section4HarvestEmbeddingAdmissibility,
     Section4HarvestPolicy, Section4HarvestSubsetSelection, Section4MetricContract,
-    Section4ProfileSourceSpec, Section4ProfileSpec, Section4SuiteManifest,
-    Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport, Section4SuiteRunProfileReport,
-    Section4SuiteRunReport, Section4SuiteSpec, generate_section4_suite_assets,
-    render_section4_suite_scorecard, resolve_profile_block_store_paths,
-    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
-    resolve_section4_suite_spec_paths, run_section4_suite, write_section4_suite_artifacts,
+    Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface, Section4ScaleTierKind,
+    Section4SuiteManifest, Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport,
+    Section4SuiteRunProfileReport, Section4SuiteRunReport, Section4SuiteSpec,
+    generate_section4_suite_assets, render_section4_suite_scorecard,
+    resolve_profile_block_store_paths, resolve_registered_candidates,
+    resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths, run_section4_suite,
+    write_section4_suite_artifacts,
 };
 
 pub type PassPlan = Vec<Vec<Embedding>>;
@@ -1551,10 +1553,21 @@ fn finalize_successful_run(
     repeated: SingleExecution,
 ) -> CandidateRunReport {
     let determinism = compare_executions(&primary, &repeated);
-    let metric_results = compute_metric_results(&primary, profile);
-    let gate_results = compute_gate_results(profile, &primary, &metric_results, &determinism);
+    let hard_gate_results =
+        compute_gate_results_with_filter(profile, &primary, &[], &determinism, is_hard_gate_kind);
+    let failed_hard_gate = hard_gate_results
+        .iter()
+        .find(|gate| gate.status == GateStatus::Failed)
+        .cloned();
     let synthetic_padding_concentration =
         compute_synthetic_padding_concentration(&primary.cluster_occupancies, profile);
+    let (metric_results, gate_results) = if failed_hard_gate.is_some() {
+        (Vec::new(), hard_gate_results)
+    } else {
+        let metric_results = compute_metric_results(&primary, profile);
+        let gate_results = compute_gate_results(profile, &primary, &metric_results, &determinism);
+        (metric_results, gate_results)
+    };
     let survived_required_gates = gate_results
         .iter()
         .all(|gate| gate.status == GateStatus::Passed);
@@ -1571,14 +1584,17 @@ fn finalize_successful_run(
     let terminal_failure = if survived_required_gates {
         None
     } else {
-        let failed_gate = gate_results
-            .iter()
-            .find(|gate| gate.status == GateStatus::Failed)
-            .expect("a non-surviving candidate must have a failed gate");
+        let failed_gate = failed_hard_gate.unwrap_or_else(|| {
+            gate_results
+                .iter()
+                .find(|gate| gate.status == GateStatus::Failed)
+                .cloned()
+                .expect("a non-surviving candidate must have a failed gate")
+        });
         Some(StructuredFailure::GateFailure {
             candidate_id: identity.candidate_id.clone(),
-            gate_id: failed_gate.gate_id.clone(),
-            message: failed_gate.detail.clone(),
+            gate_id: failed_gate.gate_id,
+            message: failed_gate.detail,
         })
     };
 
@@ -1657,6 +1673,16 @@ fn compute_gate_results(
     metric_results: &[MetricResult],
     determinism: &DeterminismReport,
 ) -> Vec<GateResult> {
+    compute_gate_results_with_filter(profile, execution, metric_results, determinism, |_| true)
+}
+
+fn compute_gate_results_with_filter(
+    profile: &BenchmarkProfile,
+    execution: &SingleExecution,
+    metric_results: &[MetricResult],
+    determinism: &DeterminismReport,
+    mut include_gate: impl FnMut(&GateKind) -> bool,
+) -> Vec<GateResult> {
     let metric_lookup = metric_results
         .iter()
         .map(|metric| (metric.metric_id.as_str(), metric.value))
@@ -1681,6 +1707,7 @@ fn compute_gate_results(
     profile
         .gate_declarations
         .iter()
+        .filter(|gate| include_gate(&gate.kind))
         .map(|gate| match &gate.kind {
             GateKind::ExactLeafOccupancy => GateResult {
                 gate_id: gate.gate_id.clone(),
@@ -1771,6 +1798,10 @@ fn compute_gate_results(
             }
         })
         .collect()
+}
+
+fn is_hard_gate_kind(kind: &GateKind) -> bool {
+    !matches!(kind, GateKind::MetricAtLeast { .. })
 }
 
 fn bool_to_status(value: bool) -> GateStatus {

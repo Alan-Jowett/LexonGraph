@@ -101,6 +101,11 @@ For scalable corpora, the source declaration may identify either a
 filesystem-root-backed block store or a zip-archive-backed block store plus the
 root block ID to traverse.
 
+For section-4 screening, the profile remains subordinate to a suite-owned
+experiment-track contract that freezes the metric family, dimensionality
+contract, alignment-policy family, quantization baseline policy, and declared
+execution environment so candidates cannot silently shift the comparison basis.
+
 ### DSG-STREAM-EVAL-006 `Shared-profile campaign execution`
 
 One evaluation campaign binds one benchmark profile to one or more registered
@@ -285,6 +290,12 @@ benchmark profile and result schema record that goal as deferred rather than
 misreporting a proxy as full proof. Deferred status therefore limits the
 crate's claims, not the parent end-state requirement.
 
+The same deferred-record mechanism also carries frozen section-1 benchmark-
+contract items that remain outside the direct section-4 proof surface, such as
+same-or-sibling locality targets, routing targets, bounded hierarchy-shape
+constraints, parent-summary obligations, persistence obligations, and
+multi-thread reproducibility obligations beyond the direct observable boundary.
+
 ### DSG-STREAM-EVAL-016 `Output artifacts`
 
 The evaluator emits:
@@ -354,6 +365,14 @@ ambiguous, including empty suite identity, empty profile sets, and zero-valued
 positive-count controls such as `leaf_size`, `dimensions`, `batch_size`, and
 `neighbor_count`.
 
+The same suite layer owns the frozen benchmark-contract declaration for each
+experiment track, including the primary `leaf_size`, any declared sensitivity
+sizes, metric family, transformed-metric policy if any, dimensionality
+contract, alignment-policy family, quantization baseline policy over real
+entities only, any declared search-target threshold and beam-width policy that
+must carry forward to later routing phases, declared floating-point profile,
+declared candidate-threading model, and declared hardware profile.
+
 ### DSG-STREAM-EVAL-021 `Repository-owned corpus panel`
 
 The section-4 benchmark suite defines a repository-owned corpus panel whose
@@ -373,6 +392,10 @@ for the profiles used in repeated comparison.
 Each panel member carries a stable corpus identity plus a deterministic
 construction or harvesting policy so that repeated candidate comparisons remain
 reproducible.
+
+For corpus families that participate in repeated scale comparison, the panel
+also carries stable small, medium, and large tier identities or deterministic
+nearest-practical equivalents together with the rule that relates those tiers.
 
 ### DSG-STREAM-EVAL-022 `Deterministic ground-truth assets`
 
@@ -453,6 +476,11 @@ strict-alignment corpora that are not divisible by `leaf_size` and for
 deterministic-padding corpora that are empty or already divisible by
 `leaf_size`.
 
+If a candidate fails a hard invariant gate for a configuration, the workflow
+stops further comparative metric evaluation for that candidate/configuration
+pair and preserves only the failure-classified artifact surface needed for
+deterministic reporting and survivor selection.
+
 ### DSG-STREAM-EVAL-026 `Leaf-stage build-cost reporting`
 
 For section-4 benchmark executions, the evaluator reports a small leaf-stage
@@ -512,6 +540,81 @@ The evaluator does not pre-filter such candidates out of the checked-in
 registration surface; it lists them, allows selection, and records explicit
 outcomes when a profile triggers one of those limits.
 
+### DSG-STREAM-EVAL-031 `Frozen section-1 benchmark contract`
+
+The section-4 suite defines one explicit frozen benchmark contract per
+experiment track so repeated leaf-stage comparisons do not silently move the
+goalposts.
+
+That contract records:
+
+- the metric family and any transformed-metric policy
+- the primary `leaf_size` and any declared sensitivity sizes
+- the dimensionality contract, including deterministic out-of-range rejection
+  semantics where applicable
+- the alignment-policy family
+- the quantization or compression baseline policy over real entities only
+- any declared search-target threshold and beam-width policy carried forward to
+  later routing phases
+- the declared floating-point profile
+- the declared candidate-threading model
+- the declared hardware profile
+
+Each item is also labeled as either directly measured during section-4
+screening or deferred to a later proof surface.
+
+### DSG-STREAM-EVAL-032 `Deferred obligation ledger`
+
+The suite and campaign report model include an explicit deferred-obligation
+ledger for frozen section-1 contract items that remain outside the leaf-stage
+direct-evidence boundary.
+
+In this revision, the ledger can record at least:
+
+- same-or-sibling locality targets carried forward from same-leaf proxy scoring
+- routing targets or routing-procedure assumptions
+- beam-width policies or related routing-study assumptions
+- bounded fanout and depth constraints
+- parent-summary accuracy or stability obligations
+- serialization round-trip and persisted-artifact durability obligations
+- multi-thread reproducibility obligations beyond the direct section-4
+  observable boundary
+
+Each ledger entry names the deferred target, why section-4 cannot discharge it,
+and which later evaluation line is expected to prove it.
+
+### DSG-STREAM-EVAL-033 `Deterministic scale-tier contract`
+
+For corpus families used in repeated section-4 size-tier comparison, the suite
+defines a deterministic scale-tier contract that binds:
+
+- a stable small, medium, and large identity or deterministic nearest-practical
+  equivalents
+- the tier-growth rule for the family
+- the corpus asset and exact-neighbor ground-truth asset associated with each
+  tier identity
+
+The same contract allows a checked-in harvested real-world corpus family to
+participate in the same tiered comparison surface used by synthetic families.
+
+Later routing phases may reuse these tier identities and may declare held-out
+query-set identities, but section-4 execution does not depend on consuming
+those later-phase query assets.
+
+### DSG-STREAM-EVAL-034 `Hard-gate termination and artifact hygiene`
+
+The section-4 workflow treats hard invariant gates as short-circuit conditions
+for a candidate/configuration execution.
+
+When a candidate fails such a gate, the workflow:
+
+1. stops further comparative metric evaluation for that candidate under that
+   configuration
+2. emits deterministic failure-classified artifacts without presenting a
+   success-shaped completed result for the rejected configuration
+3. preserves enough campaign state to identify which candidates, if any, remain
+   survivors eligible for later hierarchy-stage comparison
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -551,3 +654,7 @@ outcomes when a profile triggers one of those limits.
 | DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
 | DSG-STREAM-EVAL-029 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040 |
 | DSG-STREAM-EVAL-030 | REQ-STREAM-EVAL-041, REQ-STREAM-EVAL-042 |
+| DSG-STREAM-EVAL-031 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043 |
+| DSG-STREAM-EVAL-032 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-044 |
+| DSG-STREAM-EVAL-033 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045 |
+| DSG-STREAM-EVAL-034 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046 |
