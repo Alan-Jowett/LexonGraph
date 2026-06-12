@@ -1371,7 +1371,10 @@ pub fn resolve_registered_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::{cosine_distance, euclidean_distance};
+    use super::{
+        AlignmentPolicy, EvaluationEntity, Section4MetricContract, apply_alignment_policy,
+        compute_ground_truth, cosine_distance, euclidean_distance,
+    };
     use crate::EvaluatorError;
 
     #[test]
@@ -1390,5 +1393,54 @@ mod tests {
         let distance = euclidean_distance(&[0.0, 0.0], &[3.0, 4.0]).unwrap();
 
         assert_eq!(distance, 5.0);
+    }
+
+    #[test]
+    fn cosine_distance_rejects_zero_norm_embeddings() {
+        let result = cosine_distance(&[0.0, 0.0], &[1.0, 0.0]);
+
+        assert!(matches!(
+            result,
+            Err(EvaluatorError::InvalidConfiguration(message))
+                if message.contains("zero-norm embeddings")
+        ));
+    }
+
+    #[test]
+    fn compute_ground_truth_rejects_too_small_real_entity_sets() {
+        let entities = vec![
+            EvaluationEntity {
+                entity_id: "a".into(),
+                corpus_id: "fixture".into(),
+                embedding: vec![1.0, 0.0],
+                synthetic: false,
+            },
+            EvaluationEntity {
+                entity_id: "b".into(),
+                corpus_id: "fixture".into(),
+                embedding: vec![0.0, 1.0],
+                synthetic: false,
+            },
+        ];
+
+        let result = compute_ground_truth(&entities, Section4MetricContract::Euclidean, 2);
+
+        assert!(matches!(
+            result,
+            Err(EvaluatorError::InvalidConfiguration(message))
+                if message.contains("requires more than 2 real entities")
+        ));
+    }
+
+    #[test]
+    fn deterministic_padding_rejects_empty_real_entity_sets() {
+        let result =
+            apply_alignment_policy(&[], 2, &AlignmentPolicy::DeterministicSyntheticPadding);
+
+        assert!(matches!(
+            result,
+            Err(EvaluatorError::InvalidConfiguration(message))
+                if message.contains("must include at least one real entity")
+        ));
     }
 }

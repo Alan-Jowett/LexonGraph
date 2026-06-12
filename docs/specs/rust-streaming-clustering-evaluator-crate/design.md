@@ -339,6 +339,12 @@ This suite remains subordinate to the evaluator's leaf-stage boundary: it
 orchestrates comparative leaf-partition studies and does not widen the crate
 into a hierarchy-construction or routing evaluator.
 
+The suite layer also owns deterministic invalid-configuration rejection for the
+malformed suite-level controls that would otherwise make asset generation
+ambiguous, including empty suite identity, empty profile sets, and zero-valued
+positive-count controls such as `leaf_size`, `dimensions`, `batch_size`, and
+`neighbor_count`.
+
 ### DSG-STREAM-EVAL-021 `Repository-owned corpus panel`
 
 The section-4 benchmark suite defines a repository-owned corpus panel whose
@@ -372,6 +378,10 @@ These assets are benchmark-owned supporting artifacts rather than
 candidate-owned outputs. They remain leaf-stage artifacts and exclude synthetic
 padding entities from externally reported locality scoring.
 
+This ground-truth layer also owns deterministic rejection of invalid exact-
+neighbor preconditions, including corpora too small for the declared
+`neighbor_count` and cosine-metric inputs containing zero-norm embeddings.
+
 ### DSG-STREAM-EVAL-023 `Deterministic real-world corpus harvesting`
 
 The suite derives a real-world benchmark corpus from repository-approved
@@ -389,6 +399,11 @@ not synthetic-only.
 
 This design keeps large benchmark corpora reproducible even when they originate
 from external block-store material rather than hand-authored fixture JSON.
+
+The harvesting workflow also classifies deterministic invalid inputs at the
+evaluator boundary, including malformed entity-identity metadata, malformed
+`synthetic` metadata, embeddings that fail the declared admissibility contract,
+and harvested sources that do not retain enough real entities after filtering.
 
 ### DSG-STREAM-EVAL-024 `Zip-native large benchmark assets`
 
@@ -422,6 +437,12 @@ top-10 exact-neighbor ground truth for locality-scored profiles.
 
 The outputs are intended to support down-selection of candidate leaf strategies
 for later hierarchy-stage work without claiming hierarchy-stage proof.
+
+Before candidate execution, the workflow validates alignment-policy
+preconditions and surfaces deterministic invalid-configuration failures for
+strict-alignment corpora that are not divisible by `leaf_size` and for
+deterministic-padding corpora that are empty or already divisible by
+`leaf_size`.
 
 ### DSG-STREAM-EVAL-026 `Leaf-stage build-cost reporting`
 
@@ -510,12 +531,12 @@ outcomes when a profile triggers one of those limits.
 | DSG-STREAM-EVAL-017 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-028, REQ-STREAM-EVAL-029 |
 | DSG-STREAM-EVAL-018 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-025 |
 | DSG-STREAM-EVAL-019 | REQ-STREAM-EVAL-016 |
-| DSG-STREAM-EVAL-020 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036 |
+| DSG-STREAM-EVAL-020 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-047 |
 | DSG-STREAM-EVAL-021 | REQ-STREAM-EVAL-032 |
-| DSG-STREAM-EVAL-022 | REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-036 |
-| DSG-STREAM-EVAL-023 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-034 |
+| DSG-STREAM-EVAL-022 | REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-050 |
+| DSG-STREAM-EVAL-023 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-049 |
 | DSG-STREAM-EVAL-024 | REQ-STREAM-EVAL-035 |
-| DSG-STREAM-EVAL-025 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036 |
+| DSG-STREAM-EVAL-025 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-048 |
 | DSG-STREAM-EVAL-026 | REQ-STREAM-EVAL-037 |
 | DSG-STREAM-EVAL-027 | REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
 | DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
