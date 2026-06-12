@@ -2641,6 +2641,40 @@ fn regression_section4_suite_rejects_empty_suite_and_zero_controls() {
 }
 
 #[test]
+fn regression_section4_suite_rejects_malformed_frozen_contract_items() {
+    let output_dir = tempdir().unwrap();
+    let mut empty_item_id =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    empty_item_id.experiment_track_contract.frozen_items[0].item_id = "   ".into();
+    let empty_item_id_result = generate_section4_suite_assets(&empty_item_id, output_dir.path());
+    assert!(
+        matches!(empty_item_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty item_id"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut empty_label =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    empty_label.experiment_track_contract.frozen_items[0].label = "".into();
+    let empty_label_result = generate_section4_suite_assets(&empty_label, output_dir.path());
+    assert!(
+        matches!(empty_label_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty label"))
+    );
+
+    let output_dir = tempdir().unwrap();
+    let mut duplicate_item_id =
+        section4_suite_spec(vec![strict_synthetic_profile("valid-id", "corpus-a", 12)]);
+    duplicate_item_id.experiment_track_contract.frozen_items[1].item_id =
+        duplicate_item_id.experiment_track_contract.frozen_items[0]
+            .item_id
+            .clone();
+    let duplicate_item_id_result =
+        generate_section4_suite_assets(&duplicate_item_id, output_dir.path());
+    assert!(
+        matches!(duplicate_item_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate frozen benchmark-contract item_id"))
+    );
+}
+
+#[test]
 fn regression_section4_suite_rejects_invalid_alignment_policy_preconditions() {
     let output_dir = tempdir().unwrap();
     let strict_result = generate_section4_suite_assets(

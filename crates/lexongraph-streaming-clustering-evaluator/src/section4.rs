@@ -745,6 +745,27 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite must declare frozen benchmark-contract items".into(),
         ));
     }
+    let mut seen_frozen_item_ids = HashSet::new();
+    for item in &spec.experiment_track_contract.frozen_items {
+        if item.item_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "section-4 suite frozen benchmark-contract items must declare a non-empty item_id"
+                    .into(),
+            ));
+        }
+        if item.label.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite frozen benchmark-contract item {} must declare a non-empty label",
+                item.item_id
+            )));
+        }
+        if !seen_frozen_item_ids.insert(item.item_id.as_str()) {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite declares duplicate frozen benchmark-contract item_id {:?}",
+                item.item_id
+            )));
+        }
+    }
     let mut seen_profile_ids = HashSet::new();
     for profile in &spec.profiles {
         validate_profile_id(&profile.profile_id)?;

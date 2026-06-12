@@ -1554,9 +1554,7 @@ fn finalize_successful_run(
 ) -> CandidateRunReport {
     let determinism = compare_executions(&primary, &repeated);
     let hard_gate_results =
-        compute_gate_results_with_filter(profile, &primary, &[], &determinism, |kind| {
-            is_hard_gate_kind(kind)
-        });
+        compute_gate_results_with_filter(profile, &primary, &[], &determinism, is_hard_gate_kind);
     let failed_hard_gate = hard_gate_results
         .iter()
         .find(|gate| gate.status == GateStatus::Failed)
