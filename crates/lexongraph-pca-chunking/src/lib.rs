@@ -215,15 +215,22 @@ impl StreamingClusterClassifier for PcaChunkingStreamingClassifier {
             .transform
             .apply(embedding)
             .map_err(map_pca_error)?;
-        let sort_key = build_sort_key(
-            embedding,
-            coordinates,
+        let projection_key = scalar_projection_key(
+            coordinates.as_slice(),
             self.model.projection_weights.as_slice(),
         )?;
         let cluster_index = self
             .model
             .chunk_upper_bounds
-            .partition_point(|upper_bound| compare_sort_keys(&sort_key, upper_bound).is_gt());
+            .partition_point(|upper_bound| {
+                compare_sort_key_parts(
+                    projection_key,
+                    coordinates.as_slice(),
+                    embedding,
+                    upper_bound,
+                )
+                .is_gt()
+            });
         Ok(cluster_index as ClusterId)
     }
 }
@@ -360,6 +367,23 @@ fn compare_sort_keys(left: &SortKey, right: &SortKey) -> std::cmp::Ordering {
             )
         })
         .then_with(|| compare_f32_slices(left.embedding.as_slice(), right.embedding.as_slice()))
+}
+
+fn compare_sort_key_parts(
+    projection_key: f32,
+    retained_coordinates: &[f32],
+    embedding: &[f32],
+    upper_bound: &SortKey,
+) -> std::cmp::Ordering {
+    projection_key
+        .total_cmp(&upper_bound.projection_key)
+        .then_with(|| {
+            compare_f32_slices(
+                retained_coordinates,
+                upper_bound.retained_coordinates.as_slice(),
+            )
+        })
+        .then_with(|| compare_f32_slices(embedding, upper_bound.embedding.as_slice()))
 }
 
 fn compare_f32_slices(left: &[f32], right: &[f32]) -> std::cmp::Ordering {
