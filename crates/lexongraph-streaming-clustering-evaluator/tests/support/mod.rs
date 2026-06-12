@@ -190,7 +190,7 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
         deferred_research_goals: vec![DeferredResearchGoal {
             deferred_id: "deferred-hierarchy-routing".into(),
             label: "Hierarchy routing proof".into(),
-            reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary".into(),
+            reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line".into(),
             research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
             coverage: ResearchCoverage::Deferred,
         }],

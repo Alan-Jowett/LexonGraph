@@ -19,6 +19,8 @@ This document specifies the crate-level requirements for a new Rust crate that:
   abstraction rather than requiring monolithic profile-embedded JSON datasets
 - translates applicable intent from `docs/research/clustering.md` and
   `docs/research/clustering_plan.md` into an evaluator-owned benchmark contract
+  for the section-4 leaf-stage screening slice without redefining the end-state
+  hierarchy requirements owned by `docs/research/clustering.md`
 
 This document defines the evaluator boundary, benchmark contract, campaign
 execution model, leaf-membership scoring surface, scorecard outputs, and
@@ -90,11 +92,15 @@ The new crate shall remain subordinate to:
 - `docs/specs/rust-block-storage-trait/` for the backend-neutral storage
   contract used by scalable corpus references
 
-If those sources appear to conflict, the narrower evaluator scope remains
-authoritative for this crate's boundary: the research documents are
-authoritative for evaluation intent, and the shared streaming clustering
-specification is authoritative for the candidate integration surface. The
-block-storage trait specification is authoritative for the scalable external
+If those sources appear to conflict, `docs/research/clustering.md` remains
+authoritative for the end-state black-box requirements, and
+`docs/research/clustering_plan.md` remains authoritative for the staged
+benchmark workflow that serves those requirements. The narrower evaluator scope
+only limits what this crate may directly prove or claim at the leaf-partition
+boundary; it does not relax, replace, or reinterpret the parent research
+requirements. The shared streaming clustering specification remains
+authoritative for the candidate integration surface, and the block-storage
+trait specification remains authoritative for the scalable external
 corpus-loading contract.
 
 ### REQ-STREAM-EVAL-003
@@ -277,6 +283,12 @@ shall distinguish real entities from synthetic padding entities in the leaf
 membership artifact and shall exclude synthetic padding from externally reported
 locality and compression metrics.
 
+The evaluator shall also verify and report whether synthetic padding entities
+are concentrated into the minimum possible number of final clusters permitted
+by the deterministic procedure. At this boundary, that concentration result is
+part of the leaf-stage fixed-capacity evidence surface rather than a separate
+hierarchy-stage claim.
+
 ### REQ-STREAM-EVAL-019
 
 The evaluator shall directly compute leaf-stage locality metrics from the leaf
@@ -285,7 +297,9 @@ membership artifact and benchmark ground truth.
 In this revision, the required direct locality metric is same-leaf neighborhood
 coherence over real entities. Same-or-sibling locality remains outside this
 crate's direct proof boundary unless a future revision introduces explicit
-sibling structure at this evaluator boundary.
+sibling structure at this evaluator boundary. The same-leaf metric therefore
+acts as a staged proxy subordinate to, rather than a redefinition of, the
+full same-or-sibling locality objective from `docs/research/clustering.md`.
 
 ### REQ-STREAM-EVAL-020
 
@@ -304,7 +318,10 @@ serialization, and durable index build semantics.
 
 This revision also shall not define the future end-to-end evaluator layered on
 `docs/specs/rust-streaming-indexer-crate/` and
-`docs/specs/rust-search-crate/`; that line remains future work.
+`docs/specs/rust-search-crate/`; that line remains future work. These
+deferments constrain only what this evaluator revision may claim as direct
+evidence. They do not narrow the parent end-state obligations defined by
+`docs/research/clustering.md` and staged by `docs/research/clustering_plan.md`.
 
 ### REQ-STREAM-EVAL-022
 
@@ -399,6 +416,9 @@ that fixed neighborhood size shall be top-10.
 This suite remains leaf-stage only: it prepares and executes comparative
 leaf-formation campaigns and does not claim to validate hierarchy construction,
 parent summaries, persisted routing, or full end-to-end index conformance.
+Instead, it provides the repository-owned leaf-stage evidence slice that feeds
+the later hierarchy, summary, routing, and persistence phases in
+`docs/research/clustering_plan.md`.
 
 ### REQ-STREAM-EVAL-032
 
@@ -488,7 +508,9 @@ shall use top-10 exact-neighbor ground truth for locality-scored profiles.
 
 The resulting comparative outputs shall be sufficient to down-select candidate
 leaf strategies for later hierarchy-stage work without claiming hierarchy-stage
-proof.
+proof. The workflow therefore serves the broader end-state requirements from
+`docs/research/clustering.md` by staged screening rather than by redefining
+those requirements at the evaluator boundary.
 
 ### REQ-STREAM-EVAL-037
 
@@ -557,6 +579,9 @@ shall include all repository-owned registered section-4 candidates so they can
 be listed, selected, and exercised through ordinary campaign and section-4
 suite execution paths.
 
+REQ-STREAM-EVAL-043 through REQ-STREAM-EVAL-046 are intentionally unused in
+this revision.
+
 ### REQ-STREAM-EVAL-047
 
 The section-4 validation surface shall exercise deterministic rejection of
@@ -601,8 +626,8 @@ At minimum, this revision shall cover:
 ### REQ-STREAM-EVAL-050
 
 The section-4 validation surface shall exercise deterministic rejection of
-invalid exact-neighbor ground-truth inputs beyond the large-corpus brute-force
-cap.
+invalid exact-neighbor ground-truth inputs that prevent valid benchmark-owned
+ground-truth generation.
 
 At minimum, this revision shall cover:
 

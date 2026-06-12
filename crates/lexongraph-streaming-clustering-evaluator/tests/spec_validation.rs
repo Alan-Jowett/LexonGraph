@@ -629,6 +629,14 @@ fn val_stream_eval_010_synthetic_padding_is_distinguished_and_excluded_from_exte
             .value
             > 0.0
     );
+    let concentration = run_report
+        .synthetic_padding_concentration
+        .as_ref()
+        .expect("padding profiles should report synthetic padding concentration");
+    assert_eq!(concentration.synthetic_entity_count, 1);
+    assert_eq!(concentration.clusters_with_synthetic_entities, 1);
+    assert_eq!(concentration.minimum_possible_cluster_count, 1);
+    assert!(concentration.satisfies_minimum_concentration);
 }
 
 #[test]
@@ -735,20 +743,31 @@ fn val_stream_eval_014_metric_gate_and_deferred_records_trace_to_research_goals(
 #[test]
 fn val_stream_eval_015_emits_machine_readable_reports_and_a_human_scorecard() {
     let report = run_evaluation_campaign(
-        &strict_alignment_profile(),
-        &balanced_and_skewed_candidates(),
+        &synthetic_padding_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
     )
     .unwrap();
     let artifacts = emit_campaign_artifacts(&report).unwrap();
 
-    assert_eq!(artifacts.per_candidate_reports.len(), 2);
+    assert_eq!(artifacts.per_candidate_reports.len(), 1);
     assert!(
         artifacts
             .campaign_report
             .contents
-            .contains("\"profile_id\": \"strict-alignment-campaign\"")
+            .contains("\"profile_id\": \"synthetic-padding-campaign\"")
     );
     assert!(artifacts.scorecard.contents.contains("Campaign scorecard"));
+    assert!(
+        artifacts
+            .scorecard
+            .contents
+            .contains("synthetic-padding-concentration")
+    );
 }
 
 #[test]
@@ -866,11 +885,10 @@ fn val_stream_eval_018_deferred_hierarchy_and_search_goals_remain_explicitly_def
     )
     .unwrap();
 
-    assert!(
-        report.run_reports[0].deferred_research_goals[0]
-            .reason
-            .contains("outside the leaf-stage evaluator boundary")
-    );
+    let reason = &report.run_reports[0].deferred_research_goals[0].reason;
+    assert!(reason.contains("outside the leaf-stage evaluator boundary"));
+    assert!(reason.contains("staged leaf-stage evidence toward docs/research/clustering.md"));
+    assert!(reason.contains("future end-to-end evaluator"));
 }
 
 #[test]

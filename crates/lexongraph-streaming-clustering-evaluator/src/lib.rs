@@ -573,6 +573,14 @@ pub struct ClusterOccupancy {
     pub synthetic_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyntheticPaddingConcentrationReport {
+    pub synthetic_entity_count: usize,
+    pub clusters_with_synthetic_entities: usize,
+    pub minimum_possible_cluster_count: usize,
+    pub satisfies_minimum_concentration: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PrerequisiteCheckResult {
     pub check_id: String,
@@ -689,6 +697,7 @@ pub struct CandidateRunReport {
     pub probe_results: Vec<ProbeAssignmentResult>,
     pub leaf_membership: Vec<LeafMembershipRecord>,
     pub cluster_occupancies: Vec<ClusterOccupancy>,
+    pub synthetic_padding_concentration: Option<SyntheticPaddingConcentrationReport>,
     pub determinism: DeterminismReport,
     pub metric_results: Vec<MetricResult>,
     pub gate_results: Vec<GateResult>,
@@ -881,6 +890,19 @@ pub fn render_scorecard(report: &CampaignReport) -> String {
             lines.push(format!(
                 "  metric {}: {:.6}",
                 metric.metric_id, metric.value
+            ));
+        }
+        if let Some(padding) = &run_report.synthetic_padding_concentration {
+            lines.push(format!(
+                "  synthetic-padding-concentration: {} synthetic entities across {} cluster(s); minimum possible {} [{}]",
+                padding.synthetic_entity_count,
+                padding.clusters_with_synthetic_entities,
+                padding.minimum_possible_cluster_count,
+                if padding.satisfies_minimum_concentration {
+                    "PASS"
+                } else {
+                    "FAIL"
+                }
             ));
         }
         for deferred in &run_report.deferred_research_goals {
@@ -1444,6 +1466,7 @@ fn failed_candidate_run(
         probe_results: Vec::new(),
         leaf_membership: Vec::new(),
         cluster_occupancies: Vec::new(),
+        synthetic_padding_concentration: None,
         determinism: DeterminismReport {
             deterministic: false,
             compared_fields: determinism_compared_fields(),
@@ -1492,6 +1515,7 @@ fn failed_corpus_source_run(
         probe_results: Vec::new(),
         leaf_membership: Vec::new(),
         cluster_occupancies: Vec::new(),
+        synthetic_padding_concentration: None,
         determinism: DeterminismReport {
             deterministic: false,
             compared_fields: determinism_compared_fields(),
@@ -1527,6 +1551,8 @@ fn finalize_successful_run(
     let determinism = compare_executions(&primary, &repeated);
     let metric_results = compute_metric_results(&primary, profile);
     let gate_results = compute_gate_results(profile, &primary, &metric_results, &determinism);
+    let synthetic_padding_concentration =
+        compute_synthetic_padding_concentration(&primary.cluster_occupancies, profile);
     let survived_required_gates = gate_results
         .iter()
         .all(|gate| gate.status == GateStatus::Passed);
@@ -1567,6 +1593,7 @@ fn finalize_successful_run(
         probe_results: primary.probe_results,
         leaf_membership: primary.leaf_membership,
         cluster_occupancies: primary.cluster_occupancies,
+        synthetic_padding_concentration,
         determinism,
         metric_results,
         gate_results,
@@ -2547,6 +2574,38 @@ fn compute_cluster_occupancies(
     by_cluster.into_values().collect()
 }
 
+fn compute_synthetic_padding_concentration(
+    cluster_occupancies: &[ClusterOccupancy],
+    profile: &BenchmarkProfile,
+) -> Option<SyntheticPaddingConcentrationReport> {
+    if profile.leaf_model.alignment_policy != AlignmentPolicy::DeterministicSyntheticPadding {
+        return None;
+    }
+
+    let synthetic_entity_count = cluster_occupancies
+        .iter()
+        .map(|occupancy| occupancy.synthetic_count)
+        .sum::<usize>();
+    if synthetic_entity_count == 0 {
+        return None;
+    }
+
+    let clusters_with_synthetic_entities = cluster_occupancies
+        .iter()
+        .filter(|occupancy| occupancy.synthetic_count > 0)
+        .count();
+    let minimum_possible_cluster_count =
+        synthetic_entity_count.div_ceil(profile.leaf_model.leaf_size);
+
+    Some(SyntheticPaddingConcentrationReport {
+        synthetic_entity_count,
+        clusters_with_synthetic_entities,
+        minimum_possible_cluster_count,
+        satisfies_minimum_concentration: clusters_with_synthetic_entities
+            == minimum_possible_cluster_count,
+    })
+}
+
 fn compare_executions(left: &SingleExecution, right: &SingleExecution) -> DeterminismReport {
     let mut mismatch_details = Vec::new();
     if left.pass_reports != right.pass_reports {
@@ -3356,7 +3415,7 @@ mod tests {
             deferred_research_goals: vec![DeferredResearchGoal {
                 deferred_id: "deferred-hierarchy-routing".into(),
                 label: "Hierarchy routing proof".into(),
-                reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary".into(),
+                reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line".into(),
                 research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
                 coverage: ResearchCoverage::Deferred,
             }],

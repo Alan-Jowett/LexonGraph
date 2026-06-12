@@ -45,11 +45,13 @@ The crate does not own:
 
 ### DSG-STREAM-EVAL-001 `Composite normative boundary`
 
-The crate depends on the two clustering research documents for evaluation intent
-and on `docs/specs/rust-streaming-clustering-crate/` for the candidate
-trainer/classifier boundary. For scalable corpus inputs, it also depends on
-`docs/specs/rust-block-storage-trait/` for the backend-neutral storage
-contract. The crate does not redefine those sources.
+The crate depends on `docs/research/clustering.md` for the end-state black-box
+requirements, on `docs/research/clustering_plan.md` for the staged benchmark
+workflow, and on `docs/specs/rust-streaming-clustering-crate/` for the
+candidate trainer/classifier boundary. For scalable corpus inputs, it also
+depends on `docs/specs/rust-block-storage-trait/` for the backend-neutral
+storage contract. The crate does not redefine those sources; it only defines
+the evaluator-owned leaf-stage evidence slice that is subordinate to them.
 
 ### DSG-STREAM-EVAL-002 `Evaluator-owned boundary`
 
@@ -244,6 +246,9 @@ If the benchmark profile uses strict alignment, occupancy checks apply directly
 to real entities. If the profile uses deterministic synthetic padding, the
 evaluator adds or consumes the declared synthetic entities before scoring and
 still requires exact final occupancy against the combined evaluated entity set.
+The same padding-aware scoring step also reports whether synthetic padding
+concentrates into the minimum possible number of final clusters permitted by
+the deterministic procedure.
 
 ### DSG-STREAM-EVAL-012 `Leaf-stage locality scoring`
 
@@ -277,7 +282,8 @@ motivating research goal and is tagged as direct, proxy, or deferred.
 When a research goal from `docs/research/clustering.md` cannot be proven through
 the shared streaming clustering boundary and benchmark fixtures alone, the
 benchmark profile and result schema record that goal as deferred rather than
-misreporting a proxy as full proof.
+misreporting a proxy as full proof. Deferred status therefore limits the
+crate's claims, not the parent end-state requirement.
 
 ### DSG-STREAM-EVAL-016 `Output artifacts`
 
@@ -311,7 +317,8 @@ shape, persisted-hierarchy routing, or durable storage semantics.
 
 The future end-to-end evaluator on top of the streaming indexer and search
 specifications is called out as a separate later line rather than collapsed into
-this crate.
+this crate. This non-goal boundary prevents false proof claims while remaining
+subordinate to the broader staged plan and end-state contract.
 
 ### DSG-STREAM-EVAL-019 `Verification artifacts`
 
@@ -337,7 +344,9 @@ that fixed neighborhood size is top-10.
 
 This suite remains subordinate to the evaluator's leaf-stage boundary: it
 orchestrates comparative leaf-partition studies and does not widen the crate
-into a hierarchy-construction or routing evaluator.
+into a hierarchy-construction or routing evaluator. It is a repository-owned
+screening layer that feeds later plan phases rather than a replacement for
+those phases.
 
 The suite layer also owns deterministic invalid-configuration rejection for the
 malformed suite-level controls that would otherwise make asset generation

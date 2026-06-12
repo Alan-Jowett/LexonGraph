@@ -31,6 +31,14 @@ At the end of this plan, we should be able to answer:
 
 ## 1. Freeze the Evaluation Contract First
 
+Before comparing approaches, freeze the full end-state contract from
+`clustering.md` so later experiments do not silently move the goalposts.
+Sections 1-4 define the screening contract for leaf-stage comparison, but they
+remain subordinate to the full hierarchy requirements. If a property is not
+directly measurable during leaf-stage screening, it must still be frozen here
+and then carried forward as a later-phase proof obligation rather than being
+dropped from the plan.
+
 Before comparing approaches, lock these items so results are comparable:
 
 | Item | What to freeze |
@@ -51,13 +59,26 @@ Before comparing approaches, lock these items so results are comparable:
 | Hardware profile | Single named machine for all benchmark runs |
 | Dataset alignment policy | Strict alignment or deterministic synthetic padding |
 
-**Deliverable:** a one-page benchmark contract that all later experiments must use.
+For section-4 leaf-stage screening, some frozen items are measured directly
+(for example deterministic behavior, exact leaf capacity, padding handling, and
+leaf-local compression), while others remain explicit later-phase obligations
+(for example bounded hierarchy shape, persisted artifact reload behavior,
+routing recall, parent summaries, and full query service levels).
+
+**Deliverable:** a one-page benchmark contract that all later experiments must
+use, plus explicit labels for which frozen items are measured directly in
+section-4 screening versus deferred to later phases.
 
 ---
 
 ## 2. Build a Corpus Panel
 
 Do not evaluate on a single corpus. Use a small panel that exposes different failure modes.
+
+For the repository-owned section-4 screening workflow, each corpus slice should
+be realized as a stable benchmark identity with a stable scale-tier identity so
+repeated comparisons remain reproducible across candidate runs and later
+hierarchy-stage follow-on work.
 
 ### Required corpus slices
 
@@ -80,35 +101,63 @@ For each corpus family, prepare at least:
 
 If possible, use three sizes such as `50k`, `200k`, and `800k` vectors, or the closest practical equivalents from the sample corpus.
 
-**Deliverable:** immutable train/build corpora plus a separate query set and exact-nearest-neighbor ground truth.
+For any corpus used in leaf-stage locality screening, materialize deterministic
+top-10 exact-nearest-neighbor ground truth tied to the corpus identity,
+scale-tier identity, and declared metric contract. For real-world corpora, use
+deterministic harvesting from repository-approved source data so the checked-in
+screening panel is not synthetic-only. Large checked-in benchmark corpora
+should be stored as zip-native assets that the evaluator can consume directly
+without a manual pre-decompression step.
+
+**Deliverable:** immutable train/build corpora, stable benchmark identities and
+scale tiers, deterministic top-10 ground truth for locality-scored profiles, a
+deterministically harvested real-world corpus asset, and a separate held-out
+query set for later full-routing phases.
 
 ---
 
 ## 3. Implement a Common Evaluation Harness
 
-Every candidate design must plug into the same harness and emit the same artifacts.
+Every candidate design must plug into the same harness and emit the same
+artifacts. The harness must support staged evidence collection: section-4
+leaf-stage screening uses a narrower direct-evidence slice, while later phases
+reuse the same benchmark contract to prove the full end-state hierarchy
+requirements.
 
 ### Required harness outputs
 
-1. Build manifest: corpus ID, config, seed, binary version, FP profile, hardware profile.
-2. Tree artifact: leaf assignments, internal structure, summaries, metadata.
-3. Metrics report: all hard invariants and all quality metrics.
-4. Failure report: deterministic error code and message when a build is invalid.
+1. Provenance manifest: corpus IDs, config, seed policy, binary version, FP
+   profile, hardware profile, and source-reference identities for any external
+   corpus assets.
+2. Leaf-stage artifact set: evaluator-owned leaf assignments, per-candidate run
+   report, comparative scorecard, and deferred-goal records for end-state
+   requirements not yet directly proven.
+3. Later-phase artifact set: full tree structure, internal summaries, routing
+   benchmark outputs, and persisted-artifact evidence once hierarchy-stage work
+   begins.
+4. Failure report: deterministic error code and message when a build or
+   benchmark precondition is invalid.
 
 ### Hard-invariant gates that must be implemented in the harness
 
-1. Exact leaf-size check and complete-coverage check.
-2. Bitwise-deterministic rebuild check, including 1-thread vs N-thread comparison when multithreading is supported.
-3. Serialization round-trip gate: persisted artifact must reload into a bitwise-identical queryable structure.
-4. Structured-failure gate: deterministic error code, no exposed partial artifact, and explicit artifact-hygiene verification on injected failures.
+1. Section-4 direct gates: exact leaf-size check, complete-coverage check,
+   repeated-run determinism, and padding-hygiene validation.
+2. Section-4 precondition rejection gate: deterministic rejection of malformed
+   suite configuration, invalid alignment-policy inputs, malformed harvested
+   corpora, and invalid exact-neighbor ground-truth inputs.
+3. Later-phase end-state gates: serialization round-trip identity,
+   persisted-artifact durability, bounded hierarchy shape, and routing-service
+   verification once hierarchy and query artifacts exist.
+4. Structured-failure gate: deterministic error code, no exposed partial
+   artifact, and explicit artifact-hygiene verification on injected failures.
 
 ### Metrics to compute for every run
 
 | Category | Metrics |
 | --- | --- |
-| Hard invariants | exact leaf sizes, no duplicates, no dropped vectors, depth bound, fanout bound, determinism, serialization round-trip identity |
-| Search | TNN recall@10, routing path length, beam width, p95 latency, QPS |
-| Locality | percent of true top-10 neighbors in same leaf or sibling leaves |
+| Hard invariants | exact leaf sizes, no duplicates, no dropped vectors, direct repeated-run determinism; depth bound, fanout bound, and serialization round-trip identity are carried as later-phase obligations until hierarchy artifacts exist |
+| Search | TNN recall@10, routing path length, beam width, p95 latency, QPS, all deferred to the full-tree routing phases |
+| Locality | for section-4 screening, percent of true top-10 neighbors in the same leaf as a direct proxy; same-or-sibling locality remains the end-state target carried forward from `clustering.md` |
 | Compression | local-vs-global reconstruction error delta under the fixed quantization scheme, where the global baseline is computed over the unindexed real dataset excluding synthetic padding, plus per-bucket distribution |
 | Summary quality | exact-vs-approx parent summary relative `L2` error using `||S_approx - S_exact||_2 / max(||S_exact||_2, delta)`, perturbation sensitivity, logged `delta` where `delta <= 10^-6 * mean(||S_exact||_2)` |
 | Refinement | per-edge `beta = Disp(C) / Disp(P)`, fraction of edges with `beta <= 0.85`, and explicit tracking of the penultimate-layer `epsilon` exception where `Disp(P) <= 0.01 * Disp(Root)` and all children are leaves |
@@ -124,6 +173,11 @@ Every candidate design must plug into the same harness and emit the same artifac
 
 The leaf layer is the most constrained part of the problem because exact leaf size interacts directly with locality and compression.
 
+This stage is still subordinate to the full hierarchy goals in
+`clustering.md`, but it intentionally screens the leaf-formation problem first
+so weak candidates can be eliminated before hierarchy construction and routing
+work.
+
 ### Candidate families to test
 
 | ID | Strategy | Why test it |
@@ -134,6 +188,17 @@ The leaf layer is the most constrained part of the problem because exact leaf si
 | D | Graph-based neighborhood partitioning with exact-size balancing | May preserve local topology better |
 | E | Hybrid: coarse partitioning then exact-size local rebalance | Likely practical compromise |
 | F | Random shuffle + exact chunking | Null baseline for measuring algorithmic value |
+
+The abstract family list above defines the search space. The checked-in
+repository-owned section-4 screening workflow should also name the concrete
+initial candidate set used for repeated comparisons, including at least:
+
+- `lexongraph-pca-chunking`
+- `lexongraph-directional-pca`
+- `lexongraph-dcbc-streaming`
+
+Additional fixture or null-baseline candidates may be included as long as they
+use the same evaluator-owned registration and reporting surface.
 
 ### Leaf-stage experiments
 
@@ -159,12 +224,30 @@ For each leaf strategy, run an explicit `N mod L != 0` experiment under determin
 4. Verify padding is excluded from recall, locality, and compression metrics.
 5. Compare strict-alignment rejection vs deterministic-padding behavior and cost.
 
+### Required precondition rejection sub-experiments
+
+Before comparing candidate quality, exercise the deterministic rejection paths
+that protect the screening contract:
+
+1. malformed suite-level configuration such as empty suite identity, zero-valued
+   positive-count controls, or an empty profile set
+2. strict-alignment inputs whose real-entity count is not divisible by
+   `leaf_size`
+3. deterministic-padding inputs with no real entities or with a real-entity
+   count already divisible by `leaf_size`
+4. malformed harvested-corpus inputs such as missing entity identity metadata,
+   invalid `synthetic` metadata, inadmissible embeddings, or too few retained
+   real entities
+5. invalid exact-neighbor ground-truth inputs such as corpora too small for the
+   declared neighborhood size or cosine inputs containing zero-norm embeddings
+
 ### Decision rule
 
 Carry forward only the top 2-3 leaf strategies that:
 
 - never violate the hard invariants
-- come closest to the `>=80%` locality target
+- rank highest on same-leaf neighborhood coherence as a proxy toward the
+  `>=80%` same-or-sibling end-state locality target from `clustering.md`
 - show meaningful local compression benefit
 - do not have obviously unacceptable build cost
 
