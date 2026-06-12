@@ -1949,8 +1949,19 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
                 .any(|gate| gate.gate_id == "deterministic-observable-results")
         }));
         assert!(campaign.run_reports.iter().all(|run| {
-            run.survived_required_gates
-                || (run.metric_results.is_empty() && run.ranking_score.is_none())
+            let hard_gate_failed = matches!(
+                &run.terminal_failure,
+                Some(StructuredFailure::GateFailure { gate_id, .. })
+                    if matches!(
+                        gate_id.as_str(),
+                        "exact-leaf-occupancy"
+                            | "complete-coverage"
+                            | "one-cluster-per-entity"
+                            | "no-empty-declared-clusters"
+                            | "deterministic-observable-results"
+                    )
+            );
+            !hard_gate_failed || (run.metric_results.is_empty() && run.ranking_score.is_none())
         }));
     }
 }
