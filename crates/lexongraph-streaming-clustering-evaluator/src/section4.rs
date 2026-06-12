@@ -804,10 +804,19 @@ fn compute_ground_truth(
     metric_contract: Section4MetricContract,
     neighbor_count: usize,
 ) -> Result<Vec<GroundTruthNeighborhood>, EvaluatorError> {
+    const MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES: usize = 8_192;
+
     if real_entities.len() <= neighbor_count {
         return Err(EvaluatorError::InvalidConfiguration(format!(
             "section-4 ground truth requires more than {} real entities, found {}",
             neighbor_count,
+            real_entities.len()
+        )));
+    }
+    if real_entities.len() > MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-4 ground truth generation currently uses brute-force exact neighbors and supports at most {} real entities; found {}",
+            MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES,
             real_entities.len()
         )));
     }

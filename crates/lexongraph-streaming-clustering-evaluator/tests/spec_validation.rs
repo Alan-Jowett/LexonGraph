@@ -1477,12 +1477,13 @@ fn val_stream_eval_027_ground_truth_is_deterministic_and_excludes_synthetic_padd
     assert_eq!(manifest.generated_profiles[0].real_entity_count, 3);
     assert_eq!(manifest.generated_profiles[0].evaluated_entity_count, 4);
     assert_eq!(profile.locality_ground_truth.len(), 3);
-    assert!(
-        profile
-            .locality_ground_truth
-            .iter()
-            .all(|entry| !entry.entity_id.contains("synthetic"))
-    );
+    assert!(profile.locality_ground_truth.iter().all(|entry| {
+        !entry.entity_id.contains("-synthetic-")
+            && entry
+                .neighbor_ids
+                .iter()
+                .all(|neighbor_id| !neighbor_id.contains("-synthetic-"))
+    }));
     assert!(matches!(
         &corpora[0].corpus.store,
         BlockStoreReferenceStore::ZipArchive { .. }
@@ -1849,5 +1850,21 @@ fn regression_section4_suite_rejects_zero_evaluated_entity_count_in_manifests() 
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("evaluated_entity_count"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_bruteforce_ground_truth_on_large_corpora() {
+    let output_dir = tempdir().unwrap();
+    let spec = section4_suite_spec(vec![strict_synthetic_profile(
+        "large-ground-truth",
+        "large-corpus",
+        8_194,
+    )]);
+
+    let result = generate_section4_suite_assets(&spec, output_dir.path());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("brute-force exact neighbors"))
     );
 }
