@@ -72,6 +72,9 @@ provides the candidate identity metadata needed for campaign reports. The
 adapter does not expose algorithm-specific evaluation hooks outside that shared
 boundary.
 
+Repository-owned reusable concrete candidates and evaluator-local fixtures use
+the same adapter shape.
+
 ### DSG-STREAM-EVAL-005 `Benchmark profile shape`
 
 The benchmark profile fixes all candidate-comparable inputs for one campaign,
@@ -432,6 +435,22 @@ equivalent benchmark-declared normalized build-cost measure is sufficient
 across the checked-in section-4 panel's scale tiers. It does not widen the
 crate into a full query-runtime or end-to-end service-level evaluator.
 
+### DSG-STREAM-EVAL-027 `Repository-owned concrete section-4 candidates`
+
+The checked-in section-4 workflow includes at least one repository-owned
+non-fixture candidate implementation that is reusable outside the evaluator and
+is entered solely through the shared streaming trainer/classifier contract.
+
+In this revision, the first such candidate is the
+`crates/lexongraph-pca-chunking` implementation of PCA projection +
+deterministic sort + exact chunking.
+
+### DSG-STREAM-EVAL-028 `Stable candidate identity in reports`
+
+Section-4 reports and scorecards surface stable repository-owned candidate
+identities for checked-in reusable concrete candidates in the same result model
+used for fixture candidates.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -467,3 +486,5 @@ crate into a full query-runtime or end-to-end service-level evaluator.
 | DSG-STREAM-EVAL-024 | REQ-STREAM-EVAL-035 |
 | DSG-STREAM-EVAL-025 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036 |
 | DSG-STREAM-EVAL-026 | REQ-STREAM-EVAL-037 |
+| DSG-STREAM-EVAL-027 | REQ-STREAM-EVAL-038 |
+| DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038 |

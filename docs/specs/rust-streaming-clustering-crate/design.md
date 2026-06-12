@@ -89,6 +89,11 @@ The default public API avoids any surface requiring dataset replay buffers,
 full assignment materialization, or whole-dataset ownership inside the contract
 types.
 
+Concrete implementations may retain pass-scoped internal state when their
+documented algorithm requires that buffering. The dataset-size-independent
+constraint applies to the shared public contract rather than prohibiting all
+implementation-internal pass buffering.
+
 ### DSG-STREAM-TRAIT-010 `Feature-gated conformance helpers`
 
 The crate exposes conformance helpers behind a non-default `conformance`

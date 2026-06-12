@@ -506,6 +506,16 @@ At minimum, this revision shall support deterministic reporting of:
 These reports shall remain consistent across the scale-tier set used by the
 checked-in section-4 screening panel in this revision.
 
+### REQ-STREAM-EVAL-038
+
+The checked-in section-4 screening workflow shall support at least one
+repository-owned reusable concrete candidate implementation in addition to
+evaluator-local fixture candidates.
+
+This revision's first such candidate shall be the PCA projection +
+deterministic sort + exact chunking implementation provided by
+`crates/lexongraph-pca-chunking`.
+
 ## Out of Scope
 
 This crate does not define or own:

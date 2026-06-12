@@ -75,7 +75,9 @@ category-level error surface.
 Inspect the public API for dataset-size coupling.
 
 **Pass condition:** the contract does not require full-dataset materialization
-or full assignment retention as part of normal trait use.
+or full assignment retention as part of normal trait use by callers or as an
+observable trait obligation. Concrete implementation-internal pass buffering is
+not by itself a contract violation.
 
 **Traces to:** REQ-STREAM-TRAIT-011
 

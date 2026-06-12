@@ -1,0 +1,12 @@
+[package]
+name = "lexongraph-pca-chunking"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lexongraph-pca = { path = "../lexongraph-pca" }
+lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
+sha2 = "0.11.0"
+
+[dev-dependencies]
+lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering", features = ["conformance"] }
