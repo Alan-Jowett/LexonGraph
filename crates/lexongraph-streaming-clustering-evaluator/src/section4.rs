@@ -24,13 +24,14 @@ use zip::write::SimpleFileOptions;
 
 use crate::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
-    BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark, DeferredResearchGoal,
-    EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, EvaluatorError,
-    GateDeclaration, GateKind, GroundTruthNeighborhood, MetricDeclaration, MetricKind,
-    ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
-    SharedBalanceConstraints, SharedCandidateConfig, TrainingPassSource, decode_embedding_to_f32,
-    emit_campaign_artifacts, load_leaf_records, metadata_value, rank_candidates, run_candidate,
-    validate_candidates, validate_profile, write_campaign_artifacts,
+    BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark,
+    DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
+    EvaluationEntity, EvaluationEntitySource, EvaluatorError, GateDeclaration, GateKind,
+    GroundTruthNeighborhood, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
+    ReproducibilityMetadata, ResearchCoverage, SharedBalanceConstraints, SharedCandidateConfig,
+    TrainingPassSource, decode_embedding_to_f32, emit_campaign_artifacts, load_leaf_records,
+    metadata_value, rank_candidates, run_candidate, validate_candidates, validate_profile,
+    write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1318,7 +1319,7 @@ fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
     vec![DeferredResearchGoal {
         deferred_id: "deferred-hierarchy-routing".into(),
         label: "Hierarchy routing proof".into(),
-        reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line".into(),
+        reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
         research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
         coverage: ResearchCoverage::Deferred,
     }]

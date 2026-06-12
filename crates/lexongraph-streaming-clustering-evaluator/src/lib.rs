@@ -56,6 +56,8 @@ pub use section4::{
 
 pub type PassPlan = Vec<Vec<Embedding>>;
 
+pub const DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON: &str = "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateIdentity {
     pub candidate_id: String,
@@ -3193,10 +3195,11 @@ fn hashed_fixture_assignment(embedding: &[f32], cluster_count: u32, seed: u64) -
 mod tests {
     use super::{
         AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
-        CandidateRunStatus, CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus,
-        DeferredResearchGoal, EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource,
-        GateDeclaration, GateKind, GroundTruthNeighborhood, MetricDeclaration, MetricKind,
-        ProbeWorkload, ReproducibilityMetadata, ResearchCoverage, SharedCandidateConfig,
+        CandidateRunStatus, CompressionBenchmark, CompressionMethod,
+        DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, DeferredResearchGoal,
+        EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, GateDeclaration,
+        GateKind, GroundTruthNeighborhood, MetricDeclaration, MetricKind, ProbeWorkload,
+        ReproducibilityMetadata, ResearchCoverage, SharedCandidateConfig,
         TEST_FORCE_TEMP_LAYER_FAILURE, TrainingPassSource, built_in_fixture_candidate,
         decode_embedding_to_f32, embeddings_into_batches, run_evaluation_campaign,
     };
@@ -3415,7 +3418,7 @@ mod tests {
             deferred_research_goals: vec![DeferredResearchGoal {
                 deferred_id: "deferred-hierarchy-routing".into(),
                 label: "Hierarchy routing proof".into(),
-                reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line".into(),
+                reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
                 research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
                 coverage: ResearchCoverage::Deferred,
             }],
