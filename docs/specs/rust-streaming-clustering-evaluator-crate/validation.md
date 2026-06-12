@@ -379,22 +379,45 @@ checked-in scale tier.
 
 ### VAL-STREAM-EVAL-032
 
-Run the checked-in section-4 suite with the repository-owned
-`lexongraph-pca-chunking` candidate.
+Run the checked-in section-4 suite with each repository-owned registered
+section-4 candidate.
 
-**Pass condition:** the candidate enters through the shared streaming
+**Pass condition:** each candidate enters through the shared streaming
 trainer/classifier contract and emits ordinary section-4 evaluator artifacts
 under a stable repository-owned candidate identity.
 
-**Traces to:** REQ-STREAM-EVAL-038
+**Traces to:** REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042
 
 ### VAL-STREAM-EVAL-033
 
-Compare one evaluator-local fixture candidate and the repository-owned
-`lexongraph-pca-chunking` candidate within the same campaign.
+Compare one evaluator-local fixture candidate and each repository-owned
+registered candidate within the same campaign.
 
-**Pass condition:** both candidates use the same evaluator-owned registration
+**Pass condition:** all compared candidates use the same evaluator-owned registration
 and report model, and the repository-owned concrete candidate does not require
 evaluator-private algorithm hooks.
 
-**Traces to:** REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-038
+**Traces to:** REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040
+
+### VAL-STREAM-EVAL-034
+
+Inspect the registered-candidate discovery surface and its CLI exposure.
+
+**Pass condition:** the evaluator's ordinary candidate-listing surface includes
+the repository-owned `lexongraph-pca-chunking`, `lexongraph-directional-pca`,
+and `lexongraph-dcbc-streaming` candidates so each can be selected through the
+same discovery path used for fixture candidates.
+
+**Traces to:** REQ-STREAM-EVAL-042
+
+### VAL-STREAM-EVAL-035
+
+Run profiles that trigger known candidate-specific shared-contract limits for
+the registered repository-owned candidates.
+
+**Pass condition:** the evaluator reports explicit ordinary candidate outcomes,
+rather than silently filtering candidates out, for at least directional-PCA
+rejection of shared balance constraints and DCBC rejection of zero-norm
+embeddings plus unsupported shared balance settings.
+
+**Traces to:** REQ-STREAM-EVAL-041

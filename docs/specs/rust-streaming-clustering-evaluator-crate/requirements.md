@@ -512,9 +512,50 @@ The checked-in section-4 screening workflow shall support at least one
 repository-owned reusable concrete candidate implementation in addition to
 evaluator-local fixture candidates.
 
-This revision's first such candidate shall be the PCA projection +
-deterministic sort + exact chunking implementation provided by
-`crates/lexongraph-pca-chunking`.
+This revision's checked-in repository-owned candidate set shall include:
+
+- the PCA projection + deterministic sort + exact chunking implementation
+  provided by `crates/lexongraph-pca-chunking`
+- the directional PCA clustering implementation provided by
+  `crates/lexongraph-directional-pca`
+- the streaming DCBC clustering implementation provided by
+  `crates/lexongraph-dcbc-streaming`
+
+### REQ-STREAM-EVAL-039
+
+For the repository-owned `lexongraph-directional-pca` candidate, the evaluator
+shall own deterministic default `DirectionalPcaParams` sufficient to register
+and execute that candidate through the shared streaming
+trainer/classifier contract without introducing an evaluator-private candidate
+API.
+
+### REQ-STREAM-EVAL-040
+
+The evaluator shall register `lexongraph-dcbc-streaming` through the same
+shared candidate adapter surface and report model used for evaluator-local
+fixtures and other repository-owned candidates.
+
+### REQ-STREAM-EVAL-041
+
+When a registered repository-owned candidate cannot execute under a benchmark
+profile because of candidate-specific limits that remain within the shared
+streaming clustering contract, the evaluator shall surface that outcome as an
+ordinary candidate result rather than silently filtering the candidate out of
+the run.
+
+At minimum, this revision shall preserve explicit candidate outcomes for:
+
+- `lexongraph-directional-pca` rejection of shared balance constraints
+- `lexongraph-dcbc-streaming` rejection of zero-norm embeddings
+- `lexongraph-dcbc-streaming` rejection of unsupported shared balance settings
+  such as `max_cluster_size_ratio` and `soft_balance_penalty`
+
+### REQ-STREAM-EVAL-042
+
+The evaluator's candidate-discovery surface and checked-in validation artifacts
+shall include all repository-owned registered section-4 candidates so they can
+be listed, selected, and exercised through ordinary campaign and section-4
+suite execution paths.
 
 ## Out of Scope
 

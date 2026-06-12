@@ -437,19 +437,50 @@ crate into a full query-runtime or end-to-end service-level evaluator.
 
 ### DSG-STREAM-EVAL-027 `Repository-owned concrete section-4 candidates`
 
-The checked-in section-4 workflow includes at least one repository-owned
-non-fixture candidate implementation that is reusable outside the evaluator and
-is entered solely through the shared streaming trainer/classifier contract.
+The checked-in section-4 workflow includes a repository-owned set of
+non-fixture candidate implementations that are reusable outside the evaluator
+and are entered solely through the shared streaming trainer/classifier
+contract.
 
-In this revision, the first such candidate is the
-`crates/lexongraph-pca-chunking` implementation of PCA projection +
-deterministic sort + exact chunking.
+In this revision, that set includes:
+
+- `crates/lexongraph-pca-chunking`
+- `crates/lexongraph-directional-pca`
+- `crates/lexongraph-dcbc-streaming`
 
 ### DSG-STREAM-EVAL-028 `Stable candidate identity in reports`
 
 Section-4 reports and scorecards surface stable repository-owned candidate
 identities for checked-in reusable concrete candidates in the same result model
 used for fixture candidates.
+
+### DSG-STREAM-EVAL-029 `Evaluator-owned registration defaults`
+
+For repository-owned reusable candidates that require algorithm-local parameter
+objects in addition to the shared clustering configuration, the evaluator owns
+deterministic registration defaults inside its ordinary registered-candidate
+surface rather than widening the shared candidate contract.
+
+In this revision, the evaluator provides deterministic default
+`DirectionalPcaParams` for `lexongraph-directional-pca`, while
+`lexongraph-dcbc-streaming` is registered directly from the shared clustering
+configuration.
+
+### DSG-STREAM-EVAL-030 `Explicit incompatibility outcomes`
+
+Candidate-specific incompatibilities that are still expressed through the
+shared contract are surfaced as ordinary candidate outcomes in the same report
+model used for other candidate failures.
+
+In this revision, that includes at least:
+
+- `lexongraph-directional-pca` rejection of shared balance constraints
+- `lexongraph-dcbc-streaming` rejection of zero-norm embeddings
+- `lexongraph-dcbc-streaming` rejection of unsupported shared balance settings
+
+The evaluator does not pre-filter such candidates out of the checked-in
+registration surface; it lists them, allows selection, and records explicit
+outcomes when a profile triggers one of those limits.
 
 ## Traceability
 
@@ -486,5 +517,7 @@ used for fixture candidates.
 | DSG-STREAM-EVAL-024 | REQ-STREAM-EVAL-035 |
 | DSG-STREAM-EVAL-025 | REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036 |
 | DSG-STREAM-EVAL-026 | REQ-STREAM-EVAL-037 |
-| DSG-STREAM-EVAL-027 | REQ-STREAM-EVAL-038 |
-| DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038 |
+| DSG-STREAM-EVAL-027 | REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
+| DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
+| DSG-STREAM-EVAL-029 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040 |
+| DSG-STREAM-EVAL-030 | REQ-STREAM-EVAL-041, REQ-STREAM-EVAL-042 |
