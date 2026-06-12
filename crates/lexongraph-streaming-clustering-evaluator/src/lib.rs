@@ -1235,6 +1235,11 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
         }
     }
     for identity in &profile.later_phase_identities {
+        if identity.identity_id.trim().is_empty() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "later-phase identities must declare a non-empty identity_id".into(),
+            ));
+        }
         if identity.label.trim().is_empty() {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "later-phase identity {} must declare a non-empty label",
@@ -1694,11 +1699,15 @@ fn finalize_successful_run(
     let hard_gate_failed = failed_hard_gate.is_some();
     let synthetic_padding_concentration =
         compute_synthetic_padding_concentration(&primary.cluster_occupancies, profile);
-    let compression_analysis = compute_compression_analysis(
-        &primary.leaf_membership,
-        &primary.evaluation_entities,
-        &profile.compression_benchmark,
-    );
+    let compression_analysis = if hard_gate_failed {
+        None
+    } else {
+        compute_compression_analysis(
+            &primary.leaf_membership,
+            &primary.evaluation_entities,
+            &profile.compression_benchmark,
+        )
+    };
     let (metric_results, gate_results) = if failed_hard_gate.is_some() {
         (Vec::new(), hard_gate_results)
     } else {

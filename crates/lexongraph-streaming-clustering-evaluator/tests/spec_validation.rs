@@ -1406,6 +1406,18 @@ fn regression_unknown_entity_corpus_ids_are_rejected() {
 }
 
 #[test]
+fn regression_empty_later_phase_identity_ids_are_rejected() {
+    let mut profile = strict_alignment_profile();
+    profile.later_phase_identities[0].identity_id.clear();
+
+    let result = run_evaluation_campaign(&profile, &balanced_and_skewed_candidates());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("non-empty identity_id"))
+    );
+}
+
+#[test]
 fn regression_duplicate_corpus_source_ids_are_rejected() {
     let result = run_evaluation_campaign(
         &duplicate_source_id_profile(),
@@ -2014,6 +2026,7 @@ fn val_stream_eval_030_section4_screening_runs_strict_and_padding_profiles() {
             );
             !hard_gate_failed
                 || (run.metric_results.is_empty()
+                    && run.compression_analysis.is_none()
                     && run.ranking_score.is_none()
                     && !run.artifact_hygiene.comparative_metrics_emitted
                     && !run

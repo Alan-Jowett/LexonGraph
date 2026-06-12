@@ -688,6 +688,7 @@ pub fn write_section4_suite_artifacts(
 }
 
 fn measure_peak_build_memory<T>(run: impl FnOnce() -> T) -> (T, u64) {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -711,10 +712,14 @@ fn measure_peak_build_memory<T>(run: impl FnOnce() -> T) -> (T, u64) {
         }
     });
 
-    let result = run();
+    let result = catch_unwind(AssertUnwindSafe(run));
     stop.store(true, AtomicOrdering::Relaxed);
     let _ = sampler.join();
-    (result, peak.load(AtomicOrdering::Relaxed))
+    let peak_bytes = peak.load(AtomicOrdering::Relaxed);
+    match result {
+        Ok(result) => (result, peak_bytes),
+        Err(payload) => resume_unwind(payload),
+    }
 }
 
 #[cfg(target_os = "windows")]
