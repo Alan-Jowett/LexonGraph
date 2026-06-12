@@ -4,9 +4,9 @@
 
 ## Status
 
-Draft validation specification for a Rust crate that composes streaming
-directional PCA and streaming DCBC into one deterministic adaptive built-in
-planning realization for the LexonGraph streaming indexer.
+Draft validation specification for a Rust crate that defines deterministic
+adaptive planning-policy settings, switch selection, and diagnostics for the
+LexonGraph streaming indexer's adaptive built-in planning path.
 
 ## Validation Scope
 
@@ -14,7 +14,8 @@ These validation entries define the conformance surface for the adaptive
 planning-policy crate. They cover both:
 
 - deterministic adaptive switching behavior
-- compatibility with the indexer's existing finalized partition hierarchy
+- compatibility of selector outputs and diagnostics with the indexer's existing
+  finalized partition hierarchy boundary
 
 ## Validation Entries
 
@@ -31,16 +32,17 @@ Inspect the repository artifacts for the new crate.
 
 Inspect the crate's public surface and its specification references.
 
-**Pass condition:** the crate exposes an aggregate planning realization or
-factory for the streaming indexer's built-in planning path, remains subordinate
-to the streaming indexer, directional-PCA, and streaming DCBC specification
-packages, and does not redefine the shared streaming clustering contract.
+**Pass condition:** the crate exposes adaptive planning-policy settings together
+with a selector surface for the streaming indexer's built-in planning path,
+remains subordinate to the streaming indexer, directional-PCA, and streaming
+DCBC specification packages, and does not redefine the shared streaming
+clustering contract.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-002, REQ-ADAPTIVE-POLICY-003
 
 ### VAL-ADAPTIVE-POLICY-003
 
-Construct the adaptive realization with valid explicit settings.
+Construct the adaptive selector surface with valid explicit settings.
 
 **Pass condition:** construction succeeds only when direction, directional-PCA
 settings, DCBC settings, and a finite non-negative mean-cluster-radius switch
@@ -112,9 +114,9 @@ and do not switch back to directional PCA.
 Complete both a no-switch adaptive flow and a switch-triggering adaptive flow
 through the indexer's hierarchy-normalization boundary.
 
-**Pass condition:** both flows normalize into the indexer's existing finalized
-partition hierarchy abstraction without requiring a different final
-materialization contract.
+**Pass condition:** both flows produce selector outputs and diagnostics that
+remain compatible with the indexer's existing finalized partition hierarchy
+abstraction without requiring a different final materialization contract.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-011
 
@@ -133,9 +135,10 @@ substituting another algorithm, threshold interpretation, or direction.
 Inspect the repository verification artifacts for the adaptive crate and repeat
 the same switch-triggering fixture twice.
 
-**Pass condition:** automated coverage exists for construction, no-switch
-behavior, switch-trigger behavior, both directions, and hierarchy
-compatibility, including coverage for a current threshold assumption of `0.25`,
-and both repeated runs select the same switch boundary.
+**Pass condition:** automated coverage exists for selector construction,
+no-switch behavior, switch-trigger behavior, both directions, and deterministic
+structured diagnostics compatible with the indexer-owned hierarchy boundary,
+including coverage for a current threshold assumption of `0.25`, and both
+repeated runs select the same switch boundary.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-014

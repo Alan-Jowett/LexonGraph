@@ -4,9 +4,9 @@
 
 ## Status
 
-Draft design specification for a Rust crate that composes streaming directional
-PCA and streaming DCBC into one deterministic adaptive built-in planning
-realization for the LexonGraph streaming indexer.
+Draft design specification for a Rust crate that defines deterministic adaptive
+planning-policy settings, switch selection, and diagnostics for the LexonGraph
+streaming indexer's adaptive built-in planning path.
 
 ## Design Goals
 
@@ -15,7 +15,7 @@ The crate design is intended to be:
 - deterministic at the observable boundary
 - minimal in how much new algorithm surface it introduces
 - explicit about switch criteria and direction continuity
-- compatible with the indexer's existing finalized partition hierarchy
+- compatible with the indexer's existing finalized partition hierarchy boundary
 - respectful of existing crate ownership boundaries
 
 ## Crate Boundary
@@ -25,8 +25,8 @@ The crate owns:
 - adaptive planning-policy configuration
 - deterministic switch-decision logic
 - structured adaptive diagnostics and switch records
-- composition of the existing directional-PCA and DCBC realizations for indexer
-  built-in planning
+- deterministic selection between the existing directional-PCA and DCBC
+  realizations for indexer built-in planning
 
 The crate does not own:
 
@@ -46,14 +46,22 @@ specification packages for their owned algorithm realizations.
 The crate does not redefine those sources or the shared streaming clustering
 contract.
 
-### DSG-ADAPTIVE-POLICY-002 `Adaptive built-in realization boundary`
+### DSG-ADAPTIVE-POLICY-002 `Adaptive selector boundary`
 
-The crate exposes one aggregate planning realization or factory intended for the
-streaming indexer's built-in planning-selection surface.
+The crate exposes adaptive planning-policy settings together with a selector
+surface intended for the streaming indexer's built-in planning-selection
+surface.
 
-The caller chooses the adaptive realization up front; the crate then owns the
+Within this specification package, later references to the `adaptive
+realization` mean this selector surface together with its internal
+deterministic switch logic.
+
+The caller chooses the adaptive mode up front; the crate then owns the
 algorithm-switch logic internally rather than requiring a caller-driven
 per-layer conversation.
+
+The streaming indexer remains responsible for instantiating planning phases,
+normalizing planning output, and materializing the finalized hierarchy.
 
 ### DSG-ADAPTIVE-POLICY-003 `Explicit adaptive configuration`
 
@@ -129,15 +137,16 @@ For each evaluated boundary, the crate retains a structured record identifying:
 If surfaced publicly, these diagnostics remain deterministic and suitable for
 validation without requiring parsing of free-form messages.
 
-### DSG-ADAPTIVE-POLICY-010 `Hierarchy normalization compatibility`
+### DSG-ADAPTIVE-POLICY-010 `Hierarchy compatibility`
 
 Regardless of whether a given planning segment is realized by directional PCA
-or DCBC, the adaptive crate normalizes the resulting planning output into the
-same finalized partition-hierarchy abstraction expected by the streaming
-indexer.
+or DCBC, the adaptive crate's selected active-algorithm outputs and diagnostics
+remain compatible with the same finalized partition-hierarchy abstraction
+expected by the streaming indexer.
 
 The adaptive crate therefore does not require a different final materialization
-contract downstream.
+contract downstream, while leaving actual normalization to the indexer-owned
+planning path.
 
 ### DSG-ADAPTIVE-POLICY-011 `Explicit failure behavior`
 
@@ -150,9 +159,10 @@ direction, or fall back to caller interaction.
 
 ### DSG-ADAPTIVE-POLICY-012 `Verification realization`
 
-Repository verification artifacts cover construction, no-switch behavior,
-switch-trigger behavior, deterministic switch-boundary reproduction, both
-direction modes, and hierarchy-compatibility behavior for the adaptive crate.
+Repository verification artifacts cover selector construction, no-switch
+behavior, switch-trigger behavior, deterministic switch-boundary reproduction,
+both direction modes, and compatibility of selector outputs and diagnostics
+with the indexer-owned hierarchy boundary.
 
 ## Traceability
 

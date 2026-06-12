@@ -113,10 +113,12 @@ archives.
 Inspect the zip-backed implementation's public and verification surface.
 
 **Pass condition:** the repository includes automated verification artifacts for
-the approved read-only zip backend behavior and does not claim full parent
-conformance.
+the approved read-only zip backend behavior, remains subordinate to
+`docs/protocol/blocks.md`, `docs/specs/rust-block-crate/`, and
+`docs/specs/rust-block-storage-trait/` for read-path semantics and integrity
+rules, and does not claim full parent conformance.
 
-**Traces to:** REQ-ZIP-STORE-008, REQ-ZIP-STORE-009
+**Traces to:** REQ-ZIP-STORE-001, REQ-ZIP-STORE-008, REQ-ZIP-STORE-009
 
 ### VAL-ZIP-STORE-012
 
