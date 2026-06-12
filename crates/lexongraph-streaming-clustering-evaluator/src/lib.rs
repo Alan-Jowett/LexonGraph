@@ -2894,21 +2894,6 @@ fn compute_compression_analysis(
                 return None;
             }
 
-            let global_error = scalar_quantization_error(&real_entities);
-            if global_error == 0.0 {
-                return Some(CompressionAnalysis {
-                    baseline_label: compression_benchmark.global_baseline_label.clone(),
-                    global_real_entity_count: real_entities.len(),
-                    global_reconstruction_error: global_error,
-                    local_reconstruction_error_sum: 0.0,
-                    reported_gain: 0.0,
-                    delta_semantics:
-                        "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error"
-                            .into(),
-                    bucket_reports: Vec::new(),
-                });
-            }
-
             let entity_lookup = evaluation_entities
                 .iter()
                 .map(|entity| (entity.entity_id.as_str(), entity))
@@ -2925,7 +2910,6 @@ fn compute_compression_analysis(
                         .push(*entity);
                 }
             }
-
             let bucket_reports = entities_by_cluster
                 .iter()
                 .map(|(cluster_id, entities)| CompressionBucketReport {
@@ -2938,6 +2922,21 @@ fn compute_compression_analysis(
                 .iter()
                 .map(|bucket| bucket.reconstruction_error)
                 .sum::<f64>();
+
+            let global_error = scalar_quantization_error(&real_entities);
+            if global_error == 0.0 {
+                return Some(CompressionAnalysis {
+                    baseline_label: compression_benchmark.global_baseline_label.clone(),
+                    global_real_entity_count: real_entities.len(),
+                    global_reconstruction_error: global_error,
+                    local_reconstruction_error_sum: local_error_sum,
+                    reported_gain: 0.0,
+                    delta_semantics:
+                        "reported_gain = 0 when global_reconstruction_error == 0; local_reconstruction_error_sum is reported directly"
+                            .into(),
+                    bucket_reports,
+                });
+            }
 
             Some(CompressionAnalysis {
                 baseline_label: compression_benchmark.global_baseline_label.clone(),

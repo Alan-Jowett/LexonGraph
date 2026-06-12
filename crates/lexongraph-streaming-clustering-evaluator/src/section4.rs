@@ -1030,6 +1030,7 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
     let mut seen_profile_ids = HashSet::new();
     let mut declared_corpus_ids = HashSet::new();
     let mut declared_scale_tier_ids = HashSet::new();
+    let mut declared_profile_coordinates = HashSet::new();
     for profile in &spec.profiles {
         validate_profile_id(&profile.profile_id)?;
         if profile.corpus_id.trim().is_empty() {
@@ -1052,6 +1053,8 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
         }
         declared_corpus_ids.insert(profile.corpus_id.as_str());
         declared_scale_tier_ids.insert(profile.scale_tier_id.as_str());
+        declared_profile_coordinates
+            .insert((profile.corpus_id.as_str(), profile.scale_tier_id.as_str()));
         let real_entity_count = match &profile.source {
             Section4ProfileSourceSpec::Synthetic {
                 real_entity_count, ..
@@ -1090,6 +1093,16 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "section-4 suite held-out query-set identity {} must declare corpus_id and scale_tier_id",
                 identity.identity_id
+            )));
+        }
+        if let (Some(corpus_id), Some(scale_tier_id)) = (
+            identity.corpus_id.as_deref(),
+            identity.scale_tier_id.as_deref(),
+        ) && !declared_profile_coordinates.contains(&(corpus_id, scale_tier_id))
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} references undeclared corpus_id/scale_tier_id pair ({}, {})",
+                identity.identity_id, corpus_id, scale_tier_id
             )));
         }
     }

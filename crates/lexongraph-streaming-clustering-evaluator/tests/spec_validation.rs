@@ -781,6 +781,62 @@ fn val_stream_eval_012_local_compression_metric_compares_local_and_global_baseli
 }
 
 #[test]
+fn regression_compression_analysis_handles_zero_global_reconstruction_error() {
+    let mut profile = strict_alignment_profile();
+    let exact_embeddings = [
+        vec![0.0, 0.0],
+        vec![1.0, 0.0],
+        vec![254.0, 0.0],
+        vec![255.0, 0.0],
+    ];
+    for pass in &mut profile.training_passes {
+        let TrainingPassSource::Inline { batches } = pass else {
+            panic!("regression fixture should use inline training passes");
+        };
+        batches[0][0] = exact_embeddings[0].clone();
+        batches[0][1] = exact_embeddings[1].clone();
+        batches[1][0] = exact_embeddings[2].clone();
+        batches[1][1] = exact_embeddings[3].clone();
+    }
+    let EmbeddingWorkloadSource::Inline { embeddings } = &mut profile.probe_workloads[0].source
+    else {
+        panic!("regression fixture should use inline probe embeddings");
+    };
+    embeddings[0] = vec![0.5, 0.0];
+    embeddings[1] = vec![254.5, 0.0];
+    let entities = profile
+        .inline_evaluation_entities_mut()
+        .expect("regression fixture should use inline evaluation entities");
+    for (entity, embedding) in entities.iter_mut().zip(exact_embeddings) {
+        entity.embedding = embedding;
+    }
+
+    let report = run_evaluation_campaign(
+        &profile,
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let analysis = report.run_reports[0]
+        .compression_analysis
+        .as_ref()
+        .expect("compression analysis should still be emitted");
+
+    assert_eq!(analysis.global_reconstruction_error, 0.0);
+    assert_eq!(analysis.local_reconstruction_error_sum, 0.0);
+    assert_eq!(analysis.reported_gain, 0.0);
+    assert_eq!(
+        analysis.delta_semantics,
+        "reported_gain = 0 when global_reconstruction_error == 0; local_reconstruction_error_sum is reported directly"
+    );
+    assert!(!analysis.bucket_reports.is_empty());
+}
+
+#[test]
 fn val_stream_eval_013_report_distinguishes_prerequisites_gates_and_metrics_and_excludes_gate_failures_from_ranking()
  {
     let report = run_evaluation_campaign(
@@ -2901,6 +2957,38 @@ fn regression_section4_suite_rejects_malformed_frozen_contract_items() {
         generate_section4_suite_assets(&duplicate_item_id, output_dir.path());
     assert!(
         matches!(duplicate_item_id_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("duplicate frozen benchmark-contract item_id"))
+    );
+}
+
+#[test]
+fn regression_section4_suite_rejects_later_phase_identity_coordinate_mismatches() {
+    let output_dir = tempdir().unwrap();
+    let mut spec = section4_suite_spec(vec![
+        strict_synthetic_profile("small-a", "corpus-a", 12),
+        Section4ProfileSpec {
+            profile_id: "medium-b".into(),
+            corpus_id: "corpus-b".into(),
+            scale_tier_id: "n-14".into(),
+            scale_tier_kind: Section4ScaleTierKind::Medium,
+            source: Section4ProfileSourceSpec::Synthetic {
+                family: Section4CorpusFamily::WellClusteredSynthetic,
+                real_entity_count: 14,
+                alignment_policy: AlignmentPolicy::StrictAlignment,
+            },
+        },
+    ]);
+    spec.experiment_track_contract.later_phase_identities = vec![LaterPhaseIdentity {
+        identity_id: "mismatched-heldout".into(),
+        label: "Mismatched held-out query set".into(),
+        kind: LaterPhaseIdentityKind::HeldOutQuerySet,
+        corpus_id: Some("corpus-a".into()),
+        scale_tier_id: Some("n-14".into()),
+        later_evaluation_line: "future hierarchy-routing evaluator".into(),
+    }];
+
+    let result = generate_section4_suite_assets(&spec, output_dir.path());
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("undeclared corpus_id/scale_tier_id pair"))
     );
 }
 
