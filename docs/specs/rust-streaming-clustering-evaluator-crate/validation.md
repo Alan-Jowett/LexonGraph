@@ -202,9 +202,9 @@ returns a shared-contract failure.
 
 **Pass condition:** failures are surfaced deterministically with a stable error
 code and deterministic human-readable message and distinguish invalid evaluator
-configuration, invalid or unresolved corpus-source references, block-store-
-backed corpus-loading failures, zip-archive open or read failures, and
-candidate-reported shared-contract failure. A failed section-4
+configuration, invalid or unresolved corpus-source references,
+block-store-backed corpus-loading failures, zip-archive open or read failures,
+and candidate-reported shared-contract failure. A failed section-4
 candidate/configuration execution does not expose success-shaped completed
 artifacts beyond the point of failure.
 
@@ -385,8 +385,8 @@ exact-neighbor ground truth, local-versus-global compression gain, and the
 distinct outcomes for strict alignment versus deterministic padding where both
 are applicable, including deterministic rejection of non-divisible strict
 alignment and impossible or degenerate deterministic-padding inputs, together
-with the declared normalized build-cost comparison used to judge the alignment-
-policy tradeoff.
+with the declared normalized build-cost comparison used to judge the
+alignment-policy tradeoff.
 
 **Traces to:** REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-048
 

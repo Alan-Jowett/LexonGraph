@@ -522,10 +522,12 @@ pub fn run_section4_suite(
         let mut timings = HashMap::new();
         let mut run_reports = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let started = Instant::now();
-            let (run_report, peak_build_memory_bytes) =
-                measure_peak_build_memory(|| run_candidate(&profile, candidate));
-            let elapsed = started.elapsed().as_nanos();
+            let ((run_report, elapsed), peak_build_memory_bytes) =
+                measure_peak_build_memory(|| {
+                    let started = Instant::now();
+                    let run_report = run_candidate(&profile, candidate);
+                    (run_report, started.elapsed().as_nanos())
+                });
             timings.insert(
                 candidate.identity.candidate_id.clone(),
                 (
@@ -705,7 +707,7 @@ fn measure_peak_build_memory<T>(run: impl FnOnce() -> T) -> (T, u64) {
             if let Some(memory_bytes) = current_process_memory_bytes() {
                 peak_value.fetch_max(memory_bytes, AtomicOrdering::Relaxed);
             }
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(10));
         }
         if let Some(memory_bytes) = current_process_memory_bytes() {
             peak_value.fetch_max(memory_bytes, AtomicOrdering::Relaxed);
