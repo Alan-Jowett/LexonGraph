@@ -1946,6 +1946,29 @@ fn val_stream_eval_035_candidate_incompatibilities_are_reported_explicitly() {
             if candidate_id == "dcbc-streaming"
                 && message.contains("max_cluster_size_ratio")
     ));
+
+    let mut soft_penalty_profile = non_zero_strict_alignment_profile();
+    soft_penalty_profile
+        .shared_candidate_config
+        .balance_constraints = Some(SharedBalanceConstraints {
+        min_cluster_occupancy: None,
+        max_cluster_occupancy: None,
+        max_cluster_size_ratio: None,
+        soft_balance_penalty: Some(0.25),
+    });
+    let soft_penalty_report =
+        run_evaluation_campaign(&soft_penalty_profile, &zero_norm_candidates).unwrap();
+    let soft_penalty_run = &soft_penalty_report.run_reports[0];
+    assert_eq!(
+        soft_penalty_run.run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(matches!(
+        soft_penalty_run.terminal_failure.as_ref(),
+        Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
+            if candidate_id == "dcbc-streaming"
+                && message.contains("soft_balance_penalty")
+    ));
 }
 
 #[test]
