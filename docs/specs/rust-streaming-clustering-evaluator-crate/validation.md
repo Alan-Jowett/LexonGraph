@@ -33,7 +33,9 @@ Inspect the crate's public surface and specification references.
 
 **Pass condition:** the crate remains subordinate to the clustering research
 documents and the shared streaming clustering contract while defining an
-evaluator-owned benchmark boundary rather than a broader candidate API.
+evaluator-owned benchmark boundary rather than a broader candidate API, and the
+crate's leaf-stage scope limits only what it may claim directly rather than
+redefining the end-state requirements from `docs/research/clustering.md`.
 
 **Traces to:** REQ-STREAM-EVAL-002, REQ-STREAM-EVAL-004
 
@@ -127,7 +129,9 @@ Run the evaluator on a benchmark profile with deterministic synthetic padding.
 **Pass condition:** the evaluator distinguishes real from synthetic entities in
 the leaf membership artifact, enforces exact final occupancy against the padded
 evaluated set, and excludes synthetic entities from externally reported
-locality and compression metrics.
+locality and compression metrics, while also reporting whether synthetic
+padding is concentrated into the minimum possible number of final clusters
+permitted by the deterministic procedure.
 
 **Traces to:** REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018
 
@@ -213,8 +217,10 @@ documents.
 
 **Pass condition:** research goals requiring full hierarchy, sibling structure,
 routing, or durable index artifacts are recorded as deferred rather than
-claimed as fully proven by the streaming clustering evaluator alone, and the
-future end-to-end evaluator is called out as a separate later line.
+claimed as fully proven by the streaming clustering evaluator alone, the future
+end-to-end evaluator is called out as a separate later line, and the deferred
+status is presented as staged evidence toward `docs/research/clustering.md`
+rather than as a narrowing of that parent requirement set.
 
 **Traces to:** REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021
 

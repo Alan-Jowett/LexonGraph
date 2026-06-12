@@ -18,10 +18,11 @@ use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
-    BlockStoreReferenceStore, CompressionBenchmark, CompressionMethod, DeferredResearchGoal,
-    EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind,
-    MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata,
-    ResearchCoverage, SharedCandidateConfig, TrainingPassSource, built_in_fixture_candidate,
+    BlockStoreReferenceStore, CompressionBenchmark, CompressionMethod,
+    DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
+    EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind, MetricDeclaration,
+    MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
+    SharedCandidateConfig, TrainingPassSource, built_in_fixture_candidate,
 };
 use zip::CompressionMethod as ZipCompressionMethod;
 use zip::ZipWriter;
@@ -190,7 +191,7 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
         deferred_research_goals: vec![DeferredResearchGoal {
             deferred_id: "deferred-hierarchy-routing".into(),
             label: "Hierarchy routing proof".into(),
-            reason: "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary".into(),
+            reason: DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON.into(),
             research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-ROUTING".into()],
             coverage: ResearchCoverage::Deferred,
         }],
