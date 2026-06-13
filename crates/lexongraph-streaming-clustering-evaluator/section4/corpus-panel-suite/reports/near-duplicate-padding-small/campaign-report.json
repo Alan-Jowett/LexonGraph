@@ -1,0 +1,3269 @@
+{
+  "profile_id": "near-duplicate-padding-small",
+  "run_reports": [
+    {
+      "candidate_identity": {
+        "candidate_id": "recursive-balanced-kmeans",
+        "implementation_label": "Evaluator-local recursive balanced k-means family representative",
+        "software_identity": "evaluator-recursive-balanced-kmeans-v1"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "recursive-balanced-kmeans",
+          "implementation_label": "Evaluator-local recursive balanced k-means family representative",
+          "software_identity": "evaluator-recursive-balanced-kmeans-v1"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 0.0,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            2,
+            3,
+            1,
+            4,
+            5,
+            5,
+            3,
+            4,
+            2,
+            0,
+            1
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 5,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 1,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 1,
+          "synthetic_count": 1
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": {
+        "baseline_label": "global-real-dataset-8bit",
+        "global_real_entity_count": 11,
+        "global_reconstruction_error": 0.005815703079775858,
+        "local_reconstruction_error_sum": 0.0,
+        "reported_gain": 1.0,
+        "delta_semantics": "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error",
+        "bucket_reports": [
+          {
+            "cluster_id": 0,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 1,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 2,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 3,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 4,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 5,
+            "real_entity_count": 1,
+            "reconstruction_error": 0.0
+          }
+        ]
+      },
+      "metric_results": [
+        {
+          "metric_id": "same-leaf-neighborhood-coherence",
+          "label": "Same-leaf neighborhood coherence",
+          "kind": "SameLeafNeighborhoodCoherence",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "ranking_weight": 1.0,
+          "value": 0.09090909090909091
+        },
+        {
+          "metric_id": "local-compression-gain",
+          "label": "Local compression gain",
+          "kind": "LocalCompressionGain",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COMPRESSION"
+          ],
+          "ranking_weight": 0.5,
+          "value": 1.0
+        }
+      ],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": true,
+        "success_shaped_completion_artifacts_emitted": true,
+        "detail": "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+      },
+      "run_status": "Succeeded",
+      "survived_required_gates": true,
+      "ranking_score": 0.5909090909090909,
+      "terminal_failure_code": null,
+      "terminal_failure_message": null,
+      "terminal_failure": null
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "pca-sort-exact-chunking",
+        "implementation_label": "Repository-owned PCA sort + exact chunking",
+        "software_identity": "lexongraph-pca-chunking-v0.1.0"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "pca-sort-exact-chunking",
+          "implementation_label": "Repository-owned PCA sort + exact chunking",
+          "software_identity": "lexongraph-pca-chunking-v0.1.0"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 167.76906732804528,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            2,
+            3,
+            1,
+            4,
+            5,
+            5,
+            3,
+            4,
+            2,
+            0,
+            1
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 5,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 1,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 1,
+          "synthetic_count": 1
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": {
+        "baseline_label": "global-real-dataset-8bit",
+        "global_real_entity_count": 11,
+        "global_reconstruction_error": 0.005815703079775858,
+        "local_reconstruction_error_sum": 0.0,
+        "reported_gain": 1.0,
+        "delta_semantics": "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error",
+        "bucket_reports": [
+          {
+            "cluster_id": 0,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 1,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 2,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 3,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 4,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 5,
+            "real_entity_count": 1,
+            "reconstruction_error": 0.0
+          }
+        ]
+      },
+      "metric_results": [
+        {
+          "metric_id": "same-leaf-neighborhood-coherence",
+          "label": "Same-leaf neighborhood coherence",
+          "kind": "SameLeafNeighborhoodCoherence",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "ranking_weight": 1.0,
+          "value": 0.09090909090909091
+        },
+        {
+          "metric_id": "local-compression-gain",
+          "label": "Local compression gain",
+          "kind": "LocalCompressionGain",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COMPRESSION"
+          ],
+          "ranking_weight": 0.5,
+          "value": 1.0
+        }
+      ],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": true,
+        "success_shaped_completion_artifacts_emitted": true,
+        "detail": "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+      },
+      "run_status": "Succeeded",
+      "survived_required_gates": true,
+      "ranking_score": 0.5909090909090909,
+      "terminal_failure_code": null,
+      "terminal_failure_message": null,
+      "terminal_failure": null
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "space-filling-curve-exact-chunking",
+        "implementation_label": "Evaluator-local space-filling-curve ordering + exact chunking baseline",
+        "software_identity": "evaluator-space-filling-curve-v1"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "implementation_label": "Evaluator-local space-filling-curve ordering + exact chunking baseline",
+          "software_identity": "evaluator-space-filling-curve-v1"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 0.0,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            2,
+            3,
+            1,
+            4,
+            5,
+            5,
+            3,
+            4,
+            2,
+            0,
+            1
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 5,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 1,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 1,
+          "synthetic_count": 1
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": {
+        "baseline_label": "global-real-dataset-8bit",
+        "global_real_entity_count": 11,
+        "global_reconstruction_error": 0.005815703079775858,
+        "local_reconstruction_error_sum": 0.0,
+        "reported_gain": 1.0,
+        "delta_semantics": "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error",
+        "bucket_reports": [
+          {
+            "cluster_id": 0,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 1,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 2,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 3,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 4,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 5,
+            "real_entity_count": 1,
+            "reconstruction_error": 0.0
+          }
+        ]
+      },
+      "metric_results": [
+        {
+          "metric_id": "same-leaf-neighborhood-coherence",
+          "label": "Same-leaf neighborhood coherence",
+          "kind": "SameLeafNeighborhoodCoherence",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "ranking_weight": 1.0,
+          "value": 0.09090909090909091
+        },
+        {
+          "metric_id": "local-compression-gain",
+          "label": "Local compression gain",
+          "kind": "LocalCompressionGain",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COMPRESSION"
+          ],
+          "ranking_weight": 0.5,
+          "value": 1.0
+        }
+      ],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": true,
+        "success_shaped_completion_artifacts_emitted": true,
+        "detail": "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+      },
+      "run_status": "Succeeded",
+      "survived_required_gates": true,
+      "ranking_score": 0.5909090909090909,
+      "terminal_failure_code": null,
+      "terminal_failure_message": null,
+      "terminal_failure": null
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "graph-neighborhood-balance",
+        "implementation_label": "Evaluator-local graph-neighborhood partitioning with exact-size balancing",
+        "software_identity": "evaluator-graph-neighborhood-v1"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "graph-neighborhood-balance",
+          "implementation_label": "Evaluator-local graph-neighborhood partitioning with exact-size balancing",
+          "software_identity": "evaluator-graph-neighborhood-v1"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 0.0,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            4,
+            5,
+            1,
+            2,
+            3,
+            0,
+            5
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 5,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 5,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 1,
+          "synthetic_count": 1
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": {
+        "baseline_label": "global-real-dataset-8bit",
+        "global_real_entity_count": 11,
+        "global_reconstruction_error": 0.005815703079775858,
+        "local_reconstruction_error_sum": 0.0,
+        "reported_gain": 1.0,
+        "delta_semantics": "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error",
+        "bucket_reports": [
+          {
+            "cluster_id": 0,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 1,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 2,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 3,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 4,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 5,
+            "real_entity_count": 1,
+            "reconstruction_error": 0.0
+          }
+        ]
+      },
+      "metric_results": [
+        {
+          "metric_id": "same-leaf-neighborhood-coherence",
+          "label": "Same-leaf neighborhood coherence",
+          "kind": "SameLeafNeighborhoodCoherence",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "ranking_weight": 1.0,
+          "value": 0.09090909090909091
+        },
+        {
+          "metric_id": "local-compression-gain",
+          "label": "Local compression gain",
+          "kind": "LocalCompressionGain",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COMPRESSION"
+          ],
+          "ranking_weight": 0.5,
+          "value": 1.0
+        }
+      ],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": true,
+        "success_shaped_completion_artifacts_emitted": true,
+        "detail": "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+      },
+      "run_status": "Succeeded",
+      "survived_required_gates": true,
+      "ranking_score": 0.5909090909090909,
+      "terminal_failure_code": null,
+      "terminal_failure_message": null,
+      "terminal_failure": null
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "hybrid-coarse-rebalance",
+        "implementation_label": "Evaluator-local hybrid coarse partitioning plus local rebalance",
+        "software_identity": "evaluator-hybrid-coarse-rebalance-v1"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "implementation_label": "Evaluator-local hybrid coarse partitioning plus local rebalance",
+          "software_identity": "evaluator-hybrid-coarse-rebalance-v1"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 0.0,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            2,
+            3,
+            1,
+            4,
+            5,
+            5,
+            3,
+            4,
+            2,
+            0,
+            1
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 5,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 1,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 1,
+          "synthetic_count": 1
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": {
+        "baseline_label": "global-real-dataset-8bit",
+        "global_real_entity_count": 11,
+        "global_reconstruction_error": 0.005815703079775858,
+        "local_reconstruction_error_sum": 0.0,
+        "reported_gain": 1.0,
+        "delta_semantics": "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error",
+        "bucket_reports": [
+          {
+            "cluster_id": 0,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 1,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 2,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 3,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 4,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 5,
+            "real_entity_count": 1,
+            "reconstruction_error": 0.0
+          }
+        ]
+      },
+      "metric_results": [
+        {
+          "metric_id": "same-leaf-neighborhood-coherence",
+          "label": "Same-leaf neighborhood coherence",
+          "kind": "SameLeafNeighborhoodCoherence",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "ranking_weight": 1.0,
+          "value": 0.09090909090909091
+        },
+        {
+          "metric_id": "local-compression-gain",
+          "label": "Local compression gain",
+          "kind": "LocalCompressionGain",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COMPRESSION"
+          ],
+          "ranking_weight": 0.5,
+          "value": 1.0
+        }
+      ],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": true,
+        "success_shaped_completion_artifacts_emitted": true,
+        "detail": "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+      },
+      "run_status": "Succeeded",
+      "survived_required_gates": true,
+      "ranking_score": 0.5909090909090909,
+      "terminal_failure_code": null,
+      "terminal_failure_message": null,
+      "terminal_failure": null
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "random-shuffle-exact-chunking",
+        "implementation_label": "Evaluator-local deterministic random-shuffle null baseline",
+        "software_identity": "evaluator-random-shuffle-v1"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "implementation_label": "Evaluator-local deterministic random-shuffle null baseline",
+          "software_identity": "evaluator-random-shuffle-v1"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 0.0,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            3,
+            5,
+            0,
+            4,
+            2,
+            3,
+            4,
+            1,
+            2,
+            5,
+            1
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 3,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 1,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 1,
+          "synthetic_count": 1
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": {
+        "baseline_label": "global-real-dataset-8bit",
+        "global_real_entity_count": 11,
+        "global_reconstruction_error": 0.005815703079775858,
+        "local_reconstruction_error_sum": 0.0,
+        "reported_gain": 1.0,
+        "delta_semantics": "reported_gain = 1 - local_reconstruction_error_sum / global_reconstruction_error",
+        "bucket_reports": [
+          {
+            "cluster_id": 0,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 1,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 2,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 3,
+            "real_entity_count": 1,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 4,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          },
+          {
+            "cluster_id": 5,
+            "real_entity_count": 2,
+            "reconstruction_error": 0.0
+          }
+        ]
+      },
+      "metric_results": [
+        {
+          "metric_id": "same-leaf-neighborhood-coherence",
+          "label": "Same-leaf neighborhood coherence",
+          "kind": "SameLeafNeighborhoodCoherence",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "ranking_weight": 1.0,
+          "value": 0.09090909090909091
+        },
+        {
+          "metric_id": "local-compression-gain",
+          "label": "Local compression gain",
+          "kind": "LocalCompressionGain",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COMPRESSION"
+          ],
+          "ranking_weight": 0.5,
+          "value": 1.0
+        }
+      ],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": true,
+        "success_shaped_completion_artifacts_emitted": true,
+        "detail": "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+      },
+      "run_status": "Succeeded",
+      "survived_required_gates": true,
+      "ranking_score": 0.5909090909090909,
+      "terminal_failure_code": null,
+      "terminal_failure_message": null,
+      "terminal_failure": null
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "directional-pca",
+        "implementation_label": "Repository-owned directional PCA clustering",
+        "software_identity": "lexongraph-directional-pca-v0.1.0"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "directional-pca",
+          "implementation_label": "Repository-owned directional PCA clustering",
+          "software_identity": "lexongraph-directional-pca-v0.1.0"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 167.76906732804528,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            2,
+            3,
+            1,
+            4,
+            4,
+            5,
+            3,
+            4,
+            2,
+            0,
+            0
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 1,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 5,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 0,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 3,
+          "real_count": 3,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 1,
+          "real_count": 1,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 3,
+          "real_count": 3,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 1,
+          "real_count": 0,
+          "synthetic_count": 1
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": null,
+      "metric_results": [],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Failed",
+          "observed_value": 2.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": false,
+        "success_shaped_completion_artifacts_emitted": false,
+        "detail": "a hard invariant gate failed, so later comparative metrics and success-shaped completion artifacts were not emitted"
+      },
+      "run_status": "GateFailed",
+      "survived_required_gates": false,
+      "ranking_score": null,
+      "terminal_failure_code": "gate-failure",
+      "terminal_failure_message": "expected every cluster to contain exactly 2 entities",
+      "terminal_failure": {
+        "GateFailure": {
+          "candidate_id": "directional-pca",
+          "gate_id": "exact-leaf-occupancy",
+          "message": "expected every cluster to contain exactly 2 entities"
+        }
+      }
+    },
+    {
+      "candidate_identity": {
+        "candidate_id": "dcbc-streaming",
+        "implementation_label": "Repository-owned streaming DCBC clustering",
+        "software_identity": "lexongraph-dcbc-streaming-v0.1.0"
+      },
+      "provenance": {
+        "profile_id": "near-duplicate-padding-small",
+        "corpus_ids": [
+          "near-duplicate-padding-small"
+        ],
+        "source_reference_ids": [
+          "near-duplicate-padding-small-evaluation",
+          "near-duplicate-padding-small-probe",
+          "near-duplicate-padding-small-training"
+        ],
+        "candidate_identity": {
+          "candidate_id": "dcbc-streaming",
+          "implementation_label": "Repository-owned streaming DCBC clustering",
+          "software_identity": "lexongraph-dcbc-streaming-v0.1.0"
+        },
+        "shared_candidate_config": {
+          "cluster_count": 6,
+          "dimensions": 2,
+          "balance_constraints": null,
+          "random_seed": 11
+        },
+        "seed_policy": "fixed-seed-11",
+        "software_identity": "section4-corpus-panel-v2",
+        "floating_point_profile": "ieee754-deterministic-no-fma",
+        "hardware_profile": "fixture-cpu"
+      },
+      "prerequisite_checks": [
+        {
+          "check_id": "shared-contract-execution",
+          "label": "Shared contract execution",
+          "passed": true,
+          "detail": "candidate completed the shared trainer/classifier lifecycle"
+        }
+      ],
+      "pass_reports": [
+        {
+          "observed_count": 12,
+          "quality_metric": 4.322829865066602e-6,
+          "balance_metric": 0.0,
+          "quality_direction": "SmallerIsBetter",
+          "balance_direction": "SmallerIsBetter",
+          "cluster_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "probe_results": [
+        {
+          "workload_id": "near-duplicate-padding-small-probes",
+          "assignments": [
+            0,
+            3,
+            4,
+            2,
+            4,
+            4,
+            1,
+            3,
+            4,
+            2,
+            5,
+            5
+          ]
+        }
+      ],
+      "leaf_membership": [
+        {
+          "entity_id": "near-duplicate-padding-small-real-000000",
+          "cluster_id": 0,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000002",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000003",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000001",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000004",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000009",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-synthetic-000000",
+          "cluster_id": 1,
+          "synthetic": true
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000007",
+          "cluster_id": 3,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000008",
+          "cluster_id": 4,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000006",
+          "cluster_id": 2,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000005",
+          "cluster_id": 5,
+          "synthetic": false
+        },
+        {
+          "entity_id": "near-duplicate-padding-small-real-000010",
+          "cluster_id": 5,
+          "synthetic": false
+        }
+      ],
+      "cluster_occupancies": [
+        {
+          "cluster_id": 0,
+          "total_count": 1,
+          "real_count": 1,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 1,
+          "total_count": 1,
+          "real_count": 0,
+          "synthetic_count": 1
+        },
+        {
+          "cluster_id": 2,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 3,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 4,
+          "total_count": 4,
+          "real_count": 4,
+          "synthetic_count": 0
+        },
+        {
+          "cluster_id": 5,
+          "total_count": 2,
+          "real_count": 2,
+          "synthetic_count": 0
+        }
+      ],
+      "synthetic_padding_concentration": {
+        "synthetic_entity_count": 1,
+        "clusters_with_synthetic_entities": 1,
+        "minimum_possible_cluster_count": 1,
+        "satisfies_minimum_concentration": true
+      },
+      "determinism": {
+        "deterministic": true,
+        "compared_fields": [
+          "pass_reports",
+          "probe_results",
+          "leaf_membership",
+          "evaluation_entities",
+          "provenance"
+        ],
+        "mismatch_details": []
+      },
+      "compression_analysis": null,
+      "metric_results": [],
+      "gate_results": [
+        {
+          "gate_id": "exact-leaf-occupancy",
+          "label": "Exact leaf occupancy",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Failed",
+          "observed_value": 3.0,
+          "detail": "expected every cluster to contain exactly 2 entities"
+        },
+        {
+          "gate_id": "complete-coverage",
+          "label": "Complete coverage",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "observed 12 assigned entities for 12 declared entities"
+        },
+        {
+          "gate_id": "one-cluster-per-entity",
+          "label": "One cluster per entity",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-COVERAGE"
+          ],
+          "status": "Passed",
+          "observed_value": 12.0,
+          "detail": "each evaluated entity must appear once in the leaf membership artifact"
+        },
+        {
+          "gate_id": "no-empty-declared-clusters",
+          "label": "No empty declared clusters",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-FIXED-LEAF-SIZE"
+          ],
+          "status": "Passed",
+          "observed_value": 6.0,
+          "detail": "every declared final cluster must contain at least one entity"
+        },
+        {
+          "gate_id": "deterministic-observable-results",
+          "label": "Deterministic observable results",
+          "coverage": "Direct",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "status": "Passed",
+          "observed_value": 1.0,
+          "detail": "repeated observable results matched"
+        }
+      ],
+      "deferred_research_goals": [
+        {
+          "deferred_id": "deferred-hierarchy-routing",
+          "label": "Hierarchy routing proof",
+          "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-routing evaluator"
+        },
+        {
+          "deferred_id": "deferred-same-or-sibling-locality",
+          "label": "Same-or-sibling locality target",
+          "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+          "research_goal_ids": [
+            "RG-LOCALITY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-locality evaluator"
+        },
+        {
+          "deferred_id": "deferred-bounded-tree-shape",
+          "label": "Bounded fanout and depth",
+          "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-shape evaluator"
+        },
+        {
+          "deferred_id": "deferred-parent-summaries",
+          "label": "Parent summary accuracy and stability",
+          "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY",
+            "RG-ROUTING"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-refinement-contract",
+          "label": "Refinement and dispersion contract",
+          "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future hierarchy-summary evaluator"
+        },
+        {
+          "deferred_id": "deferred-persistence-roundtrip",
+          "label": "Persisted artifact durability",
+          "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-loaded-index-memory",
+          "label": "Loaded index memory",
+          "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+          "research_goal_ids": [
+            "RG-HIERARCHY"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future persistence evaluator"
+        },
+        {
+          "deferred_id": "deferred-threading-reproducibility",
+          "label": "Multi-thread reproducibility",
+          "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+          "research_goal_ids": [
+            "RG-DETERMINISM"
+          ],
+          "coverage": "Deferred",
+          "status": "Deferred",
+          "later_evaluation_line": "future execution-profile evaluator"
+        }
+      ],
+      "artifact_hygiene": {
+        "comparative_metrics_emitted": false,
+        "success_shaped_completion_artifacts_emitted": false,
+        "detail": "a hard invariant gate failed, so later comparative metrics and success-shaped completion artifacts were not emitted"
+      },
+      "run_status": "GateFailed",
+      "survived_required_gates": false,
+      "ranking_score": null,
+      "terminal_failure_code": "gate-failure",
+      "terminal_failure_message": "expected every cluster to contain exactly 2 entities",
+      "terminal_failure": {
+        "GateFailure": {
+          "candidate_id": "dcbc-streaming",
+          "gate_id": "exact-leaf-occupancy",
+          "message": "expected every cluster to contain exactly 2 entities"
+        }
+      }
+    }
+  ],
+  "ranking": [
+    {
+      "candidate_id": "graph-neighborhood-balance",
+      "ranking_score": 0.5909090909090909,
+      "rank": 1
+    },
+    {
+      "candidate_id": "hybrid-coarse-rebalance",
+      "ranking_score": 0.5909090909090909,
+      "rank": 2
+    },
+    {
+      "candidate_id": "pca-sort-exact-chunking",
+      "ranking_score": 0.5909090909090909,
+      "rank": 3
+    },
+    {
+      "candidate_id": "random-shuffle-exact-chunking",
+      "ranking_score": 0.5909090909090909,
+      "rank": 4
+    },
+    {
+      "candidate_id": "recursive-balanced-kmeans",
+      "ranking_score": 0.5909090909090909,
+      "rank": 5
+    },
+    {
+      "candidate_id": "space-filling-curve-exact-chunking",
+      "ranking_score": 0.5909090909090909,
+      "rank": 6
+    }
+  ]
+}

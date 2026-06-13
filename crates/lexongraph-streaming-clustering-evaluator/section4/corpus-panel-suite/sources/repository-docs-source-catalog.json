@@ -6,88 +6,580 @@
   "subset_selection": "SortByEntityIdTakeFirst",
   "entities": [
     {
-      "entity_id": "01-clustering-overview",
-      "source_path": "docs/research/clustering.md",
-      "source_label": "Clustering research overview",
-      "embedding": [0.0, 0.0]
+      "entity_id": "01-directional-pca-tree",
+      "source_path": "docs/arch/Directional PCA tree.md",
+      "source_label": "Directional Pca Tree",
+      "embedding": [
+        10.0,
+        0.0
+      ]
     },
     {
-      "entity_id": "02-section4-plan",
-      "source_path": "docs/research/clustering_plan.md",
-      "source_label": "Section 4 candidate plan",
-      "embedding": [0.2, 0.1]
-    },
-    {
-      "entity_id": "03-streaming-clustering-arch",
-      "source_path": "docs/arch/streaming-clustering.md",
-      "source_label": "Streaming clustering architecture",
-      "embedding": [0.4, -0.1]
-    },
-    {
-      "entity_id": "04-evaluator-spec-scope",
-      "source_path": "docs/specs/rust-streaming-clustering-evaluator-crate/requirements.md",
-      "source_label": "Evaluator scope requirements",
-      "embedding": [0.6, 0.2]
-    },
-    {
-      "entity_id": "05-indexing-protocol",
-      "source_path": "docs/protocol/indexing.md",
-      "source_label": "Indexing protocol",
-      "embedding": [10.0, 0.0]
-    },
-    {
-      "entity_id": "06-search-protocol",
-      "source_path": "docs/protocol/search.md",
-      "source_label": "Search protocol",
-      "embedding": [10.2, 0.1]
-    },
-    {
-      "entity_id": "07-blocks-protocol",
-      "source_path": "docs/protocol/blocks.md",
-      "source_label": "Block protocol",
-      "embedding": [10.4, -0.1]
-    },
-    {
-      "entity_id": "08-vision-overview",
-      "source_path": "docs/vision.md",
-      "source_label": "Vision overview",
-      "embedding": [10.6, 0.2]
-    },
-    {
-      "entity_id": "09-indexer-reqs",
-      "source_path": "docs/specs/rust-streaming-indexer-crate/requirements.md",
-      "source_label": "Indexer requirements",
-      "embedding": [20.0, 0.0]
-    },
-    {
-      "entity_id": "10-indexer-design",
-      "source_path": "docs/specs/rust-streaming-indexer-crate/design.md",
-      "source_label": "Indexer design",
-      "embedding": [20.2, 0.1]
-    },
-    {
-      "entity_id": "11-indexer-validation",
-      "source_path": "docs/specs/rust-streaming-indexer-crate/validation.md",
-      "source_label": "Indexer validation",
-      "embedding": [20.4, -0.1]
-    },
-    {
-      "entity_id": "12-search-reqs",
-      "source_path": "docs/specs/rust-search-crate/requirements.md",
-      "source_label": "Search requirements",
-      "embedding": [20.6, 0.2]
-    },
-    {
-      "entity_id": "13-semantic-compression",
-      "source_path": "docs/arch/semantic-compression.md",
-      "source_label": "Semantic compression architecture",
-      "embedding": [30.0, 0.0]
-    },
-    {
-      "entity_id": "14-pca-arch",
+      "entity_id": "02-pca",
       "source_path": "docs/arch/pca.md",
-      "source_label": "PCA architecture",
-      "embedding": [30.2, 0.1]
+      "source_label": "Pca",
+      "embedding": [
+        10.17,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "03-semantic-compression",
+      "source_path": "docs/arch/semantic-compression.md",
+      "source_label": "Semantic Compression",
+      "embedding": [
+        10.34,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "04-streaming-clustering",
+      "source_path": "docs/arch/streaming-clustering.md",
+      "source_label": "Streaming Clustering",
+      "embedding": [
+        10.51,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "05-2026-06-06-full-traceability-audit",
+      "source_path": "docs/audits/2026-06-06-full-traceability-audit.md",
+      "source_label": "2026 06 06 Full Traceability Audit",
+      "embedding": [
+        50.0,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "06-blocks",
+      "source_path": "docs/protocol/blocks.md",
+      "source_label": "Blocks",
+      "embedding": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "07-dcbc",
+      "source_path": "docs/protocol/dcbc.md",
+      "source_label": "Dcbc",
+      "embedding": [
+        0.17,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "08-ebcp",
+      "source_path": "docs/protocol/ebcp.md",
+      "source_label": "Ebcp",
+      "embedding": [
+        0.34,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "09-indexing",
+      "source_path": "docs/protocol/indexing.md",
+      "source_label": "Indexing",
+      "embedding": [
+        0.51,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "10-search",
+      "source_path": "docs/protocol/search.md",
+      "source_label": "Search",
+      "embedding": [
+        0.0,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "11-2026-06-03-embeddings-openai-spec-drift-rca",
+      "source_path": "docs/rca/2026-06-03-embeddings-openai-spec-drift-rca.md",
+      "source_label": "2026 06 03 Embeddings Openai Spec Drift Rca",
+      "embedding": [
+        30.0,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+      "source_path": "docs/rca/2026-06-03-embeddings-trait-conformance-drift-rca.md",
+      "source_label": "2026 06 03 Embeddings Trait Conformance Drift Rca",
+      "embedding": [
+        30.17,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "13-2026-06-03-filesystem-block-store-spec-first-rca",
+      "source_path": "docs/rca/2026-06-03-filesystem-block-store-spec-first-rca.md",
+      "source_label": "2026 06 03 Filesystem Block Store Spec First Rca",
+      "embedding": [
+        30.34,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "14-2026-06-03-search-spec-drift-followup-rca",
+      "source_path": "docs/rca/2026-06-03-search-spec-drift-followup-rca.md",
+      "source_label": "2026 06 03 Search Spec Drift Followup Rca",
+      "embedding": [
+        30.51,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "15-2026-06-03-search-spec-drift-rca",
+      "source_path": "docs/rca/2026-06-03-search-spec-drift-rca.md",
+      "source_label": "2026 06 03 Search Spec Drift Rca",
+      "embedding": [
+        30.0,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+      "source_path": "docs/rca/2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca.md",
+      "source_label": "2026 06 11 Streaming Clustering Evaluator Plan Gap Analysis Rca",
+      "embedding": [
+        30.17,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "17-clustering",
+      "source_path": "docs/research/clustering.md",
+      "source_label": "Clustering",
+      "embedding": [
+        20.0,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "18-clustering_plan",
+      "source_path": "docs/research/clustering_plan.md",
+      "source_label": "Clustering_Plan",
+      "embedding": [
+        20.17,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "19-design",
+      "source_path": "docs/specs/repository-dependabot/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.0,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "20-requirements",
+      "source_path": "docs/specs/repository-dependabot/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.0,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "21-validation",
+      "source_path": "docs/specs/repository-dependabot/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.0,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "22-design",
+      "source_path": "docs/specs/rust-adaptive-planning-policy-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.17,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "23-requirements",
+      "source_path": "docs/specs/rust-adaptive-planning-policy-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.17,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "24-validation",
+      "source_path": "docs/specs/rust-adaptive-planning-policy-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.17,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "25-design",
+      "source_path": "docs/specs/rust-block-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.34,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "26-requirements",
+      "source_path": "docs/specs/rust-block-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.34,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "27-validation",
+      "source_path": "docs/specs/rust-block-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.34,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "28-design",
+      "source_path": "docs/specs/rust-block-inspect-cli/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.51,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "29-requirements",
+      "source_path": "docs/specs/rust-block-inspect-cli/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.51,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "30-validation",
+      "source_path": "docs/specs/rust-block-inspect-cli/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.51,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "31-design",
+      "source_path": "docs/specs/rust-block-storage-trait/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.0,
+        5.13
+      ]
+    },
+    {
+      "entity_id": "32-requirements",
+      "source_path": "docs/specs/rust-block-storage-trait/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.0,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "33-validation",
+      "source_path": "docs/specs/rust-block-storage-trait/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.0,
+        10.13
+      ]
+    },
+    {
+      "entity_id": "34-design",
+      "source_path": "docs/specs/rust-dcbc-streaming-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.17,
+        5.13
+      ]
+    },
+    {
+      "entity_id": "35-requirements",
+      "source_path": "docs/specs/rust-dcbc-streaming-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.17,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "36-validation",
+      "source_path": "docs/specs/rust-dcbc-streaming-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.17,
+        10.13
+      ]
+    },
+    {
+      "entity_id": "37-design",
+      "source_path": "docs/specs/rust-directional-pca-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.34,
+        5.13
+      ]
+    },
+    {
+      "entity_id": "38-requirements",
+      "source_path": "docs/specs/rust-directional-pca-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.34,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "39-validation",
+      "source_path": "docs/specs/rust-directional-pca-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.34,
+        10.13
+      ]
+    },
+    {
+      "entity_id": "40-design",
+      "source_path": "docs/specs/rust-embeddings-openai-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.51,
+        5.13
+      ]
+    },
+    {
+      "entity_id": "41-requirements",
+      "source_path": "docs/specs/rust-embeddings-openai-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.51,
+        0.13
+      ]
+    },
+    {
+      "entity_id": "42-validation",
+      "source_path": "docs/specs/rust-embeddings-openai-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.51,
+        10.13
+      ]
+    },
+    {
+      "entity_id": "43-design",
+      "source_path": "docs/specs/rust-embeddings-trait/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.0,
+        5.26
+      ]
+    },
+    {
+      "entity_id": "44-requirements",
+      "source_path": "docs/specs/rust-embeddings-trait/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.0,
+        0.26
+      ]
+    },
+    {
+      "entity_id": "45-validation",
+      "source_path": "docs/specs/rust-embeddings-trait/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.0,
+        10.26
+      ]
+    },
+    {
+      "entity_id": "46-design",
+      "source_path": "docs/specs/rust-filesystem-block-store/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.17,
+        5.26
+      ]
+    },
+    {
+      "entity_id": "47-requirements",
+      "source_path": "docs/specs/rust-filesystem-block-store/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.17,
+        0.26
+      ]
+    },
+    {
+      "entity_id": "48-validation",
+      "source_path": "docs/specs/rust-filesystem-block-store/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.17,
+        10.26
+      ]
+    },
+    {
+      "entity_id": "49-design",
+      "source_path": "docs/specs/rust-memory-block-store/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.34,
+        5.26
+      ]
+    },
+    {
+      "entity_id": "50-requirements",
+      "source_path": "docs/specs/rust-memory-block-store/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.34,
+        0.26
+      ]
+    },
+    {
+      "entity_id": "51-validation",
+      "source_path": "docs/specs/rust-memory-block-store/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.34,
+        10.26
+      ]
+    },
+    {
+      "entity_id": "52-design",
+      "source_path": "docs/specs/rust-overlay-block-store/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.51,
+        5.26
+      ]
+    },
+    {
+      "entity_id": "53-requirements",
+      "source_path": "docs/specs/rust-overlay-block-store/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.51,
+        0.26
+      ]
+    },
+    {
+      "entity_id": "54-validation",
+      "source_path": "docs/specs/rust-overlay-block-store/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.51,
+        10.26
+      ]
+    },
+    {
+      "entity_id": "55-design",
+      "source_path": "docs/specs/rust-pca-chunking-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.0,
+        5.39
+      ]
+    },
+    {
+      "entity_id": "56-requirements",
+      "source_path": "docs/specs/rust-pca-chunking-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.0,
+        0.39
+      ]
+    },
+    {
+      "entity_id": "57-validation",
+      "source_path": "docs/specs/rust-pca-chunking-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.0,
+        10.39
+      ]
+    },
+    {
+      "entity_id": "58-design",
+      "source_path": "docs/specs/rust-pca-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.17,
+        5.39
+      ]
+    },
+    {
+      "entity_id": "59-requirements",
+      "source_path": "docs/specs/rust-pca-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.17,
+        0.39
+      ]
+    },
+    {
+      "entity_id": "60-validation",
+      "source_path": "docs/specs/rust-pca-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.17,
+        10.39
+      ]
+    },
+    {
+      "entity_id": "61-design",
+      "source_path": "docs/specs/rust-search-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.34,
+        5.39
+      ]
+    },
+    {
+      "entity_id": "62-requirements",
+      "source_path": "docs/specs/rust-search-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.34,
+        0.39
+      ]
+    },
+    {
+      "entity_id": "63-validation",
+      "source_path": "docs/specs/rust-search-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.34,
+        10.39
+      ]
+    },
+    {
+      "entity_id": "64-design",
+      "source_path": "docs/specs/rust-streaming-clustering-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.51,
+        5.39
+      ]
     }
   ]
 }

@@ -252,6 +252,8 @@ The evaluator shall emit:
 - a machine-readable comparative campaign report
 - a human-readable scorecard summarizing pass/fail status, metric values, and
   comparative ranking for surviving candidates
+- for checked-in section-4 suite execution, a human-readable survivor-decision
+  artifact summarizing which candidates carry forward and why
 
 These outputs remain evaluator-owned and source-neutral: changing a workload
 from inline fixture data to a block-store-backed corpus reference shall change
@@ -517,6 +519,12 @@ small, medium, and large scale-tier identities or deterministic nearest-
 practical equivalents for each corpus family that participates in repeated
 size-tier comparison.
 
+The first complete checked-in section-4 panel in this revision shall include
+repeated-comparison small, medium, and large tiers for the harvested,
+well-clustered, weak-cluster or uniform, anisotropic or manifold, and
+near-duplicate-heavy families, plus at least one explicit deterministic-padding
+profile used to compare strict-alignment versus padding behavior.
+
 ### REQ-STREAM-EVAL-033
 
 For benchmark corpora used in section-4 locality evaluation, the repository
@@ -629,6 +637,15 @@ This revision's checked-in repository-owned candidate set shall include:
 - the streaming DCBC clustering implementation provided by
   `crates/lexongraph-dcbc-streaming`
 
+The checked-in runnable section-4 candidate set for repeated comparison shall
+also include concrete representatives for the remaining research-plan families:
+
+- recursive balanced partitioning with exact-size enforcement
+- space-filling-curve ordering plus exact chunking
+- graph-neighborhood partitioning with exact-size balancing
+- hybrid coarse partitioning with exact-size local rebalance
+- random shuffle plus exact chunking as a null baseline
+
 ### REQ-STREAM-EVAL-039
 
 For the repository-owned `lexongraph-directional-pca` candidate, the evaluator
@@ -661,9 +678,9 @@ At minimum, this revision shall preserve explicit candidate outcomes for:
 ### REQ-STREAM-EVAL-042
 
 The evaluator's candidate-discovery surface and checked-in validation artifacts
-shall include all repository-owned registered section-4 candidates so they can
-be listed, selected, and exercised through ordinary campaign and section-4
-suite execution paths.
+shall include all registered section-4 candidates used by the checked-in
+screening workflow so they can be listed, selected, and exercised through
+ordinary campaign and section-4 suite execution paths.
 
 ### REQ-STREAM-EVAL-047
 
@@ -797,7 +814,8 @@ consuming those later-phase query assets.
 
 The first complete checked-in section-4 panel in this revision shall include at
 least one such held-out query-set identity for a checked-in harvested
-real-world corpus family carried forward beyond leaf-stage screening.
+real-world corpus family carried forward beyond leaf-stage screening, together
+with a checked-in materialized asset path for that held-out identity.
 
 ### REQ-STREAM-EVAL-046
 
@@ -820,6 +838,9 @@ At minimum:
 - section-4 comparative outputs shall identify the surviving candidates, if
   any, that remain eligible to carry forward into later hierarchy-stage
   comparison
+- the checked-in section-4 suite artifact set shall include a machine-readable
+  suite report, a human-readable suite scorecard, and a human-readable
+  survivor-decision summary for the canonical checked-in run
 
 This requirement constrains candidate-comparison semantics; it does not require
 section-4 to perform later hierarchy-stage execution itself.
@@ -863,7 +884,8 @@ Section-4 execution in this revision may leave those identities unused, but it
 shall not omit them from the frozen contract when the experiment track declares
 them. The first complete checked-in section-4 panel shall include at least one
 preserved held-out query-set identity for a harvested real-world corpus family
-that later routing phases are expected to consume.
+that later routing phases are expected to consume, and that identity shall
+retain a checked-in materialized asset path.
 
 ### REQ-STREAM-EVAL-053
 
@@ -880,6 +902,10 @@ At minimum, the rule shall:
   comparisons to rescue a hard-gate failure
 - define deterministic tie-breaking behavior when surviving candidates remain
   otherwise indistinguishable on the declared comparison surface
+
+The checked-in section-4 workflow in this revision shall publish the resulting
+carry-forward decision as a checked-in survivor-decision artifact produced from
+the canonical section-4 suite run.
 
 ## Out of Scope
 

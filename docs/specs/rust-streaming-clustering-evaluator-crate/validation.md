@@ -410,9 +410,9 @@ omitting it.
 Run the checked-in section-4 suite with each repository-owned registered
 section-4 candidate.
 
-**Pass condition:** each candidate enters through the shared streaming
-trainer/classifier contract and emits ordinary section-4 evaluator artifacts
-under a stable repository-owned candidate identity.
+**Pass condition:** each checked-in section-4 family candidate enters through
+the shared streaming trainer/classifier contract and emits ordinary section-4
+evaluator artifacts under a stable candidate identity.
 
 **Traces to:** REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042
 
@@ -432,8 +432,11 @@ evaluator-private algorithm hooks.
 Inspect the registered-candidate discovery surface and its CLI exposure.
 
 **Pass condition:** the evaluator's ordinary candidate-listing surface includes
-the repository-owned `lexongraph-pca-chunking`, `lexongraph-directional-pca`,
-and `lexongraph-dcbc-streaming` candidates so each can be selected through the
+the full checked-in section-4 family candidate set, including
+`pca-sort-exact-chunking`, `recursive-balanced-kmeans`,
+`space-filling-curve-exact-chunking`, `graph-neighborhood-balance`,
+`hybrid-coarse-rebalance`, `random-shuffle-exact-chunking`,
+`directional-pca`, and `dcbc-streaming`, so each can be selected through the
 same discovery path used for fixture candidates.
 
 **Traces to:** REQ-STREAM-EVAL-042
@@ -497,7 +500,8 @@ harvested real-world corpus family within that same tiered comparison surface.
 For any corpus family intended to carry forward into later routing studies, the
 same contract also declares held-out query-set identities, including at least
 one such identity for a checked-in harvested real-world corpus family in the
-first complete checked-in section-4 panel.
+first complete checked-in section-4 panel, and that preserved identity points
+at a checked-in materialized asset.
 
 **Traces to:** REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045
 
@@ -542,7 +546,8 @@ the suite preserves those identities together with the later evaluation line
 expected to consume each one even if section-4 execution does not directly use
 them. For the first complete checked-in section-4 panel, that preserved set
 includes at least one held-out query-set identity for a harvested real-world
-corpus family expected to feed later routing phases.
+corpus family expected to feed later routing phases, and the identity retains a
+checked-in asset path.
 
 **Traces to:** REQ-STREAM-EVAL-052
 
@@ -558,3 +563,14 @@ deterministic tie-break when survivors remain otherwise indistinguishable on
 the declared comparison surface.
 
 **Traces to:** REQ-STREAM-EVAL-053
+
+### VAL-STREAM-EVAL-043
+
+Inspect the checked-in canonical section-4 suite run artifacts.
+
+**Pass condition:** the repository includes a machine-readable suite report, a
+human-readable suite scorecard, and a human-readable survivor-decision summary
+for the checked-in canonical section-4 run, and those artifacts remain
+consistent with the current checked-in suite manifest and candidate identities.
+
+**Traces to:** REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-046, REQ-STREAM-EVAL-053

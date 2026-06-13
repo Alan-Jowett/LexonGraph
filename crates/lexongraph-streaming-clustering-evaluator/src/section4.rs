@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonGraph contributors
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -251,7 +251,14 @@ pub struct Section4SuiteRunReport {
 pub struct Section4SuiteRunArtifacts {
     pub suite_report_path: PathBuf,
     pub scorecard_path: PathBuf,
+    pub survivor_decision_path: PathBuf,
     pub profile_output_dirs: Vec<PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct JsonArchiveEntity {
+    entity_id: String,
+    embedding: Vec<f32>,
 }
 
 pub fn generate_section4_suite_assets(
@@ -478,6 +485,79 @@ pub fn generate_section4_suite_assets(
     Ok(manifest)
 }
 
+pub fn materialize_section4_archive_from_json(
+    input_path: &Path,
+    archive_path: &Path,
+    source_id_override: Option<&str>,
+    corpus_id_override: Option<&str>,
+) -> Result<BlockStoreCorpusReference, EvaluatorError> {
+    let contents = std::fs::read_to_string(input_path).map_err(|error| {
+        EvaluatorError::Io(format!(
+            "failed to read section-4 archive source {}: {error}",
+            input_path.display()
+        ))
+    })?;
+    let document: serde_json::Value =
+        serde_json::from_str(&contents).map_err(|error| EvaluatorError::Json(error.to_string()))?;
+    let source_id = source_id_override
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            document
+                .get("source_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            document
+                .get("query_set_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| {
+            EvaluatorError::InvalidConfiguration(format!(
+                "section-4 archive source {} must declare source_id or query_set_id",
+                input_path.display()
+            ))
+        })?;
+    let corpus_id = corpus_id_override
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            document
+                .get("corpus_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| source_id.clone());
+    let entities_value = document
+        .get("entities")
+        .or_else(|| document.get("queries"))
+        .cloned()
+        .ok_or_else(|| {
+            EvaluatorError::InvalidConfiguration(format!(
+                "section-4 archive source {} must declare entities or queries",
+                input_path.display()
+            ))
+        })?;
+    let entities: Vec<JsonArchiveEntity> = serde_json::from_value(entities_value)
+        .map_err(|error| EvaluatorError::Json(error.to_string()))?;
+    if entities.is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-4 archive source {} must declare at least one entity",
+            input_path.display()
+        )));
+    }
+    let entities = entities
+        .into_iter()
+        .map(|entity| EvaluationEntity {
+            entity_id: entity.entity_id,
+            corpus_id: corpus_id.clone(),
+            embedding: entity.embedding,
+            synthetic: false,
+        })
+        .collect::<Vec<_>>();
+    materialize_corpus_archive(archive_path, &entities, &source_id)
+}
+
 pub fn run_section4_suite(
     manifest: &Section4SuiteManifest,
     candidates: &[RegisteredCandidate],
@@ -647,6 +727,105 @@ pub fn render_section4_suite_scorecard(report: &Section4SuiteRunReport) -> Strin
     lines.join("\n")
 }
 
+pub fn render_section4_survivor_decision(report: &Section4SuiteRunReport) -> String {
+    #[derive(Default)]
+    struct CandidateAggregate {
+        survived_profiles: usize,
+        ranking_score_sum: f64,
+        failed_profiles: Vec<String>,
+    }
+
+    let total_profiles = report.profile_reports.len();
+    let mut aggregates = BTreeMap::<String, CandidateAggregate>::new();
+    for profile in &report.profile_reports {
+        for candidate in &profile.candidate_reports {
+            let aggregate = aggregates
+                .entry(candidate.candidate_id.clone())
+                .or_default();
+            if candidate.survived_required_gates {
+                aggregate.survived_profiles += 1;
+                aggregate.ranking_score_sum += candidate.ranking_score.unwrap_or(0.0);
+            } else {
+                aggregate.failed_profiles.push(profile.profile_id.clone());
+            }
+        }
+    }
+
+    let mut eligible = aggregates
+        .iter()
+        .filter(|(_, aggregate)| aggregate.survived_profiles == total_profiles)
+        .map(|(candidate_id, aggregate)| {
+            (
+                candidate_id.clone(),
+                aggregate.ranking_score_sum / total_profiles as f64,
+            )
+        })
+        .collect::<Vec<_>>();
+    eligible.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let carried_forward = eligible
+        .iter()
+        .take(3)
+        .map(|(candidate_id, _)| candidate_id.clone())
+        .collect::<Vec<_>>();
+
+    let mut lines = vec![format!(
+        "Section-4 survivor decision for {} [{}]",
+        report.suite_id, report.experiment_track_id
+    )];
+    lines.push(format!(
+        "Carry-forward rule: reject hard-gate failures first, then rank surviving candidates by section-4 ranking_score across {} profile(s).",
+        total_profiles
+    ));
+    lines.push(format!(
+        "Carried forward: {}",
+        if carried_forward.is_empty() {
+            "none".into()
+        } else {
+            carried_forward.join(", ")
+        }
+    ));
+    if !eligible.is_empty() {
+        lines.push("Eligible candidates by average ranking_score:".into());
+        for (candidate_id, average_ranking_score) in &eligible {
+            lines.push(format!(
+                "- {}: average_ranking_score={:.6}",
+                candidate_id, average_ranking_score
+            ));
+        }
+    }
+
+    let mut rejected = aggregates
+        .into_iter()
+        .filter(|(candidate_id, _)| !carried_forward.contains(candidate_id))
+        .collect::<Vec<_>>();
+    rejected.sort_by(|left, right| left.0.cmp(&right.0));
+    if !rejected.is_empty() {
+        lines.push("Rejected or not carried forward:".into());
+        for (candidate_id, aggregate) in rejected {
+            if aggregate.failed_profiles.is_empty() {
+                lines.push(format!(
+                    "- {}: survived all profiles but ranked below the carried-forward cut",
+                    candidate_id
+                ));
+            } else {
+                lines.push(format!(
+                    "- {}: failed hard gates in {}",
+                    candidate_id,
+                    aggregate.failed_profiles.join(", ")
+                ));
+            }
+        }
+    }
+
+    lines.join("\n")
+}
+
 pub fn write_section4_suite_artifacts(
     report: &Section4SuiteRunReport,
     output_dir: &Path,
@@ -676,6 +855,17 @@ pub fn write_section4_suite_artifacts(
             scorecard_path.display()
         ))
     })?;
+    let survivor_decision_path = output_dir.join("section4-survivor-decision.txt");
+    std::fs::write(
+        &survivor_decision_path,
+        render_section4_survivor_decision(report),
+    )
+    .map_err(|error| {
+        EvaluatorError::Io(format!(
+            "failed to write survivor decision {}: {error}",
+            survivor_decision_path.display()
+        ))
+    })?;
 
     let profile_output_dirs = report
         .profile_reports
@@ -685,6 +875,7 @@ pub fn write_section4_suite_artifacts(
     Ok(Section4SuiteRunArtifacts {
         suite_report_path,
         scorecard_path,
+        survivor_decision_path,
         profile_output_dirs,
     })
 }
@@ -993,6 +1184,14 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
                 identity.identity_id
             )));
         }
+        if matches!(identity.kind, LaterPhaseIdentityKind::HeldOutQuerySet)
+            && identity.asset_path.is_none()
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite held-out query-set identity {} must declare asset_path",
+                identity.identity_id
+            )));
+        }
     }
     let mut seen_later_phase_identity_ids = HashSet::new();
     for identity in &spec.experiment_track_contract.later_phase_identities {
@@ -1105,6 +1304,15 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "section-4 suite later-phase identity {} references undeclared corpus_id/scale_tier_id pair ({}, {})",
                 identity.identity_id, corpus_id, scale_tier_id
+            )));
+        }
+        if let Some(asset_path) = &identity.asset_path
+            && !asset_path.exists()
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-4 suite later-phase identity {} references missing asset {}",
+                identity.identity_id,
+                asset_path.display()
             )));
         }
     }
@@ -1727,6 +1935,13 @@ pub fn resolve_profile_block_store_paths(profile: &mut BenchmarkProfile, base_di
             resolve_corpus_reference_paths(&mut corpus.corpus, base_dir);
         }
     }
+    for identity in &mut profile.later_phase_identities {
+        if let Some(asset_path) = &mut identity.asset_path
+            && asset_path.is_relative()
+        {
+            *asset_path = base_dir.join(&*asset_path);
+        }
+    }
 }
 
 fn resolve_corpus_reference_paths(reference: &mut BlockStoreCorpusReference, base_dir: &Path) {
@@ -1748,6 +1963,13 @@ pub fn resolve_section4_suite_spec_paths(spec: &mut Section4SuiteSpec, base_dir:
     for profile in &mut spec.profiles {
         if let Section4ProfileSourceSpec::Harvested { source, .. } = &mut profile.source {
             resolve_corpus_reference_paths(source, base_dir);
+        }
+    }
+    for identity in &mut spec.experiment_track_contract.later_phase_identities {
+        if let Some(asset_path) = &mut identity.asset_path
+            && asset_path.is_relative()
+        {
+            *asset_path = base_dir.join(&*asset_path);
         }
     }
 }

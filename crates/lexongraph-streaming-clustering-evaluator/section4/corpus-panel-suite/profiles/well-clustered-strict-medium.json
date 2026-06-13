@@ -4,7 +4,7 @@
     "well-clustered-medium"
   ],
   "shared_candidate_config": {
-    "cluster_count": 7,
+    "cluster_count": 12,
     "dimensions": 2,
     "balance_constraints": null,
     "random_seed": 11
@@ -14,7 +14,7 @@
       "source_kind": "block-store",
       "corpus": {
         "source_id": "well-clustered-strict-medium-training",
-        "root_block_id": "f434728e34e56b8637469d556d4117ba8f90a992e58a29f72cce2698b30089af",
+        "root_block_id": "0907366bac894fa7b8832ae96f6a8d48aca07956907e2a426b27ccb71c01a315",
         "store_kind": "zip-archive",
         "archive_path": "../corpora/well-clustered-strict-medium.zip"
       },
@@ -27,7 +27,7 @@
       "source_kind": "block-store",
       "corpus": {
         "source_id": "well-clustered-strict-medium-probe",
-        "root_block_id": "f434728e34e56b8637469d556d4117ba8f90a992e58a29f72cce2698b30089af",
+        "root_block_id": "0907366bac894fa7b8832ae96f6a8d48aca07956907e2a426b27ccb71c01a315",
         "store_kind": "zip-archive",
         "archive_path": "../corpora/well-clustered-strict-medium.zip"
       }
@@ -40,7 +40,7 @@
         "corpus_id": "well-clustered-medium",
         "corpus": {
           "source_id": "well-clustered-strict-medium-evaluation",
-          "root_block_id": "f434728e34e56b8637469d556d4117ba8f90a992e58a29f72cce2698b30089af",
+          "root_block_id": "0907366bac894fa7b8832ae96f6a8d48aca07956907e2a426b27ccb71c01a315",
           "store_kind": "zip-archive",
           "archive_path": "../corpora/well-clustered-strict-medium.zip"
         },
@@ -51,7 +51,7 @@
   },
   "leaf_model": {
     "leaf_size": 2,
-    "declared_final_cluster_count": 7,
+    "declared_final_cluster_count": 12,
     "alignment_policy": "StrictAlignment"
   },
   "locality_ground_truth": [
@@ -61,13 +61,13 @@
         "well-clustered-medium-real-000004",
         "well-clustered-medium-real-000008",
         "well-clustered-medium-real-000012",
+        "well-clustered-medium-real-000016",
+        "well-clustered-medium-real-000020",
         "well-clustered-medium-real-000001",
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000010"
+        "well-clustered-medium-real-000017"
       ]
     },
     {
@@ -76,13 +76,13 @@
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000013",
+        "well-clustered-medium-real-000017",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000020",
+        "well-clustered-medium-real-000016",
         "well-clustered-medium-real-000012",
         "well-clustered-medium-real-000008",
-        "well-clustered-medium-real-000004",
-        "well-clustered-medium-real-000000",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000010"
+        "well-clustered-medium-real-000004"
       ]
     },
     {
@@ -90,14 +90,14 @@
       "neighbor_ids": [
         "well-clustered-medium-real-000006",
         "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000017",
         "well-clustered-medium-real-000013",
         "well-clustered-medium-real-000009",
-        "well-clustered-medium-real-000005",
-        "well-clustered-medium-real-000001",
-        "well-clustered-medium-real-000003",
-        "well-clustered-medium-real-000007",
-        "well-clustered-medium-real-000011",
-        "well-clustered-medium-real-000012"
+        "well-clustered-medium-real-000005"
       ]
     },
     {
@@ -105,14 +105,14 @@
       "neighbor_ids": [
         "well-clustered-medium-real-000007",
         "well-clustered-medium-real-000011",
+        "well-clustered-medium-real-000015",
+        "well-clustered-medium-real-000019",
+        "well-clustered-medium-real-000023",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
         "well-clustered-medium-real-000010",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000009",
-        "well-clustered-medium-real-000005",
-        "well-clustered-medium-real-000001",
-        "well-clustered-medium-real-000012"
+        "well-clustered-medium-real-000006"
       ]
     },
     {
@@ -121,13 +121,13 @@
         "well-clustered-medium-real-000008",
         "well-clustered-medium-real-000000",
         "well-clustered-medium-real-000012",
+        "well-clustered-medium-real-000016",
+        "well-clustered-medium-real-000020",
         "well-clustered-medium-real-000001",
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000010"
+        "well-clustered-medium-real-000017"
       ]
     },
     {
@@ -136,13 +136,13 @@
         "well-clustered-medium-real-000001",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000013",
+        "well-clustered-medium-real-000017",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000020",
+        "well-clustered-medium-real-000016",
         "well-clustered-medium-real-000012",
         "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000008",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000004",
-        "well-clustered-medium-real-000000",
-        "well-clustered-medium-real-000010"
+        "well-clustered-medium-real-000008"
       ]
     },
     {
@@ -150,14 +150,14 @@
       "neighbor_ids": [
         "well-clustered-medium-real-000002",
         "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000017",
         "well-clustered-medium-real-000013",
         "well-clustered-medium-real-000009",
-        "well-clustered-medium-real-000003",
-        "well-clustered-medium-real-000005",
-        "well-clustered-medium-real-000007",
-        "well-clustered-medium-real-000001",
-        "well-clustered-medium-real-000011",
-        "well-clustered-medium-real-000012"
+        "well-clustered-medium-real-000003"
       ]
     },
     {
@@ -165,14 +165,14 @@
       "neighbor_ids": [
         "well-clustered-medium-real-000011",
         "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000015",
+        "well-clustered-medium-real-000019",
+        "well-clustered-medium-real-000023",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
         "well-clustered-medium-real-000010",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000009",
-        "well-clustered-medium-real-000005",
-        "well-clustered-medium-real-000001",
-        "well-clustered-medium-real-000012"
+        "well-clustered-medium-real-000006"
       ]
     },
     {
@@ -181,13 +181,13 @@
         "well-clustered-medium-real-000004",
         "well-clustered-medium-real-000012",
         "well-clustered-medium-real-000000",
+        "well-clustered-medium-real-000016",
+        "well-clustered-medium-real-000020",
         "well-clustered-medium-real-000001",
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000010"
+        "well-clustered-medium-real-000017"
       ]
     },
     {
@@ -196,48 +196,110 @@
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000013",
         "well-clustered-medium-real-000001",
+        "well-clustered-medium-real-000017",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000020",
         "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000016",
         "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000012",
-        "well-clustered-medium-real-000010",
-        "well-clustered-medium-real-000008",
-        "well-clustered-medium-real-000004",
-        "well-clustered-medium-real-000000"
+        "well-clustered-medium-real-000012"
       ]
     },
     {
       "entity_id": "well-clustered-medium-real-000010",
       "neighbor_ids": [
+        "well-clustered-medium-real-000014",
         "well-clustered-medium-real-000006",
         "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000017",
         "well-clustered-medium-real-000003",
         "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000007",
-        "well-clustered-medium-real-000011",
-        "well-clustered-medium-real-000009",
-        "well-clustered-medium-real-000005",
-        "well-clustered-medium-real-000001",
-        "well-clustered-medium-real-000012"
+        "well-clustered-medium-real-000007"
       ]
     },
     {
       "entity_id": "well-clustered-medium-real-000011",
       "neighbor_ids": [
         "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000015",
         "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000019",
+        "well-clustered-medium-real-000023",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
         "well-clustered-medium-real-000010",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000009",
-        "well-clustered-medium-real-000005",
-        "well-clustered-medium-real-000001",
-        "well-clustered-medium-real-000012"
+        "well-clustered-medium-real-000006"
       ]
     },
     {
       "entity_id": "well-clustered-medium-real-000012",
       "neighbor_ids": [
+        "well-clustered-medium-real-000008",
+        "well-clustered-medium-real-000016",
+        "well-clustered-medium-real-000020",
+        "well-clustered-medium-real-000004",
+        "well-clustered-medium-real-000000",
+        "well-clustered-medium-real-000001",
+        "well-clustered-medium-real-000005",
+        "well-clustered-medium-real-000009",
+        "well-clustered-medium-real-000013",
+        "well-clustered-medium-real-000017"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000013",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000009",
+        "well-clustered-medium-real-000017",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000005",
+        "well-clustered-medium-real-000001",
+        "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000006",
+        "well-clustered-medium-real-000020",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000016"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000014",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000006",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000017",
+        "well-clustered-medium-real-000011"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000015",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000011",
+        "well-clustered-medium-real-000019",
+        "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000023",
+        "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000006"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000016",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000020",
+        "well-clustered-medium-real-000012",
         "well-clustered-medium-real-000008",
         "well-clustered-medium-real-000004",
         "well-clustered-medium-real-000000",
@@ -245,24 +307,112 @@
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000013",
-        "well-clustered-medium-real-000002",
-        "well-clustered-medium-real-000006",
-        "well-clustered-medium-real-000010"
+        "well-clustered-medium-real-000017"
       ]
     },
     {
-      "entity_id": "well-clustered-medium-real-000013",
+      "entity_id": "well-clustered-medium-real-000017",
       "neighbor_ids": [
+        "well-clustered-medium-real-000021",
+        "well-clustered-medium-real-000013",
         "well-clustered-medium-real-000009",
         "well-clustered-medium-real-000005",
         "well-clustered-medium-real-000001",
         "well-clustered-medium-real-000002",
         "well-clustered-medium-real-000006",
         "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000020"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000018",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000006",
+        "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000011",
+        "well-clustered-medium-real-000015",
+        "well-clustered-medium-real-000021"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000019",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000015",
+        "well-clustered-medium-real-000023",
+        "well-clustered-medium-real-000011",
+        "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000006"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000020",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000016",
         "well-clustered-medium-real-000012",
         "well-clustered-medium-real-000008",
         "well-clustered-medium-real-000004",
-        "well-clustered-medium-real-000000"
+        "well-clustered-medium-real-000000",
+        "well-clustered-medium-real-000001",
+        "well-clustered-medium-real-000005",
+        "well-clustered-medium-real-000009",
+        "well-clustered-medium-real-000013",
+        "well-clustered-medium-real-000017"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000021",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000017",
+        "well-clustered-medium-real-000013",
+        "well-clustered-medium-real-000009",
+        "well-clustered-medium-real-000005",
+        "well-clustered-medium-real-000001",
+        "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000006",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000018"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000022",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000006",
+        "well-clustered-medium-real-000002",
+        "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000011",
+        "well-clustered-medium-real-000015",
+        "well-clustered-medium-real-000019"
+      ]
+    },
+    {
+      "entity_id": "well-clustered-medium-real-000023",
+      "neighbor_ids": [
+        "well-clustered-medium-real-000019",
+        "well-clustered-medium-real-000015",
+        "well-clustered-medium-real-000011",
+        "well-clustered-medium-real-000007",
+        "well-clustered-medium-real-000003",
+        "well-clustered-medium-real-000022",
+        "well-clustered-medium-real-000018",
+        "well-clustered-medium-real-000014",
+        "well-clustered-medium-real-000010",
+        "well-clustered-medium-real-000006"
       ]
     }
   ],

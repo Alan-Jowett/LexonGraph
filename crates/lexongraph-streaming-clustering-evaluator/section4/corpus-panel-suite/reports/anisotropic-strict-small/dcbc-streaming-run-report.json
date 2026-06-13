@@ -1,0 +1,170 @@
+{
+  "candidate_identity": {
+    "candidate_id": "dcbc-streaming",
+    "implementation_label": "Repository-owned streaming DCBC clustering",
+    "software_identity": "lexongraph-dcbc-streaming-v0.1.0"
+  },
+  "provenance": {
+    "profile_id": "anisotropic-strict-small",
+    "corpus_ids": [
+      "anisotropic-small"
+    ],
+    "source_reference_ids": [
+      "anisotropic-strict-small-evaluation",
+      "anisotropic-strict-small-probe",
+      "anisotropic-strict-small-training"
+    ],
+    "candidate_identity": {
+      "candidate_id": "dcbc-streaming",
+      "implementation_label": "Repository-owned streaming DCBC clustering",
+      "software_identity": "lexongraph-dcbc-streaming-v0.1.0"
+    },
+    "shared_candidate_config": {
+      "cluster_count": 6,
+      "dimensions": 2,
+      "balance_constraints": null,
+      "random_seed": 11
+    },
+    "seed_policy": "fixed-seed-11",
+    "software_identity": "section4-corpus-panel-v2",
+    "floating_point_profile": "ieee754-deterministic-no-fma",
+    "hardware_profile": "fixture-cpu"
+  },
+  "prerequisite_checks": [
+    {
+      "check_id": "shared-contract-execution",
+      "label": "Shared contract execution",
+      "passed": false,
+      "detail": "malformed streaming clustering input: embeddings must have non-zero Euclidean norm"
+    }
+  ],
+  "pass_reports": [],
+  "probe_results": [],
+  "leaf_membership": [],
+  "cluster_occupancies": [],
+  "synthetic_padding_concentration": null,
+  "determinism": {
+    "deterministic": false,
+    "compared_fields": [
+      "pass_reports",
+      "probe_results",
+      "leaf_membership",
+      "evaluation_entities",
+      "provenance"
+    ],
+    "mismatch_details": [
+      "candidate execution did not complete"
+    ]
+  },
+  "compression_analysis": null,
+  "metric_results": [],
+  "gate_results": [],
+  "deferred_research_goals": [
+    {
+      "deferred_id": "deferred-hierarchy-routing",
+      "label": "Hierarchy routing proof",
+      "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future hierarchy-routing evaluator"
+    },
+    {
+      "deferred_id": "deferred-same-or-sibling-locality",
+      "label": "Same-or-sibling locality target",
+      "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+      "research_goal_ids": [
+        "RG-LOCALITY"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future hierarchy-locality evaluator"
+    },
+    {
+      "deferred_id": "deferred-bounded-tree-shape",
+      "label": "Bounded fanout and depth",
+      "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future hierarchy-shape evaluator"
+    },
+    {
+      "deferred_id": "deferred-parent-summaries",
+      "label": "Parent summary accuracy and stability",
+      "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-refinement-contract",
+      "label": "Refinement and dispersion contract",
+      "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-persistence-roundtrip",
+      "label": "Persisted artifact durability",
+      "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-loaded-index-memory",
+      "label": "Loaded index memory",
+      "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-threading-reproducibility",
+      "label": "Multi-thread reproducibility",
+      "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+      "research_goal_ids": [
+        "RG-DETERMINISM"
+      ],
+      "coverage": "Deferred",
+      "status": "Deferred",
+      "later_evaluation_line": "future execution-profile evaluator"
+    }
+  ],
+  "artifact_hygiene": {
+    "comparative_metrics_emitted": false,
+    "success_shaped_completion_artifacts_emitted": false,
+    "detail": "candidate execution failed before comparative metrics or success-shaped completion artifacts could be emitted"
+  },
+  "run_status": "CandidateSharedContractFailure",
+  "survived_required_gates": false,
+  "ranking_score": null,
+  "terminal_failure_code": "candidate-shared-contract-failure",
+  "terminal_failure_message": "malformed streaming clustering input: embeddings must have non-zero Euclidean norm",
+  "terminal_failure": {
+    "CandidateSharedContractFailure": {
+      "candidate_id": "dcbc-streaming",
+      "message": "malformed streaming clustering input: embeddings must have non-zero Euclidean norm"
+    }
+  }
+}

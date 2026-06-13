@@ -1,0 +1,16 @@
+Section-4 survivor decision for section4-corpus-panel-v2 [leaf-screening-euclidean]
+Carry-forward rule: reject hard-gate failures first, then rank surviving candidates by section-4 ranking_score across 16 profile(s).
+Carried forward: recursive-balanced-kmeans, hybrid-coarse-rebalance, graph-neighborhood-balance
+Eligible candidates by average ranking_score:
+- recursive-balanced-kmeans: average_ranking_score=0.598911
+- hybrid-coarse-rebalance: average_ranking_score=0.598390
+- graph-neighborhood-balance: average_ranking_score=0.597348
+- pca-sort-exact-chunking: average_ranking_score=0.596177
+- space-filling-curve-exact-chunking: average_ranking_score=0.595135
+- random-shuffle-exact-chunking: average_ranking_score=0.555291
+Rejected or not carried forward:
+- dcbc-streaming: failed hard gates in real-world-harvested-strict-small, real-world-harvested-strict-medium, real-world-harvested-strict-large, well-clustered-strict-small, well-clustered-strict-medium, well-clustered-strict-large, weak-uniform-strict-small, weak-uniform-strict-medium, weak-uniform-strict-large, anisotropic-strict-small, anisotropic-strict-medium, anisotropic-strict-large, near-duplicate-strict-small, near-duplicate-strict-medium, near-duplicate-strict-large, near-duplicate-padding-small
+- directional-pca: failed hard gates in real-world-harvested-strict-small, real-world-harvested-strict-medium, real-world-harvested-strict-large, well-clustered-strict-small, weak-uniform-strict-medium, weak-uniform-strict-large, near-duplicate-strict-small, near-duplicate-strict-medium, near-duplicate-strict-large, near-duplicate-padding-small
+- pca-sort-exact-chunking: survived all profiles but ranked below the carried-forward cut
+- random-shuffle-exact-chunking: survived all profiles but ranked below the carried-forward cut
+- space-filling-curve-exact-chunking: survived all profiles but ranked below the carried-forward cut

@@ -1,0 +1,117 @@
+{
+  "query_set_id": "repository-docs-heldout-queries",
+  "description": "Held-out query set reserved for later routing benchmarks against the harvested real-world corpus tiers.",
+  "corpus_id": "real-world-harvested-large",
+  "scale_tier_id": "n-48",
+  "metric_contract": "Euclidean",
+  "queries": [
+    {
+      "entity_id": "q01-requirements",
+      "source_path": "docs/specs/rust-streaming-clustering-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.0,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "q02-validation",
+      "source_path": "docs/specs/rust-streaming-clustering-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.0,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "q03-design",
+      "source_path": "docs/specs/rust-streaming-clustering-evaluator-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.0,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "q04-requirements",
+      "source_path": "docs/specs/rust-streaming-clustering-evaluator-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.17,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "q05-validation",
+      "source_path": "docs/specs/rust-streaming-clustering-evaluator-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.17,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "q06-design",
+      "source_path": "docs/specs/rust-streaming-indexer-crate/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.17,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "q07-requirements",
+      "source_path": "docs/specs/rust-streaming-indexer-crate/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.34,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "q08-validation",
+      "source_path": "docs/specs/rust-streaming-indexer-crate/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.34,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "q09-design",
+      "source_path": "docs/specs/rust-workspace-ci/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.34,
+        5.0
+      ]
+    },
+    {
+      "entity_id": "q10-requirements",
+      "source_path": "docs/specs/rust-workspace-ci/requirements.md",
+      "source_label": "Requirements",
+      "embedding": [
+        40.51,
+        0.0
+      ]
+    },
+    {
+      "entity_id": "q11-validation",
+      "source_path": "docs/specs/rust-workspace-ci/validation.md",
+      "source_label": "Validation",
+      "embedding": [
+        40.51,
+        10.0
+      ]
+    },
+    {
+      "entity_id": "q12-design",
+      "source_path": "docs/specs/rust-zip-block-store/design.md",
+      "source_label": "Design",
+      "embedding": [
+        40.51,
+        5.0
+      ]
+    }
+  ]
+}

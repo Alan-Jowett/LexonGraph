@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lexongraph_streaming_clustering_evaluator::{
     BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
-    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    emit_campaign_artifacts, generate_section4_suite_assets,
+    materialize_section4_archive_from_json, registered_candidate_names,
     resolve_profile_block_store_paths, resolve_registered_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
     run_evaluation_campaign, run_section4_suite, write_campaign_artifacts,
@@ -40,6 +41,17 @@ enum Command {
         suite: PathBuf,
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
+    },
+    /// Materialize a block-store zip archive from a section-4 JSON entity list.
+    MaterializeSection4Archive {
+        #[arg(long, value_name = "PATH")]
+        input: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        output: PathBuf,
+        #[arg(long, value_name = "TEXT")]
+        source_id: Option<String>,
+        #[arg(long, value_name = "TEXT")]
+        corpus_id: Option<String>,
     },
     /// Run a generated section-4 benchmark suite against one or more candidates.
     RunSection4Suite {
@@ -126,6 +138,22 @@ fn run() -> Result<(), EvaluatorError> {
             }
             Ok(())
         }
+        Command::MaterializeSection4Archive {
+            input,
+            output,
+            source_id,
+            corpus_id,
+        } => {
+            let reference = materialize_section4_archive_from_json(
+                &input,
+                &output,
+                source_id.as_deref(),
+                corpus_id.as_deref(),
+            )?;
+            println!("{}", output.display());
+            println!("{}", reference.root_block_id);
+            Ok(())
+        }
         Command::RunSection4Suite {
             manifest,
             candidates,
@@ -154,6 +182,7 @@ fn run() -> Result<(), EvaluatorError> {
             let artifacts = write_section4_suite_artifacts(&report, &output_dir)?;
             println!("{}", artifacts.suite_report_path.display());
             println!("{}", artifacts.scorecard_path.display());
+            println!("{}", artifacts.survivor_decision_path.display());
             for path in artifacts.profile_output_dirs {
                 println!("{}", path.display());
             }
