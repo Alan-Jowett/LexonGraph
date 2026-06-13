@@ -1,0 +1,145 @@
+Section-4 suite scorecard for section4-corpus-panel-v2 [leaf-screening-euclidean; growth=small-to-medium-to-large nearest practical tiers with deterministic corpus identity reuse]
+- real-world-harvested-strict-small [real-world-harvested / n-12 / Small / real=12 / evaluated=12 / survivors=graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, random-shuffle-exact-chunking, space-filling-curve-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=2665116.667, peak_build_memory_bytes=10149888
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2561691.667, peak_build_memory_bytes=10469376
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2934333.333, peak_build_memory_bytes=10563584
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2934000.000, peak_build_memory_bytes=10608640
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=2539291.667, peak_build_memory_bytes=10649600
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3086808.333, peak_build_memory_bytes=10678272
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=2798166.667, peak_build_memory_bytes=10866688
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=3007450.000, peak_build_memory_bytes=10891264
+- real-world-harvested-strict-medium [real-world-harvested / n-24 / Medium / real=24 / evaluated=24 / survivors=pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, hybrid-coarse-rebalance, graph-neighborhood-balance, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3262270.833, peak_build_memory_bytes=11358208
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3230291.667, peak_build_memory_bytes=11423744
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3026608.333, peak_build_memory_bytes=11436032
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2909937.500, peak_build_memory_bytes=11456512
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=3146162.500, peak_build_memory_bytes=11501568
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3337375.000, peak_build_memory_bytes=11517952
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=3293133.333, peak_build_memory_bytes=11624448
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=2956004.167, peak_build_memory_bytes=11620352
+- real-world-harvested-strict-large [real-world-harvested / n-48 / Large / real=48 / evaluated=48 / survivors=space-filling-curve-exact-chunking, hybrid-coarse-rebalance, recursive-balanced-kmeans, graph-neighborhood-balance, pca-sort-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=4596177.083, peak_build_memory_bytes=11816960
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=7012568.750, peak_build_memory_bytes=11849728
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=9045183.333, peak_build_memory_bytes=11886592
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=8915443.750, peak_build_memory_bytes=11886592
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=8662652.083, peak_build_memory_bytes=11923456
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=8560545.833, peak_build_memory_bytes=11837440
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=7496562.500, peak_build_memory_bytes=11841536
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=5453760.417, peak_build_memory_bytes=14868480
+- well-clustered-strict-small [well-clustered-synthetic / n-12 / Small / real=12 / evaluated=12 / survivors=graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=2784125.000, peak_build_memory_bytes=14614528
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3023891.667, peak_build_memory_bytes=14548992
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3269408.333, peak_build_memory_bytes=14548992
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2902891.667, peak_build_memory_bytes=14548992
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=3132883.333, peak_build_memory_bytes=14557184
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3595550.000, peak_build_memory_bytes=14565376
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=2898450.000, peak_build_memory_bytes=14573568
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=2847541.667, peak_build_memory_bytes=14573568
+- well-clustered-strict-medium [well-clustered-synthetic / n-24 / Medium / real=24 / evaluated=24 / survivors=directional-pca, graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3384787.500, peak_build_memory_bytes=14667776
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3036945.833, peak_build_memory_bytes=14716928
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3110504.167, peak_build_memory_bytes=14741504
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=3158608.333, peak_build_memory_bytes=14757888
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=3011575.000, peak_build_memory_bytes=14708736
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3053125.000, peak_build_memory_bytes=14729216
+  candidate directional-pca: Succeeded, survived=true, campaign_time_per_vector_nanos=3148366.667, peak_build_memory_bytes=14729216
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=9890200.000, peak_build_memory_bytes=14802944
+- well-clustered-strict-large [well-clustered-synthetic / n-48 / Large / real=48 / evaluated=48 / survivors=directional-pca, graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=4734054.167, peak_build_memory_bytes=14934016
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4408445.833, peak_build_memory_bytes=14995456
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4465614.583, peak_build_memory_bytes=14913536
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=4622339.583, peak_build_memory_bytes=14880768
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=4633562.500, peak_build_memory_bytes=14876672
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4490643.750, peak_build_memory_bytes=15089664
+  candidate directional-pca: Succeeded, survived=true, campaign_time_per_vector_nanos=4678729.167, peak_build_memory_bytes=15163392
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=20633979.167, peak_build_memory_bytes=15093760
+- weak-uniform-strict-small [weak-cluster-uniform / n-12 / Small / real=12 / evaluated=12 / survivors=directional-pca, graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=2284658.333, peak_build_memory_bytes=14905344
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2978233.333, peak_build_memory_bytes=14970880
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2885983.333, peak_build_memory_bytes=14979072
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2535350.000, peak_build_memory_bytes=14974976
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=2496825.000, peak_build_memory_bytes=14974976
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2603158.333, peak_build_memory_bytes=14974976
+  candidate directional-pca: Succeeded, survived=true, campaign_time_per_vector_nanos=3005191.667, peak_build_memory_bytes=14987264
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=3557066.667, peak_build_memory_bytes=14995456
+- weak-uniform-strict-medium [weak-cluster-uniform / n-24 / Medium / real=24 / evaluated=24 / survivors=graph-neighborhood-balance, hybrid-coarse-rebalance, recursive-balanced-kmeans, space-filling-curve-exact-chunking, pca-sort-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3285920.833, peak_build_memory_bytes=14860288
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3346112.500, peak_build_memory_bytes=14884864
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3095429.167, peak_build_memory_bytes=14909440
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=3019308.333, peak_build_memory_bytes=14909440
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=3362958.333, peak_build_memory_bytes=14938112
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2933508.333, peak_build_memory_bytes=14925824
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=3251341.667, peak_build_memory_bytes=15007744
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=10557475.000, peak_build_memory_bytes=15003648
+- weak-uniform-strict-large [weak-cluster-uniform / n-48 / Large / real=48 / evaluated=48 / survivors=hybrid-coarse-rebalance, recursive-balanced-kmeans, pca-sort-exact-chunking, graph-neighborhood-balance, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=4582539.583, peak_build_memory_bytes=14983168
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4742872.917, peak_build_memory_bytes=15024128
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4723170.833, peak_build_memory_bytes=15032320
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=4536027.083, peak_build_memory_bytes=14999552
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=4581277.083, peak_build_memory_bytes=15015936
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4287789.583, peak_build_memory_bytes=15085568
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=4593502.083, peak_build_memory_bytes=15081472
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=81920987.500, peak_build_memory_bytes=15220736
+- anisotropic-strict-small [anisotropic-manifold / n-12 / Small / real=12 / evaluated=12 / survivors=directional-pca, graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3062333.333, peak_build_memory_bytes=14954496
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3442358.333, peak_build_memory_bytes=14966784
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2704425.000, peak_build_memory_bytes=14966784
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2981050.000, peak_build_memory_bytes=14962688
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=2687758.333, peak_build_memory_bytes=14905344
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2385008.333, peak_build_memory_bytes=14909440
+  candidate directional-pca: Succeeded, survived=true, campaign_time_per_vector_nanos=2842841.667, peak_build_memory_bytes=14909440
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=2700350.000, peak_build_memory_bytes=14917632
+- anisotropic-strict-medium [anisotropic-manifold / n-24 / Medium / real=24 / evaluated=24 / survivors=directional-pca, graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3533766.667, peak_build_memory_bytes=14938112
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3427908.333, peak_build_memory_bytes=14934016
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4642879.167, peak_build_memory_bytes=15044608
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=3708179.167, peak_build_memory_bytes=15056896
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=3060633.333, peak_build_memory_bytes=15060992
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3150000.000, peak_build_memory_bytes=15126528
+  candidate directional-pca: Succeeded, survived=true, campaign_time_per_vector_nanos=3517354.167, peak_build_memory_bytes=15130624
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=3184133.333, peak_build_memory_bytes=15134720
+- anisotropic-strict-large [anisotropic-manifold / n-48 / Large / real=48 / evaluated=48 / survivors=directional-pca, graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=4558214.583, peak_build_memory_bytes=15245312
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4706356.250, peak_build_memory_bytes=15245312
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4735354.167, peak_build_memory_bytes=15253504
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=4836568.750, peak_build_memory_bytes=15282176
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=4573227.083, peak_build_memory_bytes=15290368
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=4433560.417, peak_build_memory_bytes=15282176
+  candidate directional-pca: Succeeded, survived=true, campaign_time_per_vector_nanos=4669958.333, peak_build_memory_bytes=15360000
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=5426193.750, peak_build_memory_bytes=15282176
+- near-duplicate-strict-small [near-duplicate-heavy / n-12 / Small / real=12 / evaluated=12 / survivors=graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=2575191.667, peak_build_memory_bytes=15134720
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3187725.000, peak_build_memory_bytes=15147008
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2844275.000, peak_build_memory_bytes=15147008
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2797033.333, peak_build_memory_bytes=15147008
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=2711891.667, peak_build_memory_bytes=15155200
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2973916.667, peak_build_memory_bytes=15151104
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=2769800.000, peak_build_memory_bytes=15192064
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=3210641.667, peak_build_memory_bytes=15204352
+- near-duplicate-strict-medium [near-duplicate-heavy / n-24 / Medium / real=24 / evaluated=24 / survivors=graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3605612.500, peak_build_memory_bytes=15126528
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3398441.667, peak_build_memory_bytes=15233024
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3699304.167, peak_build_memory_bytes=15253504
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=3469787.500, peak_build_memory_bytes=15261696
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=3779966.667, peak_build_memory_bytes=15175680
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3626587.500, peak_build_memory_bytes=15187968
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=3453437.500, peak_build_memory_bytes=15192064
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=9163683.333, peak_build_memory_bytes=15208448
+- near-duplicate-strict-large [near-duplicate-heavy / n-48 / Large / real=48 / evaluated=48 / survivors=hybrid-coarse-rebalance, pca-sort-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking, graph-neighborhood-balance, random-shuffle-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=5198235.417, peak_build_memory_bytes=15208448
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=5067637.500, peak_build_memory_bytes=15319040
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=5341129.167, peak_build_memory_bytes=15269888
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=5105185.417, peak_build_memory_bytes=15327232
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=5168339.583, peak_build_memory_bytes=15327232
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=5317587.500, peak_build_memory_bytes=15269888
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=5815733.333, peak_build_memory_bytes=15273984
+  candidate dcbc-streaming: CandidateSharedContractFailure, survived=false, campaign_time_per_vector_nanos=6035754.167, peak_build_memory_bytes=15331328
+- near-duplicate-padding-small [near-duplicate-heavy / n-11-padded / Small / real=11 / evaluated=12 / survivors=graph-neighborhood-balance, hybrid-coarse-rebalance, pca-sort-exact-chunking, random-shuffle-exact-chunking, recursive-balanced-kmeans, space-filling-curve-exact-chunking]
+  candidate recursive-balanced-kmeans: Succeeded, survived=true, campaign_time_per_vector_nanos=3319408.333, peak_build_memory_bytes=15212544
+  candidate pca-sort-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3630750.000, peak_build_memory_bytes=15224832
+  candidate space-filling-curve-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=2987825.000, peak_build_memory_bytes=15220736
+  candidate graph-neighborhood-balance: Succeeded, survived=true, campaign_time_per_vector_nanos=2922800.000, peak_build_memory_bytes=15224832
+  candidate hybrid-coarse-rebalance: Succeeded, survived=true, campaign_time_per_vector_nanos=2862166.667, peak_build_memory_bytes=15224832
+  candidate random-shuffle-exact-chunking: Succeeded, survived=true, campaign_time_per_vector_nanos=3442066.667, peak_build_memory_bytes=15220736
+  candidate directional-pca: GateFailed, survived=false, campaign_time_per_vector_nanos=2797541.667, peak_build_memory_bytes=15233024
+  candidate dcbc-streaming: GateFailed, survived=false, campaign_time_per_vector_nanos=3158458.333, peak_build_memory_bytes=15241216

@@ -1,0 +1,953 @@
+{
+  "profile_id": "real-world-harvested-strict-large",
+  "corpus_ids": [
+    "real-world-harvested-large"
+  ],
+  "shared_candidate_config": {
+    "cluster_count": 24,
+    "dimensions": 2,
+    "balance_constraints": null,
+    "random_seed": 11
+  },
+  "training_passes": [
+    {
+      "source_kind": "block-store",
+      "corpus": {
+        "source_id": "real-world-harvested-strict-large-training",
+        "root_block_id": "72e3a6c98584f64d954a8eed81bc0f9753c545979f7a63d57d642d6dbfef1723",
+        "store_kind": "zip-archive",
+        "archive_path": "../corpora/real-world-harvested-strict-large.zip"
+      },
+      "batch_size": 2
+    }
+  ],
+  "probe_workloads": [
+    {
+      "workload_id": "real-world-harvested-strict-large-probes",
+      "source_kind": "block-store",
+      "corpus": {
+        "source_id": "real-world-harvested-strict-large-probe",
+        "root_block_id": "72e3a6c98584f64d954a8eed81bc0f9753c545979f7a63d57d642d6dbfef1723",
+        "store_kind": "zip-archive",
+        "archive_path": "../corpora/real-world-harvested-strict-large.zip"
+      }
+    }
+  ],
+  "evaluation_entities": {
+    "source_kind": "block-store",
+    "corpora": [
+      {
+        "corpus_id": "real-world-harvested-large",
+        "corpus": {
+          "source_id": "real-world-harvested-strict-large-evaluation",
+          "root_block_id": "72e3a6c98584f64d954a8eed81bc0f9753c545979f7a63d57d642d6dbfef1723",
+          "store_kind": "zip-archive",
+          "archive_path": "../corpora/real-world-harvested-strict-large.zip"
+        },
+        "entity_id_metadata_key": "entity_id",
+        "synthetic_metadata_key": "synthetic"
+      }
+    ]
+  },
+  "leaf_model": {
+    "leaf_size": 2,
+    "declared_final_cluster_count": 24,
+    "alignment_policy": "StrictAlignment"
+  },
+  "locality_ground_truth": [
+    {
+      "entity_id": "01-directional-pca-tree",
+      "neighbor_ids": [
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "09-indexing",
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "17-clustering",
+        "10-search",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "02-pca",
+      "neighbor_ids": [
+        "01-directional-pca-tree",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "09-indexing",
+        "17-clustering",
+        "08-ebcp",
+        "18-clustering_plan",
+        "07-dcbc",
+        "06-blocks",
+        "10-search"
+      ]
+    },
+    {
+      "entity_id": "03-semantic-compression",
+      "neighbor_ids": [
+        "02-pca",
+        "04-streaming-clustering",
+        "01-directional-pca-tree",
+        "17-clustering",
+        "18-clustering_plan",
+        "09-indexing",
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "10-search"
+      ]
+    },
+    {
+      "entity_id": "04-streaming-clustering",
+      "neighbor_ids": [
+        "03-semantic-compression",
+        "02-pca",
+        "01-directional-pca-tree",
+        "17-clustering",
+        "18-clustering_plan",
+        "09-indexing",
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "10-search"
+      ]
+    },
+    {
+      "entity_id": "05-2026-06-06-full-traceability-audit",
+      "neighbor_ids": [
+        "29-requirements",
+        "41-requirements",
+        "26-requirements",
+        "38-requirements",
+        "23-requirements",
+        "35-requirements",
+        "47-requirements",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements"
+      ]
+    },
+    {
+      "entity_id": "06-blocks",
+      "neighbor_ids": [
+        "10-search",
+        "07-dcbc",
+        "08-ebcp",
+        "09-indexing",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "07-dcbc",
+      "neighbor_ids": [
+        "06-blocks",
+        "08-ebcp",
+        "10-search",
+        "09-indexing",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "08-ebcp",
+      "neighbor_ids": [
+        "09-indexing",
+        "07-dcbc",
+        "06-blocks",
+        "10-search",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "09-indexing",
+      "neighbor_ids": [
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "10-search",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "10-search",
+      "neighbor_ids": [
+        "06-blocks",
+        "07-dcbc",
+        "08-ebcp",
+        "09-indexing",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "11-2026-06-03-embeddings-openai-spec-drift-rca",
+      "neighbor_ids": [
+        "15-2026-06-03-search-spec-drift-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "18-clustering_plan",
+        "17-clustering",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements"
+      ]
+    },
+    {
+      "entity_id": "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+      "neighbor_ids": [
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements",
+        "23-requirements",
+        "18-clustering_plan"
+      ]
+    },
+    {
+      "entity_id": "13-2026-06-03-filesystem-block-store-spec-first-rca",
+      "neighbor_ids": [
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements",
+        "23-requirements",
+        "35-requirements"
+      ]
+    },
+    {
+      "entity_id": "14-2026-06-03-search-spec-drift-followup-rca",
+      "neighbor_ids": [
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements",
+        "23-requirements",
+        "35-requirements"
+      ]
+    },
+    {
+      "entity_id": "15-2026-06-03-search-spec-drift-rca",
+      "neighbor_ids": [
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "18-clustering_plan",
+        "32-requirements",
+        "17-clustering",
+        "20-requirements",
+        "44-requirements"
+      ]
+    },
+    {
+      "entity_id": "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+      "neighbor_ids": [
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "32-requirements",
+        "20-requirements",
+        "44-requirements",
+        "35-requirements",
+        "23-requirements"
+      ]
+    },
+    {
+      "entity_id": "17-clustering",
+      "neighbor_ids": [
+        "18-clustering_plan",
+        "04-streaming-clustering",
+        "03-semantic-compression",
+        "02-pca",
+        "01-directional-pca-tree",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca"
+      ]
+    },
+    {
+      "entity_id": "18-clustering_plan",
+      "neighbor_ids": [
+        "17-clustering",
+        "04-streaming-clustering",
+        "03-semantic-compression",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "02-pca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "01-directional-pca-tree",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca"
+      ]
+    },
+    {
+      "entity_id": "19-design",
+      "neighbor_ids": [
+        "31-design",
+        "22-design",
+        "34-design",
+        "43-design",
+        "46-design",
+        "25-design",
+        "37-design",
+        "28-design",
+        "40-design",
+        "44-requirements"
+      ]
+    },
+    {
+      "entity_id": "20-requirements",
+      "neighbor_ids": [
+        "32-requirements",
+        "23-requirements",
+        "35-requirements",
+        "44-requirements",
+        "47-requirements",
+        "26-requirements",
+        "38-requirements",
+        "29-requirements",
+        "41-requirements",
+        "19-design"
+      ]
+    },
+    {
+      "entity_id": "21-validation",
+      "neighbor_ids": [
+        "33-validation",
+        "24-validation",
+        "36-validation",
+        "45-validation",
+        "48-validation",
+        "27-validation",
+        "39-validation",
+        "30-validation",
+        "42-validation",
+        "43-design"
+      ]
+    },
+    {
+      "entity_id": "22-design",
+      "neighbor_ids": [
+        "34-design",
+        "19-design",
+        "25-design",
+        "31-design",
+        "37-design",
+        "46-design",
+        "43-design",
+        "28-design",
+        "40-design",
+        "47-requirements"
+      ]
+    },
+    {
+      "entity_id": "23-requirements",
+      "neighbor_ids": [
+        "35-requirements",
+        "20-requirements",
+        "26-requirements",
+        "32-requirements",
+        "38-requirements",
+        "47-requirements",
+        "44-requirements",
+        "29-requirements",
+        "41-requirements",
+        "22-design"
+      ]
+    },
+    {
+      "entity_id": "24-validation",
+      "neighbor_ids": [
+        "36-validation",
+        "21-validation",
+        "27-validation",
+        "33-validation",
+        "39-validation",
+        "48-validation",
+        "45-validation",
+        "30-validation",
+        "42-validation",
+        "46-design"
+      ]
+    },
+    {
+      "entity_id": "25-design",
+      "neighbor_ids": [
+        "37-design",
+        "28-design",
+        "22-design",
+        "40-design",
+        "34-design",
+        "46-design",
+        "19-design",
+        "31-design",
+        "43-design",
+        "47-requirements"
+      ]
+    },
+    {
+      "entity_id": "26-requirements",
+      "neighbor_ids": [
+        "38-requirements",
+        "29-requirements",
+        "23-requirements",
+        "41-requirements",
+        "35-requirements",
+        "47-requirements",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements",
+        "25-design"
+      ]
+    },
+    {
+      "entity_id": "27-validation",
+      "neighbor_ids": [
+        "39-validation",
+        "30-validation",
+        "24-validation",
+        "42-validation",
+        "36-validation",
+        "48-validation",
+        "21-validation",
+        "33-validation",
+        "45-validation",
+        "46-design"
+      ]
+    },
+    {
+      "entity_id": "28-design",
+      "neighbor_ids": [
+        "40-design",
+        "25-design",
+        "37-design",
+        "22-design",
+        "34-design",
+        "46-design",
+        "19-design",
+        "31-design",
+        "43-design",
+        "47-requirements"
+      ]
+    },
+    {
+      "entity_id": "29-requirements",
+      "neighbor_ids": [
+        "41-requirements",
+        "26-requirements",
+        "38-requirements",
+        "23-requirements",
+        "35-requirements",
+        "47-requirements",
+        "20-requirements",
+        "32-requirements",
+        "44-requirements",
+        "28-design"
+      ]
+    },
+    {
+      "entity_id": "30-validation",
+      "neighbor_ids": [
+        "42-validation",
+        "27-validation",
+        "39-validation",
+        "24-validation",
+        "36-validation",
+        "48-validation",
+        "21-validation",
+        "33-validation",
+        "45-validation",
+        "46-design"
+      ]
+    },
+    {
+      "entity_id": "31-design",
+      "neighbor_ids": [
+        "19-design",
+        "43-design",
+        "34-design",
+        "22-design",
+        "46-design",
+        "37-design",
+        "25-design",
+        "40-design",
+        "28-design",
+        "21-validation"
+      ]
+    },
+    {
+      "entity_id": "32-requirements",
+      "neighbor_ids": [
+        "20-requirements",
+        "44-requirements",
+        "35-requirements",
+        "23-requirements",
+        "47-requirements",
+        "38-requirements",
+        "26-requirements",
+        "41-requirements",
+        "29-requirements",
+        "19-design"
+      ]
+    },
+    {
+      "entity_id": "33-validation",
+      "neighbor_ids": [
+        "21-validation",
+        "45-validation",
+        "36-validation",
+        "24-validation",
+        "48-validation",
+        "39-validation",
+        "27-validation",
+        "42-validation",
+        "30-validation",
+        "43-design"
+      ]
+    },
+    {
+      "entity_id": "34-design",
+      "neighbor_ids": [
+        "22-design",
+        "46-design",
+        "31-design",
+        "37-design",
+        "19-design",
+        "43-design",
+        "25-design",
+        "40-design",
+        "28-design",
+        "24-validation"
+      ]
+    },
+    {
+      "entity_id": "35-requirements",
+      "neighbor_ids": [
+        "23-requirements",
+        "47-requirements",
+        "32-requirements",
+        "38-requirements",
+        "20-requirements",
+        "44-requirements",
+        "26-requirements",
+        "41-requirements",
+        "29-requirements",
+        "22-design"
+      ]
+    },
+    {
+      "entity_id": "36-validation",
+      "neighbor_ids": [
+        "24-validation",
+        "48-validation",
+        "33-validation",
+        "39-validation",
+        "21-validation",
+        "45-validation",
+        "27-validation",
+        "42-validation",
+        "30-validation",
+        "46-design"
+      ]
+    },
+    {
+      "entity_id": "37-design",
+      "neighbor_ids": [
+        "25-design",
+        "40-design",
+        "34-design",
+        "28-design",
+        "22-design",
+        "46-design",
+        "31-design",
+        "19-design",
+        "43-design",
+        "27-validation"
+      ]
+    },
+    {
+      "entity_id": "38-requirements",
+      "neighbor_ids": [
+        "26-requirements",
+        "41-requirements",
+        "35-requirements",
+        "29-requirements",
+        "23-requirements",
+        "47-requirements",
+        "32-requirements",
+        "20-requirements",
+        "44-requirements",
+        "25-design"
+      ]
+    },
+    {
+      "entity_id": "39-validation",
+      "neighbor_ids": [
+        "27-validation",
+        "42-validation",
+        "36-validation",
+        "30-validation",
+        "24-validation",
+        "48-validation",
+        "33-validation",
+        "21-validation",
+        "45-validation",
+        "46-design"
+      ]
+    },
+    {
+      "entity_id": "40-design",
+      "neighbor_ids": [
+        "28-design",
+        "37-design",
+        "25-design",
+        "34-design",
+        "22-design",
+        "46-design",
+        "31-design",
+        "19-design",
+        "43-design",
+        "30-validation"
+      ]
+    },
+    {
+      "entity_id": "41-requirements",
+      "neighbor_ids": [
+        "29-requirements",
+        "38-requirements",
+        "26-requirements",
+        "35-requirements",
+        "23-requirements",
+        "47-requirements",
+        "32-requirements",
+        "20-requirements",
+        "44-requirements",
+        "28-design"
+      ]
+    },
+    {
+      "entity_id": "42-validation",
+      "neighbor_ids": [
+        "30-validation",
+        "39-validation",
+        "27-validation",
+        "36-validation",
+        "24-validation",
+        "48-validation",
+        "33-validation",
+        "21-validation",
+        "45-validation",
+        "46-design"
+      ]
+    },
+    {
+      "entity_id": "43-design",
+      "neighbor_ids": [
+        "31-design",
+        "46-design",
+        "34-design",
+        "19-design",
+        "22-design",
+        "37-design",
+        "25-design",
+        "40-design",
+        "28-design",
+        "21-validation"
+      ]
+    },
+    {
+      "entity_id": "44-requirements",
+      "neighbor_ids": [
+        "32-requirements",
+        "47-requirements",
+        "35-requirements",
+        "20-requirements",
+        "23-requirements",
+        "38-requirements",
+        "26-requirements",
+        "41-requirements",
+        "29-requirements",
+        "19-design"
+      ]
+    },
+    {
+      "entity_id": "45-validation",
+      "neighbor_ids": [
+        "33-validation",
+        "48-validation",
+        "36-validation",
+        "21-validation",
+        "24-validation",
+        "39-validation",
+        "27-validation",
+        "42-validation",
+        "30-validation",
+        "43-design"
+      ]
+    },
+    {
+      "entity_id": "46-design",
+      "neighbor_ids": [
+        "34-design",
+        "43-design",
+        "31-design",
+        "37-design",
+        "22-design",
+        "19-design",
+        "25-design",
+        "40-design",
+        "28-design",
+        "24-validation"
+      ]
+    },
+    {
+      "entity_id": "47-requirements",
+      "neighbor_ids": [
+        "35-requirements",
+        "44-requirements",
+        "32-requirements",
+        "38-requirements",
+        "23-requirements",
+        "20-requirements",
+        "26-requirements",
+        "41-requirements",
+        "29-requirements",
+        "22-design"
+      ]
+    },
+    {
+      "entity_id": "48-validation",
+      "neighbor_ids": [
+        "36-validation",
+        "45-validation",
+        "33-validation",
+        "39-validation",
+        "24-validation",
+        "21-validation",
+        "27-validation",
+        "42-validation",
+        "30-validation",
+        "46-design"
+      ]
+    }
+  ],
+  "compression_benchmark": {
+    "method": "ScalarQuantization8Bit",
+    "global_baseline_label": "global-real-dataset-8bit"
+  },
+  "metric_declarations": [
+    {
+      "metric_id": "same-leaf-neighborhood-coherence",
+      "label": "Same-leaf neighborhood coherence",
+      "kind": "SameLeafNeighborhoodCoherence",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-LOCALITY"
+      ],
+      "ranking_weight": 1.0
+    },
+    {
+      "metric_id": "local-compression-gain",
+      "label": "Local compression gain",
+      "kind": "LocalCompressionGain",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COMPRESSION"
+      ],
+      "ranking_weight": 0.5
+    }
+  ],
+  "gate_declarations": [
+    {
+      "gate_id": "exact-leaf-occupancy",
+      "label": "Exact leaf occupancy",
+      "kind": "ExactLeafOccupancy",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-FIXED-LEAF-SIZE"
+      ]
+    },
+    {
+      "gate_id": "complete-coverage",
+      "label": "Complete coverage",
+      "kind": "CompleteCoverage",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COVERAGE"
+      ]
+    },
+    {
+      "gate_id": "one-cluster-per-entity",
+      "label": "One cluster per entity",
+      "kind": "OneClusterPerEntity",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COVERAGE"
+      ]
+    },
+    {
+      "gate_id": "no-empty-declared-clusters",
+      "label": "No empty declared clusters",
+      "kind": "NoEmptyDeclaredClusters",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-FIXED-LEAF-SIZE"
+      ]
+    },
+    {
+      "gate_id": "deterministic-observable-results",
+      "label": "Deterministic observable results",
+      "kind": "DeterministicObservableResults",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-DETERMINISM"
+      ]
+    }
+  ],
+  "deferred_research_goals": [
+    {
+      "deferred_id": "deferred-hierarchy-routing",
+      "label": "Hierarchy routing proof",
+      "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-routing evaluator"
+    },
+    {
+      "deferred_id": "deferred-same-or-sibling-locality",
+      "label": "Same-or-sibling locality target",
+      "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+      "research_goal_ids": [
+        "RG-LOCALITY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-locality evaluator"
+    },
+    {
+      "deferred_id": "deferred-bounded-tree-shape",
+      "label": "Bounded fanout and depth",
+      "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-shape evaluator"
+    },
+    {
+      "deferred_id": "deferred-parent-summaries",
+      "label": "Parent summary accuracy and stability",
+      "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-refinement-contract",
+      "label": "Refinement and dispersion contract",
+      "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-persistence-roundtrip",
+      "label": "Persisted artifact durability",
+      "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-loaded-index-memory",
+      "label": "Loaded index memory",
+      "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-threading-reproducibility",
+      "label": "Multi-thread reproducibility",
+      "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+      "research_goal_ids": [
+        "RG-DETERMINISM"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future execution-profile evaluator"
+    }
+  ],
+  "later_phase_identities": [
+    {
+      "identity_id": "real-world-harvested-large-heldout-queries",
+      "label": "Held-out routing query set for harvested large corpus",
+      "kind": "HeldOutQuerySet",
+      "corpus_id": "real-world-harvested-large",
+      "scale_tier_id": "n-48",
+      "asset_path": "C:/dev/LexonGraph/crates/lexongraph-streaming-clustering-evaluator/section4/corpus-panel-suite/sources/repository-docs-heldout-queries.json",
+      "later_evaluation_line": "future hierarchy-routing evaluator"
+    }
+  ],
+  "reproducibility": {
+    "seed_policy": "fixed-seed-11",
+    "software_identity": "section4-corpus-panel-v2",
+    "floating_point_profile": "ieee754-deterministic-no-fma",
+    "hardware_profile": "fixture-cpu"
+  }
+}

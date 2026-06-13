@@ -413,6 +413,11 @@ For corpus families that participate in repeated scale comparison, the panel
 also carries stable small, medium, and large tier identities or deterministic
 nearest-practical equivalents together with the rule that relates those tiers.
 
+In this revision, the checked-in panel realizes three repeated-comparison tiers
+for the harvested, well-clustered, weak-cluster or uniform, anisotropic or
+manifold, and near-duplicate-heavy families, and keeps one separate
+deterministic-padding near-duplicate profile for alignment-policy comparison.
+
 ### DSG-STREAM-EVAL-022 `Deterministic ground-truth assets`
 
 For any corpus used in same-leaf locality evaluation, the benchmark suite
@@ -522,17 +527,19 @@ non-fixture candidate implementations that are reusable outside the evaluator
 and are entered solely through the shared streaming trainer/classifier
 contract.
 
-In this revision, that set includes:
+In this revision, the runnable section-4 comparison set includes:
 
-- `crates/lexongraph-pca-chunking`
-- `crates/lexongraph-directional-pca`
-- `crates/lexongraph-dcbc-streaming`
+- reusable repository crates `crates/lexongraph-pca-chunking`,
+  `crates/lexongraph-directional-pca`, and `crates/lexongraph-dcbc-streaming`
+- evaluator-owned deterministic representatives for recursive balanced
+  partitioning, space-filling-curve chunking, graph-neighborhood balancing,
+  hybrid coarse rebalance, and random-shuffle exact chunking
 
 ### DSG-STREAM-EVAL-028 `Stable candidate identity in reports`
 
-Section-4 reports and scorecards surface stable repository-owned candidate
-identities for checked-in reusable concrete candidates in the same result model
-used for fixture candidates.
+Section-4 reports and scorecards surface stable candidate identities for the
+full checked-in runnable section-4 set in the same result model used for
+fixture candidates.
 
 ### DSG-STREAM-EVAL-029 `Evaluator-owned registration defaults`
 
@@ -636,7 +643,9 @@ The first complete checked-in section-4 panel in this revision includes at
 least one such held-out query-set identity for a harvested real-world corpus
 family. When the experiment track declares later-phase identities, the suite
 preserves them in the frozen contract and deferred ledger rather than dropping
-them from the section-4 artifact model.
+them from the section-4 artifact model. Held-out query-set identities in this
+revision also carry checked-in materialized asset paths so later routing work
+can reuse the frozen corpus/tier identity without regenerating unnamed inputs.
 
 ### DSG-STREAM-EVAL-034 `Hard-gate termination and artifact hygiene`
 
@@ -653,6 +662,10 @@ When a candidate fails such a gate, the workflow:
    success-shaped completion artifacts were not exposed after the failing gate
 4. preserves enough campaign state to identify which candidates, if any, remain
    survivors eligible for later hierarchy-stage comparison
+
+For the canonical checked-in section-4 run, the workflow writes a machine-
+readable suite report plus human-readable scorecard and survivor-decision
+artifacts beside the per-profile outputs.
 
 ### DSG-STREAM-EVAL-035 `Metric and execution semantics contract`
 
@@ -705,6 +718,10 @@ That rule:
 3. prevents build-cost comparisons from rescuing a hard-gate failure
 4. defines deterministic tie-breaking when surviving candidates remain otherwise
    indistinguishable on the declared comparison surface
+
+The checked-in workflow materializes that decision as a stable human-readable
+survivor summary listing carried-forward candidates, average ranking evidence,
+and rejected or non-carried-forward candidates.
 
 ## Traceability
 

@@ -50,7 +50,8 @@ pub use section4::{
     Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface, Section4ScaleTierKind,
     Section4SuiteManifest, Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport,
     Section4SuiteRunProfileReport, Section4SuiteRunReport, Section4SuiteSpec,
-    generate_section4_suite_assets, render_section4_suite_scorecard,
+    generate_section4_suite_assets, materialize_section4_archive_from_json,
+    render_section4_suite_scorecard, render_section4_survivor_decision,
     resolve_profile_block_store_paths, resolve_registered_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths, run_section4_suite,
     write_section4_suite_artifacts,
@@ -163,6 +164,13 @@ pub struct LaterPhaseIdentity {
     pub kind: LaterPhaseIdentityKind,
     pub corpus_id: Option<String>,
     pub scale_tier_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_portable_pathbuf",
+        deserialize_with = "deserialize_optional_cross_platform_pathbuf"
+    )]
+    pub asset_path: Option<PathBuf>,
     pub later_evaluation_line: String,
 }
 
@@ -229,6 +237,29 @@ where
     S: serde::Serializer,
 {
     serializer.serialize_str(&path.to_string_lossy().replace('\\', "/"))
+}
+
+pub(crate) fn deserialize_optional_cross_platform_pathbuf<'de, D>(
+    deserializer: D,
+) -> Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.map(normalize_cross_platform_path))
+}
+
+pub(crate) fn serialize_optional_portable_pathbuf<S>(
+    path: &Option<PathBuf>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match path {
+        Some(path) => serializer.serialize_some(&path.to_string_lossy().replace('\\', "/")),
+        None => serializer.serialize_none(),
+    }
 }
 
 fn has_windows_drive_prefix(path: &str) -> bool {
@@ -1249,6 +1280,14 @@ fn validate_profile(profile: &BenchmarkProfile) -> Result<(), EvaluatorError> {
         if identity.later_evaluation_line.trim().is_empty() {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "later-phase identity {} must declare later_evaluation_line",
+                identity.identity_id
+            )));
+        }
+        if matches!(identity.kind, LaterPhaseIdentityKind::HeldOutQuerySet)
+            && identity.asset_path.is_none()
+        {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "held-out query-set identity {} must declare asset_path",
                 identity.identity_id
             )));
         }
@@ -3084,9 +3123,20 @@ pub fn built_in_fixture_candidate_names() -> Vec<&'static str> {
     ]
 }
 
+pub fn section4_family_candidate_names() -> Vec<&'static str> {
+    vec![
+        "recursive-balanced-kmeans",
+        "pca-sort-exact-chunking",
+        "space-filling-curve-exact-chunking",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "random-shuffle-exact-chunking",
+    ]
+}
+
 pub fn registered_candidate_names() -> Vec<&'static str> {
     let mut names = built_in_fixture_candidate_names();
-    names.push("pca-sort-exact-chunking");
+    names.extend(section4_family_candidate_names());
     names.push("directional-pca");
     names.push("dcbc-streaming");
     names
@@ -3101,6 +3151,508 @@ fn default_directional_pca_params() -> DirectionalPcaParams {
         min_effective_rank: 1,
         min_cumulative_variance: 0.0,
     }
+}
+
+#[derive(Clone, Copy)]
+enum Section4FamilyStrategyMode {
+    RecursiveBalancedKmeans,
+    SpaceFillingCurveExactChunking,
+    GraphNeighborhoodBalance,
+    HybridCoarseRebalance,
+    RandomShuffleExactChunking,
+}
+
+#[derive(Clone)]
+struct Section4FamilyStrategyTrainer {
+    config: StreamingClusteringConfig,
+    state: TrainerState,
+    mode: Section4FamilyStrategyMode,
+    pass_observed_count: usize,
+    ingested_embeddings: Vec<Embedding>,
+}
+
+#[derive(Clone)]
+struct Section4FamilyStrategyClassifier {
+    config: StreamingClusteringConfig,
+    exact_assignments: HashMap<Vec<u32>, ClusterId>,
+    cluster_centroids: Vec<Embedding>,
+}
+
+impl Section4FamilyStrategyTrainer {
+    fn new(
+        config: &StreamingClusteringConfig,
+        mode: Section4FamilyStrategyMode,
+    ) -> Result<Self, StreamingClusteringError> {
+        validate_config(config)?;
+        Ok(Self {
+            config: config.clone(),
+            state: TrainerState::Idle,
+            mode,
+            pass_observed_count: 0,
+            ingested_embeddings: Vec::new(),
+        })
+    }
+}
+
+impl StreamingClusterTrainer for Section4FamilyStrategyTrainer {
+    type Classifier = Section4FamilyStrategyClassifier;
+
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn state(&self) -> TrainerState {
+        self.state
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Embedding]) -> Result<(), StreamingClusteringError> {
+        if !matches!(
+            self.state,
+            TrainerState::Idle | TrainerState::Ingesting | TrainerState::PassComplete
+        ) {
+            let invalid_state = self.state;
+            self.state = TrainerState::Error;
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: invalid_state,
+                operation: "ingest_batch".into(),
+            });
+        }
+        for embedding in embeddings {
+            validate_embedding(embedding, self.config.dimensions)?;
+            self.ingested_embeddings.push(embedding.clone());
+        }
+        self.pass_observed_count += embeddings.len();
+        self.state = TrainerState::Ingesting;
+        Ok(())
+    }
+
+    fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
+        if self.state != TrainerState::Ingesting {
+            let invalid_state = self.state;
+            self.state = TrainerState::Error;
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: invalid_state,
+                operation: "finish_pass".into(),
+            });
+        }
+        let report = PassReport {
+            observed_count: self.pass_observed_count,
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: (0..self.config.cluster_count).collect(),
+        };
+        self.pass_observed_count = 0;
+        self.state = TrainerState::PassComplete;
+        Ok(report)
+    }
+
+    fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+        if self.state != TrainerState::PassComplete {
+            let invalid_state = self.state;
+            self.state = TrainerState::Error;
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: invalid_state,
+                operation: "complete_training".into(),
+            });
+        }
+        self.state = TrainerState::TrainingComplete;
+        Ok(())
+    }
+
+    fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+        if self.state != TrainerState::TrainingComplete {
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: self.state,
+                operation: "into_classifier".into(),
+            });
+        }
+        let partitions = build_section4_family_partitions(
+            &self.ingested_embeddings,
+            self.config.cluster_count as usize,
+            self.mode,
+            self.config.random_seed.unwrap_or(0),
+        )?;
+        let mut exact_assignments = HashMap::with_capacity(self.ingested_embeddings.len());
+        let mut cluster_centroids = Vec::with_capacity(partitions.len());
+        for (cluster_id, members) in partitions.iter().enumerate() {
+            let centroid = compute_cluster_centroid(&self.ingested_embeddings, members);
+            for &member_index in members {
+                exact_assignments.insert(
+                    embedding_key(&self.ingested_embeddings[member_index]),
+                    cluster_id as ClusterId,
+                );
+            }
+            cluster_centroids.push(centroid);
+        }
+        Ok(Section4FamilyStrategyClassifier {
+            config: self.config,
+            exact_assignments,
+            cluster_centroids,
+        })
+    }
+}
+
+impl StreamingClusterClassifier for Section4FamilyStrategyClassifier {
+    fn config(&self) -> &StreamingClusteringConfig {
+        &self.config
+    }
+
+    fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        validate_embedding(embedding, self.config.dimensions)?;
+        if let Some(cluster_id) = self.exact_assignments.get(&embedding_key(embedding)) {
+            return Ok(*cluster_id);
+        }
+        let (cluster_id, _) = self
+            .cluster_centroids
+            .iter()
+            .enumerate()
+            .map(|(cluster_id, centroid)| {
+                (
+                    cluster_id as ClusterId,
+                    squared_euclidean_distance(embedding, centroid),
+                )
+            })
+            .min_by(|left, right| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| left.0.cmp(&right.0))
+            })
+            .expect("section-4 family candidates always produce at least one centroid");
+        Ok(cluster_id)
+    }
+}
+
+fn build_section4_family_partitions(
+    embeddings: &[Embedding],
+    cluster_count: usize,
+    mode: Section4FamilyStrategyMode,
+    random_seed: u64,
+) -> Result<Vec<Vec<usize>>, StreamingClusteringError> {
+    if embeddings.is_empty() {
+        return Err(StreamingClusteringError::UnsatisfiableConstraint {
+            message: "section-4 family candidates require at least one embedding".into(),
+        });
+    }
+    if cluster_count == 0 || !embeddings.len().is_multiple_of(cluster_count) {
+        return Err(StreamingClusteringError::UnsatisfiableConstraint {
+            message: format!(
+                "section-4 family candidates require an evaluated entity count divisible by cluster_count; observed {} and {}",
+                embeddings.len(),
+                cluster_count
+            ),
+        });
+    }
+    let leaf_size = embeddings.len() / cluster_count;
+    let partitions = match mode {
+        Section4FamilyStrategyMode::RecursiveBalancedKmeans => {
+            recursive_balanced_partitions(embeddings, cluster_count, leaf_size)
+        }
+        Section4FamilyStrategyMode::SpaceFillingCurveExactChunking => {
+            if embeddings[0].len() > 2 {
+                return Err(StreamingClusteringError::UnsatisfiableConstraint {
+                    message: format!(
+                        "space-filling-curve-exact-chunking supports at most 2 dimensions; observed {}",
+                        embeddings[0].len()
+                    ),
+                });
+            }
+            contiguous_chunks(sorted_indices_by_space_filling_curve(embeddings), leaf_size)
+        }
+        Section4FamilyStrategyMode::GraphNeighborhoodBalance => {
+            graph_neighborhood_partitions(embeddings, cluster_count, leaf_size)
+        }
+        Section4FamilyStrategyMode::HybridCoarseRebalance => {
+            hybrid_coarse_rebalance_partitions(embeddings, cluster_count, leaf_size)
+        }
+        Section4FamilyStrategyMode::RandomShuffleExactChunking => contiguous_chunks(
+            sorted_indices_by_deterministic_hash(embeddings, random_seed),
+            leaf_size,
+        ),
+    };
+    if partitions.len() != cluster_count
+        || partitions
+            .iter()
+            .any(|partition| partition.len() != leaf_size)
+    {
+        return Err(StreamingClusteringError::UnsatisfiableConstraint {
+            message: "section-4 family candidates failed to materialize exact-size partitions"
+                .into(),
+        });
+    }
+    Ok(partitions)
+}
+
+fn recursive_balanced_partitions(
+    embeddings: &[Embedding],
+    cluster_count: usize,
+    leaf_size: usize,
+) -> Vec<Vec<usize>> {
+    fn recurse(
+        embeddings: &[Embedding],
+        indices: &[usize],
+        cluster_count: usize,
+        leaf_size: usize,
+        partitions: &mut Vec<Vec<usize>>,
+    ) {
+        if cluster_count == 1 {
+            partitions.push(indices.to_vec());
+            return;
+        }
+        let left_clusters = cluster_count / 2;
+        let right_clusters = cluster_count - left_clusters;
+        let split_point = left_clusters * leaf_size;
+        let axis = widest_variance_dimension(embeddings, indices);
+        let mut sorted = indices.to_vec();
+        sorted.sort_by(|left, right| {
+            embeddings[*left][axis]
+                .total_cmp(&embeddings[*right][axis])
+                .then_with(|| left.cmp(right))
+        });
+        let (left, right) = sorted.split_at(split_point);
+        recurse(embeddings, left, left_clusters, leaf_size, partitions);
+        recurse(embeddings, right, right_clusters, leaf_size, partitions);
+    }
+
+    let indices = (0..embeddings.len()).collect::<Vec<_>>();
+    let mut partitions = Vec::with_capacity(cluster_count);
+    recurse(
+        embeddings,
+        &indices,
+        cluster_count,
+        leaf_size,
+        &mut partitions,
+    );
+    partitions
+}
+
+fn widest_variance_dimension(embeddings: &[Embedding], indices: &[usize]) -> usize {
+    let first_embedding = &embeddings[indices[0]];
+    let mut widest_dimension = 0;
+    let mut widest_variance = f32::NEG_INFINITY;
+    for (dimension, _) in first_embedding.iter().enumerate() {
+        let mean = indices
+            .iter()
+            .map(|index| embeddings[*index][dimension])
+            .sum::<f32>()
+            / indices.len() as f32;
+        let variance = indices
+            .iter()
+            .map(|index| {
+                let delta = embeddings[*index][dimension] - mean;
+                delta * delta
+            })
+            .sum::<f32>();
+        if variance > widest_variance {
+            widest_variance = variance;
+            widest_dimension = dimension;
+        }
+    }
+    widest_dimension
+}
+
+fn sorted_indices_by_space_filling_curve(embeddings: &[Embedding]) -> Vec<usize> {
+    let dimensions = embeddings[0].len();
+    debug_assert!(dimensions > 0);
+    let x_dimension = 0;
+    let y_dimension = if dimensions > 1 { 1 } else { 0 };
+    let (min_x, max_x) = min_max_dimension(embeddings, x_dimension);
+    let (min_y, max_y) = min_max_dimension(embeddings, y_dimension);
+    let mut indices = (0..embeddings.len()).collect::<Vec<_>>();
+    indices.sort_by(|left, right| {
+        morton_code(
+            embeddings[*left][x_dimension],
+            embeddings[*left][y_dimension],
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        )
+        .cmp(&morton_code(
+            embeddings[*right][x_dimension],
+            embeddings[*right][y_dimension],
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        ))
+        .then_with(|| left.cmp(right))
+    });
+    indices
+}
+
+fn min_max_dimension(embeddings: &[Embedding], dimension: usize) -> (f32, f32) {
+    embeddings.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(min_value, max_value), embedding| {
+            (
+                min_value.min(embedding[dimension]),
+                max_value.max(embedding[dimension]),
+            )
+        },
+    )
+}
+
+fn quantize_to_u16(value: f32, min_value: f32, max_value: f32) -> u16 {
+    if max_value <= min_value {
+        return 0;
+    }
+    let normalized = ((value - min_value) / (max_value - min_value)).clamp(0.0, 1.0);
+    (normalized * u16::MAX as f32).round() as u16
+}
+
+fn morton_code(x: f32, y: f32, min_x: f32, max_x: f32, min_y: f32, max_y: f32) -> u32 {
+    let x = quantize_to_u16(x, min_x, max_x);
+    let y = quantize_to_u16(y, min_y, max_y);
+    let mut code = 0u32;
+    for bit in 0..16 {
+        code |= (((x >> bit) & 1) as u32) << (bit * 2);
+        code |= (((y >> bit) & 1) as u32) << (bit * 2 + 1);
+    }
+    code
+}
+
+fn graph_neighborhood_partitions(
+    embeddings: &[Embedding],
+    cluster_count: usize,
+    leaf_size: usize,
+) -> Vec<Vec<usize>> {
+    let mut unassigned = (0..embeddings.len()).collect::<HashSet<_>>();
+    let mut partitions = Vec::with_capacity(cluster_count);
+    while !unassigned.is_empty() {
+        let seed = *unassigned
+            .iter()
+            .min()
+            .expect("unassigned set is non-empty");
+        unassigned.remove(&seed);
+        let mut partition = vec![seed];
+        while partition.len() < leaf_size {
+            let next = unassigned
+                .iter()
+                .copied()
+                .min_by(|left, right| {
+                    average_distance_to_partition(embeddings, *left, &partition)
+                        .partial_cmp(&average_distance_to_partition(
+                            embeddings, *right, &partition,
+                        ))
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| left.cmp(right))
+                })
+                .expect("leaf_size is guaranteed to be achievable");
+            unassigned.remove(&next);
+            partition.push(next);
+        }
+        partitions.push(partition);
+    }
+    partitions
+}
+
+fn average_distance_to_partition(
+    embeddings: &[Embedding],
+    candidate_index: usize,
+    partition: &[usize],
+) -> f32 {
+    partition
+        .iter()
+        .map(|member| {
+            squared_euclidean_distance(&embeddings[candidate_index], &embeddings[*member])
+        })
+        .sum::<f32>()
+        / partition.len() as f32
+}
+
+fn hybrid_coarse_rebalance_partitions(
+    embeddings: &[Embedding],
+    cluster_count: usize,
+    leaf_size: usize,
+) -> Vec<Vec<usize>> {
+    let coarse_group_count = (cluster_count as f64).sqrt().floor().max(1.0) as usize;
+    let coarse_cluster_counts = balanced_cluster_counts(cluster_count, coarse_group_count);
+    let mut sorted = (0..embeddings.len()).collect::<Vec<_>>();
+    sorted.sort_by(|left, right| {
+        embeddings[*left][0]
+            .total_cmp(&embeddings[*right][0])
+            .then_with(|| left.cmp(right))
+    });
+    let mut partitions = Vec::with_capacity(cluster_count);
+    let mut offset = 0usize;
+    for coarse_clusters in coarse_cluster_counts {
+        let coarse_size = coarse_clusters * leaf_size;
+        let mut coarse_indices = sorted[offset..offset + coarse_size].to_vec();
+        offset += coarse_size;
+        let secondary_dimension = if embeddings[0].len() > 1 { 1 } else { 0 };
+        coarse_indices.sort_by(|left, right| {
+            embeddings[*left][secondary_dimension]
+                .total_cmp(&embeddings[*right][secondary_dimension])
+                .then_with(|| left.cmp(right))
+        });
+        partitions.extend(contiguous_chunks(coarse_indices, leaf_size));
+    }
+    partitions
+}
+
+fn balanced_cluster_counts(total_clusters: usize, group_count: usize) -> Vec<usize> {
+    let base = total_clusters / group_count;
+    let remainder = total_clusters % group_count;
+    (0..group_count)
+        .map(|group_index| base + usize::from(group_index < remainder))
+        .collect()
+}
+
+fn sorted_indices_by_deterministic_hash(embeddings: &[Embedding], seed: u64) -> Vec<usize> {
+    let mut indices = (0..embeddings.len()).collect::<Vec<_>>();
+    indices.sort_by(|left, right| {
+        deterministic_embedding_hash(&embeddings[*left], seed)
+            .cmp(&deterministic_embedding_hash(&embeddings[*right], seed))
+            .then_with(|| left.cmp(right))
+    });
+    indices
+}
+
+fn deterministic_embedding_hash(embedding: &[f32], seed: u64) -> u64 {
+    let mut hash = 0x517c_c1b7_2722_0a95u64 ^ seed;
+    for value in embedding {
+        hash ^= u64::from(value.to_bits());
+        hash = hash.rotate_left(17).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+    hash
+}
+
+fn contiguous_chunks(indices: Vec<usize>, leaf_size: usize) -> Vec<Vec<usize>> {
+    indices
+        .chunks(leaf_size)
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+fn compute_cluster_centroid(embeddings: &[Embedding], members: &[usize]) -> Embedding {
+    let dimensions = embeddings[0].len();
+    let mut centroid = vec![0.0; dimensions];
+    for &member in members {
+        for (dimension, value) in embeddings[member].iter().enumerate() {
+            centroid[dimension] += *value;
+        }
+    }
+    for value in &mut centroid {
+        *value /= members.len() as f32;
+    }
+    centroid
+}
+
+fn embedding_key(embedding: &[f32]) -> Vec<u32> {
+    embedding.iter().map(|value| value.to_bits()).collect()
+}
+
+fn squared_euclidean_distance(left: &[f32], right: &[f32]) -> f32 {
+    left.iter()
+        .zip(right)
+        .map(|(left_value, right_value)| {
+            let delta = left_value - right_value;
+            delta * delta
+        })
+        .sum()
 }
 
 pub fn built_in_fixture_candidate(name: &str) -> Option<RegisteredCandidate> {
@@ -3146,6 +3698,20 @@ pub fn built_in_fixture_candidate(name: &str) -> Option<RegisteredCandidate> {
 
 pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
     built_in_fixture_candidate(name).or_else(|| match name {
+        "recursive-balanced-kmeans" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "recursive-balanced-kmeans".into(),
+                implementation_label:
+                    "Evaluator-local recursive balanced k-means family representative".into(),
+                software_identity: "evaluator-recursive-balanced-kmeans-v1".into(),
+            },
+            |config| {
+                Section4FamilyStrategyTrainer::new(
+                    config,
+                    Section4FamilyStrategyMode::RecursiveBalancedKmeans,
+                )
+            },
+        )),
         "pca-sort-exact-chunking" => Some(candidate_adapter(
             CandidateIdentity {
                 candidate_id: "pca-sort-exact-chunking".into(),
@@ -3162,6 +3728,20 @@ pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
                 )
             },
         )),
+        "space-filling-curve-exact-chunking" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "space-filling-curve-exact-chunking".into(),
+                implementation_label:
+                    "Evaluator-local space-filling-curve ordering + exact chunking baseline".into(),
+                software_identity: "evaluator-space-filling-curve-v1".into(),
+            },
+            |config| {
+                Section4FamilyStrategyTrainer::new(
+                    config,
+                    Section4FamilyStrategyMode::SpaceFillingCurveExactChunking,
+                )
+            },
+        )),
         "directional-pca" => Some(candidate_adapter(
             CandidateIdentity {
                 candidate_id: "directional-pca".into(),
@@ -3175,6 +3755,35 @@ pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
                 )
             },
         )),
+        "graph-neighborhood-balance" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "graph-neighborhood-balance".into(),
+                implementation_label:
+                    "Evaluator-local graph-neighborhood partitioning with exact-size balancing"
+                        .into(),
+                software_identity: "evaluator-graph-neighborhood-v1".into(),
+            },
+            |config| {
+                Section4FamilyStrategyTrainer::new(
+                    config,
+                    Section4FamilyStrategyMode::GraphNeighborhoodBalance,
+                )
+            },
+        )),
+        "hybrid-coarse-rebalance" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "hybrid-coarse-rebalance".into(),
+                implementation_label:
+                    "Evaluator-local hybrid coarse partitioning plus local rebalance".into(),
+                software_identity: "evaluator-hybrid-coarse-rebalance-v1".into(),
+            },
+            |config| {
+                Section4FamilyStrategyTrainer::new(
+                    config,
+                    Section4FamilyStrategyMode::HybridCoarseRebalance,
+                )
+            },
+        )),
         "dcbc-streaming" => Some(candidate_adapter(
             CandidateIdentity {
                 candidate_id: "dcbc-streaming".into(),
@@ -3182,6 +3791,20 @@ pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
                 software_identity: DCBC_STREAMING_SOFTWARE_IDENTITY.into(),
             },
             |config| DcbcStreamingTrainer::new(config.clone()),
+        )),
+        "random-shuffle-exact-chunking" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "random-shuffle-exact-chunking".into(),
+                implementation_label: "Evaluator-local deterministic random-shuffle null baseline"
+                    .into(),
+                software_identity: "evaluator-random-shuffle-v1".into(),
+            },
+            |config| {
+                Section4FamilyStrategyTrainer::new(
+                    config,
+                    Section4FamilyStrategyMode::RandomShuffleExactChunking,
+                )
+            },
         )),
         _ => None,
     })
@@ -3439,9 +4062,9 @@ mod tests {
         EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, GateDeclaration,
         GateKind, GroundTruthNeighborhood, LaterPhaseIdentity, LaterPhaseIdentityKind,
         MetricDeclaration, MetricKind, ProbeWorkload, ReproducibilityMetadata, ResearchCoverage,
-        SharedCandidateConfig, TEST_FORCE_TEMP_LAYER_FAILURE, TrainingPassSource,
-        built_in_fixture_candidate, decode_embedding_to_f32, embeddings_into_batches,
-        run_evaluation_campaign,
+        Section4FamilyStrategyMode, SharedCandidateConfig, TEST_FORCE_TEMP_LAYER_FAILURE,
+        TrainingPassSource, build_section4_family_partitions, built_in_fixture_candidate,
+        decode_embedding_to_f32, embeddings_into_batches, run_evaluation_campaign,
     };
     use lexongraph_block::EmbeddingSpec;
     use serde_json::json;
@@ -3537,6 +4160,24 @@ mod tests {
                 archive_path: super::normalize_cross_platform_path(r"C:\archive.zip"),
             }
         );
+    }
+
+    #[test]
+    fn space_filling_curve_exact_chunking_rejects_embeddings_above_two_dimensions() {
+        let error = build_section4_family_partitions(
+            &[vec![0.0, 0.0, 0.0], vec![1.0, 1.0, 1.0]],
+            1,
+            Section4FamilyStrategyMode::SpaceFillingCurveExactChunking,
+            7,
+        )
+        .expect_err("space-filling curve candidate should reject dimensions above two");
+
+        assert!(matches!(
+            error,
+            lexongraph_streaming_clustering::StreamingClusteringError::UnsatisfiableConstraint {
+                message
+            } if message.contains("at most 2 dimensions")
+        ));
     }
 
     fn archive_training_profile_for_tests() -> BenchmarkProfile {
@@ -3669,6 +4310,7 @@ mod tests {
                 kind: LaterPhaseIdentityKind::HeldOutQuerySet,
                 corpus_id: Some("fixture-corpus-a".into()),
                 scale_tier_id: None,
+                asset_path: Some(PathBuf::from("fixtures/heldout-queries.zip")),
                 later_evaluation_line: "future hierarchy-routing evaluator".into(),
             }],
             reproducibility: ReproducibilityMetadata {

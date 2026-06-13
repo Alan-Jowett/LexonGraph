@@ -1,0 +1,1663 @@
+{
+  "suite_id": "section4-corpus-panel-v2",
+  "experiment_track_id": "leaf-screening-euclidean",
+  "tier_growth_rule": "small-to-medium-to-large nearest practical tiers with deterministic corpus identity reuse",
+  "profile_reports": [
+    {
+      "profile_id": "real-world-harvested-strict-small",
+      "corpus_id": "real-world-harvested-small",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "RealWorldHarvested",
+      "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
+      "real_entity_count": 12,
+      "evaluated_entity_count": 12,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "random-shuffle-exact-chunking",
+        "space-filling-curve-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 31981400,
+          "campaign_time_per_vector_nanos": 2665116.6666666665,
+          "peak_build_memory_bytes": 10149888
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 30740300,
+          "campaign_time_per_vector_nanos": 2561691.6666666665,
+          "peak_build_memory_bytes": 10469376
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5833333333333334,
+          "campaign_elapsed_nanos": 35212000,
+          "campaign_time_per_vector_nanos": 2934333.3333333335,
+          "peak_build_memory_bytes": 10563584
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 35208000,
+          "campaign_time_per_vector_nanos": 2934000.0,
+          "peak_build_memory_bytes": 10608640
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 30471500,
+          "campaign_time_per_vector_nanos": 2539291.6666666665,
+          "peak_build_memory_bytes": 10649600
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 37041700,
+          "campaign_time_per_vector_nanos": 3086808.3333333335,
+          "peak_build_memory_bytes": 10678272
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 33578000,
+          "campaign_time_per_vector_nanos": 2798166.6666666665,
+          "peak_build_memory_bytes": 10866688
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 36089400,
+          "campaign_time_per_vector_nanos": 3007450.0,
+          "peak_build_memory_bytes": 10891264
+        }
+      ]
+    },
+    {
+      "profile_id": "real-world-harvested-strict-medium",
+      "corpus_id": "real-world-harvested-medium",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "RealWorldHarvested",
+      "scale_tier_id": "n-24",
+      "scale_tier_kind": "Medium",
+      "real_entity_count": 24,
+      "evaluated_entity_count": 24,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "hybrid-coarse-rebalance",
+        "graph-neighborhood-balance",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 78294500,
+          "campaign_time_per_vector_nanos": 3262270.8333333335,
+          "peak_build_memory_bytes": 11358208
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 77527000,
+          "campaign_time_per_vector_nanos": 3230291.6666666665,
+          "peak_build_memory_bytes": 11423744
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 72638600,
+          "campaign_time_per_vector_nanos": 3026608.3333333335,
+          "peak_build_memory_bytes": 11436032
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5875,
+          "campaign_elapsed_nanos": 69838500,
+          "campaign_time_per_vector_nanos": 2909937.5,
+          "peak_build_memory_bytes": 11456512
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 75507900,
+          "campaign_time_per_vector_nanos": 3146162.5,
+          "peak_build_memory_bytes": 11501568
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5458333333333333,
+          "campaign_elapsed_nanos": 80097000,
+          "campaign_time_per_vector_nanos": 3337375.0,
+          "peak_build_memory_bytes": 11517952
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 79035200,
+          "campaign_time_per_vector_nanos": 3293133.3333333335,
+          "peak_build_memory_bytes": 11624448
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 70944100,
+          "campaign_time_per_vector_nanos": 2956004.1666666665,
+          "peak_build_memory_bytes": 11620352
+        }
+      ]
+    },
+    {
+      "profile_id": "real-world-harvested-strict-large",
+      "corpus_id": "real-world-harvested-large",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "RealWorldHarvested",
+      "scale_tier_id": "n-48",
+      "scale_tier_kind": "Large",
+      "real_entity_count": 48,
+      "evaluated_entity_count": 48,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [
+        "real-world-harvested-large-heldout-queries"
+      ],
+      "survivor_candidate_ids": [
+        "space-filling-curve-exact-chunking",
+        "hybrid-coarse-rebalance",
+        "recursive-balanced-kmeans",
+        "graph-neighborhood-balance",
+        "pca-sort-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 220616500,
+          "campaign_time_per_vector_nanos": 4596177.083333333,
+          "peak_build_memory_bytes": 11816960
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5854166666666667,
+          "campaign_elapsed_nanos": 336603300,
+          "campaign_time_per_vector_nanos": 7012568.75,
+          "peak_build_memory_bytes": 11849728
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5958333333333333,
+          "campaign_elapsed_nanos": 434168800,
+          "campaign_time_per_vector_nanos": 9045183.333333334,
+          "peak_build_memory_bytes": 11886592
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5895833333333333,
+          "campaign_elapsed_nanos": 427941300,
+          "campaign_time_per_vector_nanos": 8915443.75,
+          "peak_build_memory_bytes": 11886592
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 415807300,
+          "campaign_time_per_vector_nanos": 8662652.083333334,
+          "peak_build_memory_bytes": 11923456
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5333333333333333,
+          "campaign_elapsed_nanos": 410906200,
+          "campaign_time_per_vector_nanos": 8560545.833333334,
+          "peak_build_memory_bytes": 11837440
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 359835000,
+          "campaign_time_per_vector_nanos": 7496562.5,
+          "peak_build_memory_bytes": 11841536
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 261780500,
+          "campaign_time_per_vector_nanos": 5453760.416666667,
+          "peak_build_memory_bytes": 14868480
+        }
+      ]
+    },
+    {
+      "profile_id": "well-clustered-strict-small",
+      "corpus_id": "well-clustered-small",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "WellClusteredSynthetic",
+      "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
+      "real_entity_count": 12,
+      "evaluated_entity_count": 12,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 33409500,
+          "campaign_time_per_vector_nanos": 2784125.0,
+          "peak_build_memory_bytes": 14614528
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 36286700,
+          "campaign_time_per_vector_nanos": 3023891.6666666665,
+          "peak_build_memory_bytes": 14548992
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 39232900,
+          "campaign_time_per_vector_nanos": 3269408.3333333335,
+          "peak_build_memory_bytes": 14548992
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 34834700,
+          "campaign_time_per_vector_nanos": 2902891.6666666665,
+          "peak_build_memory_bytes": 14548992
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 37594600,
+          "campaign_time_per_vector_nanos": 3132883.3333333335,
+          "peak_build_memory_bytes": 14557184
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5833333333333334,
+          "campaign_elapsed_nanos": 43146600,
+          "campaign_time_per_vector_nanos": 3595550.0,
+          "peak_build_memory_bytes": 14565376
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 34781400,
+          "campaign_time_per_vector_nanos": 2898450.0,
+          "peak_build_memory_bytes": 14573568
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 34170500,
+          "campaign_time_per_vector_nanos": 2847541.6666666665,
+          "peak_build_memory_bytes": 14573568
+        }
+      ]
+    },
+    {
+      "profile_id": "well-clustered-strict-medium",
+      "corpus_id": "well-clustered-medium",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "WellClusteredSynthetic",
+      "scale_tier_id": "n-24",
+      "scale_tier_kind": "Medium",
+      "real_entity_count": 24,
+      "evaluated_entity_count": 24,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "directional-pca",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 81234900,
+          "campaign_time_per_vector_nanos": 3384787.5,
+          "peak_build_memory_bytes": 14667776
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 72886700,
+          "campaign_time_per_vector_nanos": 3036945.8333333335,
+          "peak_build_memory_bytes": 14716928
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 74652100,
+          "campaign_time_per_vector_nanos": 3110504.1666666665,
+          "peak_build_memory_bytes": 14741504
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 75806600,
+          "campaign_time_per_vector_nanos": 3158608.3333333335,
+          "peak_build_memory_bytes": 14757888
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 72277800,
+          "campaign_time_per_vector_nanos": 3011575.0,
+          "peak_build_memory_bytes": 14708736
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.525,
+          "campaign_elapsed_nanos": 73275000,
+          "campaign_time_per_vector_nanos": 3053125.0,
+          "peak_build_memory_bytes": 14729216
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 75560800,
+          "campaign_time_per_vector_nanos": 3148366.6666666665,
+          "peak_build_memory_bytes": 14729216
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 237364800,
+          "campaign_time_per_vector_nanos": 9890200.0,
+          "peak_build_memory_bytes": 14802944
+        }
+      ]
+    },
+    {
+      "profile_id": "well-clustered-strict-large",
+      "corpus_id": "well-clustered-large",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "WellClusteredSynthetic",
+      "scale_tier_id": "n-48",
+      "scale_tier_kind": "Large",
+      "real_entity_count": 48,
+      "evaluated_entity_count": 48,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "directional-pca",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 227234600,
+          "campaign_time_per_vector_nanos": 4734054.166666667,
+          "peak_build_memory_bytes": 14934016
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 211605400,
+          "campaign_time_per_vector_nanos": 4408445.833333333,
+          "peak_build_memory_bytes": 14995456
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 214349500,
+          "campaign_time_per_vector_nanos": 4465614.583333333,
+          "peak_build_memory_bytes": 14913536
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 221872300,
+          "campaign_time_per_vector_nanos": 4622339.583333333,
+          "peak_build_memory_bytes": 14880768
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 222411000,
+          "campaign_time_per_vector_nanos": 4633562.5,
+          "peak_build_memory_bytes": 14876672
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.51875,
+          "campaign_elapsed_nanos": 215550900,
+          "campaign_time_per_vector_nanos": 4490643.75,
+          "peak_build_memory_bytes": 15089664
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 224579000,
+          "campaign_time_per_vector_nanos": 4678729.166666667,
+          "peak_build_memory_bytes": 15163392
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 990431000,
+          "campaign_time_per_vector_nanos": 20633979.166666668,
+          "peak_build_memory_bytes": 15093760
+        }
+      ]
+    },
+    {
+      "profile_id": "weak-uniform-strict-small",
+      "corpus_id": "weak-uniform-small",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "WeakClusterUniform",
+      "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
+      "real_entity_count": 12,
+      "evaluated_entity_count": 12,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "directional-pca",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 27415900,
+          "campaign_time_per_vector_nanos": 2284658.3333333335,
+          "peak_build_memory_bytes": 14905344
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 35738800,
+          "campaign_time_per_vector_nanos": 2978233.3333333335,
+          "peak_build_memory_bytes": 14970880
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 34631800,
+          "campaign_time_per_vector_nanos": 2885983.3333333335,
+          "peak_build_memory_bytes": 14979072
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 30424200,
+          "campaign_time_per_vector_nanos": 2535350.0,
+          "peak_build_memory_bytes": 14974976
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 29961900,
+          "campaign_time_per_vector_nanos": 2496825.0,
+          "peak_build_memory_bytes": 14974976
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 31237900,
+          "campaign_time_per_vector_nanos": 2603158.3333333335,
+          "peak_build_memory_bytes": 14974976
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 36062300,
+          "campaign_time_per_vector_nanos": 3005191.6666666665,
+          "peak_build_memory_bytes": 14987264
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 42684800,
+          "campaign_time_per_vector_nanos": 3557066.6666666665,
+          "peak_build_memory_bytes": 14995456
+        }
+      ]
+    },
+    {
+      "profile_id": "weak-uniform-strict-medium",
+      "corpus_id": "weak-uniform-medium",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "WeakClusterUniform",
+      "scale_tier_id": "n-24",
+      "scale_tier_kind": "Medium",
+      "real_entity_count": 24,
+      "evaluated_entity_count": 24,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "pca-sort-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 78862100,
+          "campaign_time_per_vector_nanos": 3285920.8333333335,
+          "peak_build_memory_bytes": 14860288
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5666666666666667,
+          "campaign_elapsed_nanos": 80306700,
+          "campaign_time_per_vector_nanos": 3346112.5,
+          "peak_build_memory_bytes": 14884864
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 74290300,
+          "campaign_time_per_vector_nanos": 3095429.1666666665,
+          "peak_build_memory_bytes": 14909440
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 72463400,
+          "campaign_time_per_vector_nanos": 3019308.3333333335,
+          "peak_build_memory_bytes": 14909440
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 80711000,
+          "campaign_time_per_vector_nanos": 3362958.3333333335,
+          "peak_build_memory_bytes": 14938112
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5583333333333333,
+          "campaign_elapsed_nanos": 70404200,
+          "campaign_time_per_vector_nanos": 2933508.3333333335,
+          "peak_build_memory_bytes": 14925824
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 78032200,
+          "campaign_time_per_vector_nanos": 3251341.6666666665,
+          "peak_build_memory_bytes": 15007744
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 253379400,
+          "campaign_time_per_vector_nanos": 10557475.0,
+          "peak_build_memory_bytes": 15003648
+        }
+      ]
+    },
+    {
+      "profile_id": "weak-uniform-strict-large",
+      "corpus_id": "weak-uniform-large",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "WeakClusterUniform",
+      "scale_tier_id": "n-48",
+      "scale_tier_kind": "Large",
+      "real_entity_count": 48,
+      "evaluated_entity_count": 48,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "hybrid-coarse-rebalance",
+        "recursive-balanced-kmeans",
+        "pca-sort-exact-chunking",
+        "graph-neighborhood-balance",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 219961900,
+          "campaign_time_per_vector_nanos": 4582539.583333333,
+          "peak_build_memory_bytes": 14983168
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5958333333162917,
+          "campaign_elapsed_nanos": 227657900,
+          "campaign_time_per_vector_nanos": 4742872.916666667,
+          "peak_build_memory_bytes": 15024128
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5749999999829584,
+          "campaign_elapsed_nanos": 226712200,
+          "campaign_time_per_vector_nanos": 4723170.833333333,
+          "peak_build_memory_bytes": 15032320
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 217729300,
+          "campaign_time_per_vector_nanos": 4536027.083333333,
+          "peak_build_memory_bytes": 14999552
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 219901300,
+          "campaign_time_per_vector_nanos": 4581277.083333333,
+          "peak_build_memory_bytes": 15015936
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5312499999829584,
+          "campaign_elapsed_nanos": 205813900,
+          "campaign_time_per_vector_nanos": 4287789.583333333,
+          "peak_build_memory_bytes": 15085568
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 220488100,
+          "campaign_time_per_vector_nanos": 4593502.083333333,
+          "peak_build_memory_bytes": 15081472
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 3932207400,
+          "campaign_time_per_vector_nanos": 81920987.5,
+          "peak_build_memory_bytes": 15220736
+        }
+      ]
+    },
+    {
+      "profile_id": "anisotropic-strict-small",
+      "corpus_id": "anisotropic-small",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "AnisotropicManifold",
+      "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
+      "real_entity_count": 12,
+      "evaluated_entity_count": 12,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "directional-pca",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.599999999999866,
+          "campaign_elapsed_nanos": 36748000,
+          "campaign_time_per_vector_nanos": 3062333.3333333335,
+          "peak_build_memory_bytes": 14954496
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.599999999999866,
+          "campaign_elapsed_nanos": 41308300,
+          "campaign_time_per_vector_nanos": 3442358.3333333335,
+          "peak_build_memory_bytes": 14966784
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.599999999999866,
+          "campaign_elapsed_nanos": 32453100,
+          "campaign_time_per_vector_nanos": 2704425.0,
+          "peak_build_memory_bytes": 14966784
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.599999999999866,
+          "campaign_elapsed_nanos": 35772600,
+          "campaign_time_per_vector_nanos": 2981050.0,
+          "peak_build_memory_bytes": 14962688
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.599999999999866,
+          "campaign_elapsed_nanos": 32253100,
+          "campaign_time_per_vector_nanos": 2687758.3333333335,
+          "peak_build_memory_bytes": 14905344
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5833333332930115,
+          "campaign_elapsed_nanos": 28620100,
+          "campaign_time_per_vector_nanos": 2385008.3333333335,
+          "peak_build_memory_bytes": 14909440
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.599999999999866,
+          "campaign_elapsed_nanos": 34114100,
+          "campaign_time_per_vector_nanos": 2842841.6666666665,
+          "peak_build_memory_bytes": 14909440
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 32404200,
+          "campaign_time_per_vector_nanos": 2700350.0,
+          "peak_build_memory_bytes": 14917632
+        }
+      ]
+    },
+    {
+      "profile_id": "anisotropic-strict-medium",
+      "corpus_id": "anisotropic-medium",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "AnisotropicManifold",
+      "scale_tier_id": "n-24",
+      "scale_tier_kind": "Medium",
+      "real_entity_count": 24,
+      "evaluated_entity_count": 24,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "directional-pca",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999474,
+          "campaign_elapsed_nanos": 84810400,
+          "campaign_time_per_vector_nanos": 3533766.6666666665,
+          "peak_build_memory_bytes": 14938112
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999474,
+          "campaign_elapsed_nanos": 82269800,
+          "campaign_time_per_vector_nanos": 3427908.3333333335,
+          "peak_build_memory_bytes": 14934016
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666139,
+          "campaign_elapsed_nanos": 111429100,
+          "campaign_time_per_vector_nanos": 4642879.166666667,
+          "peak_build_memory_bytes": 15044608
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999474,
+          "campaign_elapsed_nanos": 88996300,
+          "campaign_time_per_vector_nanos": 3708179.1666666665,
+          "peak_build_memory_bytes": 15056896
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999474,
+          "campaign_elapsed_nanos": 73455200,
+          "campaign_time_per_vector_nanos": 3060633.3333333335,
+          "peak_build_memory_bytes": 15060992
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5583333333277388,
+          "campaign_elapsed_nanos": 75600000,
+          "campaign_time_per_vector_nanos": 3150000.0,
+          "peak_build_memory_bytes": 15126528
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999474,
+          "campaign_elapsed_nanos": 84416500,
+          "campaign_time_per_vector_nanos": 3517354.1666666665,
+          "peak_build_memory_bytes": 15130624
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 76419200,
+          "campaign_time_per_vector_nanos": 3184133.3333333335,
+          "peak_build_memory_bytes": 15134720
+        }
+      ]
+    },
+    {
+      "profile_id": "anisotropic-strict-large",
+      "corpus_id": "anisotropic-large",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "AnisotropicManifold",
+      "scale_tier_id": "n-48",
+      "scale_tier_kind": "Large",
+      "real_entity_count": 48,
+      "evaluated_entity_count": 48,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "directional-pca",
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999983,
+          "campaign_elapsed_nanos": 218794300,
+          "campaign_time_per_vector_nanos": 4558214.583333333,
+          "peak_build_memory_bytes": 15245312
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999983,
+          "campaign_elapsed_nanos": 225905100,
+          "campaign_time_per_vector_nanos": 4706356.25,
+          "peak_build_memory_bytes": 15245312
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.585416666666665,
+          "campaign_elapsed_nanos": 227297000,
+          "campaign_time_per_vector_nanos": 4735354.166666667,
+          "peak_build_memory_bytes": 15253504
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999983,
+          "campaign_elapsed_nanos": 232155300,
+          "campaign_time_per_vector_nanos": 4836568.75,
+          "peak_build_memory_bytes": 15282176
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999983,
+          "campaign_elapsed_nanos": 219514900,
+          "campaign_time_per_vector_nanos": 4573227.083333333,
+          "peak_build_memory_bytes": 15290368
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5249999999880579,
+          "campaign_elapsed_nanos": 212810900,
+          "campaign_time_per_vector_nanos": 4433560.416666667,
+          "peak_build_memory_bytes": 15282176
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5999999999999983,
+          "campaign_elapsed_nanos": 224158000,
+          "campaign_time_per_vector_nanos": 4669958.333333333,
+          "peak_build_memory_bytes": 15360000
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 260457300,
+          "campaign_time_per_vector_nanos": 5426193.75,
+          "peak_build_memory_bytes": 15282176
+        }
+      ]
+    },
+    {
+      "profile_id": "near-duplicate-strict-small",
+      "corpus_id": "near-duplicate-small",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "NearDuplicateHeavy",
+      "scale_tier_id": "n-12",
+      "scale_tier_kind": "Small",
+      "real_entity_count": 12,
+      "evaluated_entity_count": 12,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 30902300,
+          "campaign_time_per_vector_nanos": 2575191.6666666665,
+          "peak_build_memory_bytes": 15134720
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 38252700,
+          "campaign_time_per_vector_nanos": 3187725.0,
+          "peak_build_memory_bytes": 15147008
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 34131300,
+          "campaign_time_per_vector_nanos": 2844275.0,
+          "peak_build_memory_bytes": 15147008
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 33564400,
+          "campaign_time_per_vector_nanos": 2797033.3333333335,
+          "peak_build_memory_bytes": 15147008
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 32542700,
+          "campaign_time_per_vector_nanos": 2711891.6666666665,
+          "peak_build_memory_bytes": 15155200
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5916666666666667,
+          "campaign_elapsed_nanos": 35687000,
+          "campaign_time_per_vector_nanos": 2973916.6666666665,
+          "peak_build_memory_bytes": 15151104
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 33237600,
+          "campaign_time_per_vector_nanos": 2769800.0,
+          "peak_build_memory_bytes": 15192064
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 38527700,
+          "campaign_time_per_vector_nanos": 3210641.6666666665,
+          "peak_build_memory_bytes": 15204352
+        }
+      ]
+    },
+    {
+      "profile_id": "near-duplicate-strict-medium",
+      "corpus_id": "near-duplicate-medium",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "NearDuplicateHeavy",
+      "scale_tier_id": "n-24",
+      "scale_tier_kind": "Medium",
+      "real_entity_count": 24,
+      "evaluated_entity_count": 24,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 86534700,
+          "campaign_time_per_vector_nanos": 3605612.5,
+          "peak_build_memory_bytes": 15126528
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 81562600,
+          "campaign_time_per_vector_nanos": 3398441.6666666665,
+          "peak_build_memory_bytes": 15233024
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 88783300,
+          "campaign_time_per_vector_nanos": 3699304.1666666665,
+          "peak_build_memory_bytes": 15253504
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 83274900,
+          "campaign_time_per_vector_nanos": 3469787.5,
+          "peak_build_memory_bytes": 15261696
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 90719200,
+          "campaign_time_per_vector_nanos": 3779966.6666666665,
+          "peak_build_memory_bytes": 15175680
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5374999999357933,
+          "campaign_elapsed_nanos": 87038100,
+          "campaign_time_per_vector_nanos": 3626587.5,
+          "peak_build_memory_bytes": 15187968
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 82882500,
+          "campaign_time_per_vector_nanos": 3453437.5,
+          "peak_build_memory_bytes": 15192064
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 219928400,
+          "campaign_time_per_vector_nanos": 9163683.333333334,
+          "peak_build_memory_bytes": 15208448
+        }
+      ]
+    },
+    {
+      "profile_id": "near-duplicate-strict-large",
+      "corpus_id": "near-duplicate-large",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "NearDuplicateHeavy",
+      "scale_tier_id": "n-48",
+      "scale_tier_kind": "Large",
+      "real_entity_count": 48,
+      "evaluated_entity_count": 48,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking",
+        "graph-neighborhood-balance",
+        "random-shuffle-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 249515300,
+          "campaign_time_per_vector_nanos": 5198235.416666667,
+          "peak_build_memory_bytes": 15208448
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 243246600,
+          "campaign_time_per_vector_nanos": 5067637.5,
+          "peak_build_memory_bytes": 15319040
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 256374200,
+          "campaign_time_per_vector_nanos": 5341129.166666667,
+          "peak_build_memory_bytes": 15269888
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5979166666666667,
+          "campaign_elapsed_nanos": 245048900,
+          "campaign_time_per_vector_nanos": 5105185.416666667,
+          "peak_build_memory_bytes": 15327232
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.6,
+          "campaign_elapsed_nanos": 248080300,
+          "campaign_time_per_vector_nanos": 5168339.583333333,
+          "peak_build_memory_bytes": 15327232
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5187499999657299,
+          "campaign_elapsed_nanos": 255244200,
+          "campaign_time_per_vector_nanos": 5317587.5,
+          "peak_build_memory_bytes": 15269888
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 279155200,
+          "campaign_time_per_vector_nanos": 5815733.333333333,
+          "peak_build_memory_bytes": 15273984
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "CandidateSharedContractFailure",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 289716200,
+          "campaign_time_per_vector_nanos": 6035754.166666667,
+          "peak_build_memory_bytes": 15331328
+        }
+      ]
+    },
+    {
+      "profile_id": "near-duplicate-padding-small",
+      "corpus_id": "near-duplicate-padding-small",
+      "experiment_track_id": "leaf-screening-euclidean",
+      "family": "NearDuplicateHeavy",
+      "scale_tier_id": "n-11-padded",
+      "scale_tier_kind": "Small",
+      "real_entity_count": 11,
+      "evaluated_entity_count": 12,
+      "preserved_deferred_goal_ids": [
+        "deferred-hierarchy-routing",
+        "deferred-same-or-sibling-locality",
+        "deferred-bounded-tree-shape",
+        "deferred-parent-summaries",
+        "deferred-refinement-contract",
+        "deferred-persistence-roundtrip",
+        "deferred-loaded-index-memory",
+        "deferred-threading-reproducibility"
+      ],
+      "preserved_later_phase_identity_ids": [],
+      "survivor_candidate_ids": [
+        "graph-neighborhood-balance",
+        "hybrid-coarse-rebalance",
+        "pca-sort-exact-chunking",
+        "random-shuffle-exact-chunking",
+        "recursive-balanced-kmeans",
+        "space-filling-curve-exact-chunking"
+      ],
+      "candidate_reports": [
+        {
+          "candidate_id": "recursive-balanced-kmeans",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5909090909090909,
+          "campaign_elapsed_nanos": 39832900,
+          "campaign_time_per_vector_nanos": 3319408.3333333335,
+          "peak_build_memory_bytes": 15212544
+        },
+        {
+          "candidate_id": "pca-sort-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5909090909090909,
+          "campaign_elapsed_nanos": 43569000,
+          "campaign_time_per_vector_nanos": 3630750.0,
+          "peak_build_memory_bytes": 15224832
+        },
+        {
+          "candidate_id": "space-filling-curve-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5909090909090909,
+          "campaign_elapsed_nanos": 35853900,
+          "campaign_time_per_vector_nanos": 2987825.0,
+          "peak_build_memory_bytes": 15220736
+        },
+        {
+          "candidate_id": "graph-neighborhood-balance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5909090909090909,
+          "campaign_elapsed_nanos": 35073600,
+          "campaign_time_per_vector_nanos": 2922800.0,
+          "peak_build_memory_bytes": 15224832
+        },
+        {
+          "candidate_id": "hybrid-coarse-rebalance",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5909090909090909,
+          "campaign_elapsed_nanos": 34346000,
+          "campaign_time_per_vector_nanos": 2862166.6666666665,
+          "peak_build_memory_bytes": 15224832
+        },
+        {
+          "candidate_id": "random-shuffle-exact-chunking",
+          "run_status": "Succeeded",
+          "survived_required_gates": true,
+          "ranking_score": 0.5909090909090909,
+          "campaign_elapsed_nanos": 41304800,
+          "campaign_time_per_vector_nanos": 3442066.6666666665,
+          "peak_build_memory_bytes": 15220736
+        },
+        {
+          "candidate_id": "directional-pca",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 33570500,
+          "campaign_time_per_vector_nanos": 2797541.6666666665,
+          "peak_build_memory_bytes": 15233024
+        },
+        {
+          "candidate_id": "dcbc-streaming",
+          "run_status": "GateFailed",
+          "survived_required_gates": false,
+          "ranking_score": null,
+          "campaign_elapsed_nanos": 37901500,
+          "campaign_time_per_vector_nanos": 3158458.3333333335,
+          "peak_build_memory_bytes": 15241216
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,583 @@
+{
+  "profile_id": "anisotropic-strict-medium",
+  "corpus_ids": [
+    "anisotropic-medium"
+  ],
+  "shared_candidate_config": {
+    "cluster_count": 12,
+    "dimensions": 2,
+    "balance_constraints": null,
+    "random_seed": 11
+  },
+  "training_passes": [
+    {
+      "source_kind": "block-store",
+      "corpus": {
+        "source_id": "anisotropic-strict-medium-training",
+        "root_block_id": "1b6d2eb0eddcc37c2fbf284a661d47714c2825ffaa772463891f336b3a277e6d",
+        "store_kind": "zip-archive",
+        "archive_path": "../corpora/anisotropic-strict-medium.zip"
+      },
+      "batch_size": 2
+    }
+  ],
+  "probe_workloads": [
+    {
+      "workload_id": "anisotropic-strict-medium-probes",
+      "source_kind": "block-store",
+      "corpus": {
+        "source_id": "anisotropic-strict-medium-probe",
+        "root_block_id": "1b6d2eb0eddcc37c2fbf284a661d47714c2825ffaa772463891f336b3a277e6d",
+        "store_kind": "zip-archive",
+        "archive_path": "../corpora/anisotropic-strict-medium.zip"
+      }
+    }
+  ],
+  "evaluation_entities": {
+    "source_kind": "block-store",
+    "corpora": [
+      {
+        "corpus_id": "anisotropic-medium",
+        "corpus": {
+          "source_id": "anisotropic-strict-medium-evaluation",
+          "root_block_id": "1b6d2eb0eddcc37c2fbf284a661d47714c2825ffaa772463891f336b3a277e6d",
+          "store_kind": "zip-archive",
+          "archive_path": "../corpora/anisotropic-strict-medium.zip"
+        },
+        "entity_id_metadata_key": "entity_id",
+        "synthetic_metadata_key": "synthetic"
+      }
+    ]
+  },
+  "leaf_model": {
+    "leaf_size": 2,
+    "declared_final_cluster_count": 12,
+    "alignment_policy": "StrictAlignment"
+  },
+  "locality_ground_truth": [
+    {
+      "entity_id": "anisotropic-medium-real-000000",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000001",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000001",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000000",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000002",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000001",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000000",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000003",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000001",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000000",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000004",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000001",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000000"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000005",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000001",
+        "anisotropic-medium-real-000011"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000006",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000001",
+        "anisotropic-medium-real-000011"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000007",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000001"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000008",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000002",
+        "anisotropic-medium-real-000012"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000009",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000012",
+        "anisotropic-medium-real-000003",
+        "anisotropic-medium-real-000013"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000010",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000012",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000005",
+        "anisotropic-medium-real-000004",
+        "anisotropic-medium-real-000003"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000011",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000012",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000007",
+        "anisotropic-medium-real-000006",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000005"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000012",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000008",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000007"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000013",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000012",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000010",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000009",
+        "anisotropic-medium-real-000019"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000014",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000012",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000011",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000021"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000015",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000012",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000011"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000016",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000012"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000017",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000023"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000018",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000013",
+        "anisotropic-medium-real-000023"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000019",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000023",
+        "anisotropic-medium-real-000013"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000020",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000023",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000013"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000021",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000023",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000013"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000022",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000023",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000013"
+      ]
+    },
+    {
+      "entity_id": "anisotropic-medium-real-000023",
+      "neighbor_ids": [
+        "anisotropic-medium-real-000022",
+        "anisotropic-medium-real-000021",
+        "anisotropic-medium-real-000020",
+        "anisotropic-medium-real-000019",
+        "anisotropic-medium-real-000018",
+        "anisotropic-medium-real-000017",
+        "anisotropic-medium-real-000016",
+        "anisotropic-medium-real-000015",
+        "anisotropic-medium-real-000014",
+        "anisotropic-medium-real-000013"
+      ]
+    }
+  ],
+  "compression_benchmark": {
+    "method": "ScalarQuantization8Bit",
+    "global_baseline_label": "global-real-dataset-8bit"
+  },
+  "metric_declarations": [
+    {
+      "metric_id": "same-leaf-neighborhood-coherence",
+      "label": "Same-leaf neighborhood coherence",
+      "kind": "SameLeafNeighborhoodCoherence",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-LOCALITY"
+      ],
+      "ranking_weight": 1.0
+    },
+    {
+      "metric_id": "local-compression-gain",
+      "label": "Local compression gain",
+      "kind": "LocalCompressionGain",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COMPRESSION"
+      ],
+      "ranking_weight": 0.5
+    }
+  ],
+  "gate_declarations": [
+    {
+      "gate_id": "exact-leaf-occupancy",
+      "label": "Exact leaf occupancy",
+      "kind": "ExactLeafOccupancy",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-FIXED-LEAF-SIZE"
+      ]
+    },
+    {
+      "gate_id": "complete-coverage",
+      "label": "Complete coverage",
+      "kind": "CompleteCoverage",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COVERAGE"
+      ]
+    },
+    {
+      "gate_id": "one-cluster-per-entity",
+      "label": "One cluster per entity",
+      "kind": "OneClusterPerEntity",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-COVERAGE"
+      ]
+    },
+    {
+      "gate_id": "no-empty-declared-clusters",
+      "label": "No empty declared clusters",
+      "kind": "NoEmptyDeclaredClusters",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-FIXED-LEAF-SIZE"
+      ]
+    },
+    {
+      "gate_id": "deterministic-observable-results",
+      "label": "Deterministic observable results",
+      "kind": "DeterministicObservableResults",
+      "coverage": "Direct",
+      "research_goal_ids": [
+        "RG-DETERMINISM"
+      ]
+    }
+  ],
+  "deferred_research_goals": [
+    {
+      "deferred_id": "deferred-hierarchy-routing",
+      "label": "Hierarchy routing proof",
+      "reason": "full hierarchy, sibling structure, and persisted search routing remain outside the leaf-stage evaluator boundary; this evaluator provides staged leaf-stage evidence toward docs/research/clustering.md rather than narrowing the parent end-state requirements; the future end-to-end evaluator layered on the indexer and search specifications remains a separate later line",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-routing evaluator"
+    },
+    {
+      "deferred_id": "deferred-same-or-sibling-locality",
+      "label": "Same-or-sibling locality target",
+      "reason": "section-4 measures same-leaf locality directly, but proving the end-state same-or-sibling target requires an explicit hierarchy and sibling structure in a later evaluation line",
+      "research_goal_ids": [
+        "RG-LOCALITY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-locality evaluator"
+    },
+    {
+      "deferred_id": "deferred-bounded-tree-shape",
+      "label": "Bounded fanout and depth",
+      "reason": "section-4 screens leaf formation only; bounded fanout and depth require hierarchy construction artifacts in a later evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-shape evaluator"
+    },
+    {
+      "deferred_id": "deferred-parent-summaries",
+      "label": "Parent summary accuracy and stability",
+      "reason": "section-4 does not materialize parent summaries, so summary accuracy and stability remain deferred to the hierarchy and summary evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY",
+        "RG-ROUTING"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-refinement-contract",
+      "label": "Refinement and dispersion contract",
+      "reason": "section-4 does not materialize parent-child hierarchy edges, so refinement ratios and deferred dispersion-contract obligations remain outside the direct proof surface",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future hierarchy-summary evaluator"
+    },
+    {
+      "deferred_id": "deferred-persistence-roundtrip",
+      "label": "Persisted artifact durability",
+      "reason": "section-4 does not serialize and reload a hierarchy, so round-trip identity and persisted-artifact durability remain deferred to a later persistence-focused evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-loaded-index-memory",
+      "label": "Loaded index memory",
+      "reason": "section-4 compares build-time resource usage without materializing a persisted loadable index, so loaded-index memory remains deferred to a later persistence or service-level evaluation line",
+      "research_goal_ids": [
+        "RG-HIERARCHY"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future persistence evaluator"
+    },
+    {
+      "deferred_id": "deferred-threading-reproducibility",
+      "label": "Multi-thread reproducibility",
+      "reason": "section-4 records the declared candidate-threading model, but proving 1-thread versus N-thread reproducibility exceeds the direct observable boundary of this revision and remains deferred to later execution-profile evaluation",
+      "research_goal_ids": [
+        "RG-DETERMINISM"
+      ],
+      "coverage": "Deferred",
+      "later_evaluation_line": "future execution-profile evaluator"
+    }
+  ],
+  "later_phase_identities": [],
+  "reproducibility": {
+    "seed_policy": "fixed-seed-11",
+    "software_identity": "section4-corpus-panel-v2",
+    "floating_point_profile": "ieee754-deterministic-no-fma",
+    "hardware_profile": "fixture-cpu"
+  }
+}

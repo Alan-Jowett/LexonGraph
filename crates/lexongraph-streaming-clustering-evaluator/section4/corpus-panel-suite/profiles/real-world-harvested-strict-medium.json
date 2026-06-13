@@ -4,7 +4,7 @@
     "real-world-harvested-medium"
   ],
   "shared_candidate_config": {
-    "cluster_count": 7,
+    "cluster_count": 12,
     "dimensions": 2,
     "balance_constraints": null,
     "random_seed": 11
@@ -14,7 +14,7 @@
       "source_kind": "block-store",
       "corpus": {
         "source_id": "real-world-harvested-strict-medium-training",
-        "root_block_id": "514721d31358d273f4b7f5ef77e7258d005e931f055eb43c7409d5341e74b5ca",
+        "root_block_id": "4952506472edf5dac870f493d38d852571c9929fd6e798f5b5ec87beac96558d",
         "store_kind": "zip-archive",
         "archive_path": "../corpora/real-world-harvested-strict-medium.zip"
       },
@@ -27,7 +27,7 @@
       "source_kind": "block-store",
       "corpus": {
         "source_id": "real-world-harvested-strict-medium-probe",
-        "root_block_id": "514721d31358d273f4b7f5ef77e7258d005e931f055eb43c7409d5341e74b5ca",
+        "root_block_id": "4952506472edf5dac870f493d38d852571c9929fd6e798f5b5ec87beac96558d",
         "store_kind": "zip-archive",
         "archive_path": "../corpora/real-world-harvested-strict-medium.zip"
       }
@@ -40,7 +40,7 @@
         "corpus_id": "real-world-harvested-medium",
         "corpus": {
           "source_id": "real-world-harvested-strict-medium-evaluation",
-          "root_block_id": "514721d31358d273f4b7f5ef77e7258d005e931f055eb43c7409d5341e74b5ca",
+          "root_block_id": "4952506472edf5dac870f493d38d852571c9929fd6e798f5b5ec87beac96558d",
           "store_kind": "zip-archive",
           "archive_path": "../corpora/real-world-harvested-strict-medium.zip"
         },
@@ -51,218 +51,368 @@
   },
   "leaf_model": {
     "leaf_size": 2,
-    "declared_final_cluster_count": 7,
+    "declared_final_cluster_count": 12,
     "alignment_policy": "StrictAlignment"
   },
   "locality_ground_truth": [
     {
-      "entity_id": "01-clustering-overview",
+      "entity_id": "01-directional-pca-tree",
       "neighbor_ids": [
-        "02-section4-plan",
-        "03-streaming-clustering-arch",
-        "04-evaluator-spec-scope",
-        "05-indexing-protocol",
-        "06-search-protocol",
-        "07-blocks-protocol",
-        "08-vision-overview",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "11-indexer-validation"
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "09-indexing",
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "17-clustering",
+        "10-search",
+        "18-clustering_plan"
       ]
     },
     {
-      "entity_id": "02-section4-plan",
+      "entity_id": "02-pca",
       "neighbor_ids": [
-        "01-clustering-overview",
-        "03-streaming-clustering-arch",
-        "04-evaluator-spec-scope",
-        "05-indexing-protocol",
-        "06-search-protocol",
-        "07-blocks-protocol",
-        "08-vision-overview",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "11-indexer-validation"
+        "01-directional-pca-tree",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "09-indexing",
+        "17-clustering",
+        "08-ebcp",
+        "18-clustering_plan",
+        "07-dcbc",
+        "06-blocks",
+        "10-search"
       ]
     },
     {
-      "entity_id": "03-streaming-clustering-arch",
+      "entity_id": "03-semantic-compression",
       "neighbor_ids": [
-        "02-section4-plan",
-        "04-evaluator-spec-scope",
-        "01-clustering-overview",
-        "05-indexing-protocol",
-        "06-search-protocol",
-        "07-blocks-protocol",
-        "08-vision-overview",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "11-indexer-validation"
+        "02-pca",
+        "04-streaming-clustering",
+        "01-directional-pca-tree",
+        "17-clustering",
+        "18-clustering_plan",
+        "09-indexing",
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "10-search"
       ]
     },
     {
-      "entity_id": "04-evaluator-spec-scope",
+      "entity_id": "04-streaming-clustering",
       "neighbor_ids": [
-        "03-streaming-clustering-arch",
-        "02-section4-plan",
-        "01-clustering-overview",
-        "05-indexing-protocol",
-        "06-search-protocol",
-        "07-blocks-protocol",
-        "08-vision-overview",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "11-indexer-validation"
+        "03-semantic-compression",
+        "02-pca",
+        "01-directional-pca-tree",
+        "17-clustering",
+        "18-clustering_plan",
+        "09-indexing",
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "10-search"
       ]
     },
     {
-      "entity_id": "05-indexing-protocol",
+      "entity_id": "05-2026-06-06-full-traceability-audit",
       "neighbor_ids": [
-        "06-search-protocol",
-        "07-blocks-protocol",
-        "08-vision-overview",
-        "04-evaluator-spec-scope",
-        "03-streaming-clustering-arch",
-        "02-section4-plan",
-        "01-clustering-overview",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "11-indexer-validation"
+        "23-requirements",
+        "20-requirements",
+        "22-design",
+        "19-design",
+        "24-validation",
+        "21-validation",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca"
       ]
     },
     {
-      "entity_id": "06-search-protocol",
+      "entity_id": "06-blocks",
       "neighbor_ids": [
-        "05-indexing-protocol",
-        "07-blocks-protocol",
-        "08-vision-overview",
-        "04-evaluator-spec-scope",
-        "09-indexer-reqs",
-        "03-streaming-clustering-arch",
-        "02-section4-plan",
-        "10-indexer-design",
-        "01-clustering-overview",
-        "11-indexer-validation"
+        "10-search",
+        "07-dcbc",
+        "08-ebcp",
+        "09-indexing",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
       ]
     },
     {
-      "entity_id": "07-blocks-protocol",
+      "entity_id": "07-dcbc",
       "neighbor_ids": [
-        "06-search-protocol",
-        "08-vision-overview",
-        "05-indexing-protocol",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "04-evaluator-spec-scope",
-        "03-streaming-clustering-arch",
-        "11-indexer-validation",
-        "02-section4-plan",
-        "12-search-reqs"
+        "06-blocks",
+        "08-ebcp",
+        "10-search",
+        "09-indexing",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
       ]
     },
     {
-      "entity_id": "08-vision-overview",
+      "entity_id": "08-ebcp",
       "neighbor_ids": [
-        "07-blocks-protocol",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "09-indexer-reqs",
-        "10-indexer-design",
-        "11-indexer-validation",
-        "12-search-reqs",
-        "04-evaluator-spec-scope",
-        "03-streaming-clustering-arch",
-        "02-section4-plan"
+        "09-indexing",
+        "07-dcbc",
+        "06-blocks",
+        "10-search",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
       ]
     },
     {
-      "entity_id": "09-indexer-reqs",
+      "entity_id": "09-indexing",
       "neighbor_ids": [
-        "10-indexer-design",
-        "11-indexer-validation",
-        "12-search-reqs",
-        "08-vision-overview",
-        "07-blocks-protocol",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "13-semantic-compression",
-        "14-pca-arch",
-        "04-evaluator-spec-scope"
+        "08-ebcp",
+        "07-dcbc",
+        "06-blocks",
+        "10-search",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
       ]
     },
     {
-      "entity_id": "10-indexer-design",
+      "entity_id": "10-search",
       "neighbor_ids": [
-        "09-indexer-reqs",
-        "11-indexer-validation",
-        "12-search-reqs",
-        "08-vision-overview",
-        "13-semantic-compression",
-        "07-blocks-protocol",
-        "14-pca-arch",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "04-evaluator-spec-scope"
+        "06-blocks",
+        "07-dcbc",
+        "08-ebcp",
+        "09-indexing",
+        "01-directional-pca-tree",
+        "02-pca",
+        "03-semantic-compression",
+        "04-streaming-clustering",
+        "17-clustering",
+        "18-clustering_plan"
       ]
     },
     {
-      "entity_id": "11-indexer-validation",
+      "entity_id": "11-2026-06-03-embeddings-openai-spec-drift-rca",
       "neighbor_ids": [
-        "10-indexer-design",
-        "12-search-reqs",
-        "09-indexer-reqs",
-        "13-semantic-compression",
-        "14-pca-arch",
-        "08-vision-overview",
-        "07-blocks-protocol",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "04-evaluator-spec-scope"
+        "15-2026-06-03-search-spec-drift-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "18-clustering_plan",
+        "17-clustering",
+        "20-requirements",
+        "23-requirements",
+        "19-design"
       ]
     },
     {
-      "entity_id": "12-search-reqs",
+      "entity_id": "12-2026-06-03-embeddings-trait-conformance-drift-rca",
       "neighbor_ids": [
-        "11-indexer-validation",
-        "10-indexer-design",
-        "09-indexer-reqs",
-        "13-semantic-compression",
-        "14-pca-arch",
-        "08-vision-overview",
-        "07-blocks-protocol",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "04-evaluator-spec-scope"
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "20-requirements",
+        "23-requirements",
+        "18-clustering_plan",
+        "17-clustering",
+        "19-design"
       ]
     },
     {
-      "entity_id": "13-semantic-compression",
+      "entity_id": "13-2026-06-03-filesystem-block-store-spec-first-rca",
       "neighbor_ids": [
-        "14-pca-arch",
-        "12-search-reqs",
-        "11-indexer-validation",
-        "10-indexer-design",
-        "09-indexer-reqs",
-        "08-vision-overview",
-        "07-blocks-protocol",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "04-evaluator-spec-scope"
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "20-requirements",
+        "23-requirements",
+        "18-clustering_plan",
+        "17-clustering",
+        "19-design"
       ]
     },
     {
-      "entity_id": "14-pca-arch",
+      "entity_id": "14-2026-06-03-search-spec-drift-followup-rca",
       "neighbor_ids": [
-        "13-semantic-compression",
-        "12-search-reqs",
-        "11-indexer-validation",
-        "10-indexer-design",
-        "09-indexer-reqs",
-        "08-vision-overview",
-        "07-blocks-protocol",
-        "06-search-protocol",
-        "05-indexing-protocol",
-        "04-evaluator-spec-scope"
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "20-requirements",
+        "23-requirements",
+        "18-clustering_plan",
+        "17-clustering",
+        "19-design"
+      ]
+    },
+    {
+      "entity_id": "15-2026-06-03-search-spec-drift-rca",
+      "neighbor_ids": [
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "18-clustering_plan",
+        "17-clustering",
+        "20-requirements",
+        "23-requirements",
+        "19-design"
+      ]
+    },
+    {
+      "entity_id": "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+      "neighbor_ids": [
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "20-requirements",
+        "23-requirements",
+        "18-clustering_plan",
+        "17-clustering",
+        "19-design"
+      ]
+    },
+    {
+      "entity_id": "17-clustering",
+      "neighbor_ids": [
+        "18-clustering_plan",
+        "04-streaming-clustering",
+        "03-semantic-compression",
+        "02-pca",
+        "01-directional-pca-tree",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca"
+      ]
+    },
+    {
+      "entity_id": "18-clustering_plan",
+      "neighbor_ids": [
+        "17-clustering",
+        "04-streaming-clustering",
+        "03-semantic-compression",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca",
+        "02-pca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "01-directional-pca-tree",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca"
+      ]
+    },
+    {
+      "entity_id": "19-design",
+      "neighbor_ids": [
+        "22-design",
+        "20-requirements",
+        "21-validation",
+        "23-requirements",
+        "24-validation",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca"
+      ]
+    },
+    {
+      "entity_id": "20-requirements",
+      "neighbor_ids": [
+        "23-requirements",
+        "19-design",
+        "22-design",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "05-2026-06-06-full-traceability-audit",
+        "11-2026-06-03-embeddings-openai-spec-drift-rca",
+        "21-validation"
+      ]
+    },
+    {
+      "entity_id": "21-validation",
+      "neighbor_ids": [
+        "24-validation",
+        "19-design",
+        "22-design",
+        "20-requirements",
+        "23-requirements",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "15-2026-06-03-search-spec-drift-rca"
+      ]
+    },
+    {
+      "entity_id": "22-design",
+      "neighbor_ids": [
+        "19-design",
+        "23-requirements",
+        "24-validation",
+        "20-requirements",
+        "21-validation",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "05-2026-06-06-full-traceability-audit",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca"
+      ]
+    },
+    {
+      "entity_id": "23-requirements",
+      "neighbor_ids": [
+        "20-requirements",
+        "22-design",
+        "19-design",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "05-2026-06-06-full-traceability-audit",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca",
+        "24-validation",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "21-validation"
+      ]
+    },
+    {
+      "entity_id": "24-validation",
+      "neighbor_ids": [
+        "21-validation",
+        "22-design",
+        "19-design",
+        "23-requirements",
+        "20-requirements",
+        "14-2026-06-03-search-spec-drift-followup-rca",
+        "13-2026-06-03-filesystem-block-store-spec-first-rca",
+        "05-2026-06-06-full-traceability-audit",
+        "16-2026-06-11-streaming-clustering-evaluator-plan-gap-analysis-rca",
+        "12-2026-06-03-embeddings-trait-conformance-drift-rca"
       ]
     }
   ],
@@ -423,16 +573,7 @@
       "later_evaluation_line": "future execution-profile evaluator"
     }
   ],
-  "later_phase_identities": [
-    {
-      "identity_id": "real-world-harvested-medium-heldout-queries",
-      "label": "Held-out routing query set for harvested medium corpus",
-      "kind": "HeldOutQuerySet",
-      "corpus_id": "real-world-harvested-medium",
-      "scale_tier_id": "n-14",
-      "later_evaluation_line": "future hierarchy-routing evaluator"
-    }
-  ],
+  "later_phase_identities": [],
   "reproducibility": {
     "seed_policy": "fixed-seed-11",
     "software_identity": "section4-corpus-panel-v2",

@@ -203,6 +203,7 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
             kind: LaterPhaseIdentityKind::HeldOutQuerySet,
             corpus_id: Some("fixture-corpus-a".into()),
             scale_tier_id: None,
+            asset_path: Some(PathBuf::from("fixtures/heldout-queries.zip")),
             later_evaluation_line: "future hierarchy-routing evaluator".into(),
         }],
         reproducibility: ReproducibilityMetadata {

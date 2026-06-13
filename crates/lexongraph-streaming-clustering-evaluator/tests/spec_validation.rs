@@ -34,7 +34,7 @@ use lexongraph_streaming_clustering_evaluator::{
     StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
     emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
     resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
-    write_section4_suite_artifacts,
+    section4_family_candidate_names, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -180,6 +180,11 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
             kind: LaterPhaseIdentityKind::HeldOutQuerySet,
             corpus_id: Some("real-world-harvested-medium".into()),
             scale_tier_id: Some("n-14".into()),
+            asset_path: Some(
+                checked_in_section4_suite_dir()
+                    .join("sources")
+                    .join("repository-docs-heldout-queries.json"),
+            ),
             later_evaluation_line: "future hierarchy-routing evaluator".into(),
         }]
     } else {
@@ -376,14 +381,10 @@ fn checked_in_section4_suite_manifest() -> Section4SuiteManifest {
     let manifest_path = suite_dir.join("section4-suite-manifest.json");
     let contents = fs::read_to_string(manifest_path).unwrap();
     let mut manifest: Section4SuiteManifest = serde_json::from_str(&contents).unwrap();
-    for profile in &mut manifest.generated_profiles {
-        if profile.profile_path.is_relative() {
-            profile.profile_path = suite_dir.join(&profile.profile_path);
-        }
-        if profile.corpus_archive_path.is_relative() {
-            profile.corpus_archive_path = suite_dir.join(&profile.corpus_archive_path);
-        }
-    }
+    lexongraph_streaming_clustering_evaluator::resolve_section4_suite_manifest_paths(
+        &mut manifest,
+        &suite_dir,
+    );
     manifest
 }
 
@@ -2417,16 +2418,16 @@ fn val_stream_eval_042_section4_suite_orders_survivors_by_the_deterministic_rank
 fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_candidates() {
     let manifest = checked_in_section4_suite_manifest();
     let report_dir = tempdir().unwrap();
-    let candidate_ids = [
-        "pca-sort-exact-chunking".to_string(),
-        "directional-pca".to_string(),
-        "dcbc-streaming".to_string(),
-    ];
+    let mut candidate_ids = section4_family_candidate_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    candidate_ids.extend(["directional-pca".to_string(), "dcbc-streaming".to_string()]);
     let candidates = resolve_registered_candidates(&candidate_ids).unwrap();
 
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
 
-    assert_eq!(report.profile_reports.len(), 8);
+    assert_eq!(report.profile_reports.len(), 16);
     assert!(report.profile_reports.iter().all(|profile| {
         candidate_ids.iter().all(|candidate_id| {
             profile
@@ -2483,9 +2484,11 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
 #[test]
 fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_candidates() {
     let names = registered_candidate_names();
-    assert!(names.contains(&"pca-sort-exact-chunking"));
-    assert!(names.contains(&"directional-pca"));
-    assert!(names.contains(&"dcbc-streaming"));
+    let mut expected = section4_family_candidate_names();
+    expected.extend(["directional-pca", "dcbc-streaming"]);
+    for candidate in &expected {
+        assert!(names.contains(candidate));
+    }
 
     let binary = env!("CARGO_BIN_EXE_lexongraph-streaming-clustering-evaluator");
     let output = ProcessCommand::new(binary)
@@ -2498,9 +2501,9 @@ fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_ca
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("pca-sort-exact-chunking"));
-    assert!(stdout.contains("directional-pca"));
-    assert!(stdout.contains("dcbc-streaming"));
+    for candidate in expected {
+        assert!(stdout.contains(candidate));
+    }
 }
 
 #[test]
@@ -2648,6 +2651,12 @@ fn regression_section4_cli_commands_execute_end_to_end() {
             .join("section4-suite-scorecard.txt")
             .exists()
     );
+    assert!(
+        report_dir
+            .path()
+            .join("section4-survivor-decision.txt")
+            .exists()
+    );
 }
 
 #[test]
@@ -2658,11 +2667,12 @@ fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
         serde_json::from_str(&fs::read_to_string(suite_spec_path).unwrap()).unwrap();
     let manifest_contents =
         fs::read_to_string(suite_dir.join("section4-suite-manifest.json")).unwrap();
+    let raw_manifest: Section4SuiteManifest = serde_json::from_str(&manifest_contents).unwrap();
     let manifest = checked_in_section4_suite_manifest();
 
     assert_eq!(suite_spec.suite_id, manifest.suite_id);
     assert_eq!(suite_spec.neighbor_count, 10);
-    assert_eq!(suite_spec.profiles.len(), 8);
+    assert_eq!(suite_spec.profiles.len(), 16);
     assert_eq!(manifest.generated_profiles.len(), suite_spec.profiles.len());
     assert!(
         !suite_spec
@@ -2673,6 +2683,13 @@ fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
     );
     assert!(!suite_spec.tier_growth_rule.trim().is_empty());
     assert!(!manifest_contents.contains("\\\\"));
+    for identity in &raw_manifest
+        .experiment_track_contract
+        .later_phase_identities
+    {
+        let asset_path = identity.asset_path.as_ref().unwrap();
+        assert!(asset_path.is_relative());
+    }
     assert!(
         suite_spec
             .profiles
@@ -2687,10 +2704,43 @@ fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
         let profile_contents = fs::read_to_string(&generated.profile_path).unwrap();
         assert!(!profile_contents.contains("\\\\"));
     }
+    for identity in &suite_spec.experiment_track_contract.later_phase_identities {
+        let asset_path = suite_dir.join(identity.asset_path.as_ref().unwrap());
+        assert!(asset_path.exists());
+        assert!(asset_path.starts_with(&suite_dir));
+    }
     assert!(manifest.generated_profiles.iter().any(|profile| {
         profile.family == Section4CorpusFamily::RealWorldHarvested
             && profile.harvested_policy.as_ref() == Some(&harvested_policy())
     }));
+}
+
+#[test]
+fn regression_checked_in_section4_suite_reports_exist_and_match_the_manifest() {
+    let suite_dir = checked_in_section4_suite_dir();
+    let manifest = checked_in_section4_suite_manifest();
+    let report_dir = suite_dir.join("reports");
+    let suite_report_path = report_dir.join("section4-suite-report.json");
+    let scorecard_path = report_dir.join("section4-suite-scorecard.txt");
+    let survivor_path = report_dir.join("section4-survivor-decision.txt");
+
+    assert!(suite_report_path.exists());
+    assert!(scorecard_path.exists());
+    assert!(survivor_path.exists());
+
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&suite_report_path).unwrap()).unwrap();
+    assert_eq!(report["suite_id"], "section4-corpus-panel-v2");
+    assert_eq!(
+        report["profile_reports"].as_array().unwrap().len(),
+        manifest.generated_profiles.len()
+    );
+
+    let scorecard = fs::read_to_string(scorecard_path).unwrap();
+    let survivor = fs::read_to_string(survivor_path).unwrap();
+    assert!(scorecard.contains("Section-4 suite scorecard"));
+    assert!(survivor.contains("Section-4 survivor decision"));
+    assert!(survivor.contains("Carried forward:"));
 }
 
 #[test]
@@ -2706,7 +2756,7 @@ fn regression_checked_in_section4_suite_assets_run_successfully() {
 
     assert_eq!(report.suite_id, "section4-corpus-panel-v2");
     assert_eq!(report.experiment_track_id, "leaf-screening-euclidean");
-    assert_eq!(report.profile_reports.len(), 8);
+    assert_eq!(report.profile_reports.len(), 16);
     assert!(
         report
             .profile_reports
@@ -2722,7 +2772,7 @@ fn regression_checked_in_section4_suite_assets_run_successfully() {
     assert!(
         report_dir
             .path()
-            .join("real-world-harvested-strict-small")
+            .join("real-world-harvested-strict-large")
             .exists()
     );
 }
@@ -2983,6 +3033,7 @@ fn regression_section4_suite_rejects_later_phase_identity_coordinate_mismatches(
         kind: LaterPhaseIdentityKind::HeldOutQuerySet,
         corpus_id: Some("corpus-a".into()),
         scale_tier_id: Some("n-14".into()),
+        asset_path: Some(output_dir.path().join("missing-heldout.zip")),
         later_evaluation_line: "future hierarchy-routing evaluator".into(),
     }];
 
