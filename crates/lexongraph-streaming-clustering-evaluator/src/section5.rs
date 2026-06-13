@@ -55,7 +55,10 @@ pub struct Section5HierarchyContract {
     pub fanout_min: usize,
     pub fanout_max: usize,
     pub depth_bound_policy: Section5DepthBoundPolicy,
+    pub metric_semantics_profile: String,
+    pub grouping_functional: String,
     pub dispersion_functional: String,
+    pub metric_compatibility_rule: String,
     pub beta_threshold: f64,
     pub epsilon_policy: Section5EpsilonPolicy,
     pub section4_source_label: String,
@@ -96,6 +99,7 @@ pub enum Section5GateKind {
     DepthBound,
     RefinementBetaThreshold,
     EpsilonExceptionScope,
+    MetricSemanticsCompatibility,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +126,13 @@ pub enum Section5PairRunStatus {
     GateFailed,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Section5MetricSemanticsConsistencyResult {
+    Consistent,
+    UnsupportedDeclaration,
+    InconsistentDeclaration,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Section5PairReport {
     pub leaf_candidate_identity: CandidateIdentity,
@@ -130,6 +141,12 @@ pub struct Section5PairReport {
     pub originating_section4_source_label: String,
     pub originating_section4_ranking_score: Option<f64>,
     pub originating_section4_provenance: ProvenanceManifest,
+    pub metric_semantics_profile: String,
+    pub metric_compatibility_rule: String,
+    pub effective_grouping_functional: Option<String>,
+    pub effective_dispersion_functional: Option<String>,
+    pub metric_semantics_consistency_result: Section5MetricSemanticsConsistencyResult,
+    pub metric_semantics_consistency_detail: String,
     pub leaf_cluster_count: usize,
     pub internal_node_count: usize,
     pub max_depth: usize,
@@ -191,9 +208,9 @@ struct LeafClusterSummary {
     member_count: usize,
     leaf_descendant_count: usize,
     sum: Vec<f64>,
-    sum_sq_norm: f64,
     centroid: Vec<f32>,
     dispersion: f64,
+    member_embeddings: Vec<Vec<f32>>,
 }
 
 #[derive(Clone)]
@@ -203,10 +220,10 @@ struct BuiltNode {
     member_count: usize,
     leaf_descendant_count: usize,
     sum: Vec<f64>,
-    sum_sq_norm: f64,
     centroid: Vec<f32>,
     dispersion: f64,
     child_ids: Vec<String>,
+    member_embeddings: Vec<Vec<f32>>,
 }
 
 #[derive(Clone)]
@@ -221,8 +238,38 @@ struct PairReportContext<'a> {
     survivor: &'a CandidateRunReport,
     strategy: &'a RegisteredHierarchyStrategy,
     contract: &'a Section5HierarchyContract,
+    metric_semantics_report: PairMetricSemanticsReportContext,
     elapsed: u128,
     peak_build_memory_bytes: u64,
+}
+
+#[derive(Clone)]
+struct PairMetricSemanticsReportContext {
+    metric_semantics_profile: String,
+    metric_compatibility_rule: String,
+    effective_grouping_functional: Option<String>,
+    effective_dispersion_functional: Option<String>,
+    consistency_result: Section5MetricSemanticsConsistencyResult,
+    consistency_detail: String,
+}
+
+#[derive(Clone, Copy)]
+struct Section5ResolvedMetricSemantics {
+    kind: Section5ResolvedMetricSemanticsKind,
+    effective_grouping_functional: &'static str,
+    effective_dispersion_functional: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum Section5ResolvedMetricSemanticsKind {
+    Euclidean,
+    Cosine,
+}
+
+enum Section5MetricSemanticsResolution {
+    Consistent(Section5ResolvedMetricSemantics),
+    Unsupported(String),
+    Inconsistent(String),
 }
 
 pub fn registered_hierarchy_strategy_names() -> Vec<&'static str> {
@@ -398,10 +445,11 @@ pub fn render_section5_scorecard(report: &Section5CampaignReport) -> String {
     ));
     for pair_report in &report.pair_reports {
         lines.push(format!(
-            "- {} x {}: {:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}",
+            "- {} x {}: {:?}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}",
             pair_report.leaf_candidate_identity.candidate_id,
             pair_report.hierarchy_strategy_identity.strategy_id,
             pair_report.run_status,
+            pair_report.metric_semantics_consistency_result,
             pair_report.max_depth,
             pair_report.theoretical_depth_bound,
             pair_report.maximum_observed_beta,
@@ -527,9 +575,25 @@ fn validate_section5_contract(contract: &Section5HierarchyContract) -> Result<()
                 .into(),
         ));
     }
+    if contract.metric_semantics_profile.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-5 hierarchy contract must declare a non-empty metric_semantics_profile".into(),
+        ));
+    }
+    if contract.grouping_functional.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-5 hierarchy contract must declare a non-empty grouping_functional".into(),
+        ));
+    }
     if contract.dispersion_functional.trim().is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-5 hierarchy contract must declare a non-empty dispersion_functional".into(),
+        ));
+    }
+    if contract.metric_compatibility_rule.trim().is_empty() {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-5 hierarchy contract must declare a non-empty metric_compatibility_rule"
+                .into(),
         ));
     }
     if !contract.beta_threshold.is_finite() || contract.beta_threshold <= 0.0 {
@@ -640,26 +704,83 @@ fn build_pair_reports(
     strategies: &[RegisteredHierarchyStrategy],
 ) -> Result<Vec<Section5PairReport>, EvaluatorError> {
     let mut pair_reports = Vec::with_capacity(survivor_reports.len() * strategies.len());
+    let metric_semantics_resolution = resolve_metric_semantics(contract);
+    let metric_semantics_report =
+        pair_metric_semantics_report_context(contract, &metric_semantics_resolution);
     for survivor in survivor_reports {
-        let leaf_summaries = build_leaf_cluster_summaries(survivor, evaluation_entities)?;
-        for strategy in strategies {
-            let ((build, elapsed), peak_build_memory_bytes) = measure_peak_build_memory(|| {
-                let started = Instant::now();
-                let build = build_hierarchy(&leaf_summaries, strategy, contract);
-                (build, started.elapsed().as_nanos())
-            });
-            pair_reports.push(build_pair_report(
-                PairReportContext {
-                    section4_profile_id: &section4_campaign.profile_id,
-                    section4_source_label: &contract.section4_source_label,
+        let leaf_summaries_result = match &metric_semantics_resolution {
+            Section5MetricSemanticsResolution::Consistent(resolved_metric_semantics) => {
+                Some(build_leaf_cluster_summaries(
                     survivor,
-                    strategy,
-                    contract,
-                    elapsed,
-                    peak_build_memory_bytes,
-                },
-                build,
-            ));
+                    evaluation_entities,
+                    *resolved_metric_semantics,
+                ))
+            }
+            Section5MetricSemanticsResolution::Unsupported(_)
+            | Section5MetricSemanticsResolution::Inconsistent(_) => None,
+        };
+        for strategy in strategies {
+            match (&metric_semantics_resolution, &leaf_summaries_result) {
+                (
+                    Section5MetricSemanticsResolution::Consistent(resolved_metric_semantics),
+                    Some(Ok(leaf_summaries)),
+                ) => {
+                    let ((build, elapsed), peak_build_memory_bytes) =
+                        measure_peak_build_memory(|| {
+                            let started = Instant::now();
+                            let build = build_hierarchy(
+                                leaf_summaries,
+                                strategy,
+                                contract,
+                                *resolved_metric_semantics,
+                            );
+                            (build, started.elapsed().as_nanos())
+                        });
+                    pair_reports.push(build_pair_report(
+                        PairReportContext {
+                            section4_profile_id: &section4_campaign.profile_id,
+                            section4_source_label: &contract.section4_source_label,
+                            survivor,
+                            strategy,
+                            contract,
+                            metric_semantics_report: metric_semantics_report.clone(),
+                            elapsed,
+                            peak_build_memory_bytes,
+                        },
+                        build,
+                    ));
+                }
+                (Section5MetricSemanticsResolution::Consistent(_), Some(Err(error))) => {
+                    pair_reports.push(build_pair_report(
+                        PairReportContext {
+                            section4_profile_id: &section4_campaign.profile_id,
+                            section4_source_label: &contract.section4_source_label,
+                            survivor,
+                            strategy,
+                            contract,
+                            metric_semantics_report: metric_semantics_report.clone(),
+                            elapsed: 0,
+                            peak_build_memory_bytes: 0,
+                        },
+                        Err(error.to_string()),
+                    ));
+                }
+                (
+                    Section5MetricSemanticsResolution::Unsupported(_)
+                    | Section5MetricSemanticsResolution::Inconsistent(_),
+                    None,
+                ) => {
+                    pair_reports.push(metric_semantics_failure_pair_report(
+                        &section4_campaign.profile_id,
+                        &contract.section4_source_label,
+                        survivor,
+                        strategy,
+                        contract,
+                        &metric_semantics_report,
+                    ));
+                }
+                _ => unreachable!("metric semantics resolution and leaf summaries must align"),
+            }
         }
     }
     Ok(pair_reports)
@@ -668,6 +789,7 @@ fn build_pair_reports(
 fn build_leaf_cluster_summaries(
     survivor: &CandidateRunReport,
     evaluation_entities: &[EvaluationEntity],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<Vec<LeafClusterSummary>, EvaluatorError> {
     let embedding_lookup = evaluation_entities
         .iter()
@@ -698,7 +820,7 @@ fn build_leaf_cluster_summaries(
                 .map(|embedding| embedding.len())
                 .unwrap_or_default()
         ];
-        let mut sum_sq_norm = 0.0f64;
+        let mut member_embeddings = Vec::with_capacity(entity_ids.len());
         for entity_id in &entity_ids {
             let Some(embedding) = embedding_lookup.get(*entity_id) else {
                 return Err(EvaluatorError::InvalidConfiguration(format!(
@@ -709,19 +831,17 @@ fn build_leaf_cluster_summaries(
             for (index, value) in embedding.iter().enumerate() {
                 sum[index] += *value as f64;
             }
-            sum_sq_norm += embedding
-                .iter()
-                .map(|value| f64::from(*value) * f64::from(*value))
-                .sum::<f64>();
+            member_embeddings.push((*embedding).to_vec());
         }
         summaries.push(LeafClusterSummary {
             cluster_id,
             member_count: entity_ids.len(),
             leaf_descendant_count: 1,
             centroid: centroid_from_sum(&sum, entity_ids.len()),
-            dispersion: dispersion_from_stats(&sum, sum_sq_norm, entity_ids.len()),
+            dispersion: dispersion_from_metric(&member_embeddings, resolved_metric_semantics)
+                .map_err(EvaluatorError::InvalidConfiguration)?,
             sum,
-            sum_sq_norm,
+            member_embeddings,
         });
     }
     Ok(summaries)
@@ -731,6 +851,7 @@ fn build_hierarchy(
     leaf_summaries: &[LeafClusterSummary],
     strategy: &RegisteredHierarchyStrategy,
     contract: &Section5HierarchyContract,
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<HierarchyBuild, String> {
     let mut nodes = leaf_summaries
         .iter()
@@ -740,17 +861,23 @@ fn build_hierarchy(
             member_count: summary.member_count,
             leaf_descendant_count: summary.leaf_descendant_count,
             sum: summary.sum.clone(),
-            sum_sq_norm: summary.sum_sq_norm,
             centroid: summary.centroid.clone(),
             dispersion: summary.dispersion,
             child_ids: Vec::new(),
+            member_embeddings: summary.member_embeddings.clone(),
         })
         .collect::<Vec<_>>();
     let mut current = nodes.clone();
     let mut next_internal_index = 0usize;
     let mut layer_index = 0usize;
     while current.len() > 1 {
-        let groups = group_current_nodes(&current, strategy, contract, layer_index)?;
+        let groups = group_current_nodes(
+            &current,
+            strategy,
+            contract,
+            layer_index,
+            resolved_metric_semantics,
+        )?;
         current = groups
             .into_iter()
             .map(|group| {
@@ -766,28 +893,31 @@ fn build_hierarchy(
                     .map(|child| child.sum.len())
                     .unwrap_or_default();
                 let mut sum = vec![0.0f64; dimension_count];
-                let mut sum_sq_norm = 0.0f64;
                 let mut child_ids = Vec::with_capacity(group.len());
+                let mut member_embeddings = Vec::new();
                 for child in &group {
                     for (index, value) in child.sum.iter().enumerate() {
                         sum[index] += *value;
                     }
-                    sum_sq_norm += child.sum_sq_norm;
                     child_ids.push(child.node_id.clone());
+                    member_embeddings.extend(child.member_embeddings.iter().cloned());
                 }
-                BuiltNode {
+                Ok::<BuiltNode, String>(BuiltNode {
                     node_id,
                     kind: Section5HierarchyNodeKind::Internal,
                     member_count,
                     leaf_descendant_count,
                     centroid: centroid_from_sum(&sum, member_count),
-                    dispersion: dispersion_from_stats(&sum, sum_sq_norm, member_count),
+                    dispersion: dispersion_from_metric(
+                        &member_embeddings,
+                        resolved_metric_semantics,
+                    )?,
                     sum,
-                    sum_sq_norm,
                     child_ids,
-                }
+                    member_embeddings,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         nodes.extend(current.iter().cloned());
         layer_index += 1;
     }
@@ -806,25 +936,27 @@ fn group_current_nodes(
     strategy: &RegisteredHierarchyStrategy,
     contract: &Section5HierarchyContract,
     layer_index: usize,
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<Vec<Vec<BuiltNode>>, String> {
     let sizes = group_sizes(current.len(), contract.fanout_min, contract.fanout_max)?;
     match strategy.identity.kind {
         Section5HierarchyStrategyKind::BottomUpAgglomeration => {
-            let ordered = sort_nodes_lexicographically(current);
+            let ordered = sort_nodes_by_metric_walk(current, resolved_metric_semantics)?;
             Ok(chunk_by_sizes(&ordered, &sizes))
         }
         Section5HierarchyStrategyKind::RecursiveTopDownPartitioning => {
-            let ordered = sort_nodes_by_dominant_axis(current, false);
+            let ordered =
+                sort_nodes_by_metric_partition(current, resolved_metric_semantics, false)?;
             Ok(chunk_by_sizes(&ordered, &sizes))
         }
         Section5HierarchyStrategyKind::GreedyPackByCentroidNearestGrouping => {
-            greedy_pack_groups(current, &sizes)
+            greedy_pack_groups(current, &sizes, resolved_metric_semantics)
         }
         Section5HierarchyStrategyKind::HybridTopDownBottomUp => {
             let ordered = if layer_index.is_multiple_of(2) {
-                sort_nodes_by_dominant_axis(current, true)
+                sort_nodes_by_metric_partition(current, resolved_metric_semantics, true)?
             } else {
-                sort_nodes_lexicographically(current)
+                sort_nodes_by_metric_walk(current, resolved_metric_semantics)?
             };
             Ok(chunk_by_sizes(&ordered, &sizes))
         }
@@ -872,12 +1004,90 @@ fn sort_nodes_lexicographically(current: &[BuiltNode]) -> Vec<BuiltNode> {
     ordered
 }
 
-fn sort_nodes_by_dominant_axis(current: &[BuiltNode], descending: bool) -> Vec<BuiltNode> {
-    let dominant_axis = dominant_axis(current);
+fn sort_nodes_by_metric_walk(
+    current: &[BuiltNode],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> Result<Vec<BuiltNode>, String> {
+    let mut remaining = sort_nodes_lexicographically(current);
+    let Some(first) = remaining.first().cloned() else {
+        return Ok(Vec::new());
+    };
+    remaining.remove(0);
+    let mut ordered = vec![first];
+    while !remaining.is_empty() {
+        let last = ordered.last().expect("metric walk should keep one node");
+        let Some((next_index, _)) = remaining
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let distance = distance_between_centroids(
+                    resolved_metric_semantics,
+                    &last.centroid,
+                    &candidate.centroid,
+                )?;
+                Ok::<_, String>((index, distance))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .min_by(|left, right| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| remaining[left.0].node_id.cmp(&remaining[right.0].node_id))
+            })
+        else {
+            return Err(
+                "metric-aware hierarchy ordering exhausted its remaining nodes prematurely".into(),
+            );
+        };
+        ordered.push(remaining.remove(next_index));
+    }
+    Ok(ordered)
+}
+
+fn sort_nodes_by_metric_partition(
+    current: &[BuiltNode],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+    descending: bool,
+) -> Result<Vec<BuiltNode>, String> {
+    if current.len() <= 1 {
+        return Ok(current.to_vec());
+    }
+    let anchors = sort_nodes_lexicographically(current);
+    let anchor_left = &anchors[0];
+    let anchor_right = anchors
+        .iter()
+        .skip(1)
+        .map(|candidate| {
+            let distance = distance_between_centroids(
+                resolved_metric_semantics,
+                &anchor_left.centroid,
+                &candidate.centroid,
+            )?;
+            Ok::<_, String>((candidate, distance))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max_by(|left, right| {
+            left.1
+                .partial_cmp(&right.1)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.0.node_id.cmp(&right.0.node_id))
+        })
+        .map(|(candidate, _)| candidate)
+        .unwrap_or(anchor_left);
     let mut ordered = current.to_vec();
     ordered.sort_by(|left, right| {
-        let comparison = left.centroid[dominant_axis]
-            .partial_cmp(&right.centroid[dominant_axis])
+        let left_projection =
+            metric_partition_projection(left, anchor_left, anchor_right, resolved_metric_semantics);
+        let right_projection = metric_partition_projection(
+            right,
+            anchor_left,
+            anchor_right,
+            resolved_metric_semantics,
+        );
+        let comparison = left_projection
+            .partial_cmp(&right_projection)
             .unwrap_or(Ordering::Equal)
             .then_with(|| compare_centroids(&left.centroid, &right.centroid))
             .then_with(|| left.node_id.cmp(&right.node_id));
@@ -887,12 +1097,13 @@ fn sort_nodes_by_dominant_axis(current: &[BuiltNode], descending: bool) -> Vec<B
             comparison
         }
     });
-    ordered
+    Ok(ordered)
 }
 
 fn greedy_pack_groups(
     current: &[BuiltNode],
     sizes: &[usize],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<Vec<Vec<BuiltNode>>, String> {
     let mut remaining = sort_nodes_lexicographically(current);
     let mut groups = Vec::with_capacity(sizes.len());
@@ -909,9 +1120,15 @@ fn greedy_pack_groups(
                 .iter()
                 .enumerate()
                 .map(|(index, candidate)| {
-                    let distance = euclidean_distance(&group[0].centroid, &candidate.centroid);
-                    (index, distance)
+                    let distance = distance_between_centroids(
+                        resolved_metric_semantics,
+                        &group[0].centroid,
+                        &candidate.centroid,
+                    )?;
+                    Ok::<_, String>((index, distance))
                 })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
                 .min_by(|left, right| {
                     left.1
                         .partial_cmp(&right.1)
@@ -939,29 +1156,6 @@ fn chunk_by_sizes(nodes: &[BuiltNode], sizes: &[usize]) -> Vec<Vec<BuiltNode>> {
         start = end;
     }
     groups
-}
-
-fn dominant_axis(current: &[BuiltNode]) -> usize {
-    let dimensions = current
-        .first()
-        .map(|node| node.centroid.len())
-        .unwrap_or_default();
-    let mut best_axis = 0usize;
-    let mut best_spread = f32::NEG_INFINITY;
-    for axis in 0..dimensions {
-        let mut min_value = f32::INFINITY;
-        let mut max_value = f32::NEG_INFINITY;
-        for node in current {
-            min_value = min_value.min(node.centroid[axis]);
-            max_value = max_value.max(node.centroid[axis]);
-        }
-        let spread = max_value - min_value;
-        if spread > best_spread {
-            best_spread = spread;
-            best_axis = axis;
-        }
-    }
-    best_axis
 }
 
 fn build_pair_report(
@@ -1004,6 +1198,30 @@ fn build_pair_report(
                 originating_section4_source_label: context.section4_source_label.into(),
                 originating_section4_ranking_score: context.survivor.ranking_score,
                 originating_section4_provenance: context.survivor.provenance.clone(),
+                metric_semantics_profile: context
+                    .metric_semantics_report
+                    .metric_semantics_profile
+                    .clone(),
+                metric_compatibility_rule: context
+                    .metric_semantics_report
+                    .metric_compatibility_rule
+                    .clone(),
+                effective_grouping_functional: context
+                    .metric_semantics_report
+                    .effective_grouping_functional
+                    .clone(),
+                effective_dispersion_functional: context
+                    .metric_semantics_report
+                    .effective_dispersion_functional
+                    .clone(),
+                metric_semantics_consistency_result: context
+                    .metric_semantics_report
+                    .consistency_result
+                    .clone(),
+                metric_semantics_consistency_detail: context
+                    .metric_semantics_report
+                    .consistency_detail
+                    .clone(),
                 leaf_cluster_count,
                 internal_node_count: analysis.internal_node_count,
                 max_depth: analysis.max_depth,
@@ -1035,6 +1253,30 @@ fn build_pair_report(
             originating_section4_source_label: context.section4_source_label.into(),
             originating_section4_ranking_score: context.survivor.ranking_score,
             originating_section4_provenance: context.survivor.provenance.clone(),
+            metric_semantics_profile: context
+                .metric_semantics_report
+                .metric_semantics_profile
+                .clone(),
+            metric_compatibility_rule: context
+                .metric_semantics_report
+                .metric_compatibility_rule
+                .clone(),
+            effective_grouping_functional: context
+                .metric_semantics_report
+                .effective_grouping_functional
+                .clone(),
+            effective_dispersion_functional: context
+                .metric_semantics_report
+                .effective_dispersion_functional
+                .clone(),
+            metric_semantics_consistency_result: context
+                .metric_semantics_report
+                .consistency_result
+                .clone(),
+            metric_semantics_consistency_detail: context
+                .metric_semantics_report
+                .consistency_detail
+                .clone(),
             leaf_cluster_count: context.survivor.cluster_occupancies.len(),
             internal_node_count: 0,
             max_depth: 0,
@@ -1066,6 +1308,64 @@ fn build_pair_report(
             survived_required_gates: false,
             ranking_score: None,
         },
+    }
+}
+
+fn metric_semantics_failure_pair_report(
+    section4_profile_id: &str,
+    section4_source_label: &str,
+    survivor: &CandidateRunReport,
+    strategy: &RegisteredHierarchyStrategy,
+    contract: &Section5HierarchyContract,
+    metric_semantics_report: &PairMetricSemanticsReportContext,
+) -> Section5PairReport {
+    Section5PairReport {
+        leaf_candidate_identity: survivor.candidate_identity.clone(),
+        hierarchy_strategy_identity: strategy.identity.clone(),
+        originating_section4_profile_id: section4_profile_id.into(),
+        originating_section4_source_label: section4_source_label.into(),
+        originating_section4_ranking_score: survivor.ranking_score,
+        originating_section4_provenance: survivor.provenance.clone(),
+        metric_semantics_profile: metric_semantics_report.metric_semantics_profile.clone(),
+        metric_compatibility_rule: metric_semantics_report.metric_compatibility_rule.clone(),
+        effective_grouping_functional: metric_semantics_report
+            .effective_grouping_functional
+            .clone(),
+        effective_dispersion_functional: metric_semantics_report
+            .effective_dispersion_functional
+            .clone(),
+        metric_semantics_consistency_result: metric_semantics_report.consistency_result.clone(),
+        metric_semantics_consistency_detail: metric_semantics_report.consistency_detail.clone(),
+        leaf_cluster_count: survivor.cluster_occupancies.len(),
+        internal_node_count: 0,
+        max_depth: 0,
+        theoretical_depth_bound: theoretical_depth_bound(
+            survivor.cluster_occupancies.len(),
+            contract.fanout_min,
+        ),
+        minimum_observed_fanout: 0,
+        maximum_observed_fanout: 0,
+        refinement_edge_count: 0,
+        maximum_observed_beta: f64::INFINITY,
+        epsilon_exception_use_count: 0,
+        build_elapsed_nanos: 0,
+        build_throughput_leaf_nodes_per_second: 0.0,
+        peak_build_memory_bytes: 0,
+        gate_results: vec![Section5GateResult {
+            gate_id: "metric-semantics-compatibility".into(),
+            label: "Metric semantics compatibility".into(),
+            kind: Section5GateKind::MetricSemanticsCompatibility,
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-HIERARCHY".into(), "RG-REFINEMENT".into()],
+            status: Section5GateStatus::Failed,
+            observed_value: None,
+            detail: metric_semantics_report.consistency_detail.clone(),
+        }],
+        hierarchy_nodes: Vec::new(),
+        hierarchy_edges: Vec::new(),
+        run_status: Section5PairRunStatus::GateFailed,
+        survived_required_gates: false,
+        ranking_score: None,
     }
 }
 
@@ -1385,18 +1685,16 @@ fn centroid_from_sum(sum: &[f64], count: usize) -> Vec<f32> {
         .collect()
 }
 
-fn dispersion_from_stats(sum: &[f64], sum_sq_norm: f64, count: usize) -> f64 {
-    if count == 0 {
-        return 0.0;
+fn dispersion_from_metric(
+    member_embeddings: &[Vec<f32>],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> Result<f64, String> {
+    match resolved_metric_semantics.kind {
+        Section5ResolvedMetricSemanticsKind::Euclidean => {
+            Ok(mean_squared_radius(member_embeddings))
+        }
+        Section5ResolvedMetricSemanticsKind::Cosine => mean_cosine_deviation(member_embeddings),
     }
-    let centroid_norm_sq = sum
-        .iter()
-        .map(|value| {
-            let mean = *value / count as f64;
-            mean * mean
-        })
-        .sum::<f64>();
-    ((sum_sq_norm / count as f64) - centroid_norm_sq).max(0.0)
 }
 
 fn beta_for_edge(child_dispersion: f64, parent_dispersion: f64) -> f64 {
@@ -1438,6 +1736,216 @@ fn euclidean_distance(left: &[f32], right: &[f32]) -> f64 {
         })
         .sum::<f64>()
         .sqrt()
+}
+
+fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f64, String> {
+    let left_norm = l2_norm(left);
+    let right_norm = l2_norm(right);
+    if left_norm == 0.0 || right_norm == 0.0 {
+        return Err(
+            "cosine metric semantics require non-zero centroid and member embeddings".into(),
+        );
+    }
+    let cosine_similarity = left
+        .iter()
+        .zip(right)
+        .map(|(left, right)| f64::from(*left) * f64::from(*right))
+        .sum::<f64>()
+        / (left_norm * right_norm);
+    Ok((1.0 - cosine_similarity).max(0.0))
+}
+
+fn mean_squared_radius(member_embeddings: &[Vec<f32>]) -> f64 {
+    if member_embeddings.is_empty() {
+        return 0.0;
+    }
+    let dimensions = member_embeddings[0].len();
+    let mut sum = vec![0.0f64; dimensions];
+    for embedding in member_embeddings {
+        for (index, value) in embedding.iter().enumerate() {
+            sum[index] += f64::from(*value);
+        }
+    }
+    let centroid = centroid_from_sum(&sum, member_embeddings.len());
+    member_embeddings
+        .iter()
+        .map(|embedding| euclidean_distance(embedding, &centroid).powi(2))
+        .sum::<f64>()
+        / member_embeddings.len() as f64
+}
+
+fn mean_cosine_deviation(member_embeddings: &[Vec<f32>]) -> Result<f64, String> {
+    if member_embeddings.is_empty() {
+        return Ok(0.0);
+    }
+    let dimensions = member_embeddings[0].len();
+    let mut sum = vec![0.0f64; dimensions];
+    for embedding in member_embeddings {
+        for (index, value) in embedding.iter().enumerate() {
+            sum[index] += f64::from(*value);
+        }
+    }
+    let centroid = centroid_from_sum(&sum, member_embeddings.len());
+    let centroid_direction = normalized_embedding(&centroid)?;
+    Ok(member_embeddings
+        .iter()
+        .map(|embedding| cosine_distance(embedding, &centroid_direction))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum::<f64>()
+        / member_embeddings.len() as f64)
+}
+
+fn normalized_embedding(embedding: &[f32]) -> Result<Vec<f32>, String> {
+    let norm = l2_norm(embedding);
+    if norm == 0.0 {
+        return Err(
+            "cosine metric semantics require non-zero centroid and member embeddings".into(),
+        );
+    }
+    Ok(embedding
+        .iter()
+        .map(|value| (*value as f64 / norm) as f32)
+        .collect())
+}
+
+fn l2_norm(embedding: &[f32]) -> f64 {
+    embedding
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn distance_between_centroids(
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+    left: &[f32],
+    right: &[f32],
+) -> Result<f64, String> {
+    match resolved_metric_semantics.kind {
+        Section5ResolvedMetricSemanticsKind::Euclidean => Ok(euclidean_distance(left, right)),
+        Section5ResolvedMetricSemanticsKind::Cosine => cosine_distance(left, right),
+    }
+}
+
+fn metric_partition_projection(
+    node: &BuiltNode,
+    anchor_left: &BuiltNode,
+    anchor_right: &BuiltNode,
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> f64 {
+    let left_distance = distance_between_centroids(
+        resolved_metric_semantics,
+        &node.centroid,
+        &anchor_left.centroid,
+    )
+    .unwrap_or(f64::INFINITY);
+    let right_distance = distance_between_centroids(
+        resolved_metric_semantics,
+        &node.centroid,
+        &anchor_right.centroid,
+    )
+    .unwrap_or(f64::INFINITY);
+    left_distance - right_distance
+}
+
+fn resolve_metric_semantics(
+    contract: &Section5HierarchyContract,
+) -> Section5MetricSemanticsResolution {
+    if contract.metric_compatibility_rule != "closed-profile-v1" {
+        return Section5MetricSemanticsResolution::Unsupported(format!(
+            "section-5 metric compatibility rule {} is unsupported; supported rule: closed-profile-v1",
+            contract.metric_compatibility_rule
+        ));
+    }
+    match contract.metric_semantics_profile.as_str() {
+        "euclidean" => {
+            if contract.grouping_functional != "euclidean-centroid-distance" {
+                return Section5MetricSemanticsResolution::Inconsistent(format!(
+                    "section-5 metric semantics profile euclidean requires grouping_functional euclidean-centroid-distance, observed {}",
+                    contract.grouping_functional
+                ));
+            }
+            if contract.dispersion_functional != "mean-squared-radius" {
+                return Section5MetricSemanticsResolution::Inconsistent(format!(
+                    "section-5 metric semantics profile euclidean requires dispersion_functional mean-squared-radius, observed {}",
+                    contract.dispersion_functional
+                ));
+            }
+            Section5MetricSemanticsResolution::Consistent(Section5ResolvedMetricSemantics {
+                kind: Section5ResolvedMetricSemanticsKind::Euclidean,
+                effective_grouping_functional: "euclidean-centroid-distance",
+                effective_dispersion_functional: "mean-squared-radius",
+            })
+        }
+        "cosine" => {
+            if contract.grouping_functional != "cosine-centroid-distance" {
+                return Section5MetricSemanticsResolution::Inconsistent(format!(
+                    "section-5 metric semantics profile cosine requires grouping_functional cosine-centroid-distance, observed {}",
+                    contract.grouping_functional
+                ));
+            }
+            if contract.dispersion_functional != "mean-cosine-deviation" {
+                return Section5MetricSemanticsResolution::Inconsistent(format!(
+                    "section-5 metric semantics profile cosine requires dispersion_functional mean-cosine-deviation, observed {}",
+                    contract.dispersion_functional
+                ));
+            }
+            Section5MetricSemanticsResolution::Consistent(Section5ResolvedMetricSemantics {
+                kind: Section5ResolvedMetricSemanticsKind::Cosine,
+                effective_grouping_functional: "cosine-centroid-distance",
+                effective_dispersion_functional: "mean-cosine-deviation",
+            })
+        }
+        unsupported_profile => Section5MetricSemanticsResolution::Unsupported(format!(
+            "section-5 metric semantics profile {unsupported_profile} is unsupported; supported profiles: euclidean, cosine"
+        )),
+    }
+}
+
+fn pair_metric_semantics_report_context(
+    contract: &Section5HierarchyContract,
+    resolution: &Section5MetricSemanticsResolution,
+) -> PairMetricSemanticsReportContext {
+    let (
+        effective_grouping_functional,
+        effective_dispersion_functional,
+        consistency_result,
+        consistency_detail,
+    ) = match resolution {
+        Section5MetricSemanticsResolution::Consistent(resolved) => (
+            Some(resolved.effective_grouping_functional.to_string()),
+            Some(resolved.effective_dispersion_functional.to_string()),
+            Section5MetricSemanticsConsistencyResult::Consistent,
+            format!(
+                "declared profile {} is compatible with grouping_functional {} and dispersion_functional {} under {}",
+                contract.metric_semantics_profile,
+                contract.grouping_functional,
+                contract.dispersion_functional,
+                contract.metric_compatibility_rule
+            ),
+        ),
+        Section5MetricSemanticsResolution::Unsupported(detail) => (
+            None,
+            None,
+            Section5MetricSemanticsConsistencyResult::UnsupportedDeclaration,
+            detail.clone(),
+        ),
+        Section5MetricSemanticsResolution::Inconsistent(detail) => (
+            None,
+            None,
+            Section5MetricSemanticsConsistencyResult::InconsistentDeclaration,
+            detail.clone(),
+        ),
+    };
+    PairMetricSemanticsReportContext {
+        metric_semantics_profile: contract.metric_semantics_profile.clone(),
+        metric_compatibility_rule: contract.metric_compatibility_rule.clone(),
+        effective_grouping_functional,
+        effective_dispersion_functional,
+        consistency_result,
+        consistency_detail,
+    }
 }
 
 fn sanitize_artifact_stem(input: &str) -> String {

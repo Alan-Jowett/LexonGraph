@@ -586,7 +586,10 @@ Inspect the evaluator's hierarchy-strategy discovery and registration surface.
 
 **Pass condition:** the evaluator can register section-5 hierarchy strategies
 over surviving section-4 leaf-stage outputs without widening the shared
-streaming clustering trainer/classifier contract that produced those outputs.
+streaming clustering trainer/classifier contract that produced those outputs,
+and any metric-sensitive grouping behavior is resolved through the shared
+section-5 metric-semantics contract rather than through hard-wired
+Euclidean-only grouping rules.
 
 **Traces to:** REQ-STREAM-EVAL-054
 
@@ -596,10 +599,14 @@ Inspect one section-5 hierarchy-stage benchmark contract.
 
 **Pass condition:** the contract identifies the originating section-4 survivor
 set, fixes `f_min` and `f_max`, defines the depth-bound semantics and
-theoretical-bound interpretation, declares the compatible dispersion
-functional, declares the `beta` threshold, declares the penultimate-layer
-`epsilon` exception policy, and fixes the hierarchy-stage build-throughput and
-memory-reporting semantics shared by all compared pairs.
+theoretical-bound interpretation, declares the grouping functional used by
+metric-sensitive hierarchy-construction decisions, declares the compatible
+dispersion functional, declares the `beta` threshold, declares the
+penultimate-layer `epsilon` exception policy, fixes the hierarchy-stage
+build-throughput and memory-reporting semantics shared by all compared pairs,
+and declares the deterministic compatibility rule that governs whether the
+grouping-functional and refinement-dispersion-functional combination is
+supported for the benchmark's metric semantics.
 
 **Traces to:** REQ-STREAM-EVAL-055
 
@@ -611,8 +618,12 @@ hierarchy-strategy pair.
 **Pass condition:** each compared pair builds a full tree under the shared
 hierarchy-stage contract and reports fanout compliance, absence of single-child
 internal nodes, depth relative to the declared bound, per-edge refinement
-coefficients, uses of the declared `epsilon` exception, and hierarchy-stage
-build throughput plus peak build memory.
+coefficients computed with the declared compatible dispersion functional, uses
+of the declared `epsilon` exception, the effective grouping functional used by
+metric-sensitive hierarchy decisions, the effective refinement-dispersion
+functional used by `beta` and `epsilon` checks, the pair's metric-semantics
+consistency result, and hierarchy-stage build throughput plus peak build
+memory.
 
 **Traces to:** REQ-STREAM-EVAL-056
 
@@ -624,8 +635,11 @@ refinement failures.
 **Pass condition:** the workflow deterministically rejects pairs that violate
 fanout bounds, emit single-child internal nodes, exceed the declared depth
 bound, violate the declared `beta` threshold outside the admitted `epsilon`
-scope, or apply the `epsilon` exception outside its declared penultimate-layer
-admissibility conditions.
+scope, apply the `epsilon` exception outside its declared penultimate-layer
+admissibility conditions, require unsupported grouping or refinement-dispersion
+functionals for the declared metric semantics, or declare a
+grouping-functional/refinement-dispersion-functional combination that fails the
+contract's deterministic compatibility rule.
 
 **Traces to:** REQ-STREAM-EVAL-057
 
@@ -637,10 +651,29 @@ summary.
 **Pass condition:** every compared pair traces back to the originating section-4
 profile, suite, or survivor-decision artifact; the hierarchy-stage artifact set
 preserves the provenance needed to reconstruct the leaf-stage inputs consumed by
-hierarchy construction; and the workflow emits a deterministic hierarchy-stage
-pair summary identifying which pairs carry forward.
+hierarchy construction; the artifact set identifies the effective grouping
+functional, effective refinement-dispersion functional, and metric-semantics
+consistency result used by each compared pair; and the workflow emits a
+deterministic hierarchy-stage pair summary identifying which pairs carry
+forward.
 
 **Traces to:** REQ-STREAM-EVAL-058
+
+### VAL-STREAM-EVAL-050
+
+Run section-5 hierarchy-stage comparisons that exercise at least one supported
+non-Euclidean metric-semantics profile and at least one unsupported or
+internally inconsistent metric-semantics declaration.
+
+**Pass condition:** the evaluator executes metric-sensitive grouping decisions
+and refinement checks with the declared non-Euclidean grouping and dispersion
+functionals for supported profiles, reports the resulting metric-semantics
+consistency outcome for each compared pair, and deterministically rejects any
+unsupported or internally inconsistent grouping-functional/refinement-
+dispersion-functional declaration before a passing hierarchy-stage result can be
+recorded.
+
+**Traces to:** REQ-STREAM-EVAL-054, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-056, REQ-STREAM-EVAL-057
 
 ### VAL-STREAM-EVAL-049
 

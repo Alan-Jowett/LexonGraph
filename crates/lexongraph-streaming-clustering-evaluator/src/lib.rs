@@ -62,10 +62,10 @@ pub use section5::{
     Section5DeferredGoalRecord, Section5DepthBoundPolicy, Section5EpsilonPolicy, Section5GateKind,
     Section5GateResult, Section5GateStatus, Section5HierarchyContract, Section5HierarchyEdgeReport,
     Section5HierarchyNodeKind, Section5HierarchyNodeReport, Section5HierarchyStrategyIdentity,
-    Section5HierarchyStrategyKind, Section5PairReport, Section5PairRunStatus, Section5RankedPair,
-    emit_section5_campaign_artifacts, registered_hierarchy_strategy_names,
-    render_section5_carry_forward_summary, render_section5_scorecard,
-    resolve_registered_hierarchy_strategies, run_section5_campaign,
+    Section5HierarchyStrategyKind, Section5MetricSemanticsConsistencyResult, Section5PairReport,
+    Section5PairRunStatus, Section5RankedPair, emit_section5_campaign_artifacts,
+    registered_hierarchy_strategy_names, render_section5_carry_forward_summary,
+    render_section5_scorecard, resolve_registered_hierarchy_strategies, run_section5_campaign,
     write_section5_campaign_artifacts,
 };
 

@@ -504,7 +504,10 @@ pub fn section5_hierarchy_contract() -> Section5HierarchyContract {
         fanout_min: 2,
         fanout_max: 2,
         depth_bound_policy: Section5DepthBoundPolicy::CeilLogByMinFanout,
-        dispersion_functional: "variance under the declared Euclidean metric".into(),
+        metric_semantics_profile: "euclidean".into(),
+        grouping_functional: "euclidean-centroid-distance".into(),
+        dispersion_functional: "mean-squared-radius".into(),
+        metric_compatibility_rule: "closed-profile-v1".into(),
         beta_threshold: 1.25,
         epsilon_policy: Section5EpsilonPolicy {
             parent_to_root_dispersion_ratio_max: 0.01,
@@ -512,6 +515,70 @@ pub fn section5_hierarchy_contract() -> Section5HierarchyContract {
         section4_source_label: "fixture-leaf-stage-profile".into(),
         later_evaluation_line: "future parent-summary and routing evaluator".into(),
     }
+}
+
+pub fn section5_cosine_hierarchy_contract() -> Section5HierarchyContract {
+    let mut contract = section5_hierarchy_contract();
+    contract.contract_id = "section5-cosine-fixture-contract".into();
+    contract.metric_semantics_profile = "cosine".into();
+    contract.grouping_functional = "cosine-centroid-distance".into();
+    contract.dispersion_functional = "mean-cosine-deviation".into();
+    contract
+}
+
+pub fn strict_alignment_nonzero_profile() -> BenchmarkProfile {
+    let mut profile = strict_alignment_profile();
+    profile.profile_id = "strict-alignment-nonzero-campaign".into();
+    *profile
+        .inline_evaluation_entities_mut()
+        .expect("nonzero section-5 fixture should use inline entities") = vec![
+        EvaluationEntity {
+            entity_id: "a".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![1.0, 0.0],
+            synthetic: false,
+        },
+        EvaluationEntity {
+            entity_id: "b".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![0.9, 0.1],
+            synthetic: false,
+        },
+        EvaluationEntity {
+            entity_id: "c".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![0.0, 1.0],
+            synthetic: false,
+        },
+        EvaluationEntity {
+            entity_id: "d".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![0.1, 0.9],
+            synthetic: false,
+        },
+    ];
+    profile.locality_ground_truth = vec![
+        lexongraph_streaming_clustering_evaluator::GroundTruthNeighborhood {
+            entity_id: "a".into(),
+            neighbor_ids: vec!["b".into()],
+        },
+        lexongraph_streaming_clustering_evaluator::GroundTruthNeighborhood {
+            entity_id: "b".into(),
+            neighbor_ids: vec!["a".into()],
+        },
+        lexongraph_streaming_clustering_evaluator::GroundTruthNeighborhood {
+            entity_id: "c".into(),
+            neighbor_ids: vec!["d".into()],
+        },
+        lexongraph_streaming_clustering_evaluator::GroundTruthNeighborhood {
+            entity_id: "d".into(),
+            neighbor_ids: vec!["c".into()],
+        },
+    ];
+    profile.probe_workloads[0].source = EmbeddingWorkloadSource::Inline {
+        embeddings: vec![vec![0.95, 0.05], vec![0.05, 0.95]],
+    };
+    profile
 }
 
 pub fn crate_root() -> PathBuf {

@@ -30,11 +30,11 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4ExperimentTrackContract, Section4FrozenContractItem,
     Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
-    Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec, Section5PairRunStatus,
-    SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    emit_section5_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
-    registered_hierarchy_strategy_names, resolve_registered_candidates,
+    Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
+    Section5MetricSemanticsConsistencyResult, Section5PairRunStatus, SharedBalanceConstraints,
+    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, emit_section5_campaign_artifacts, generate_section4_suite_assets,
+    registered_candidate_names, registered_hierarchy_strategy_names, resolve_registered_candidates,
     resolve_registered_hierarchy_strategies, run_evaluation_campaign, run_section4_suite,
     run_section5_campaign, section4_family_candidate_names, write_section4_suite_artifacts,
 };
@@ -44,7 +44,8 @@ use support::{
     duplicate_evaluation_entities_block_store_profile, duplicate_source_id_profile,
     empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
     missing_synthetic_metadata_key_profile, nondeterministic_candidate,
-    section5_hierarchy_contract, shared_contract_failure_candidate, strict_alignment_profile,
+    section5_cosine_hierarchy_contract, section5_hierarchy_contract,
+    shared_contract_failure_candidate, strict_alignment_nonzero_profile, strict_alignment_profile,
     synthetic_padding_profile, wrong_entity_count_block_store_profile,
 };
 use tempfile::tempdir;
@@ -2954,6 +2955,10 @@ fn val_stream_eval_045_section5_hierarchy_contract_declares_required_bounds_and_
 
     assert_eq!(contract.fanout_min, 2);
     assert_eq!(contract.fanout_max, 2);
+    assert_eq!(contract.metric_semantics_profile, "euclidean");
+    assert_eq!(contract.grouping_functional, "euclidean-centroid-distance");
+    assert_eq!(contract.dispersion_functional, "mean-squared-radius");
+    assert_eq!(contract.metric_compatibility_rule, "closed-profile-v1");
     assert_eq!(contract.beta_threshold, 1.25);
     assert_eq!(contract.section4_source_label, "fixture-leaf-stage-profile");
     assert_eq!(
@@ -2997,6 +3002,12 @@ fn val_stream_eval_046_section5_campaign_reports_hierarchy_metrics_for_multiple_
             .iter()
             .all(|pair| pair.build_throughput_leaf_nodes_per_second >= 0.0)
     );
+    assert!(report.pair_reports.iter().all(|pair| {
+        pair.metric_semantics_consistency_result
+            == Section5MetricSemanticsConsistencyResult::Consistent
+            && pair.effective_grouping_functional.as_deref() == Some("euclidean-centroid-distance")
+            && pair.effective_dispersion_functional.as_deref() == Some("mean-squared-radius")
+    }));
     assert!(report.pair_reports.iter().all(|pair| {
         pair.gate_results
             .iter()
@@ -3057,6 +3068,18 @@ fn val_stream_eval_048_section5_reports_preserve_cross_stage_traceability_and_ar
         report.pair_reports[0].originating_section4_source_label,
         "fixture-leaf-stage-profile"
     );
+    assert_eq!(
+        report.pair_reports[0]
+            .effective_grouping_functional
+            .as_deref(),
+        Some("euclidean-centroid-distance")
+    );
+    assert_eq!(
+        report.pair_reports[0]
+            .effective_dispersion_functional
+            .as_deref(),
+        Some("mean-squared-radius")
+    );
     assert!(
         artifacts
             .carry_forward_summary
@@ -3086,6 +3109,70 @@ fn val_stream_eval_049_section5_reports_keep_later_phase_obligations_deferred() 
     }));
     assert!(report.remaining_deferred_goals.iter().any(|goal| {
         goal.deferred_id == "section5-deferred-persistence" && goal.reason.contains("serialization")
+    }));
+}
+
+#[test]
+fn val_stream_eval_050_section5_executes_supported_non_euclidean_semantics_and_rejects_invalid_contracts()
+ {
+    let strategies = resolve_registered_hierarchy_strategies(&[
+        "recursive-top-down".to_string(),
+        "greedy-pack".to_string(),
+    ])
+    .unwrap();
+    let supported_report = run_section5_campaign(
+        &strict_alignment_nonzero_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_cosine_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+
+    assert!(supported_report.pair_reports.iter().all(|pair| {
+        pair.metric_semantics_consistency_result
+            == Section5MetricSemanticsConsistencyResult::Consistent
+            && pair.effective_grouping_functional.as_deref() == Some("cosine-centroid-distance")
+            && pair.effective_dispersion_functional.as_deref() == Some("mean-cosine-deviation")
+    }));
+
+    let mut inconsistent_contract = section5_cosine_hierarchy_contract();
+    inconsistent_contract.grouping_functional = "euclidean-centroid-distance".into();
+    let inconsistent_report = run_section5_campaign(
+        &strict_alignment_nonzero_profile(),
+        &balanced_and_skewed_candidates(),
+        &inconsistent_contract,
+        &strategies,
+    )
+    .unwrap();
+
+    assert!(inconsistent_report.pair_reports.iter().all(|pair| {
+        pair.metric_semantics_consistency_result
+            == Section5MetricSemanticsConsistencyResult::InconsistentDeclaration
+            && matches!(pair.run_status, Section5PairRunStatus::GateFailed)
+            && pair
+                .gate_results
+                .iter()
+                .any(|gate| gate.gate_id == "metric-semantics-compatibility")
+    }));
+
+    let mut unsupported_contract = section5_cosine_hierarchy_contract();
+    unsupported_contract.metric_semantics_profile = "chebyshev".into();
+    let unsupported_report = run_section5_campaign(
+        &strict_alignment_nonzero_profile(),
+        &balanced_and_skewed_candidates(),
+        &unsupported_contract,
+        &strategies,
+    )
+    .unwrap();
+
+    assert!(unsupported_report.pair_reports.iter().all(|pair| {
+        pair.metric_semantics_consistency_result
+            == Section5MetricSemanticsConsistencyResult::UnsupportedDeclaration
+            && matches!(pair.run_status, Section5PairRunStatus::GateFailed)
+            && pair
+                .gate_results
+                .iter()
+                .any(|gate| gate.gate_id == "metric-semantics-compatibility")
     }));
 }
 

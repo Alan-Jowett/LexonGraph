@@ -750,6 +750,11 @@ The hierarchy-strategy registration surface remains evaluator-owned and does not
 widen the shared streaming clustering trainer/classifier boundary that produced
 the leaf-stage outputs.
 
+When a strategy uses metric-sensitive grouping behavior such as nearest-centroid
+packing or metric-dependent ordering, the strategy executes through evaluator-
+owned metric-semantics helpers selected from the shared section-5 contract
+rather than hard-wiring Euclidean-only grouping behavior.
+
 ### DSG-STREAM-EVAL-039 `Shared hierarchy-stage contract`
 
 The evaluator defines a shared section-5 hierarchy-stage contract per compared
@@ -760,11 +765,18 @@ That contract records:
 - the originating section-4 survivor identities and artifact references
 - the fixed `f_min` and `f_max` bounds
 - the declared depth-bound semantics and theoretical-bound interpretation
+- the grouping-distance or equivalent ordering functional used by metric-
+  sensitive hierarchy-construction decisions
 - the compatible dispersion functional used for refinement checks
 - the declared `beta` threshold
 - the declared penultimate-layer `epsilon` exception and its admissibility
   conditions
 - the hierarchy-stage build-throughput and memory-reporting semantics
+
+The same contract also carries a deterministic compatibility rule that states
+which grouping functionals and refinement-dispersion functionals are valid for
+the declared metric semantics. Unsupported or inconsistent combinations are
+rejected before pair execution begins.
 
 ### DSG-STREAM-EVAL-040 `Hierarchy-stage pair execution`
 
@@ -776,8 +788,13 @@ That evidence surface includes:
 - fanout compliance
 - detection of single-child internal nodes
 - depth relative to the declared bound
-- per-edge refinement coefficients
+- per-edge refinement coefficients computed with the declared compatible
+  dispersion functional
 - recorded uses of the declared `epsilon` exception
+- the effective grouping functional used by metric-sensitive strategy decisions
+- the effective refinement-dispersion functional used by `beta` and
+  `epsilon`-gated checks
+- the pair's metric-semantics consistency result
 - hierarchy-stage build-throughput and peak-memory reporting
 
 ### DSG-STREAM-EVAL-041 `Hierarchy-stage hard gates`
@@ -791,6 +808,11 @@ refinement contract outside the admitted `epsilon` scope, or apply the
 `epsilon` exception outside its declared penultimate-layer admissibility
 conditions.
 
+The same hard-gate path rejects pairs whose declared grouping functional or
+refinement-dispersion functional is unsupported for the selected metric
+semantics or whose declared combination fails the contract's deterministic
+compatibility rule.
+
 ### DSG-STREAM-EVAL-042 `Cross-stage provenance and carry-forward`
 
 Hierarchy-stage reports retain explicit traceability to the originating
@@ -801,6 +823,11 @@ the leaf-stage inputs consumed by each compared hierarchy-stage pair.
 The same artifact model emits a deterministic carry-forward summary identifying
 which leaf-strategy × hierarchy-strategy pairs remain eligible for the later
 parent-summary and routing phases.
+
+The same artifact model also records the effective grouping functional,
+effective refinement-dispersion functional, and metric-semantics consistency
+result used by each compared pair so non-Euclidean section-5 execution is
+auditable rather than implicit.
 
 ### DSG-STREAM-EVAL-043 `Remaining deferred hierarchy obligations`
 

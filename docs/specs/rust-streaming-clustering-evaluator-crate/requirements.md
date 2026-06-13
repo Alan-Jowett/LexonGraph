@@ -952,6 +952,13 @@ section-5 comparison that accepts the surviving section-4 leaf-stage outputs as
 its inputs and does not require a broader candidate API than the shared
 streaming clustering contract used to produce those leaf-stage outputs.
 
+The registered section-5 hierarchy strategies shall execute under the shared
+section-5 metric-semantics contract rather than hard-wiring Euclidean-only
+grouping behavior. When a hierarchy strategy uses nearest-centroid packing,
+ordering, or any other metric-sensitive grouping decision, the evaluator shall
+apply the grouping functional declared by the section-5 hierarchy-stage
+benchmark contract.
+
 At minimum, the registered section-5 hierarchy strategies shall support the
 research-plan comparison families of:
 
@@ -972,11 +979,19 @@ At minimum, that contract shall declare:
   suite artifacts from which they were derived
 - the fixed `f_min` and `f_max` bounds used for hierarchy construction
 - the depth-bound semantics and theoretical-bound formula used for comparison
+- the grouping-distance or equivalent ordering functional used for section-5
+  hierarchy construction decisions
 - the compatible dispersion functional used to interpret refinement checks
 - the declared `beta` refinement threshold
 - the declared penultimate-layer `epsilon` exception and its admissibility
   conditions
 - the hierarchy-stage build-throughput and memory-reporting semantics
+
+The contract shall also declare the deterministic compatibility rule that ties
+the grouping functional and refinement-dispersion functional back to the
+benchmark-declared metric semantics. If the declared combination is unsupported
+or internally inconsistent, the evaluator shall reject the contract
+deterministically before pair execution begins.
 
 ### REQ-STREAM-EVAL-056
 
@@ -989,8 +1004,14 @@ At minimum, the direct section-5 measurements shall report:
 - fanout compliance against the declared `f_min` and `f_max`
 - absence of single-child internal nodes
 - depth relative to the declared theoretical bound
-- per-edge refinement coefficients `beta = Disp(C) / Disp(P)`
+- per-edge refinement coefficients `beta = Disp(C) / Disp(P)` computed with the
+  declared compatible dispersion functional
 - any use of the declared penultimate-layer `epsilon` exception
+- the effective grouping functional used by any metric-sensitive hierarchy
+  strategy decisions
+- the effective refinement-dispersion functional used by `beta` and
+  `epsilon`-gated checks
+- the reported metric-semantics consistency result for the compared pair
 - hierarchy-stage build throughput and peak build memory
 
 ### REQ-STREAM-EVAL-057
@@ -1008,6 +1029,10 @@ At minimum, this revision shall reject pairs that:
   `epsilon` exception scope
 - apply the `epsilon` exception outside its declared penultimate-layer
   admissibility conditions
+- require a grouping functional or refinement-dispersion functional that the
+  evaluator does not support for the declared section-5 metric semantics
+- declare a grouping-functional and refinement-dispersion-functional
+  combination that fails the contract's deterministic compatibility rule
 
 ### REQ-STREAM-EVAL-058
 
@@ -1021,6 +1046,9 @@ At minimum, the hierarchy-stage artifact set shall:
   artifact for each compared pair
 - preserve the provenance needed to reconstruct the leaf-stage inputs consumed
   by hierarchy construction
+- identify the effective grouping functional and refinement-dispersion
+  functional used for the pair together with the metric-semantics consistency
+  result
 - publish the resulting carry-forward decision as a deterministic hierarchy-
   stage pair summary for later parent-summary and routing phases
 
