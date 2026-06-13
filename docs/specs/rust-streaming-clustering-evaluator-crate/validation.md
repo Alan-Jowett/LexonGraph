@@ -659,6 +659,19 @@ forward.
 
 **Traces to:** REQ-STREAM-EVAL-058
 
+### VAL-STREAM-EVAL-049
+
+Inspect one hierarchy-stage campaign report together with its deferred-goal
+records.
+
+**Pass condition:** even after section-5 execution is added, parent-summary
+quality, routing, beam-width, serialization, persistence, and broader
+service-level obligations remain explicitly deferred unless directly covered by
+another checked-in specification, and the hierarchy-stage direct measurements
+are presented only as staged evidence toward those later plan sections.
+
+**Traces to:** REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059
+
 ### VAL-STREAM-EVAL-050
 
 Run section-5 hierarchy-stage comparisons that exercise at least one supported
@@ -674,16 +687,3 @@ dispersion-functional declaration before a passing hierarchy-stage result can be
 recorded.
 
 **Traces to:** REQ-STREAM-EVAL-054, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-056, REQ-STREAM-EVAL-057
-
-### VAL-STREAM-EVAL-049
-
-Inspect one hierarchy-stage campaign report together with its deferred-goal
-records.
-
-**Pass condition:** even after section-5 execution is added, parent-summary
-quality, routing, beam-width, serialization, persistence, and broader
-service-level obligations remain explicitly deferred unless directly covered by
-another checked-in specification, and the hierarchy-stage direct measurements
-are presented only as staged evidence toward those later plan sections.
-
-**Traces to:** REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059

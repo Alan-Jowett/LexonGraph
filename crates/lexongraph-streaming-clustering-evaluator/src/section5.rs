@@ -223,7 +223,7 @@ struct BuiltNode {
     centroid: Vec<f32>,
     dispersion: f64,
     child_ids: Vec<String>,
-    member_embeddings: Vec<Vec<f32>>,
+    descendant_leaf_indices: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -855,7 +855,8 @@ fn build_hierarchy(
 ) -> Result<HierarchyBuild, String> {
     let mut nodes = leaf_summaries
         .iter()
-        .map(|summary| BuiltNode {
+        .enumerate()
+        .map(|(summary_index, summary)| BuiltNode {
             node_id: format!("leaf-{}", summary.cluster_id),
             kind: Section5HierarchyNodeKind::LeafCluster,
             member_count: summary.member_count,
@@ -864,7 +865,7 @@ fn build_hierarchy(
             centroid: summary.centroid.clone(),
             dispersion: summary.dispersion,
             child_ids: Vec::new(),
-            member_embeddings: summary.member_embeddings.clone(),
+            descendant_leaf_indices: vec![summary_index],
         })
         .collect::<Vec<_>>();
     let mut current = nodes.clone();
@@ -894,13 +895,13 @@ fn build_hierarchy(
                     .unwrap_or_default();
                 let mut sum = vec![0.0f64; dimension_count];
                 let mut child_ids = Vec::with_capacity(group.len());
-                let mut member_embeddings = Vec::new();
+                let mut descendant_leaf_indices = Vec::new();
                 for child in &group {
                     for (index, value) in child.sum.iter().enumerate() {
                         sum[index] += *value;
                     }
                     child_ids.push(child.node_id.clone());
-                    member_embeddings.extend(child.member_embeddings.iter().cloned());
+                    descendant_leaf_indices.extend(child.descendant_leaf_indices.iter().copied());
                 }
                 Ok::<BuiltNode, String>(BuiltNode {
                     node_id,
@@ -908,13 +909,14 @@ fn build_hierarchy(
                     member_count,
                     leaf_descendant_count,
                     centroid: centroid_from_sum(&sum, member_count),
-                    dispersion: dispersion_from_metric(
-                        &member_embeddings,
+                    dispersion: dispersion_from_descendant_leaves(
+                        &descendant_leaf_indices,
+                        leaf_summaries,
                         resolved_metric_semantics,
                     )?,
                     sum,
                     child_ids,
-                    member_embeddings,
+                    descendant_leaf_indices,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1281,8 +1283,8 @@ fn build_pair_report(
             internal_node_count: 0,
             max_depth: 0,
             theoretical_depth_bound: theoretical_depth_bound(
+                context.contract,
                 context.survivor.cluster_occupancies.len(),
-                context.contract.fanout_min,
             ),
             minimum_observed_fanout: 0,
             maximum_observed_fanout: 0,
@@ -1340,8 +1342,8 @@ fn metric_semantics_failure_pair_report(
         internal_node_count: 0,
         max_depth: 0,
         theoretical_depth_bound: theoretical_depth_bound(
+            contract,
             survivor.cluster_occupancies.len(),
-            contract.fanout_min,
         ),
         minimum_observed_fanout: 0,
         maximum_observed_fanout: 0,
@@ -1413,7 +1415,7 @@ fn analyze_hierarchy(
     let mut fanout_bounds_passed = true;
     let mut no_single_child_internal_nodes = true;
     let mut beta_threshold_passed = true;
-    let epsilon_scope_passed = true;
+    let mut epsilon_scope_passed = true;
     let mut refinement_edge_count = 0usize;
     let mut max_observed_beta = 0.0f64;
     let mut epsilon_exception_use_count = 0usize;
@@ -1453,6 +1455,9 @@ fn analyze_hierarchy(
                     let beta_requires_exception = beta > contract.beta_threshold;
                     let epsilon_exception_applied =
                         beta_requires_exception && epsilon_scope_allowed;
+                    if epsilon_exception_applied && !epsilon_scope_allowed {
+                        epsilon_scope_passed = false;
+                    }
                     if beta_requires_exception && !epsilon_scope_allowed {
                         beta_threshold_passed = false;
                         beta_violation_outside_epsilon_scope_count += 1;
@@ -1498,7 +1503,7 @@ fn analyze_hierarchy(
         .iter()
         .filter(|node| matches!(node.kind, Section5HierarchyNodeKind::LeafCluster))
         .count();
-    let theoretical_depth_bound = theoretical_depth_bound(leaf_cluster_count, contract.fanout_min);
+    let theoretical_depth_bound = theoretical_depth_bound(contract, leaf_cluster_count);
     let depth_bound_passed = overall_max_depth <= theoretical_depth_bound;
 
     HierarchyAnalysis {
@@ -1671,10 +1676,16 @@ fn assign_depths(
     }
 }
 
-fn theoretical_depth_bound(leaf_cluster_count: usize, fanout_min: usize) -> usize {
+fn theoretical_depth_bound(
+    contract: &Section5HierarchyContract,
+    leaf_cluster_count: usize,
+) -> usize {
     if leaf_cluster_count <= 1 {
         return 0;
     }
+    let fanout_min = match contract.depth_bound_policy {
+        Section5DepthBoundPolicy::CeilLogByMinFanout => contract.fanout_min,
+    };
     let mut covered = 1usize;
     let mut depth = 0usize;
     while covered < leaf_cluster_count {
@@ -1700,6 +1711,26 @@ fn dispersion_from_metric(
         }
         Section5ResolvedMetricSemanticsKind::Cosine => mean_cosine_deviation(member_embeddings),
     }
+}
+
+fn dispersion_from_descendant_leaves(
+    descendant_leaf_indices: &[usize],
+    leaf_summaries: &[LeafClusterSummary],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> Result<f64, String> {
+    let member_embeddings = descendant_leaf_indices
+        .iter()
+        .map(|index| {
+            leaf_summaries
+                .get(*index)
+                .ok_or_else(|| format!("missing descendant leaf summary at index {index}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flat_map(|summary| summary.member_embeddings.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    dispersion_from_metric(&member_embeddings, resolved_metric_semantics)
 }
 
 fn beta_for_edge(child_dispersion: f64, parent_dispersion: f64) -> f64 {
