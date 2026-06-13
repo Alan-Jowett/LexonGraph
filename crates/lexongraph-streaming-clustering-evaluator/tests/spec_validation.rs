@@ -30,11 +30,13 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4ExperimentTrackContract, Section4FrozenContractItem,
     Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
-    Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec, SharedBalanceConstraints,
-    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
-    resolve_registered_candidates, run_evaluation_campaign, run_section4_suite,
-    section4_family_candidate_names, write_section4_suite_artifacts,
+    Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec, Section5PairRunStatus,
+    SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
+    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
+    emit_section5_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    registered_hierarchy_strategy_names, resolve_registered_candidates,
+    resolve_registered_hierarchy_strategies, run_evaluation_campaign, run_section4_suite,
+    run_section5_campaign, section4_family_candidate_names, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -42,8 +44,8 @@ use support::{
     duplicate_evaluation_entities_block_store_profile, duplicate_source_id_profile,
     empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
     missing_synthetic_metadata_key_profile, nondeterministic_candidate,
-    shared_contract_failure_candidate, strict_alignment_profile, synthetic_padding_profile,
-    wrong_entity_count_block_store_profile,
+    section5_hierarchy_contract, shared_contract_failure_candidate, strict_alignment_profile,
+    synthetic_padding_profile, wrong_entity_count_block_store_profile,
 };
 use tempfile::tempdir;
 
@@ -2917,6 +2919,174 @@ fn regression_section4_suite_rejects_bruteforce_ground_truth_on_large_corpora() 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("brute-force exact neighbors"))
     );
+}
+
+#[test]
+fn val_stream_eval_044_section5_hierarchy_strategy_registration_uses_surviving_leaf_outputs() {
+    let names = registered_hierarchy_strategy_names();
+
+    assert_eq!(
+        names,
+        vec![
+            "bottom-up-agglomeration",
+            "recursive-top-down",
+            "greedy-pack",
+            "hybrid-top-down-bottom-up"
+        ]
+    );
+
+    let strategies = resolve_registered_hierarchy_strategies(&[
+        "bottom-up-agglomeration".to_string(),
+        "greedy-pack".to_string(),
+    ])
+    .unwrap();
+    assert_eq!(strategies.len(), 2);
+    assert_eq!(
+        strategies[0].identity.strategy_id,
+        "bottom-up-agglomeration"
+    );
+    assert_eq!(strategies[1].identity.strategy_id, "greedy-pack");
+}
+
+#[test]
+fn val_stream_eval_045_section5_hierarchy_contract_declares_required_bounds_and_refinement_rules() {
+    let contract = section5_hierarchy_contract();
+
+    assert_eq!(contract.fanout_min, 2);
+    assert_eq!(contract.fanout_max, 2);
+    assert_eq!(contract.beta_threshold, 1.25);
+    assert_eq!(contract.section4_source_label, "fixture-leaf-stage-profile");
+    assert_eq!(
+        contract.later_evaluation_line,
+        "future parent-summary and routing evaluator"
+    );
+}
+
+#[test]
+fn val_stream_eval_046_section5_campaign_reports_hierarchy_metrics_for_multiple_pairs() {
+    let strategies = resolve_registered_hierarchy_strategies(&[
+        "bottom-up-agglomeration".to_string(),
+        "greedy-pack".to_string(),
+    ])
+    .unwrap();
+    let report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+
+    assert_eq!(report.survivor_candidate_ids, vec!["balanced-threshold"]);
+    assert_eq!(report.pair_reports.len(), 2);
+    assert!(
+        report
+            .pair_reports
+            .iter()
+            .all(|pair| matches!(pair.run_status, Section5PairRunStatus::Succeeded))
+    );
+    assert!(
+        report
+            .pair_reports
+            .iter()
+            .all(|pair| pair.leaf_cluster_count == 2)
+    );
+    assert!(
+        report
+            .pair_reports
+            .iter()
+            .all(|pair| pair.build_throughput_leaf_nodes_per_second >= 0.0)
+    );
+    assert!(report.pair_reports.iter().all(|pair| {
+        pair.gate_results
+            .iter()
+            .any(|gate| gate.gate_id == "depth-bound")
+    }));
+}
+
+#[test]
+fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_pairs() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let mut contract = section5_hierarchy_contract();
+    contract.contract_id = "section5-impossible-fanout".into();
+    contract.fanout_min = 3;
+    contract.fanout_max = 3;
+
+    let report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &contract,
+        &strategies,
+    )
+    .unwrap();
+
+    assert_eq!(report.pair_reports.len(), 1);
+    let pair = &report.pair_reports[0];
+    assert!(matches!(pair.run_status, Section5PairRunStatus::GateFailed));
+    assert!(!pair.survived_required_gates);
+    assert!(
+        pair.gate_results
+            .iter()
+            .any(|gate| gate.detail.contains("fanout"))
+    );
+}
+
+#[test]
+fn val_stream_eval_048_section5_reports_preserve_cross_stage_traceability_and_artifacts() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let artifacts = emit_section5_campaign_artifacts(&report).unwrap();
+
+    assert_eq!(
+        report.section4_campaign.profile_id,
+        "strict-alignment-campaign"
+    );
+    assert_eq!(
+        report.pair_reports[0].originating_section4_profile_id,
+        "strict-alignment-campaign"
+    );
+    assert_eq!(
+        report.pair_reports[0].originating_section4_source_label,
+        "fixture-leaf-stage-profile"
+    );
+    assert!(
+        artifacts
+            .carry_forward_summary
+            .contents
+            .contains("balanced-threshold x bottom-up-agglomeration")
+    );
+}
+
+#[test]
+fn val_stream_eval_049_section5_reports_keep_later_phase_obligations_deferred() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+
+    assert!(report.remaining_deferred_goals.iter().any(|goal| {
+        goal.deferred_id == "section5-deferred-parent-summary"
+            && goal.reason.contains("parent-summary")
+    }));
+    assert!(report.remaining_deferred_goals.iter().any(|goal| {
+        goal.deferred_id == "section5-deferred-routing" && goal.reason.contains("routing")
+    }));
+    assert!(report.remaining_deferred_goals.iter().any(|goal| {
+        goal.deferred_id == "section5-deferred-persistence" && goal.reason.contains("serialization")
+    }));
 }
 
 #[test]

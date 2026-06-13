@@ -22,7 +22,8 @@ use lexongraph_streaming_clustering_evaluator::{
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
     EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind, LaterPhaseIdentity,
     LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
-    ReproducibilityMetadata, ResearchCoverage, SharedCandidateConfig, TrainingPassSource,
+    ReproducibilityMetadata, ResearchCoverage, Section5DepthBoundPolicy, Section5EpsilonPolicy,
+    Section5HierarchyContract, SharedCandidateConfig, TrainingPassSource,
     built_in_fixture_candidate,
 };
 use zip::CompressionMethod as ZipCompressionMethod;
@@ -495,6 +496,22 @@ pub fn shared_contract_failure_candidate() -> RegisteredCandidate {
 
 pub fn nondeterministic_candidate() -> RegisteredCandidate {
     built_in_fixture_candidate("nondeterministic-probe").unwrap()
+}
+
+pub fn section5_hierarchy_contract() -> Section5HierarchyContract {
+    Section5HierarchyContract {
+        contract_id: "section5-fixture-contract".into(),
+        fanout_min: 2,
+        fanout_max: 2,
+        depth_bound_policy: Section5DepthBoundPolicy::CeilLogByMinFanout,
+        dispersion_functional: "variance under the declared Euclidean metric".into(),
+        beta_threshold: 1.25,
+        epsilon_policy: Section5EpsilonPolicy {
+            parent_to_root_dispersion_ratio_max: 0.01,
+        },
+        section4_source_label: "fixture-leaf-stage-profile".into(),
+        later_evaluation_line: "future parent-summary and routing evaluator".into(),
+    }
 }
 
 pub fn crate_root() -> PathBuf {

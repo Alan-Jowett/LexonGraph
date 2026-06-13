@@ -5,7 +5,8 @@
 ## Status
 
 Draft design specification for a Rust crate that evaluates candidate streaming
-clustering implementations for LexonGraph at the leaf-partition boundary.
+clustering implementations for LexonGraph across the staged leaf-partition and
+hierarchy-construction boundaries.
 
 ## Design Goals
 
@@ -17,6 +18,8 @@ The crate design is intended to be:
 - comparative without redefining the shared candidate contract
 - able to score leaf occupancy, locality, and compression directly from final
   assignments
+- able to compare bounded hierarchy-construction strategies over surviving
+  leaf-stage outputs
 - able to consume large benchmark corpora through the existing block-store
   abstraction without embedding every workload entry in one profile document
 - honest about research goals that remain deferred at this boundary
@@ -28,6 +31,7 @@ The crate owns:
 - evaluator-owned benchmark profile types
 - evaluator-owned candidate registration and campaign orchestration types
 - evaluator-owned leaf membership materialization and scoring types
+- evaluator-owned hierarchy-construction materialization and scoring types
 - evaluator-owned provenance, result, and scorecard types
 - evaluator-owned gate and ranking logic
 - executable and reusable-library entry points for benchmark campaigns
@@ -51,13 +55,15 @@ workflow, and on `docs/specs/rust-streaming-clustering-crate/` for the
 candidate trainer/classifier boundary. For scalable corpus inputs, it also
 depends on `docs/specs/rust-block-storage-trait/` for the backend-neutral
 storage contract. The crate does not redefine those sources; it only defines
-the evaluator-owned leaf-stage evidence slice that is subordinate to them.
+the evaluator-owned section-4 leaf-stage and section-5 hierarchy-stage evidence
+slices that are subordinate to them.
 
 ### DSG-STREAM-EVAL-002 `Evaluator-owned boundary`
 
 The crate owns benchmark profile, campaign orchestration, provenance, result,
-scorecard, and leaf-membership scoring types. It does not own a broader
-candidate algorithm API than the shared streaming clustering contract.
+scorecard, leaf-membership scoring, and hierarchy-construction scoring types.
+It does not own a broader candidate algorithm API than the shared streaming
+clustering contract.
 
 ### DSG-STREAM-EVAL-003 `Executable plus reusable library surface`
 
@@ -91,6 +97,9 @@ including:
   material
 - the leaf model, including target leaf size `L`, the relationship among `N`,
   `K`, and expected occupancy, and the alignment policy
+- for hierarchy-stage campaigns, the hierarchy model, including fanout bounds,
+  depth-bound semantics, refinement semantics, and the penultimate-layer
+  `epsilon` exception policy
 - metric declarations, gate declarations, and comparative ranking weights
 - explicit deferred research-goal records for goals that cannot be proven at
   this boundary
@@ -108,6 +117,11 @@ For section-4 screening, the profile remains subordinate to a suite-owned
 experiment-track contract that freezes the metric family, dimensionality
 contract, alignment-policy family, quantization baseline policy, and declared
 execution environment so candidates cannot silently shift the comparison basis.
+
+For section-5 hierarchy-stage comparison, the profile also records the
+originating section-4 survivor identities and freezes the shared hierarchy
+contract so compared leaf-strategy × hierarchy-strategy pairs cannot silently
+shift fanout bounds, refinement semantics, or exception semantics.
 
 ### DSG-STREAM-EVAL-006 `Shared-profile campaign execution`
 
@@ -338,9 +352,9 @@ later comparative metrics beyond the gate that failed.
 ### DSG-STREAM-EVAL-018 `Explicit non-goal boundary`
 
 This revision does not model or claim proof of full end-to-end LexonGraph
-hierarchy properties requiring artifacts beyond the shared streaming clustering
-boundary, such as leaf-packing invariants, internal-node summaries, bounded tree
-shape, persisted-hierarchy routing, or durable storage semantics.
+hierarchy properties that still require artifacts beyond the staged leaf and
+hierarchy-construction boundaries, such as parent-summary accuracy or
+stability, persisted-hierarchy routing, or durable storage semantics.
 
 The future end-to-end evaluator on top of the streaming indexer and search
 specifications is called out as a separate later line rather than collapsed into
@@ -352,9 +366,9 @@ subordinate to the broader staged plan and end-state contract.
 The repository includes executable verification artifacts covering benchmark
 profile validation, candidate execution, observable determinism checking,
 inline-fixture and block-store-backed corpus-source handling, leaf membership
-materialization, occupancy/locality/compression scoring, comparative scorecard
-generation, failure classification, and deferred-goal reporting for the
-evaluator crate.
+materialization, occupancy/locality/compression scoring, hierarchy-stage
+construction scoring, comparative scorecard generation, failure classification,
+and deferred-goal reporting for the evaluator crate.
 
 ### DSG-STREAM-EVAL-020 `Section-4 benchmark suite layer`
 
@@ -369,11 +383,11 @@ reports.
 For the repository-owned checked-in section-4 screening panel in this revision,
 that fixed neighborhood size is top-10.
 
-This suite remains subordinate to the evaluator's leaf-stage boundary: it
-orchestrates comparative leaf-partition studies and does not widen the crate
-into a hierarchy-construction or routing evaluator. It is a repository-owned
-screening layer that feeds later plan phases rather than a replacement for
-those phases.
+This suite remains subordinate to the evaluator's section-4 leaf-stage
+boundary: it orchestrates comparative leaf-partition studies and feeds the
+crate's later hierarchy-stage workflow without replacing it. It is a
+repository-owned screening layer rather than the full staged evaluator by
+itself.
 
 The suite layer also owns deterministic invalid-configuration rejection for the
 malformed suite-level controls that would otherwise make asset generation
@@ -723,6 +737,82 @@ The checked-in workflow materializes that decision as a stable human-readable
 survivor summary listing carried-forward candidates, average ranking evidence,
 and rejected or non-carried-forward candidates.
 
+### DSG-STREAM-EVAL-038 `Hierarchy-strategy registration surface`
+
+Section-5 hierarchy construction uses an evaluator-owned registration surface
+that combines:
+
+- the surviving section-4 leaf-stage outputs
+- a named hierarchy strategy
+- the shared hierarchy-stage benchmark contract
+
+The hierarchy-strategy registration surface remains evaluator-owned and does not
+widen the shared streaming clustering trainer/classifier boundary that produced
+the leaf-stage outputs.
+
+### DSG-STREAM-EVAL-039 `Shared hierarchy-stage contract`
+
+The evaluator defines a shared section-5 hierarchy-stage contract per compared
+leaf-stage survivor set.
+
+That contract records:
+
+- the originating section-4 survivor identities and artifact references
+- the fixed `f_min` and `f_max` bounds
+- the declared depth-bound semantics and theoretical-bound interpretation
+- the compatible dispersion functional used for refinement checks
+- the declared `beta` threshold
+- the declared penultimate-layer `epsilon` exception and its admissibility
+  conditions
+- the hierarchy-stage build-throughput and memory-reporting semantics
+
+### DSG-STREAM-EVAL-040 `Hierarchy-stage pair execution`
+
+For each surviving leaf strategy × hierarchy strategy pair, the evaluator
+materializes a full tree and computes the direct section-5 evidence surface.
+
+That evidence surface includes:
+
+- fanout compliance
+- detection of single-child internal nodes
+- depth relative to the declared bound
+- per-edge refinement coefficients
+- recorded uses of the declared `epsilon` exception
+- hierarchy-stage build-throughput and peak-memory reporting
+
+### DSG-STREAM-EVAL-041 `Hierarchy-stage hard gates`
+
+The hierarchy-stage workflow applies deterministic hard-gate rejection before
+later pair ranking or carry-forward decisions.
+
+Pairs are rejected when they violate declared fanout bounds, emit single-child
+internal nodes, exceed the declared depth bound, violate the declared
+refinement contract outside the admitted `epsilon` scope, or apply the
+`epsilon` exception outside its declared penultimate-layer admissibility
+conditions.
+
+### DSG-STREAM-EVAL-042 `Cross-stage provenance and carry-forward`
+
+Hierarchy-stage reports retain explicit traceability to the originating
+section-4 survivor set. The artifact model therefore carries enough provenance
+to reconstruct which leaf-stage profile, suite, or survivor decision produced
+the leaf-stage inputs consumed by each compared hierarchy-stage pair.
+
+The same artifact model emits a deterministic carry-forward summary identifying
+which leaf-strategy × hierarchy-strategy pairs remain eligible for the later
+parent-summary and routing phases.
+
+### DSG-STREAM-EVAL-043 `Remaining deferred hierarchy obligations`
+
+Even after section-5 hierarchy construction is added, the crate still records
+parent-summary accuracy or stability, routing recall or latency, beam-width
+outcomes, serialization identity, persistence durability, and broader
+service-level behavior as deferred unless a later specification expands the
+boundary again.
+
+Section-5 direct hierarchy measurements therefore remain staged evidence toward
+the parent research goals rather than proof of the later plan sections.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -769,3 +859,9 @@ and rejected or non-carried-forward candidates.
 | DSG-STREAM-EVAL-035 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-043, REQ-STREAM-EVAL-051 |
 | DSG-STREAM-EVAL-036 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-044, REQ-STREAM-EVAL-045, REQ-STREAM-EVAL-052 |
 | DSG-STREAM-EVAL-037 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046, REQ-STREAM-EVAL-053 |
+| DSG-STREAM-EVAL-038 | REQ-STREAM-EVAL-054 |
+| DSG-STREAM-EVAL-039 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-055 |
+| DSG-STREAM-EVAL-040 | REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-056 |
+| DSG-STREAM-EVAL-041 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-057 |
+| DSG-STREAM-EVAL-042 | REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-058 |
+| DSG-STREAM-EVAL-043 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059 |

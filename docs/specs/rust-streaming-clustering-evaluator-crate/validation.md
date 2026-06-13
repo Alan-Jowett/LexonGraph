@@ -5,16 +5,17 @@
 ## Status
 
 Draft validation specification for a Rust crate that evaluates candidate
-streaming clustering implementations for LexonGraph at the leaf-partition
-boundary.
+streaming clustering implementations for LexonGraph across the staged leaf-
+partition and hierarchy-construction boundaries.
 
 ## Validation Scope
 
 These validation entries define the conformance surface for the new streaming
 clustering evaluator crate. They cover benchmark-profile definition, candidate
-execution, leaf membership scoring, comparative reporting, determinism checking,
-explicit deferred research-goal handling, and corpus sourcing through both
-inline fixtures and block-store-backed references.
+execution, leaf membership scoring, hierarchy-construction scoring,
+comparative reporting, determinism checking, explicit deferred research-goal
+handling, and corpus sourcing through both inline fixtures and block-store-
+backed references.
 
 ## Validation Entries
 
@@ -34,8 +35,9 @@ Inspect the crate's public surface and specification references.
 **Pass condition:** the crate remains subordinate to the clustering research
 documents and the shared streaming clustering contract while defining an
 evaluator-owned benchmark boundary rather than a broader candidate API, and the
-crate's leaf-stage scope limits only what it may claim directly rather than
-redefining the end-state requirements from `docs/research/clustering.md`.
+crate's staged section-4 and section-5 scope limits only what it may claim
+directly rather than redefining the end-state requirements from
+`docs/research/clustering.md`.
 
 **Traces to:** REQ-STREAM-EVAL-002, REQ-STREAM-EVAL-004
 
@@ -67,10 +69,10 @@ Inspect one benchmark profile definition.
 
 **Pass condition:** the profile fixes corpus identities, streaming pass inputs,
 classifier-side probe workloads, the declared source mode for each workload, the
-leaf model, metric declarations, gate declarations, comparative ranking
-weights, deferred research-goal records, any declared later-phase workload or
-artifact identities that section-4 must carry forward, and reproducibility
-metadata for one campaign.
+leaf model, any declared hierarchy model, metric declarations, gate
+declarations, comparative ranking weights, deferred research-goal records, any
+declared later-phase workload or artifact identities that section-4 or section-5
+must carry forward, and reproducibility metadata for one campaign.
 
 **Traces to:** REQ-STREAM-EVAL-006
 
@@ -226,12 +228,15 @@ requirement.
 Inspect the benchmark profile and scorecard against the clustering research
 documents.
 
-**Pass condition:** research goals requiring full hierarchy, sibling structure,
-routing, or durable index artifacts are recorded as deferred rather than
-claimed as fully proven by the streaming clustering evaluator alone, the future
-end-to-end evaluator is called out as a separate later line, and the deferred
-status is presented as staged evidence toward `docs/research/clustering.md`
-rather than as a narrowing of that parent requirement set.
+**Pass condition:** research goals that remain beyond the staged section-4 and
+section-5 evaluator boundary, including parent-summary quality, routing, or
+durable index artifacts, are recorded as deferred rather than claimed as fully
+proven by the streaming clustering evaluator alone; direct section-5 hierarchy
+measurements are reported only for the bounded-tree and refinement checks they
+actually cover; the future end-to-end evaluator is called out as a separate
+later line; and deferred status is presented as staged evidence toward
+`docs/research/clustering.md` rather than as a narrowing of that parent
+requirement set.
 
 **Traces to:** REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021
 
@@ -242,9 +247,9 @@ Inspect repository verification artifacts for the new crate.
 **Pass condition:** executable tests exist for benchmark-profile validation,
 candidate execution, inline-fixture and block-store-backed corpus-source
 handling, leaf membership materialization, occupancy/locality/compression
-scoring, repeated-run determinism checks, comparative scorecard generation,
-failure classification, deferred-goal reporting, and archive-backed overlay
-resolution.
+scoring, hierarchy-stage construction scoring, repeated-run determinism checks,
+comparative scorecard generation, failure classification, deferred-goal
+reporting, and archive-backed overlay resolution.
 
 **Traces to:** REQ-STREAM-EVAL-016, REQ-STREAM-EVAL-022, REQ-STREAM-EVAL-023, REQ-STREAM-EVAL-024
 
@@ -574,3 +579,78 @@ for the checked-in canonical section-4 run, and those artifacts remain
 consistent with the current checked-in suite manifest and candidate identities.
 
 **Traces to:** REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-046, REQ-STREAM-EVAL-053
+
+### VAL-STREAM-EVAL-044
+
+Inspect the evaluator's hierarchy-strategy discovery and registration surface.
+
+**Pass condition:** the evaluator can register section-5 hierarchy strategies
+over surviving section-4 leaf-stage outputs without widening the shared
+streaming clustering trainer/classifier contract that produced those outputs.
+
+**Traces to:** REQ-STREAM-EVAL-054
+
+### VAL-STREAM-EVAL-045
+
+Inspect one section-5 hierarchy-stage benchmark contract.
+
+**Pass condition:** the contract identifies the originating section-4 survivor
+set, fixes `f_min` and `f_max`, defines the depth-bound semantics and
+theoretical-bound interpretation, declares the compatible dispersion
+functional, declares the `beta` threshold, declares the penultimate-layer
+`epsilon` exception policy, and fixes the hierarchy-stage build-throughput and
+memory-reporting semantics shared by all compared pairs.
+
+**Traces to:** REQ-STREAM-EVAL-055
+
+### VAL-STREAM-EVAL-046
+
+Run one section-5 hierarchy-stage comparison over more than one leaf-strategy ×
+hierarchy-strategy pair.
+
+**Pass condition:** each compared pair builds a full tree under the shared
+hierarchy-stage contract and reports fanout compliance, absence of single-child
+internal nodes, depth relative to the declared bound, per-edge refinement
+coefficients, uses of the declared `epsilon` exception, and hierarchy-stage
+build throughput plus peak build memory.
+
+**Traces to:** REQ-STREAM-EVAL-056
+
+### VAL-STREAM-EVAL-047
+
+Run section-5 hierarchy-stage comparisons that trigger hierarchy-shape and
+refinement failures.
+
+**Pass condition:** the workflow deterministically rejects pairs that violate
+fanout bounds, emit single-child internal nodes, exceed the declared depth
+bound, violate the declared `beta` threshold outside the admitted `epsilon`
+scope, or apply the `epsilon` exception outside its declared penultimate-layer
+admissibility conditions.
+
+**Traces to:** REQ-STREAM-EVAL-057
+
+### VAL-STREAM-EVAL-048
+
+Inspect one completed section-5 hierarchy-stage report and carry-forward
+summary.
+
+**Pass condition:** every compared pair traces back to the originating section-4
+profile, suite, or survivor-decision artifact; the hierarchy-stage artifact set
+preserves the provenance needed to reconstruct the leaf-stage inputs consumed by
+hierarchy construction; and the workflow emits a deterministic hierarchy-stage
+pair summary identifying which pairs carry forward.
+
+**Traces to:** REQ-STREAM-EVAL-058
+
+### VAL-STREAM-EVAL-049
+
+Inspect one hierarchy-stage campaign report together with its deferred-goal
+records.
+
+**Pass condition:** even after section-5 execution is added, parent-summary
+quality, routing, beam-width, serialization, persistence, and broader
+service-level obligations remain explicitly deferred unless directly covered by
+another checked-in specification, and the hierarchy-stage direct measurements
+are presented only as staged evidence toward those later plan sections.
+
+**Traces to:** REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059

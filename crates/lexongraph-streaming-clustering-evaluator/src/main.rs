@@ -6,12 +6,14 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use lexongraph_streaming_clustering_evaluator::{
     BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
-    emit_campaign_artifacts, generate_section4_suite_assets,
-    materialize_section4_archive_from_json, registered_candidate_names,
+    Section5HierarchyContract, emit_campaign_artifacts, emit_section5_campaign_artifacts,
+    generate_section4_suite_assets, materialize_section4_archive_from_json,
+    registered_candidate_names, registered_hierarchy_strategy_names,
     resolve_profile_block_store_paths, resolve_registered_candidates,
-    resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
-    run_evaluation_campaign, run_section4_suite, write_campaign_artifacts,
-    write_section4_suite_artifacts,
+    resolve_registered_hierarchy_strategies, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_evaluation_campaign, run_section4_suite,
+    run_section5_campaign, write_campaign_artifacts, write_section4_suite_artifacts,
+    write_section5_campaign_artifacts,
 };
 
 #[derive(Parser, Debug)]
@@ -26,6 +28,8 @@ enum Command {
     /// List the registered candidates that this executable can run.
     #[command(alias = "list-fixture-candidates")]
     ListCandidates,
+    /// List the registered hierarchy strategies that section-5 execution can run.
+    ListHierarchyStrategies,
     /// Run one benchmark profile against one or more registered candidates.
     Run {
         #[arg(long, value_name = "PATH")]
@@ -62,6 +66,19 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
     },
+    /// Run section-5 hierarchy construction over the survivors from a leaf-stage profile.
+    RunSection5 {
+        #[arg(long, value_name = "PATH")]
+        profile: PathBuf,
+        #[arg(long = "candidate", value_name = "NAME", required = true)]
+        candidates: Vec<String>,
+        #[arg(long, value_name = "PATH")]
+        contract: PathBuf,
+        #[arg(long = "hierarchy-strategy", value_name = "NAME", required = true)]
+        hierarchy_strategies: Vec<String>,
+        #[arg(long, value_name = "PATH")]
+        output_dir: PathBuf,
+    },
 }
 
 fn main() {
@@ -76,6 +93,12 @@ fn run() -> Result<(), EvaluatorError> {
         Command::ListCandidates => {
             for candidate in registered_candidate_names() {
                 println!("{candidate}");
+            }
+            Ok(())
+        }
+        Command::ListHierarchyStrategies => {
+            for strategy in registered_hierarchy_strategy_names() {
+                println!("{strategy}");
             }
             Ok(())
         }
@@ -184,6 +207,62 @@ fn run() -> Result<(), EvaluatorError> {
             println!("{}", artifacts.scorecard_path.display());
             println!("{}", artifacts.survivor_decision_path.display());
             for path in artifacts.profile_output_dirs {
+                println!("{}", path.display());
+            }
+            Ok(())
+        }
+        Command::RunSection5 {
+            profile,
+            candidates,
+            contract,
+            hierarchy_strategies,
+            output_dir,
+        } => {
+            let profile_path = profile;
+            let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
+                EvaluatorError::Io(format!(
+                    "failed to read benchmark profile {}: {error}",
+                    profile_path.display()
+                ))
+            })?;
+            let profile: BenchmarkProfile = serde_json::from_str(&profile).map_err(|error| {
+                EvaluatorError::Json(format!(
+                    "failed to parse benchmark profile {}: {error}",
+                    profile_path.display()
+                ))
+            })?;
+            let mut profile = profile;
+            if let Some(profile_dir) = profile_path.parent() {
+                resolve_profile_block_store_paths(&mut profile, profile_dir);
+            }
+
+            let contract_path = contract;
+            let contract = std::fs::read_to_string(&contract_path).map_err(|error| {
+                EvaluatorError::Io(format!(
+                    "failed to read section-5 hierarchy contract {}: {error}",
+                    contract_path.display()
+                ))
+            })?;
+            let contract: Section5HierarchyContract =
+                serde_json::from_str(&contract).map_err(|error| {
+                    EvaluatorError::Json(format!(
+                        "failed to parse section-5 hierarchy contract {}: {error}",
+                        contract_path.display()
+                    ))
+                })?;
+
+            let registered_candidates = resolve_registered_candidates(&candidates)?;
+            let registered_strategies =
+                resolve_registered_hierarchy_strategies(&hierarchy_strategies)?;
+            let report = run_section5_campaign(
+                &profile,
+                &registered_candidates,
+                &contract,
+                &registered_strategies,
+            )?;
+            let artifacts = emit_section5_campaign_artifacts(&report)?;
+            let paths = write_section5_campaign_artifacts(&output_dir, &artifacts)?;
+            for path in paths {
                 println!("{}", path.display());
             }
             Ok(())

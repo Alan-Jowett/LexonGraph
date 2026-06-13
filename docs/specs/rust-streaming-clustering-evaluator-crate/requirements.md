@@ -5,27 +5,32 @@
 ## Status
 
 Draft specification for a Rust crate that evaluates candidate streaming
-clustering implementations for LexonGraph at the leaf-partition boundary.
+clustering implementations for LexonGraph across the staged leaf-partition and
+hierarchy-construction boundaries.
 
 ## Scope
 
 This document specifies the crate-level requirements for a new Rust crate that:
 
 - provides a reusable executable benchmark harness for comparing candidate
-  streaming clustering implementations as leaf-partition realizations
+  streaming clustering implementations as leaf-partition realizations and for
+  comparing hierarchy-construction strategies over the surviving leaf-stage
+  outputs
 - reuses the shared trainer/classifier boundary defined by
   `docs/specs/rust-streaming-clustering-crate/`
 - aligns scalable corpus consumption with the repository's existing block-store
   abstraction rather than requiring monolithic profile-embedded JSON datasets
 - translates applicable intent from `docs/research/clustering.md` and
-  `docs/research/clustering_plan.md` into an evaluator-owned benchmark contract
-  for the section-4 leaf-stage screening slice without redefining the end-state
-  hierarchy requirements owned by `docs/research/clustering.md`
+  `docs/research/clustering_plan.md` into evaluator-owned benchmark contracts
+  for the section-4 leaf-stage screening slice and the section-5 hierarchy-
+  construction comparison slice without redefining the remaining end-state
+  requirements owned by `docs/research/clustering.md`
 
-This document defines the evaluator boundary, benchmark contract, campaign
-execution model, leaf-membership scoring surface, scorecard outputs, and
-failure taxonomy. It does not require a concrete clustering algorithm and does
-not redefine the shared streaming clustering contract.
+This document defines the evaluator boundary, benchmark contracts, campaign
+execution model, leaf-membership scoring surface, hierarchy-construction
+scoring surface, scorecard outputs, and failure taxonomy. It does not require
+a concrete clustering algorithm and does not redefine the shared streaming
+clustering contract.
 
 ## Terminology
 
@@ -34,8 +39,9 @@ into evaluation through the shared streaming clustering trainer/classifier
 boundary.
 
 `Benchmark profile` means the evaluator-owned description of the fixed corpora,
-pass plan, probe workloads, leaf-model declarations, metric declarations,
-gates, and ranking weights used for one comparative evaluation campaign.
+pass plan, probe workloads, leaf-model declarations, any hierarchy-model
+declarations, metric declarations, gates, and ranking weights used for one
+comparative evaluation campaign.
 
 `Corpus source` means the benchmark-declared mechanism by which the evaluator
 obtains the embeddings and related entity identities for a workload. In this
@@ -59,6 +65,12 @@ families are strict alignment and deterministic synthetic padding.
 entity-to-cluster assignments produced by replaying the benchmark corpus through
 the candidate's finished classifier.
 
+`Hierarchy strategy` means an evaluator-owned strategy for aggregating the
+surviving leaf-stage outputs into a bounded tree for section-5 comparison.
+
+`Hierarchy-stage pair` means one surviving section-4 leaf strategy combined with
+one registered hierarchy strategy under a shared section-5 benchmark contract.
+
 `Direct metric` means an evaluator result whose measured behavior is directly
 observable from the shared streaming clustering boundary and the benchmark
 fixtures.
@@ -69,8 +81,8 @@ shared streaming clustering boundary alone.
 
 `Deferred research requirement` means one requirement from
 `docs/research/clustering.md` that this evaluator revision records as
-out-of-scope because proving it requires artifacts outside the shared streaming
-clustering boundary.
+out-of-scope because proving it requires artifacts outside the staged
+evaluation boundaries owned by this crate.
 
 ## Requirements
 
@@ -78,7 +90,8 @@ clustering boundary.
 
 The repository shall define a dedicated Rust crate at
 `crates/lexongraph-streaming-clustering-evaluator` that owns the reusable
-streaming clustering leaf-partition evaluation boundary for LexonGraph.
+streaming clustering staged leaf-partition and hierarchy-construction
+evaluation boundary for LexonGraph.
 
 ### REQ-STREAM-EVAL-002
 
@@ -96,19 +109,20 @@ If those sources appear to conflict, `docs/research/clustering.md` remains
 authoritative for the end-state black-box requirements, and
 `docs/research/clustering_plan.md` remains authoritative for the staged
 benchmark workflow that serves those requirements. The narrower evaluator scope
-only limits what this crate may directly prove or claim at the leaf-partition
-boundary; it does not relax, replace, or reinterpret the parent research
-requirements. The shared streaming clustering specification remains
-authoritative for the candidate integration surface, and the block-storage
-trait specification remains authoritative for the scalable external
-corpus-loading contract.
+only limits what this crate may directly prove or claim at the section-4 leaf-
+stage and section-5 hierarchy-construction boundaries; it does not relax,
+replace, or reinterpret the parent research requirements. The shared streaming
+clustering specification remains authoritative for the candidate integration
+surface, and the block-storage trait specification remains authoritative for the
+scalable external corpus-loading contract.
 
 ### REQ-STREAM-EVAL-003
 
 The crate shall provide a reusable executable benchmark harness, with a
 supporting reusable library surface, for running comparative evaluations of one
 or more candidate streaming clustering implementations as leaf-partition
-realizations.
+realizations and for running comparative evaluations of hierarchy-construction
+strategies over the surviving section-4 leaf-stage outputs.
 
 ### REQ-STREAM-EVAL-004
 
@@ -138,6 +152,10 @@ campaign:
 - the leaf model, including target leaf size `L`, the relationship between
   observed item count `N`, target cluster count `K`, and expected occupancy, and
   the alignment policy
+- for hierarchy-stage campaigns, the hierarchy model, including the declared
+  `f_min` and `f_max`, depth-bound semantics, the compatible dispersion
+  functional for refinement checks, and the declared penultimate-layer
+  `epsilon` exception policy
 - metric declarations and whether each metric is direct or proxy
 - must-pass gates and any comparative ranking weights
 - deferred research-goal records for requirements that cannot be proven at this
@@ -155,6 +173,12 @@ consistent with the repository-owned benchmark-suite contract for the selected
 experiment track rather than allowing per-candidate reinterpretation of metric
 family, dimensionality contract, quantization baseline policy, alignment-policy
 family, or declared execution environment.
+
+For section-5 hierarchy-stage campaigns, the fixed campaign contract shall
+remain consistent across all compared hierarchy-stage pairs derived from the
+same surviving section-4 leaf-stage outputs rather than allowing pair-specific
+reinterpretation of fanout bounds, depth-bound semantics, refinement semantics,
+or exception policy.
 
 ### REQ-STREAM-EVAL-007
 
@@ -240,9 +264,10 @@ When a metric, gate, or deferred record corresponds to a frozen section-1
 benchmark-contract item, the evaluator shall also identify the later proof
 surface expected to discharge any deferred obligation.
 
-When a frozen benchmark-contract item is not directly measured during section-4
-screening, the evaluator shall still carry it forward as an explicit deferred
-proof obligation rather than dropping it from the campaign contract.
+When a frozen benchmark-contract item is not directly measured during the
+current evaluation stage, the evaluator shall still carry it forward as an
+explicit deferred proof obligation rather than dropping it from the campaign
+contract.
 
 ### REQ-STREAM-EVAL-014
 
@@ -254,6 +279,12 @@ The evaluator shall emit:
   comparative ranking for surviving candidates
 - for checked-in section-4 suite execution, a human-readable survivor-decision
   artifact summarizing which candidates carry forward and why
+
+For section-5 hierarchy-stage execution, these outputs shall additionally
+identify the originating section-4 survivor set and the compared hierarchy-stage
+pairs and shall emit a human-readable carry-forward artifact summarizing which
+leaf-strategy × hierarchy-strategy pairs remain eligible for the later
+parent-summary and routing phases.
 
 These outputs remain evaluator-owned and source-neutral: changing a workload
 from inline fixture data to a block-store-backed corpus reference shall change
@@ -288,7 +319,8 @@ success-shaped completed artifact set was exposed for the failed execution.
 The repository shall include executable verification artifacts that realize the
 validation plan for the streaming clustering evaluator crate, including both
 inline-fixture and block-store-backed corpus-source modes where this revision
-defines both.
+defines both and including any section-5 hierarchy-stage verification surfaces
+introduced by this revision.
 
 ### REQ-STREAM-EVAL-017
 
@@ -353,9 +385,9 @@ At minimum, the declared comparison shall define:
 ### REQ-STREAM-EVAL-021
 
 This revision shall not claim to prove full end-to-end LexonGraph hierarchy
-conformance for properties that require artifacts outside the shared streaming
-clustering boundary, including leaf packing, internal-node summaries, bounded
-fanout and depth, search routing over a persisted hierarchy, artifact
+conformance for properties that still require artifacts outside the staged
+section-4 and section-5 evaluator boundaries, including parent-summary accuracy
+or stability, search routing over a persisted hierarchy, artifact
 serialization, and durable index build semantics.
 
 This revision also shall not define the future end-to-end evaluator layered on
@@ -373,11 +405,17 @@ contract freezes them for the experiment track:
 - the declared routing target, including any threshold values, and the routing-
   procedure assumptions needed to interpret that target
 - any declared beam-width policy that later routing phases must evaluate
-- bounded fanout and depth constraints
 - parent-summary accuracy and stability obligations
 - serialization round-trip and persisted-artifact durability obligations
 - any declared multi-thread reproducibility obligation that exceeds the direct
   section-4 observable boundary
+
+For section-5 hierarchy-stage execution in this revision, the evaluator shall
+preserve as later-phase proof obligations any declared parent-summary accuracy
+or stability target, routing target, routing-procedure assumption, beam-width
+policy, serialization or persistence obligation, or multi-thread
+reproducibility obligation that the hierarchy-stage campaign does not directly
+prove.
 
 ### REQ-STREAM-EVAL-022
 
@@ -907,6 +945,100 @@ The checked-in section-4 workflow in this revision shall publish the resulting
 carry-forward decision as a checked-in survivor-decision artifact produced from
 the canonical section-4 suite run.
 
+### REQ-STREAM-EVAL-054
+
+The evaluator shall define a hierarchy-strategy registration surface for
+section-5 comparison that accepts the surviving section-4 leaf-stage outputs as
+its inputs and does not require a broader candidate API than the shared
+streaming clustering contract used to produce those leaf-stage outputs.
+
+At minimum, the registered section-5 hierarchy strategies shall support the
+research-plan comparison families of:
+
+- bottom-up agglomeration with bounded fanout
+- recursive top-down partitioning over leaf summaries
+- greedy pack-by-centroid nearest grouping
+- a hybrid strategy that combines top-down coarse partitioning with lower-level
+  bottom-up grouping
+
+### REQ-STREAM-EVAL-055
+
+The evaluator shall define a shared section-5 hierarchy-stage benchmark
+contract for each compared leaf-strategy survivor set.
+
+At minimum, that contract shall declare:
+
+- the originating section-4 survivor identities and the leaf-stage profile or
+  suite artifacts from which they were derived
+- the fixed `f_min` and `f_max` bounds used for hierarchy construction
+- the depth-bound semantics and theoretical-bound formula used for comparison
+- the compatible dispersion functional used to interpret refinement checks
+- the declared `beta` refinement threshold
+- the declared penultimate-layer `epsilon` exception and its admissibility
+  conditions
+- the hierarchy-stage build-throughput and memory-reporting semantics
+
+### REQ-STREAM-EVAL-056
+
+For each surviving section-4 leaf strategy × registered hierarchy strategy
+pair, the evaluator shall execute a section-5 hierarchy-stage comparison that
+builds a full tree under the shared hierarchy-stage benchmark contract.
+
+At minimum, the direct section-5 measurements shall report:
+
+- fanout compliance against the declared `f_min` and `f_max`
+- absence of single-child internal nodes
+- depth relative to the declared theoretical bound
+- per-edge refinement coefficients `beta = Disp(C) / Disp(P)`
+- any use of the declared penultimate-layer `epsilon` exception
+- hierarchy-stage build throughput and peak build memory
+
+### REQ-STREAM-EVAL-057
+
+The section-5 hierarchy-stage workflow shall enforce deterministic hard-gate
+rejection for leaf-strategy × hierarchy-strategy pairs that violate the shared
+hierarchy-stage benchmark contract.
+
+At minimum, this revision shall reject pairs that:
+
+- violate the declared fanout bounds
+- emit one or more single-child internal nodes
+- exceed the declared depth bound
+- violate the declared `beta` refinement threshold outside the admitted
+  `epsilon` exception scope
+- apply the `epsilon` exception outside its declared penultimate-layer
+  admissibility conditions
+
+### REQ-STREAM-EVAL-058
+
+Section-5 hierarchy-stage reports and scorecards shall preserve explicit
+cross-stage traceability to the section-4 survivor set from which each compared
+pair was derived.
+
+At minimum, the hierarchy-stage artifact set shall:
+
+- identify the originating section-4 profile, suite, or survivor-decision
+  artifact for each compared pair
+- preserve the provenance needed to reconstruct the leaf-stage inputs consumed
+  by hierarchy construction
+- publish the resulting carry-forward decision as a deterministic hierarchy-
+  stage pair summary for later parent-summary and routing phases
+
+### REQ-STREAM-EVAL-059
+
+Even after section-5 hierarchy-stage execution is added, this revision shall
+continue to treat the following as deferred unless a later specification expands
+the evaluator boundary again:
+
+- parent-summary accuracy and stability comparison from section 6 of
+  `docs/research/clustering_plan.md`
+- routing recall, latency, and beam-width benchmarking from section 7
+- robustness, serialization, and persisted-artifact validation from section 8
+
+Section-5 direct hierarchy measurements shall therefore be reported as staged
+evidence toward the parent research goals rather than as proof of those later
+phases.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -915,15 +1047,15 @@ This crate does not define or own:
 - changes to the shared streaming clustering contract
 - the full LexonGraph indexing or search runtime
 - a canonical report schema shared with unrelated repository crates
-- proof of end-to-end hierarchical index conformance beyond the shared
-  streaming clustering boundary
+- proof of end-to-end hierarchical index conformance beyond the staged
+  evaluator boundaries defined by this crate
 - the future end-to-end evaluator over the indexer and search specifications
 - a new production storage backend or a widening of the parent `BlockStore`
   trait
 
 ## Relationship to Other Specifications
 
-This document creates a leaf-stage evaluator line layered on top of the shared
+This document creates a staged evaluator line layered on top of the shared
 streaming clustering trait boundary and motivated by the clustering research
 documents.
 

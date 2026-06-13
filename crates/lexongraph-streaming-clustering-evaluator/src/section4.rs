@@ -889,7 +889,7 @@ pub fn write_section4_suite_artifacts(
     })
 }
 
-fn measure_peak_build_memory<T>(run: impl FnOnce() -> T) -> (T, u64) {
+pub(crate) fn measure_peak_build_memory<T>(run: impl FnOnce() -> T) -> (T, u64) {
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     use std::sync::{
         Arc,
