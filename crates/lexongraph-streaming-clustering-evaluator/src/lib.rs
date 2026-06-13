@@ -11,6 +11,7 @@
 //! broadening the shared streaming clustering trainer/classifier contract.
 
 mod section4;
+mod section5;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -55,6 +56,17 @@ pub use section4::{
     resolve_profile_block_store_paths, resolve_registered_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths, run_section4_suite,
     write_section4_suite_artifacts,
+};
+pub use section5::{
+    RegisteredHierarchyStrategy, Section5CampaignArtifacts, Section5CampaignReport,
+    Section5DeferredGoalRecord, Section5DepthBoundPolicy, Section5EpsilonPolicy, Section5GateKind,
+    Section5GateResult, Section5GateStatus, Section5HierarchyContract, Section5HierarchyEdgeReport,
+    Section5HierarchyNodeKind, Section5HierarchyNodeReport, Section5HierarchyStrategyIdentity,
+    Section5HierarchyStrategyKind, Section5MetricSemanticsConsistencyResult, Section5PairReport,
+    Section5PairRunStatus, Section5RankedPair, emit_section5_campaign_artifacts,
+    registered_hierarchy_strategy_names, render_section5_carry_forward_summary,
+    render_section5_scorecard, resolve_registered_hierarchy_strategies, run_section5_campaign,
+    write_section5_campaign_artifacts,
 };
 
 pub type PassPlan = Vec<Vec<Embedding>>;
@@ -2342,6 +2354,20 @@ fn resolve_profile_inputs(
         evaluation_entities,
         source_reference_ids: source_reference_ids.into_keys().collect(),
     })
+}
+
+pub(crate) fn resolved_profile_evaluation_entities(
+    profile: &BenchmarkProfile,
+) -> Result<Vec<EvaluationEntity>, EvaluatorError> {
+    match resolve_profile_inputs(profile) {
+        Ok(resolved) => Ok(resolved.evaluation_entities),
+        Err(CandidateExecutionError::Candidate(error)) => {
+            Err(EvaluatorError::InvalidConfiguration(error.to_string()))
+        }
+        Err(CandidateExecutionError::CorpusSource(failure)) => Err(
+            EvaluatorError::InvalidConfiguration(structured_failure_detail(&failure)),
+        ),
+    }
 }
 
 fn evaluation_source_label(source: &EvaluationEntitySource) -> String {
