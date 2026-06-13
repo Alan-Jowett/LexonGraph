@@ -255,6 +255,8 @@ pub struct Section4SuiteRunArtifacts {
     pub profile_output_dirs: Vec<PathBuf>,
 }
 
+const SECTION4_CARRY_FORWARD_CANDIDATE_LIMIT: usize = 3;
+
 #[derive(Deserialize)]
 struct JsonArchiveEntity {
     entity_id: String,
@@ -471,6 +473,13 @@ pub fn generate_section4_suite_assets(
             })
             .collect(),
     };
+    let mut stored_manifest = stored_manifest;
+    relativize_later_phase_identity_asset_paths(
+        &mut stored_manifest
+            .experiment_track_contract
+            .later_phase_identities,
+        output_dir,
+    );
     std::fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&stored_manifest)
@@ -770,7 +779,7 @@ pub fn render_section4_survivor_decision(report: &Section4SuiteRunReport) -> Str
     });
     let carried_forward = eligible
         .iter()
-        .take(3)
+        .take(SECTION4_CARRY_FORWARD_CANDIDATE_LIMIT)
         .map(|(candidate_id, _)| candidate_id.clone())
         .collect::<Vec<_>>();
 
@@ -1959,6 +1968,19 @@ fn resolve_corpus_reference_paths(reference: &mut BlockStoreCorpusReference, bas
     }
 }
 
+fn relativize_later_phase_identity_asset_paths(
+    identities: &mut [LaterPhaseIdentity],
+    base_dir: &Path,
+) {
+    for identity in identities {
+        if let Some(asset_path) = &mut identity.asset_path
+            && let Ok(relative_path) = asset_path.strip_prefix(base_dir)
+        {
+            *asset_path = relative_path.to_path_buf();
+        }
+    }
+}
+
 pub fn resolve_section4_suite_spec_paths(spec: &mut Section4SuiteSpec, base_dir: &Path) {
     for profile in &mut spec.profiles {
         if let Section4ProfileSourceSpec::Harvested { source, .. } = &mut profile.source {
@@ -1984,6 +2006,13 @@ pub fn resolve_section4_suite_manifest_paths(
         }
         if profile.corpus_archive_path.is_relative() {
             profile.corpus_archive_path = base_dir.join(&profile.corpus_archive_path);
+        }
+    }
+    for identity in &mut manifest.experiment_track_contract.later_phase_identities {
+        if let Some(asset_path) = &mut identity.asset_path
+            && asset_path.is_relative()
+        {
+            *asset_path = base_dir.join(&*asset_path);
         }
     }
 }

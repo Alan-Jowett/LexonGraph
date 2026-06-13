@@ -381,14 +381,10 @@ fn checked_in_section4_suite_manifest() -> Section4SuiteManifest {
     let manifest_path = suite_dir.join("section4-suite-manifest.json");
     let contents = fs::read_to_string(manifest_path).unwrap();
     let mut manifest: Section4SuiteManifest = serde_json::from_str(&contents).unwrap();
-    for profile in &mut manifest.generated_profiles {
-        if profile.profile_path.is_relative() {
-            profile.profile_path = suite_dir.join(&profile.profile_path);
-        }
-        if profile.corpus_archive_path.is_relative() {
-            profile.corpus_archive_path = suite_dir.join(&profile.corpus_archive_path);
-        }
-    }
+    lexongraph_streaming_clustering_evaluator::resolve_section4_suite_manifest_paths(
+        &mut manifest,
+        &suite_dir,
+    );
     manifest
 }
 
@@ -2422,10 +2418,11 @@ fn val_stream_eval_042_section4_suite_orders_survivors_by_the_deterministic_rank
 fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_candidates() {
     let manifest = checked_in_section4_suite_manifest();
     let report_dir = tempdir().unwrap();
-    let candidate_ids = section4_family_candidate_names()
+    let mut candidate_ids = section4_family_candidate_names()
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    candidate_ids.extend(["directional-pca".to_string(), "dcbc-streaming".to_string()]);
     let candidates = resolve_registered_candidates(&candidate_ids).unwrap();
 
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
@@ -2487,8 +2484,10 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
 #[test]
 fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_candidates() {
     let names = registered_candidate_names();
-    for candidate in section4_family_candidate_names() {
-        assert!(names.contains(&candidate));
+    let mut expected = section4_family_candidate_names();
+    expected.extend(["directional-pca", "dcbc-streaming"]);
+    for candidate in &expected {
+        assert!(names.contains(candidate));
     }
 
     let binary = env!("CARGO_BIN_EXE_lexongraph-streaming-clustering-evaluator");
@@ -2502,7 +2501,7 @@ fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_ca
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for candidate in section4_family_candidate_names() {
+    for candidate in expected {
         assert!(stdout.contains(candidate));
     }
 }
@@ -2668,6 +2667,7 @@ fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
         serde_json::from_str(&fs::read_to_string(suite_spec_path).unwrap()).unwrap();
     let manifest_contents =
         fs::read_to_string(suite_dir.join("section4-suite-manifest.json")).unwrap();
+    let raw_manifest: Section4SuiteManifest = serde_json::from_str(&manifest_contents).unwrap();
     let manifest = checked_in_section4_suite_manifest();
 
     assert_eq!(suite_spec.suite_id, manifest.suite_id);
@@ -2683,6 +2683,13 @@ fn regression_checked_in_section4_suite_assets_exist_and_match_the_spec() {
     );
     assert!(!suite_spec.tier_growth_rule.trim().is_empty());
     assert!(!manifest_contents.contains("\\\\"));
+    for identity in &raw_manifest
+        .experiment_track_contract
+        .later_phase_identities
+    {
+        let asset_path = identity.asset_path.as_ref().unwrap();
+        assert!(asset_path.is_relative());
+    }
     assert!(
         suite_spec
             .profiles

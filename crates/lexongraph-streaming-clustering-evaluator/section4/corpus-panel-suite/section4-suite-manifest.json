@@ -34,7 +34,7 @@
         "kind": "HeldOutQuerySet",
         "corpus_id": "real-world-harvested-large",
         "scale_tier_id": "n-48",
-        "asset_path": "C:/dev/LexonGraph/crates/lexongraph-streaming-clustering-evaluator/section4/corpus-panel-suite/sources/repository-docs-heldout-queries.json",
+        "asset_path": "sources/repository-docs-heldout-queries.json",
         "later_evaluation_line": "future hierarchy-routing evaluator"
       }
     ],

@@ -3351,6 +3351,14 @@ fn build_section4_family_partitions(
             recursive_balanced_partitions(embeddings, cluster_count, leaf_size)
         }
         Section4FamilyStrategyMode::SpaceFillingCurveExactChunking => {
+            if embeddings[0].len() > 2 {
+                return Err(StreamingClusteringError::UnsatisfiableConstraint {
+                    message: format!(
+                        "space-filling-curve-exact-chunking supports at most 2 dimensions; observed {}",
+                        embeddings[0].len()
+                    ),
+                });
+            }
             contiguous_chunks(sorted_indices_by_space_filling_curve(embeddings), leaf_size)
         }
         Section4FamilyStrategyMode::GraphNeighborhoodBalance => {
@@ -3421,7 +3429,7 @@ fn recursive_balanced_partitions(
 }
 
 fn widest_variance_dimension(embeddings: &[Embedding], indices: &[usize]) -> usize {
-    let first_embedding = &embeddings[0];
+    let first_embedding = &embeddings[indices[0]];
     let mut widest_dimension = 0;
     let mut widest_variance = f32::NEG_INFINITY;
     for (dimension, _) in first_embedding.iter().enumerate() {
@@ -3447,6 +3455,7 @@ fn widest_variance_dimension(embeddings: &[Embedding], indices: &[usize]) -> usi
 
 fn sorted_indices_by_space_filling_curve(embeddings: &[Embedding]) -> Vec<usize> {
     let dimensions = embeddings[0].len();
+    debug_assert!(dimensions > 0);
     let x_dimension = 0;
     let y_dimension = if dimensions > 1 { 1 } else { 0 };
     let (min_x, max_x) = min_max_dimension(embeddings, x_dimension);
@@ -4053,9 +4062,9 @@ mod tests {
         EmbeddingWorkloadSource, EvaluationEntity, EvaluationEntitySource, GateDeclaration,
         GateKind, GroundTruthNeighborhood, LaterPhaseIdentity, LaterPhaseIdentityKind,
         MetricDeclaration, MetricKind, ProbeWorkload, ReproducibilityMetadata, ResearchCoverage,
-        SharedCandidateConfig, TEST_FORCE_TEMP_LAYER_FAILURE, TrainingPassSource,
-        built_in_fixture_candidate, decode_embedding_to_f32, embeddings_into_batches,
-        run_evaluation_campaign,
+        Section4FamilyStrategyMode, SharedCandidateConfig, TEST_FORCE_TEMP_LAYER_FAILURE,
+        TrainingPassSource, build_section4_family_partitions, built_in_fixture_candidate,
+        decode_embedding_to_f32, embeddings_into_batches, run_evaluation_campaign,
     };
     use lexongraph_block::EmbeddingSpec;
     use serde_json::json;
@@ -4151,6 +4160,24 @@ mod tests {
                 archive_path: super::normalize_cross_platform_path(r"C:\archive.zip"),
             }
         );
+    }
+
+    #[test]
+    fn space_filling_curve_exact_chunking_rejects_embeddings_above_two_dimensions() {
+        let error = build_section4_family_partitions(
+            &[vec![0.0, 0.0, 0.0], vec![1.0, 1.0, 1.0]],
+            1,
+            Section4FamilyStrategyMode::SpaceFillingCurveExactChunking,
+            7,
+        )
+        .expect_err("space-filling curve candidate should reject dimensions above two");
+
+        assert!(matches!(
+            error,
+            lexongraph_streaming_clustering::StreamingClusteringError::UnsatisfiableConstraint {
+                message
+            } if message.contains("at most 2 dimensions")
+        ));
     }
 
     fn archive_training_profile_for_tests() -> BenchmarkProfile {
