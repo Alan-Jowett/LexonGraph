@@ -3019,28 +3019,70 @@ fn val_stream_eval_046_section5_campaign_reports_hierarchy_metrics_for_multiple_
 fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_pairs() {
     let strategies =
         resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
-    let mut contract = section5_hierarchy_contract();
-    contract.contract_id = "section5-impossible-fanout".into();
-    contract.fanout_min = 3;
-    contract.fanout_max = 3;
+    let mut fanout_contract = section5_hierarchy_contract();
+    fanout_contract.contract_id = "section5-impossible-fanout".into();
+    fanout_contract.fanout_min = 3;
+    fanout_contract.fanout_max = 3;
 
-    let report = run_section5_campaign(
+    let fanout_report = run_section5_campaign(
         &strict_alignment_profile(),
         &balanced_and_skewed_candidates(),
-        &contract,
+        &fanout_contract,
         &strategies,
     )
     .unwrap();
 
-    assert_eq!(report.pair_reports.len(), 1);
-    let pair = &report.pair_reports[0];
-    assert!(matches!(pair.run_status, Section5PairRunStatus::GateFailed));
-    assert!(!pair.survived_required_gates);
+    assert_eq!(fanout_report.pair_reports.len(), 1);
+    let fanout_pair = &fanout_report.pair_reports[0];
+    assert!(matches!(
+        fanout_pair.run_status,
+        Section5PairRunStatus::GateFailed
+    ));
+    assert!(!fanout_pair.survived_required_gates);
     assert!(
-        pair.gate_results
+        fanout_pair
+            .gate_results
             .iter()
             .any(|gate| gate.detail.contains("fanout"))
     );
+
+    let mut refinement_contract = section5_hierarchy_contract();
+    refinement_contract.contract_id = "section5-refinement-threshold-failure".into();
+    refinement_contract.beta_threshold = 0.0001;
+    refinement_contract
+        .epsilon_policy
+        .parent_to_root_dispersion_ratio_max = 0.0;
+
+    let refinement_report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &refinement_contract,
+        &strategies,
+    )
+    .unwrap();
+
+    assert_eq!(refinement_report.pair_reports.len(), 1);
+    let refinement_pair = &refinement_report.pair_reports[0];
+    assert!(matches!(
+        refinement_pair.run_status,
+        Section5PairRunStatus::GateFailed
+    ));
+    assert!(!refinement_pair.survived_required_gates);
+    assert!(refinement_pair.gate_results.iter().any(|gate| {
+        gate.gate_id == "refinement-beta-threshold"
+            && matches!(
+                gate.status,
+                lexongraph_streaming_clustering_evaluator::Section5GateStatus::Failed
+            )
+            && gate.detail.contains("outside epsilon scope")
+    }));
+    assert!(refinement_pair.gate_results.iter().any(|gate| {
+        gate.gate_id == "epsilon-exception-scope"
+            && matches!(
+                gate.status,
+                lexongraph_streaming_clustering_evaluator::Section5GateStatus::Passed
+            )
+    }));
 }
 
 #[test]

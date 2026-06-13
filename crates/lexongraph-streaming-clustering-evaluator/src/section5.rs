@@ -1378,6 +1378,7 @@ struct HierarchyAnalysis {
     refinement_edge_count: usize,
     max_observed_beta: f64,
     epsilon_exception_use_count: usize,
+    beta_violation_outside_epsilon_scope_count: usize,
     fanout_bounds_passed: bool,
     no_single_child_internal_nodes: bool,
     depth_bound_passed: bool,
@@ -1412,10 +1413,11 @@ fn analyze_hierarchy(
     let mut fanout_bounds_passed = true;
     let mut no_single_child_internal_nodes = true;
     let mut beta_threshold_passed = true;
-    let mut epsilon_scope_passed = true;
+    let epsilon_scope_passed = true;
     let mut refinement_edge_count = 0usize;
     let mut max_observed_beta = 0.0f64;
     let mut epsilon_exception_use_count = 0usize;
+    let mut beta_violation_outside_epsilon_scope_count = 0usize;
 
     for node in &build.nodes {
         let depth_from_root = *depth_by_node.get(&node.node_id).unwrap_or(&0);
@@ -1448,16 +1450,15 @@ fn analyze_hierarchy(
             for child_id in &node.child_ids {
                 if let Some(child) = node_lookup.get(child_id.as_str()) {
                     let beta = beta_for_edge(child.dispersion, node.dispersion);
+                    let beta_requires_exception = beta > contract.beta_threshold;
                     let epsilon_exception_applied =
-                        beta > contract.beta_threshold && epsilon_scope_allowed;
-                    if beta > contract.beta_threshold && !epsilon_exception_applied {
+                        beta_requires_exception && epsilon_scope_allowed;
+                    if beta_requires_exception && !epsilon_scope_allowed {
                         beta_threshold_passed = false;
+                        beta_violation_outside_epsilon_scope_count += 1;
                     }
                     if epsilon_exception_applied {
                         epsilon_exception_use_count += 1;
-                    }
-                    if beta > contract.beta_threshold && !epsilon_scope_allowed {
-                        epsilon_scope_passed = false;
                     }
                     refinement_edge_count += 1;
                     max_observed_beta = max_observed_beta.max(beta);
@@ -1513,6 +1514,7 @@ fn analyze_hierarchy(
         refinement_edge_count,
         max_observed_beta,
         epsilon_exception_use_count,
+        beta_violation_outside_epsilon_scope_count,
         fanout_bounds_passed,
         no_single_child_internal_nodes,
         depth_bound_passed,
@@ -1580,8 +1582,10 @@ fn gate_results_from_analysis(
             status: bool_to_section5_gate_status(analysis.beta_threshold_passed),
             observed_value: Some(analysis.max_observed_beta),
             detail: format!(
-                "required beta <= {:.6}, observed maximum beta {:.6}",
-                contract.beta_threshold, analysis.max_observed_beta
+                "required beta <= {:.6} unless admitted by epsilon; observed maximum beta {:.6} with {} violation(s) outside epsilon scope",
+                contract.beta_threshold,
+                analysis.max_observed_beta,
+                analysis.beta_violation_outside_epsilon_scope_count
             ),
         },
         Section5GateResult {
@@ -1593,7 +1597,8 @@ fn gate_results_from_analysis(
             status: bool_to_section5_gate_status(analysis.epsilon_scope_passed),
             observed_value: Some(analysis.epsilon_exception_use_count as f64),
             detail: format!(
-                "epsilon exceptions must remain within penultimate-layer leaf groups and parent/root dispersion ratio <= {:.6}",
+                "applied {} epsilon exception(s); all applied exceptions must remain within penultimate-layer leaf groups and parent/root dispersion ratio <= {:.6}",
+                analysis.epsilon_exception_use_count,
                 contract.epsilon_policy.parent_to_root_dispersion_ratio_max
             ),
         },
