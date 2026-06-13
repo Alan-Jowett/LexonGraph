@@ -94,6 +94,7 @@ pub struct Section5HierarchyEdgeReport {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Section5GateKind {
+    HierarchyBuild,
     FanoutBounds,
     NoSingleChildInternalNodes,
     DepthBound,
@@ -210,7 +211,7 @@ struct LeafClusterSummary {
     sum: Vec<f64>,
     centroid: Vec<f32>,
     dispersion: f64,
-    member_embeddings: Vec<Vec<f32>>,
+    member_entity_indices: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -730,6 +731,7 @@ fn build_pair_reports(
                             let started = Instant::now();
                             let build = build_hierarchy(
                                 leaf_summaries,
+                                evaluation_entities,
                                 strategy,
                                 contract,
                                 *resolved_metric_semantics,
@@ -793,7 +795,13 @@ fn build_leaf_cluster_summaries(
 ) -> Result<Vec<LeafClusterSummary>, EvaluatorError> {
     let embedding_lookup = evaluation_entities
         .iter()
-        .map(|entity| (entity.entity_id.as_str(), entity.embedding.as_slice()))
+        .enumerate()
+        .map(|(index, entity)| {
+            (
+                entity.entity_id.as_str(),
+                (index, entity.embedding.as_slice()),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let mut grouped = BTreeMap::<u32, Vec<&str>>::new();
     for membership in &survivor.leaf_membership {
@@ -817,21 +825,23 @@ fn build_leaf_cluster_summaries(
             embedding_lookup
                 .values()
                 .next()
-                .map(|embedding| embedding.len())
+                .map(|(_, embedding)| embedding.len())
                 .unwrap_or_default()
         ];
         let mut member_embeddings = Vec::with_capacity(entity_ids.len());
+        let mut member_entity_indices = Vec::with_capacity(entity_ids.len());
         for entity_id in &entity_ids {
-            let Some(embedding) = embedding_lookup.get(*entity_id) else {
+            let Some((entity_index, embedding)) = embedding_lookup.get(*entity_id) else {
                 return Err(EvaluatorError::InvalidConfiguration(format!(
                     "section-5 hierarchy construction could not resolve embedding for entity {}",
                     entity_id
                 )));
             };
+            member_entity_indices.push(*entity_index);
             for (index, value) in embedding.iter().enumerate() {
                 sum[index] += *value as f64;
             }
-            member_embeddings.push((*embedding).to_vec());
+            member_embeddings.push(*embedding);
         }
         summaries.push(LeafClusterSummary {
             cluster_id,
@@ -841,7 +851,7 @@ fn build_leaf_cluster_summaries(
             dispersion: dispersion_from_metric(&member_embeddings, resolved_metric_semantics)
                 .map_err(EvaluatorError::InvalidConfiguration)?,
             sum,
-            member_embeddings,
+            member_entity_indices,
         });
     }
     Ok(summaries)
@@ -849,6 +859,7 @@ fn build_leaf_cluster_summaries(
 
 fn build_hierarchy(
     leaf_summaries: &[LeafClusterSummary],
+    evaluation_entities: &[EvaluationEntity],
     strategy: &RegisteredHierarchyStrategy,
     contract: &Section5HierarchyContract,
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
@@ -912,6 +923,7 @@ fn build_hierarchy(
                     dispersion: dispersion_from_descendant_leaves(
                         &descendant_leaf_indices,
                         leaf_summaries,
+                        evaluation_entities,
                         resolved_metric_semantics,
                     )?,
                     sum,
@@ -1297,7 +1309,7 @@ fn build_pair_report(
             gate_results: vec![Section5GateResult {
                 gate_id: "hierarchy-build".into(),
                 label: "Hierarchy build".into(),
-                kind: Section5GateKind::FanoutBounds,
+                kind: Section5GateKind::HierarchyBuild,
                 coverage: ResearchCoverage::Direct,
                 research_goal_ids: vec!["RG-HIERARCHY".into()],
                 status: Section5GateStatus::Failed,
@@ -1440,22 +1452,24 @@ fn analyze_hierarchy(
                     .map(|child| matches!(child.kind, Section5HierarchyNodeKind::LeafCluster))
                     .unwrap_or(false)
             });
-            let epsilon_scope_allowed = all_children_are_leaves
-                && depth_from_root + 1 == overall_max_depth
-                && if root_dispersion == 0.0 {
-                    node.dispersion == 0.0
-                } else {
-                    node.dispersion
-                        <= contract.epsilon_policy.parent_to_root_dispersion_ratio_max
-                            * root_dispersion
-                };
+            let epsilon_layer_eligible =
+                all_children_are_leaves && depth_from_root + 1 == overall_max_depth;
+            let epsilon_dispersion_allowed = if root_dispersion == 0.0 {
+                node.dispersion == 0.0
+            } else {
+                node.dispersion
+                    <= contract.epsilon_policy.parent_to_root_dispersion_ratio_max * root_dispersion
+            };
+            let epsilon_scope_allowed = epsilon_layer_eligible && epsilon_dispersion_allowed;
             for child_id in &node.child_ids {
                 if let Some(child) = node_lookup.get(child_id.as_str()) {
                     let beta = beta_for_edge(child.dispersion, node.dispersion);
                     let beta_requires_exception = beta > contract.beta_threshold;
+                    let epsilon_exception_requested =
+                        beta_requires_exception && epsilon_layer_eligible;
                     let epsilon_exception_applied =
-                        beta_requires_exception && epsilon_scope_allowed;
-                    if epsilon_exception_applied && !epsilon_scope_allowed {
+                        epsilon_exception_requested && epsilon_dispersion_allowed;
+                    if epsilon_exception_requested && !epsilon_dispersion_allowed {
                         epsilon_scope_passed = false;
                     }
                     if beta_requires_exception && !epsilon_scope_allowed {
@@ -1702,7 +1716,7 @@ fn centroid_from_sum(sum: &[f64], count: usize) -> Vec<f32> {
 }
 
 fn dispersion_from_metric(
-    member_embeddings: &[Vec<f32>],
+    member_embeddings: &[&[f32]],
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<f64, String> {
     match resolved_metric_semantics.kind {
@@ -1716,6 +1730,7 @@ fn dispersion_from_metric(
 fn dispersion_from_descendant_leaves(
     descendant_leaf_indices: &[usize],
     leaf_summaries: &[LeafClusterSummary],
+    evaluation_entities: &[EvaluationEntity],
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<f64, String> {
     let member_embeddings = descendant_leaf_indices
@@ -1727,9 +1742,18 @@ fn dispersion_from_descendant_leaves(
         })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .flat_map(|summary| summary.member_embeddings.iter())
-        .cloned()
-        .collect::<Vec<_>>();
+        .flat_map(|summary| summary.member_entity_indices.iter().copied())
+        .map(|entity_index| {
+            evaluation_entities
+                .get(entity_index)
+                .map(|entity| entity.embedding.as_slice())
+                .ok_or_else(|| {
+                    format!(
+                        "missing evaluation entity backing descendant leaf at index {entity_index}"
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     dispersion_from_metric(&member_embeddings, resolved_metric_semantics)
 }
 
@@ -1791,7 +1815,7 @@ fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f64, String> {
     Ok((1.0 - cosine_similarity).max(0.0))
 }
 
-fn mean_squared_radius(member_embeddings: &[Vec<f32>]) -> f64 {
+fn mean_squared_radius(member_embeddings: &[&[f32]]) -> f64 {
     if member_embeddings.is_empty() {
         return 0.0;
     }
@@ -1810,7 +1834,7 @@ fn mean_squared_radius(member_embeddings: &[Vec<f32>]) -> f64 {
         / member_embeddings.len() as f64
 }
 
-fn mean_cosine_deviation(member_embeddings: &[Vec<f32>]) -> Result<f64, String> {
+fn mean_cosine_deviation(member_embeddings: &[&[f32]]) -> Result<f64, String> {
     if member_embeddings.is_empty() {
         return Ok(0.0);
     }

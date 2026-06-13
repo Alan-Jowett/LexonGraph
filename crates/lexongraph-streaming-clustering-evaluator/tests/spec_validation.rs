@@ -3039,12 +3039,14 @@ fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_p
         Section5PairRunStatus::GateFailed
     ));
     assert!(!fanout_pair.survived_required_gates);
-    assert!(
-        fanout_pair
-            .gate_results
-            .iter()
-            .any(|gate| gate.detail.contains("fanout"))
-    );
+    assert!(fanout_pair.gate_results.iter().any(|gate| {
+        gate.gate_id == "hierarchy-build"
+            && matches!(
+                gate.kind,
+                lexongraph_streaming_clustering_evaluator::Section5GateKind::HierarchyBuild
+            )
+            && gate.detail.contains("fanout")
+    }));
 
     let mut refinement_contract = section5_hierarchy_contract();
     refinement_contract.contract_id = "section5-refinement-threshold-failure".into();
@@ -3080,7 +3082,7 @@ fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_p
         gate.gate_id == "epsilon-exception-scope"
             && matches!(
                 gate.status,
-                lexongraph_streaming_clustering_evaluator::Section5GateStatus::Passed
+                lexongraph_streaming_clustering_evaluator::Section5GateStatus::Failed
             )
     }));
 }
