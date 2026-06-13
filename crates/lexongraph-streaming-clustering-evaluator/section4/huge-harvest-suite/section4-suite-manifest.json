@@ -85,9 +85,9 @@
       "profile_path": "profiles/real-world-harvested-strict-huge.json",
       "corpus_archive_path": "corpora/real-world-harvested-strict-huge.zip",
       "root_block_id": "a810900c463806b785d17c3b00287a06cb18968906067cc0e7810177c5dd2514",
-      "harvested_source_id": "data2-huge-slice-source",
-      "harvested_source_root_block_id": "725df06751cab5a599d23393d919cc3302f6dda8aa452884b04f80202d3253b3",
-      "harvested_entity_id_metadata_key": "chunk_locator",
+      "harvested_source_id": "real-world-harvested-huge-source",
+      "harvested_source_root_block_id": "a810900c463806b785d17c3b00287a06cb18968906067cc0e7810177c5dd2514",
+      "harvested_entity_id_metadata_key": "entity_id",
       "harvested_policy": {
         "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
         "subset_selection": "SortByEntityIdTakeFirst"

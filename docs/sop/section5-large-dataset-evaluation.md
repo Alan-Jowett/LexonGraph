@@ -1,6 +1,8 @@
-# SOP: Running section-5 evaluation on the checked-in large harvested dataset
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+# SOP: Running section-5 evaluation on the checked-in harvested datasets
 
-This SOP describes how to run the streaming clustering evaluator's section-5 hierarchy-stage comparison on the checked-in large harvested profile, inspect the outputs, and repeat the run consistently.
+This SOP describes how to run the streaming clustering evaluator's section-5 hierarchy-stage comparison on the checked-in harvested profiles, inspect the outputs, and repeat the runs consistently.
 
 ## Purpose
 
@@ -14,7 +16,7 @@ Use this procedure to:
 
 - Work from the repository root: `C:\dev\LexonGraph`
 - Use the existing evaluator crate
-- Do not harvest a new corpus for this run; the repository already includes the required large harvested profile and corpus archive
+- Do not harvest a new corpus for these runs; the repository already includes the required checked-in harvested profiles and corpus archives
 
 ## Checked-in assets
 
@@ -58,13 +60,13 @@ This checked-in huge profile was derived from `C:\data2\block-store.zip` using:
 
 - harvested source root block: `ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8`
 - harvested slice root block: `725df06751cab5a599d23393d919cc3302f6dda8aa452884b04f80202d3253b3`
-- materialized generated profile root block: `a810900c463806b785d17c3b00287a06cb18968906067cc0e7810177c5dd2514`
+- checked-in suite source root block: `a810900c463806b785d17c3b00287a06cb18968906067cc0e7810177c5dd2514`
 - dimensionality: `384`
-- harvested identity key: `chunk_locator`
+- checked-in suite identity key: `entity_id`
 - real/evaluated entity count: `186`
 - declared cluster count at `leaf_size = 2`: `93`
 
-Because the huge profile has 93 leaf clusters, it is suitable for section-5 hierarchy contracts in the 64-128 fanout regime.
+Because the huge profile has 93 leaf clusters, it can exercise section-5 hierarchy contracts with 64-128 child fanout over the current `leaf_size = 2` section-4 outputs. It does not satisfy the separate end-goal of 64-128 embeddings per leaf cluster; that requires a different section-4 profile design.
 
 ## Step 1: List available hierarchy strategies
 
