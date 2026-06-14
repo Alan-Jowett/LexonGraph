@@ -1429,9 +1429,10 @@ fn apply_execution_budget_to_pair_report(
         return pair_report;
     };
     let budget_nanos = execution_budget.wall_clock_limit_millis as u128 * 1_000_000;
-    if pair_report.build_elapsed_nanos <= budget_nanos
-        || !matches!(pair_report.run_status, Section5PairRunStatus::Succeeded)
-    {
+    let elapsed_millis = pair_report.build_elapsed_nanos as f64 / 1_000_000.0;
+    let within_budget = pair_report.build_elapsed_nanos <= budget_nanos;
+    let succeeded = matches!(pair_report.run_status, Section5PairRunStatus::Succeeded);
+    if within_budget {
         pair_report.gate_results.push(Section5GateResult {
             gate_id: "execution-budget".into(),
             label: "Execution budget".into(),
@@ -1439,11 +1440,33 @@ fn apply_execution_budget_to_pair_report(
             coverage: ResearchCoverage::Direct,
             research_goal_ids: vec!["RG-PERFORMANCE".into()],
             status: Section5GateStatus::Passed,
-            observed_value: Some(pair_report.build_elapsed_nanos as f64 / 1_000_000.0),
+            observed_value: Some(elapsed_millis),
+            detail: if succeeded {
+                format!(
+                    "completed in {:.3} ms within the declared execution budget of {} ms",
+                    elapsed_millis, execution_budget.wall_clock_limit_millis
+                )
+            } else {
+                format!(
+                    "pair ended with status {:?} in {:.3} ms within the declared execution budget of {} ms",
+                    pair_report.run_status, elapsed_millis, execution_budget.wall_clock_limit_millis
+                )
+            },
+        });
+        return pair_report;
+    }
+    if !succeeded {
+        pair_report.gate_results.push(Section5GateResult {
+            gate_id: "execution-budget".into(),
+            label: "Execution budget".into(),
+            kind: Section5GateKind::ExecutionBudget,
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-PERFORMANCE".into()],
+            status: Section5GateStatus::Failed,
+            observed_value: Some(elapsed_millis),
             detail: format!(
-                "completed in {:.3} ms within the declared execution budget of {} ms",
-                pair_report.build_elapsed_nanos as f64 / 1_000_000.0,
-                execution_budget.wall_clock_limit_millis
+                "pair ended with status {:?} after {:.3} ms, exceeding the declared execution budget of {} ms",
+                pair_report.run_status, elapsed_millis, execution_budget.wall_clock_limit_millis
             ),
         });
         return pair_report;
@@ -1455,10 +1478,10 @@ fn apply_execution_budget_to_pair_report(
         coverage: ResearchCoverage::Direct,
         research_goal_ids: vec!["RG-PERFORMANCE".into()],
         status: Section5GateStatus::Failed,
-        observed_value: Some(pair_report.build_elapsed_nanos as f64 / 1_000_000.0),
+        observed_value: Some(elapsed_millis),
         detail: format!(
             "observed wall-clock elapsed time {:.3} ms exceeded the declared execution budget of {} ms",
-            pair_report.build_elapsed_nanos as f64 / 1_000_000.0,
+            elapsed_millis,
             execution_budget.wall_clock_limit_millis
         ),
     });
@@ -2192,6 +2215,26 @@ mod tests {
             gate.gate_id == "execution-budget"
                 && gate.kind == Section5GateKind::ExecutionBudget
                 && matches!(gate.status, Section5GateStatus::Failed)
+        }));
+    }
+
+    #[test]
+    fn execution_budget_gate_reports_prior_pair_failures_that_exceed_budget() {
+        let mut prior_failure = successful_pair_report();
+        prior_failure.run_status = Section5PairRunStatus::GateFailed;
+        let report = apply_execution_budget_to_pair_report(
+            prior_failure,
+            Some(&ExecutionBudget {
+                wall_clock_limit_millis: 1,
+            }),
+        );
+
+        assert_eq!(report.run_status, Section5PairRunStatus::GateFailed);
+        assert!(report.gate_results.iter().any(|gate| {
+            gate.gate_id == "execution-budget"
+                && gate.kind == Section5GateKind::ExecutionBudget
+                && matches!(gate.status, Section5GateStatus::Failed)
+                && gate.detail.contains("ended with status GateFailed")
         }));
     }
 

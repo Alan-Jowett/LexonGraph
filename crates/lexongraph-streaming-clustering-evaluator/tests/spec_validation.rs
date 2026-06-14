@@ -3334,16 +3334,30 @@ fn val_stream_eval_051_repository_defines_a_canonical_realistic_qualification_su
 fn val_stream_eval_052_realistic_qualification_tracks_declare_timeout_disqualification_coverage() {
     let suite_spec = realistic_qualification_suite_spec();
     let section5_contract = realistic_qualification_section5_contract();
-    let section4_source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("section4.rs"),
+    let report_dir = tempdir().unwrap();
+    let mut section4_manifest = checked_in_section4_suite_manifest();
+    section4_manifest.generated_profiles.truncate(1);
+    section4_manifest.experiment_track_contract.execution_budget = Some(ExecutionBudget {
+        wall_clock_limit_millis: 1,
+    });
+    let section4_report = run_section4_suite(
+        &section4_manifest,
+        &balanced_and_skewed_candidates()[..1],
+        report_dir.path(),
     )
     .unwrap();
-    let section5_source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("section5.rs"),
+
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let mut tight_section5_contract = section5_hierarchy_contract();
+    tight_section5_contract.execution_budget = Some(ExecutionBudget {
+        wall_clock_limit_millis: 1,
+    });
+    let section5_report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &tight_section5_contract,
+        &strategies,
     )
     .unwrap();
 
@@ -3364,11 +3378,43 @@ fn val_stream_eval_052_realistic_qualification_tracks_declare_timeout_disqualifi
             .wall_clock_limit_millis,
         600_000
     );
+    assert!(section4_report.profile_reports.iter().all(|profile| {
+        profile
+            .candidate_reports
+            .iter()
+            .all(|candidate| candidate.execution_budget_millis == Some(1))
+    }));
+    assert!(section4_report.profile_reports.iter().any(|profile| {
+        profile
+            .candidate_reports
+            .iter()
+            .any(|candidate| matches!(candidate.run_status, CandidateRunStatus::GateFailed))
+    }));
+    let section4_candidate_artifact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            report_dir
+                .path()
+                .join(&section4_report.profile_reports[0].profile_id)
+                .join("balanced-threshold-run-report.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(
-        section4_source
-            .contains("execution_budget_gate_disqualifies_slow_successful_candidate_runs")
+        section4_candidate_artifact["gate_results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gate| { gate["gate_id"] == "execution-budget" && gate["status"] == "Failed" })
     );
-    assert!(section5_source.contains("execution_budget_gate_disqualifies_slow_successful_pairs"));
+    assert!(
+        section5_report
+            .pair_reports
+            .iter()
+            .all(|pair| pair.execution_budget_millis == Some(1))
+    );
+    assert!(!section5_report.survivor_candidate_ids.is_empty());
+    assert!(!section5_report.pair_reports.is_empty());
 }
 
 #[test]
