@@ -1,0 +1,97 @@
+{
+  "suite_id": "section4-realistic-qualification-v1",
+  "experiment_track_contract": {
+    "track_id": "leaf-screening-euclidean-384d-realistic-qualification",
+    "qualification_surface": "RealisticQualification",
+    "sensitivity_leaf_sizes": [64, 96, 128],
+    "dimensionality_contract": {
+      "min_dimensions": 384,
+      "max_dimensions": 384,
+      "out_of_range_behavior": "deterministically reject out-of-range embedding dimensions"
+    },
+    "declared_search_target": "TNN Recall@10 >= 90% under later routing evaluation",
+    "beam_width_policy": "beam width 1 by default; 2, 4, and 8 reserved for later routing fallback studies",
+    "transformed_metric_policy": "no transformed metric; build, locality, compression, and later routing all use the declared Euclidean metric directly",
+    "build_metric_role": "section-4 compares leaf-stage candidate behavior under the declared Euclidean metric",
+    "locality_metric_role": "same-leaf top-10 neighborhood coherence is computed directly under the declared Euclidean metric",
+    "compression_metric_role": "local-versus-global scalar quantization compares real-entity reconstruction error under the declared Euclidean track",
+    "deferred_routing_metric_role": "later routing studies must preserve the declared Euclidean ordering and search-target interpretation",
+    "metric_contract_consistency_checks": [
+      "build, locality, compression, and deferred routing all declare the Euclidean metric",
+      "no transformed metric is permitted on this track, so ordering preservation is vacuously satisfied"
+    ],
+    "metric_contract_audit_result": "metric contract is consistent across build, locality, compression, and deferred routing obligations",
+    "dispersion_functional": "variance under the declared Euclidean metric",
+    "candidate_threading_model": "single-threaded section-4 screening",
+    "reduction_order_strategy": "single-thread sequential reduction order",
+    "execution_budget": {
+      "wall_clock_limit_millis": 1800000
+    },
+    "one_thread_vs_n_thread_identity_proof_surface": "Deferred",
+    "later_phase_identities": [
+      {
+        "identity_id": "real-world-harvested-realistic-heldout-queries",
+        "label": "Held-out routing queries for the realistic harvested qualification tier",
+        "kind": "HeldOutQuerySet",
+        "corpus_id": "real-world-harvested-realistic",
+        "scale_tier_id": "n-10017",
+        "asset_path": "sources/real-world-harvested-realistic-heldout-queries.json",
+        "later_evaluation_line": "future hierarchy-routing evaluator"
+      }
+    ],
+    "frozen_items": [
+      { "item_id": "metric-family", "label": "Metric family", "proof_surface": "Direct" },
+      { "item_id": "leaf-size", "label": "Primary leaf size and sensitivity sizes", "proof_surface": "Direct" },
+      { "item_id": "qualification-surface", "label": "Canonical realistic qualification surface", "proof_surface": "Direct" },
+      { "item_id": "execution-budget", "label": "Bounded-time qualification budget", "proof_surface": "Direct" },
+      { "item_id": "compression-baseline", "label": "Quantization baseline over real entities only", "proof_surface": "Direct" },
+      { "item_id": "same-or-sibling-locality-target", "label": "Same-or-sibling locality target", "proof_surface": "Deferred" },
+      { "item_id": "routing-target", "label": "Routing target and beam-width policy", "proof_surface": "Deferred" },
+      { "item_id": "threading-reproducibility", "label": "Multi-thread reproducibility obligation", "proof_surface": "Deferred" },
+      { "item_id": "loaded-index-memory", "label": "Loaded index memory obligation", "proof_surface": "Deferred" }
+    ]
+  },
+  "tier_growth_rule": "single canonical realistic qualification tier harvested from the external archival corpus and preserved for repeated section-4 and section-5 qualification runs",
+  "leaf_size": 64,
+  "dimensions": 384,
+  "batch_size": 256,
+  "metric_contract": "Euclidean",
+  "neighbor_count": 10,
+  "balance_constraints": null,
+  "random_seed": 11,
+  "compression_benchmark": {
+    "method": "ScalarQuantization8Bit",
+    "global_baseline_label": "global-real-dataset-8bit"
+  },
+  "reproducibility": {
+    "seed_policy": "fixed-seed-11",
+    "software_identity": "section4-realistic-qualification-v1",
+    "floating_point_profile": "ieee754-deterministic-no-fma",
+    "hardware_profile": "fixture-cpu"
+  },
+  "profiles": [
+    {
+      "profile_id": "real-world-harvested-realistic-qualification",
+      "corpus_id": "real-world-harvested-realistic",
+      "scale_tier_id": "n-10017",
+      "scale_tier_kind": "DeterministicNearestPracticalEquivalent",
+      "source": {
+        "source_kind": "harvested",
+        "family": "RealWorldHarvested",
+        "source": {
+          "source_id": "data2-block-store-realistic-qualification-source",
+          "root_block_id": "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8",
+          "store_kind": "zip-archive",
+          "archive_path": "sources/real-world-harvested-realistic-source.zip"
+        },
+        "entity_id_metadata_key": "entity_id",
+        "harvesting_policy": {
+          "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
+          "subset_selection": "SortByEntityIdTakeFirst"
+        },
+        "real_entity_count": 10017,
+        "alignment_policy": "DeterministicSyntheticPadding"
+      }
+    }
+  ]
+}

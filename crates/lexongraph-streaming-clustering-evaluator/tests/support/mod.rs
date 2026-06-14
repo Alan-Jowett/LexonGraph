@@ -20,10 +20,10 @@ use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
     BlockStoreReferenceStore, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
-    EvaluationEntity, EvaluationEntitySource, GateDeclaration, GateKind, LaterPhaseIdentity,
-    LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
-    ReproducibilityMetadata, ResearchCoverage, Section5DepthBoundPolicy, Section5EpsilonPolicy,
-    Section5HierarchyContract, SharedCandidateConfig, TrainingPassSource,
+    EvaluationEntity, EvaluationEntitySource, ExecutionBudget, GateDeclaration, GateKind,
+    LaterPhaseIdentity, LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload,
+    RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage, Section5DepthBoundPolicy,
+    Section5EpsilonPolicy, Section5HierarchyContract, SharedCandidateConfig, TrainingPassSource,
     built_in_fixture_candidate,
 };
 use zip::CompressionMethod as ZipCompressionMethod;
@@ -514,6 +514,9 @@ pub fn section5_hierarchy_contract() -> Section5HierarchyContract {
         },
         section4_source_label: "fixture-leaf-stage-profile".into(),
         later_evaluation_line: "future parent-summary and routing evaluator".into(),
+        execution_budget: Some(ExecutionBudget {
+            wall_clock_limit_millis: 60_000,
+        }),
     }
 }
 

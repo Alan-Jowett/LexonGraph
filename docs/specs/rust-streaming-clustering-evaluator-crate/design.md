@@ -427,6 +427,14 @@ For corpus families that participate in repeated scale comparison, the panel
 also carries stable small, medium, and large tier identities or deterministic
 nearest-practical equivalents together with the rule that relates those tiers.
 
+The suite may retain smaller fixture-oriented profiles for smoke and regression
+ergonomics, but it also defines a canonical realistic qualification surface.
+That qualification surface includes at least one repository-managed harvested
+real-world family whose qualification tier is in the tens-of-thousands regime,
+falls within the `384..4096` dimensionality band, and is intentionally
+non-aligned to the primary `leaf_size` so alignment-policy behavior is exercised
+under realistic conditions.
+
 In this revision, the checked-in panel realizes three repeated-comparison tiers
 for the harvested, well-clustered, weak-cluster or uniform, anisotropic or
 manifold, and near-duplicate-heavy families, and keeps one separate
@@ -517,6 +525,11 @@ stops further comparative metric evaluation for that candidate/configuration
 pair and preserves only the failure-classified artifact surface needed for
 deterministic reporting and survivor selection.
 
+For realistic qualification tracks, the same workflow also owns bounded-time
+qualification: it compares wall-clock execution against the track's frozen
+budget and emits deterministic timeout-disqualification outcomes instead of
+letting extremely slow candidates appear merely as poor-but-finished results.
+
 ### DSG-STREAM-EVAL-026 `Leaf-stage build-cost reporting`
 
 For section-4 benchmark executions, the evaluator reports a small leaf-stage
@@ -527,6 +540,10 @@ This revision keeps that resource surface narrow: deterministic reporting of
 evaluated entity count, scale-tier identity, build time per vector or an
 equivalent benchmark-declared normalized build-cost measure, and peak build
 memory is sufficient across the checked-in section-4 panel's scale tiers.
+
+For realistic qualification tracks, this same resource surface also records the
+declared execution budget, observed wall-clock elapsed time, and whether the
+run completed or was disqualified by timeout.
 
 When the frozen experiment-track contract carries a later-phase loaded-index
 memory obligation but section-4 does not materialize a persisted loadable
@@ -606,9 +623,13 @@ That contract records:
 - the declared reduction-order strategy for any deterministic aggregate
   computation permitted by the track
 - the declared hardware profile
+- any declared execution budget and timeout-disqualification semantics
 
 Each item is also labeled as either directly measured during section-4
 screening or deferred to a later proof surface.
+
+Tracks intended only for smoke or regression coverage are explicitly identified
+as such so they cannot be confused with the realistic qualification surface.
 
 ### DSG-STREAM-EVAL-032 `Deferred obligation ledger`
 
@@ -840,6 +861,31 @@ boundary again.
 Section-5 direct hierarchy measurements therefore remain staged evidence toward
 the parent research goals rather than proof of the later plan sections.
 
+### DSG-STREAM-EVAL-044 `Canonical realistic qualification surface`
+
+The evaluator's repository-managed suite layer distinguishes between:
+
+1. small fixture-oriented tracks used for fast regression or smoke validation
+2. canonical realistic qualification tracks used to support claims about real
+   archival-embedding behavior
+
+The canonical realistic qualification tracks are reproducible from checked-in
+assets or checked-in generation specifications and include harvested real-world
+corpus families in the tens-of-thousands regime, the `384..4096`
+dimensionality band, and non-aligned real-entity counts relative to the
+primary `leaf_size`.
+
+### DSG-STREAM-EVAL-045 `Deterministic timeout-disqualification model`
+
+The evaluator treats bounded-time completion as a first-class qualification
+constraint rather than a purely comparative metric.
+
+For realistic qualification tracks, both section-4 candidate executions and
+section-5 hierarchy-stage pair executions carry a frozen wall-clock execution
+budget. When a run exceeds that budget, the evaluator emits a deterministic
+timeout-disqualification outcome through the same artifact and provenance model
+used for gate failures and candidate shared-contract failures.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -892,3 +938,5 @@ the parent research goals rather than proof of the later plan sections.
 | DSG-STREAM-EVAL-041 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-057 |
 | DSG-STREAM-EVAL-042 | REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-058 |
 | DSG-STREAM-EVAL-043 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059 |
+| DSG-STREAM-EVAL-044 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-045, REQ-STREAM-EVAL-060 |
+| DSG-STREAM-EVAL-045 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-061 |

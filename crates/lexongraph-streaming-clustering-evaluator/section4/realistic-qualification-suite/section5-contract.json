@@ -1,0 +1,19 @@
+{
+  "contract_id": "section5-realistic-qualification-fanout-64-128",
+  "fanout_min": 64,
+  "fanout_max": 128,
+  "depth_bound_policy": "CeilLogByMinFanout",
+  "metric_semantics_profile": "euclidean-384d-realistic-qualification",
+  "grouping_functional": "euclidean-centroid-distance",
+  "dispersion_functional": "mean-squared-radius",
+  "metric_compatibility_rule": "closed-profile-v1",
+  "beta_threshold": 1.25,
+  "epsilon_policy": {
+    "parent_to_root_dispersion_ratio_max": 0.01
+  },
+  "section4_source_label": "section4-realistic-qualification-v1",
+  "later_evaluation_line": "future parent-summary and routing evaluator",
+  "execution_budget": {
+    "wall_clock_limit_millis": 600000
+  }
+}

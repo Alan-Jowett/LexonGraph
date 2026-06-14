@@ -469,9 +469,10 @@ dimensionality contract, the alignment-policy family, the quantization or
 compression baseline policy over real entities only, any declared search-target
 threshold and beam-width policy carried forward to later routing phases, the
 declared floating-point profile, the declared candidate-threading model, the
-declared reduction-order strategy, and the declared hardware profile; the
-artifacts also label which of those frozen items are measured directly during
-section-4 versus deferred.
+declared reduction-order strategy, the declared hardware profile, and any
+declared execution budget or timeout-disqualification semantics; the artifacts
+also label which of those frozen items are measured directly during section-4
+versus deferred.
 
 **Traces to:** REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043
 
@@ -506,7 +507,11 @@ For any corpus family intended to carry forward into later routing studies, the
 same contract also declares held-out query-set identities, including at least
 one such identity for a checked-in harvested real-world corpus family in the
 first complete checked-in section-4 panel, and that preserved identity points
-at a checked-in materialized asset.
+at a checked-in materialized asset. The canonical realistic qualification
+surface includes at least one repository-managed harvested real-world tier in
+the tens-of-thousands regime whose dimensionality lies in the `384..4096` band
+and whose real-entity count is not an exact multiple of the primary
+`leaf_size`.
 
 **Traces to:** REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045
 
@@ -604,9 +609,11 @@ metric-sensitive hierarchy-construction decisions, declares the compatible
 dispersion functional, declares the `beta` threshold, declares the
 penultimate-layer `epsilon` exception policy, fixes the hierarchy-stage
 build-throughput and memory-reporting semantics shared by all compared pairs,
-and declares the deterministic compatibility rule that governs whether the
-grouping-functional and refinement-dispersion-functional combination is
-supported for the benchmark's metric semantics.
+declares the bounded-time execution budget and timeout-disqualification
+semantics shared by all compared pairs, and declares the deterministic
+compatibility rule that governs whether the grouping-functional and refinement-
+dispersion-functional combination is supported for the benchmark's metric
+semantics.
 
 **Traces to:** REQ-STREAM-EVAL-055
 
@@ -687,3 +694,30 @@ dispersion-functional declaration before a passing hierarchy-stage result can be
 recorded.
 
 **Traces to:** REQ-STREAM-EVAL-054, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-056, REQ-STREAM-EVAL-057
+
+### VAL-STREAM-EVAL-051
+
+Inspect one canonical realistic qualification track and its checked-in corpus
+assets.
+
+**Pass condition:** the repository distinguishes fixture-oriented smoke or
+regression tracks from the canonical realistic qualification surface, and that
+qualification surface includes at least one repository-managed harvested real-
+world corpus family with a qualification tier in the tens-of-thousands regime,
+uniform dimensionality within the `384..4096` band, and a real-entity count
+that is not an exact multiple of the track's primary `leaf_size`.
+
+**Traces to:** REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-043, REQ-STREAM-EVAL-045, REQ-STREAM-EVAL-060
+
+### VAL-STREAM-EVAL-052
+
+Run one realistic-corpus section-4 candidate execution and one section-5
+hierarchy-stage pair execution under deliberately tight declared execution
+budgets.
+
+**Pass condition:** when the candidate or pair exceeds the declared budget, the
+evaluator reports a deterministic timeout-disqualification outcome rather than a
+survivor result, and the emitted artifacts preserve deterministic provenance and
+artifact hygiene consistent with other hard-failure outcomes.
+
+**Traces to:** REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-061

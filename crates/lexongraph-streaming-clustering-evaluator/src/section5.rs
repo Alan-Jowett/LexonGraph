@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::section4::measure_peak_build_memory;
 use crate::{
     BenchmarkProfile, CampaignReport, CandidateIdentity, CandidateRunReport, CandidateRunStatus,
-    EvaluationEntity, EvaluatorError, ProvenanceManifest, RegisteredCandidate, ResearchCoverage,
-    resolved_profile_evaluation_entities, run_evaluation_campaign,
+    EvaluationEntity, EvaluatorError, ExecutionBudget, ProvenanceManifest, RegisteredCandidate,
+    ResearchCoverage, resolved_profile_evaluation_entities, run_evaluation_campaign,
 };
 
 const SECTION5_PARENT_SUMMARY_REASON: &str = "parent-summary accuracy and stability remain deferred beyond section-5 hierarchy construction and must be discharged by the later summary-comparison evaluation line";
@@ -63,6 +63,8 @@ pub struct Section5HierarchyContract {
     pub epsilon_policy: Section5EpsilonPolicy,
     pub section4_source_label: String,
     pub later_evaluation_line: String,
+    #[serde(default)]
+    pub execution_budget: Option<ExecutionBudget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +103,7 @@ pub enum Section5GateKind {
     RefinementBetaThreshold,
     EpsilonExceptionScope,
     MetricSemanticsCompatibility,
+    ExecutionBudget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +160,8 @@ pub struct Section5PairReport {
     pub refinement_edge_count: usize,
     pub maximum_observed_beta: f64,
     pub epsilon_exception_use_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_budget_millis: Option<u64>,
     pub build_elapsed_nanos: u128,
     pub build_throughput_leaf_nodes_per_second: f64,
     pub peak_build_memory_bytes: u64,
@@ -350,6 +355,11 @@ pub fn run_section5_campaign(
             contract,
             strategies,
         )?
+        .into_iter()
+        .map(|pair_report| {
+            apply_execution_budget_to_pair_report(pair_report, contract.execution_budget.as_ref())
+        })
+        .collect()
     };
     let ranking = rank_pair_reports(&pair_reports);
 
@@ -445,8 +455,12 @@ pub fn render_section5_scorecard(report: &Section5CampaignReport) -> String {
         }
     ));
     for pair_report in &report.pair_reports {
+        let execution_budget = pair_report
+            .execution_budget_millis
+            .map(|budget| format!(", execution_budget_millis={budget}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "- {} x {}: {:?}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}",
+            "- {} x {}: {:?}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}{}",
             pair_report.leaf_candidate_identity.candidate_id,
             pair_report.hierarchy_strategy_identity.strategy_id,
             pair_report.run_status,
@@ -456,7 +470,8 @@ pub fn render_section5_scorecard(report: &Section5CampaignReport) -> String {
             pair_report.maximum_observed_beta,
             pair_report.epsilon_exception_use_count,
             pair_report.build_throughput_leaf_nodes_per_second,
-            pair_report.peak_build_memory_bytes
+            pair_report.peak_build_memory_bytes,
+            execution_budget
         ));
     }
     if !report.remaining_deferred_goals.is_empty() {
@@ -616,6 +631,13 @@ fn validate_section5_contract(contract: &Section5HierarchyContract) -> Result<()
     if contract.section4_source_label.trim().is_empty() {
         return Err(EvaluatorError::InvalidConfiguration(
             "section-5 hierarchy contract must declare a non-empty section4_source_label".into(),
+        ));
+    }
+    if let Some(execution_budget) = &contract.execution_budget
+        && execution_budget.wall_clock_limit_millis == 0
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-5 hierarchy contract execution budget must be positive when declared".into(),
         ));
     }
     if contract.later_evaluation_line.trim().is_empty() {
@@ -1245,6 +1267,11 @@ fn build_pair_report(
                 refinement_edge_count: analysis.refinement_edge_count,
                 maximum_observed_beta: analysis.max_observed_beta,
                 epsilon_exception_use_count: analysis.epsilon_exception_use_count,
+                execution_budget_millis: context
+                    .contract
+                    .execution_budget
+                    .as_ref()
+                    .map(|budget| budget.wall_clock_limit_millis),
                 build_elapsed_nanos: context.elapsed,
                 build_throughput_leaf_nodes_per_second,
                 peak_build_memory_bytes: context.peak_build_memory_bytes,
@@ -1303,6 +1330,11 @@ fn build_pair_report(
             refinement_edge_count: 0,
             maximum_observed_beta: f64::INFINITY,
             epsilon_exception_use_count: 0,
+            execution_budget_millis: context
+                .contract
+                .execution_budget
+                .as_ref()
+                .map(|budget| budget.wall_clock_limit_millis),
             build_elapsed_nanos: context.elapsed,
             build_throughput_leaf_nodes_per_second: 0.0,
             peak_build_memory_bytes: context.peak_build_memory_bytes,
@@ -1362,6 +1394,10 @@ fn metric_semantics_failure_pair_report(
         refinement_edge_count: 0,
         maximum_observed_beta: f64::INFINITY,
         epsilon_exception_use_count: 0,
+        execution_budget_millis: contract
+            .execution_budget
+            .as_ref()
+            .map(|budget| budget.wall_clock_limit_millis),
         build_elapsed_nanos: 0,
         build_throughput_leaf_nodes_per_second: 0.0,
         peak_build_memory_bytes: 0,
@@ -1381,6 +1417,55 @@ fn metric_semantics_failure_pair_report(
         survived_required_gates: false,
         ranking_score: None,
     }
+}
+
+fn apply_execution_budget_to_pair_report(
+    mut pair_report: Section5PairReport,
+    execution_budget: Option<&ExecutionBudget>,
+) -> Section5PairReport {
+    pair_report.execution_budget_millis =
+        execution_budget.map(|budget| budget.wall_clock_limit_millis);
+    let Some(execution_budget) = execution_budget else {
+        return pair_report;
+    };
+    let budget_nanos = execution_budget.wall_clock_limit_millis as u128 * 1_000_000;
+    if pair_report.build_elapsed_nanos <= budget_nanos
+        || !matches!(pair_report.run_status, Section5PairRunStatus::Succeeded)
+    {
+        pair_report.gate_results.push(Section5GateResult {
+            gate_id: "execution-budget".into(),
+            label: "Execution budget".into(),
+            kind: Section5GateKind::ExecutionBudget,
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-PERFORMANCE".into()],
+            status: Section5GateStatus::Passed,
+            observed_value: Some(pair_report.build_elapsed_nanos as f64 / 1_000_000.0),
+            detail: format!(
+                "completed in {:.3} ms within the declared execution budget of {} ms",
+                pair_report.build_elapsed_nanos as f64 / 1_000_000.0,
+                execution_budget.wall_clock_limit_millis
+            ),
+        });
+        return pair_report;
+    }
+    pair_report.gate_results.push(Section5GateResult {
+        gate_id: "execution-budget".into(),
+        label: "Execution budget".into(),
+        kind: Section5GateKind::ExecutionBudget,
+        coverage: ResearchCoverage::Direct,
+        research_goal_ids: vec!["RG-PERFORMANCE".into()],
+        status: Section5GateStatus::Failed,
+        observed_value: Some(pair_report.build_elapsed_nanos as f64 / 1_000_000.0),
+        detail: format!(
+            "observed wall-clock elapsed time {:.3} ms exceeded the declared execution budget of {} ms",
+            pair_report.build_elapsed_nanos as f64 / 1_000_000.0,
+            execution_budget.wall_clock_limit_millis
+        ),
+    });
+    pair_report.run_status = Section5PairRunStatus::GateFailed;
+    pair_report.survived_required_gates = false;
+    pair_report.ranking_score = None;
+    pair_report
 }
 
 struct HierarchyAnalysis {
@@ -2045,5 +2130,141 @@ fn unique_artifact_file_name(
             return candidate;
         }
         index += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Section5GateKind, Section5GateResult, Section5GateStatus, Section5PairReport,
+        Section5PairRunStatus, apply_execution_budget_to_pair_report, validate_section5_contract,
+    };
+    use crate::{
+        CandidateIdentity, ExecutionBudget, ProvenanceManifest, ResearchCoverage,
+        Section5DepthBoundPolicy, Section5EpsilonPolicy, Section5HierarchyContract,
+        Section5HierarchyNodeReport, Section5HierarchyStrategyIdentity,
+        Section5HierarchyStrategyKind, Section5MetricSemanticsConsistencyResult,
+        SharedCandidateConfig,
+    };
+
+    #[test]
+    fn section5_contract_rejects_zero_execution_budget() {
+        let result = validate_section5_contract(&Section5HierarchyContract {
+            contract_id: "contract".into(),
+            fanout_min: 2,
+            fanout_max: 4,
+            depth_bound_policy: Section5DepthBoundPolicy::CeilLogByMinFanout,
+            metric_semantics_profile: "euclidean".into(),
+            grouping_functional: "euclidean-centroid-distance".into(),
+            dispersion_functional: "mean-squared-radius".into(),
+            metric_compatibility_rule: "closed-profile-v1".into(),
+            beta_threshold: 1.25,
+            epsilon_policy: Section5EpsilonPolicy {
+                parent_to_root_dispersion_ratio_max: 0.01,
+            },
+            section4_source_label: "fixture".into(),
+            later_evaluation_line: "later".into(),
+            execution_budget: Some(ExecutionBudget {
+                wall_clock_limit_millis: 0,
+            }),
+        });
+
+        assert!(matches!(
+            result,
+            Err(crate::EvaluatorError::InvalidConfiguration(message))
+                if message.contains("execution budget must be positive")
+        ));
+    }
+
+    #[test]
+    fn execution_budget_gate_disqualifies_slow_successful_pairs() {
+        let report = apply_execution_budget_to_pair_report(
+            successful_pair_report(),
+            Some(&ExecutionBudget {
+                wall_clock_limit_millis: 1,
+            }),
+        );
+
+        assert_eq!(report.run_status, Section5PairRunStatus::GateFailed);
+        assert!(!report.survived_required_gates);
+        assert!(report.ranking_score.is_none());
+        assert!(report.gate_results.iter().any(|gate| {
+            gate.gate_id == "execution-budget"
+                && gate.kind == Section5GateKind::ExecutionBudget
+                && matches!(gate.status, Section5GateStatus::Failed)
+        }));
+    }
+
+    fn successful_pair_report() -> Section5PairReport {
+        Section5PairReport {
+            leaf_candidate_identity: CandidateIdentity {
+                candidate_id: "balanced".into(),
+                implementation_label: "Balanced fixture".into(),
+                software_identity: "balanced-fixture-v1".into(),
+            },
+            hierarchy_strategy_identity: Section5HierarchyStrategyIdentity {
+                strategy_id: "bottom-up-agglomeration".into(),
+                label: "Bottom up".into(),
+                kind: Section5HierarchyStrategyKind::BottomUpAgglomeration,
+            },
+            originating_section4_profile_id: "fixture".into(),
+            originating_section4_source_label: "fixture".into(),
+            originating_section4_ranking_score: Some(1.0),
+            originating_section4_provenance: ProvenanceManifest {
+                profile_id: "fixture".into(),
+                corpus_ids: vec!["fixture".into()],
+                source_reference_ids: vec!["fixture-source".into()],
+                candidate_identity: CandidateIdentity {
+                    candidate_id: "balanced".into(),
+                    implementation_label: "Balanced fixture".into(),
+                    software_identity: "balanced-fixture-v1".into(),
+                },
+                shared_candidate_config: SharedCandidateConfig {
+                    cluster_count: 2,
+                    dimensions: 2,
+                    balance_constraints: None,
+                    random_seed: Some(7),
+                },
+                seed_policy: "fixed-seed-7".into(),
+                software_identity: "fixture".into(),
+                floating_point_profile: "ieee754-deterministic-no-fma".into(),
+                hardware_profile: "fixture-cpu".into(),
+            },
+            metric_semantics_profile: "euclidean".into(),
+            metric_compatibility_rule: "closed-profile-v1".into(),
+            effective_grouping_functional: Some("euclidean-centroid-distance".into()),
+            effective_dispersion_functional: Some("mean-squared-radius".into()),
+            metric_semantics_consistency_result:
+                Section5MetricSemanticsConsistencyResult::Consistent,
+            metric_semantics_consistency_detail: "consistent".into(),
+            leaf_cluster_count: 4,
+            internal_node_count: 1,
+            max_depth: 1,
+            theoretical_depth_bound: 1,
+            minimum_observed_fanout: 2,
+            maximum_observed_fanout: 2,
+            refinement_edge_count: 4,
+            maximum_observed_beta: 0.5,
+            epsilon_exception_use_count: 0,
+            execution_budget_millis: None,
+            build_elapsed_nanos: 2_500_000,
+            build_throughput_leaf_nodes_per_second: 1600.0,
+            peak_build_memory_bytes: 1024,
+            gate_results: vec![Section5GateResult {
+                gate_id: "fanout-bounds".into(),
+                label: "Fanout bounds".into(),
+                kind: Section5GateKind::FanoutBounds,
+                coverage: ResearchCoverage::Direct,
+                research_goal_ids: vec!["RG-HIERARCHY".into()],
+                status: Section5GateStatus::Passed,
+                observed_value: Some(2.0),
+                detail: "passed".into(),
+            }],
+            hierarchy_nodes: Vec::<Section5HierarchyNodeReport>::new(),
+            hierarchy_edges: Vec::new(),
+            run_status: Section5PairRunStatus::Succeeded,
+            survived_required_gates: true,
+            ranking_score: Some(1.0),
+        }
     }
 }

@@ -199,6 +199,8 @@ The system must declare fixed build and query performance thresholds for the ben
 - **Query Throughput Contract:** The implementation must declare a minimum sustained query throughput $QPS_{\min}$ on $H_{\text{ref}}$ and meet or exceed it.
 - **Pre-Declaration Rule:** $R_{\text{build,min}}$, $T_{\text{query,p95,max}}$, and $QPS_{\min}$ must be fixed before evaluation and cannot be changed after benchmark results are observed.
 - **Scaling Verification:** The declared performance contracts must be verified on at least three benchmark dataset sizes spanning a factor-of-4 range in $N$, all within the declared supported dimensionality range. In addition, the implementation must declare asymptotic build complexity and per-query routing complexity as functions of $N$ and $d$.
+- **Realistic Qualification Corpus:** Any benchmark suite used to qualify the system for realistic archival embeddings must include at least one corpus family whose real-vector count is in the tens-of-thousands, whose dimensionality lies within the realistic embedding range, and whose real-vector count is not an exact multiple of the configured leaf size $L$ so that alignment-policy behavior is exercised under realistic conditions rather than toy multiples.
+- **Bounded-Time Qualification Rule:** The benchmark contract must declare a maximum wall-clock build time or equivalent timeout budget for each evaluated dataset size on $H_{\text{ref}}$. An implementation that does not complete within the declared budget is disqualified for that configuration and must be reported as a deterministic timeout outcome rather than being silently omitted.
 
 ### 12. Memory Budget
 
@@ -225,6 +227,7 @@ The system must declare the dimensionality range for which all guarantees in thi
 - **Uniform Dimensionality:** All vectors within a single dataset must share the same dimensionality $d$.
 - **Within-Range Guarantee:** All requirements in this specification must hold for any dataset whose vectors lie within the declared dimensionality range.
 - **Out-of-Range Rejection:** Datasets outside the declared range must be rejected deterministically before the build begins.
+- **Realistic Qualification Coverage:** Any benchmark suite used to claim realistic-corpus support must include at least one qualification corpus whose dimensionality lies within the realistic embedding band of $384 \le d \le 4096$ and must not rely exclusively on toy low-dimensional corpora.
 
 ### 14. Distance Metric Contract
 

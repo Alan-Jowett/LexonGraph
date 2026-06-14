@@ -25,16 +25,17 @@ use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
     CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
-    EvaluationEntitySource, EvaluatorError, FsOverlayZipBlockStore, GateStatus, LaterPhaseIdentity,
-    LaterPhaseIdentityKind, Section4CorpusFamily, Section4DimensionalityContract,
-    Section4ExperimentTrackContract, Section4FrozenContractItem,
+    EvaluationEntitySource, EvaluatorError, ExecutionBudget, FsOverlayZipBlockStore, GateStatus,
+    LaterPhaseIdentity, LaterPhaseIdentityKind, Section4CorpusFamily,
+    Section4DimensionalityContract, Section4ExperimentTrackContract, Section4FrozenContractItem,
     Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
-    Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
-    Section5MetricSemanticsConsistencyResult, Section5PairRunStatus, SharedBalanceConstraints,
-    StructuredFailure, TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
-    emit_campaign_artifacts, emit_section5_campaign_artifacts, generate_section4_suite_assets,
-    registered_candidate_names, registered_hierarchy_strategy_names, resolve_registered_candidates,
+    Section4QualificationSurface, Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
+    Section5HierarchyContract, Section5MetricSemanticsConsistencyResult, Section5PairRunStatus,
+    SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
+    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
+    emit_section5_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    registered_hierarchy_strategy_names, resolve_registered_candidates,
     resolve_registered_hierarchy_strategies, run_evaluation_campaign, run_section4_suite,
     run_section5_campaign, section4_family_candidate_names, write_section4_suite_artifacts,
 };
@@ -197,6 +198,7 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
         suite_id: "section4-corpus-panel-suite".into(),
         experiment_track_contract: Section4ExperimentTrackContract {
             track_id: "leaf-screening-euclidean".into(),
+            qualification_surface: Section4QualificationSurface::SmokeRegression,
             sensitivity_leaf_sizes: vec![2, 4],
             dimensionality_contract: Section4DimensionalityContract {
                 min_dimensions: 2,
@@ -218,6 +220,9 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
             dispersion_functional: "variance under the declared Euclidean metric".into(),
             candidate_threading_model: "single-threaded section-4 screening".into(),
             reduction_order_strategy: "single-thread sequential reduction order".into(),
+            execution_budget: Some(ExecutionBudget {
+                wall_clock_limit_millis: 60_000,
+            }),
             one_thread_vs_n_thread_identity_proof_surface: Some(Section4ProofSurface::Deferred),
             later_phase_identities,
             frozen_items: vec![
@@ -389,6 +394,28 @@ fn checked_in_section4_suite_manifest() -> Section4SuiteManifest {
         &suite_dir,
     );
     manifest
+}
+
+fn realistic_qualification_suite_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("section4")
+        .join("realistic-qualification-suite")
+}
+
+fn realistic_qualification_suite_spec() -> Section4SuiteSpec {
+    serde_json::from_str(
+        &fs::read_to_string(realistic_qualification_suite_dir().join("section4-suite-spec.json"))
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+fn realistic_qualification_section5_contract() -> Section5HierarchyContract {
+    serde_json::from_str(
+        &fs::read_to_string(realistic_qualification_suite_dir().join("section5-contract.json"))
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 struct HarvestedFixtureRecord {
@@ -3218,6 +3245,130 @@ fn val_stream_eval_050_section5_executes_supported_non_euclidean_semantics_and_r
                 .iter()
                 .any(|gate| gate.gate_id == "metric-semantics-compatibility")
     }));
+}
+
+#[test]
+fn val_stream_eval_051_repository_defines_a_canonical_realistic_qualification_surface() {
+    let suite_dir = realistic_qualification_suite_dir();
+    let suite_spec = realistic_qualification_suite_spec();
+    let section5_contract = realistic_qualification_section5_contract();
+    let materialization_spec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            suite_dir
+                .join("sources")
+                .join("real-world-harvested-realistic-materialization-spec.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let heldout_queries: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            suite_dir
+                .join("sources")
+                .join("real-world-harvested-realistic-heldout-queries.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        suite_spec.experiment_track_contract.qualification_surface,
+        Section4QualificationSurface::RealisticQualification
+    );
+    assert_eq!(suite_spec.leaf_size, 64);
+    assert!((64..=128).contains(&suite_spec.leaf_size));
+    assert!((384..=4096).contains(&suite_spec.dimensions));
+    assert_eq!(suite_spec.profiles.len(), 1);
+    let harvested_profile = &suite_spec.profiles[0];
+    assert_eq!(harvested_profile.scale_tier_id, "n-10017");
+    match &harvested_profile.source {
+        Section4ProfileSourceSpec::Harvested {
+            family,
+            source,
+            entity_id_metadata_key,
+            real_entity_count,
+            alignment_policy,
+            ..
+        } => {
+            assert_eq!(*family, Section4CorpusFamily::RealWorldHarvested);
+            assert_eq!(
+                source.root_block_id,
+                "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8"
+            );
+            assert_eq!(entity_id_metadata_key, "entity_id");
+            assert!(*real_entity_count >= 10_000);
+            assert_ne!(*real_entity_count % suite_spec.leaf_size, 0);
+            assert_eq!(
+                *alignment_policy,
+                AlignmentPolicy::DeterministicSyntheticPadding
+            );
+        }
+        Section4ProfileSourceSpec::Synthetic { .. } => {
+            panic!("realistic qualification suite must use a harvested real-world profile")
+        }
+    }
+    assert_eq!(section5_contract.fanout_min, 64);
+    assert_eq!(section5_contract.fanout_max, 128);
+    assert_eq!(
+        section5_contract.section4_source_label,
+        "section4-realistic-qualification-v1"
+    );
+    assert_eq!(
+        materialization_spec["external_source"]["root_block_id"],
+        "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8"
+    );
+    assert_eq!(
+        materialization_spec["qualification_target"]["target_real_entity_count"],
+        10017
+    );
+    assert_eq!(
+        heldout_queries["query_entity_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn val_stream_eval_052_realistic_qualification_tracks_declare_timeout_disqualification_coverage() {
+    let suite_spec = realistic_qualification_suite_spec();
+    let section5_contract = realistic_qualification_section5_contract();
+    let section4_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("section4.rs"),
+    )
+    .unwrap();
+    let section5_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("section5.rs"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        suite_spec
+            .experiment_track_contract
+            .execution_budget
+            .as_ref()
+            .unwrap()
+            .wall_clock_limit_millis,
+        1_800_000
+    );
+    assert_eq!(
+        section5_contract
+            .execution_budget
+            .as_ref()
+            .unwrap()
+            .wall_clock_limit_millis,
+        600_000
+    );
+    assert!(
+        section4_source
+            .contains("execution_budget_gate_disqualifies_slow_successful_candidate_runs")
+    );
+    assert!(section5_source.contains("execution_budget_gate_disqualifies_slow_successful_pairs"));
 }
 
 #[test]
