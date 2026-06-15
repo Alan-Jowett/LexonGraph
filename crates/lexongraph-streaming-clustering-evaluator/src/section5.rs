@@ -245,7 +245,8 @@ struct PairReportContext<'a> {
     strategy: &'a RegisteredHierarchyStrategy,
     contract: &'a Section5HierarchyContract,
     metric_semantics_report: PairMetricSemanticsReportContext,
-    elapsed: u128,
+    leaf_summary_elapsed_nanos: u128,
+    hierarchy_build_elapsed_nanos: u128,
     peak_build_memory_bytes: u64,
 }
 
@@ -733,11 +734,13 @@ fn build_pair_reports(
     for survivor in survivor_reports {
         let leaf_summaries_result = match &metric_semantics_resolution {
             Section5MetricSemanticsResolution::Consistent(resolved_metric_semantics) => {
-                Some(build_leaf_cluster_summaries(
+                let started = Instant::now();
+                let result = build_leaf_cluster_summaries(
                     survivor,
                     evaluation_entities,
                     *resolved_metric_semantics,
-                ))
+                );
+                Some((result, started.elapsed().as_nanos()))
             }
             Section5MetricSemanticsResolution::Unsupported(_)
             | Section5MetricSemanticsResolution::Inconsistent(_) => None,
@@ -746,9 +749,9 @@ fn build_pair_reports(
             match (&metric_semantics_resolution, &leaf_summaries_result) {
                 (
                     Section5MetricSemanticsResolution::Consistent(resolved_metric_semantics),
-                    Some(Ok(leaf_summaries)),
+                    Some((Ok(leaf_summaries), leaf_summary_elapsed_nanos)),
                 ) => {
-                    let ((build, elapsed), peak_build_memory_bytes) =
+                    let ((build, hierarchy_build_elapsed_nanos), peak_build_memory_bytes) =
                         measure_peak_build_memory(|| {
                             let started = Instant::now();
                             let build = build_hierarchy(
@@ -768,13 +771,17 @@ fn build_pair_reports(
                             strategy,
                             contract,
                             metric_semantics_report: metric_semantics_report.clone(),
-                            elapsed,
+                            leaf_summary_elapsed_nanos: *leaf_summary_elapsed_nanos,
+                            hierarchy_build_elapsed_nanos,
                             peak_build_memory_bytes,
                         },
                         build,
                     ));
                 }
-                (Section5MetricSemanticsResolution::Consistent(_), Some(Err(error))) => {
+                (
+                    Section5MetricSemanticsResolution::Consistent(_),
+                    Some((Err(error), leaf_summary_elapsed_nanos)),
+                ) => {
                     pair_reports.push(build_pair_report(
                         PairReportContext {
                             section4_profile_id: &section4_campaign.profile_id,
@@ -783,7 +790,8 @@ fn build_pair_reports(
                             strategy,
                             contract,
                             metric_semantics_report: metric_semantics_report.clone(),
-                            elapsed: 0,
+                            leaf_summary_elapsed_nanos: *leaf_summary_elapsed_nanos,
+                            hierarchy_build_elapsed_nanos: 0,
                             peak_build_memory_bytes: 0,
                         },
                         Err(error.to_string()),
@@ -1198,6 +1206,10 @@ fn build_pair_report(
     context: PairReportContext<'_>,
     build: Result<HierarchyBuild, String>,
 ) -> Section5PairReport {
+    let total_elapsed_nanos = total_pair_execution_elapsed_nanos(
+        context.leaf_summary_elapsed_nanos,
+        context.hierarchy_build_elapsed_nanos,
+    );
     match build {
         Ok(build) => {
             let analysis = analyze_hierarchy(&build, context.contract);
@@ -1210,10 +1222,10 @@ fn build_pair_report(
                 .iter()
                 .filter(|node| matches!(node.kind, Section5HierarchyNodeKind::LeafCluster))
                 .count();
-            let build_throughput_leaf_nodes_per_second = if context.elapsed == 0 {
+            let build_throughput_leaf_nodes_per_second = if total_elapsed_nanos == 0 {
                 leaf_cluster_count as f64
             } else {
-                leaf_cluster_count as f64 / (context.elapsed as f64 / 1_000_000_000.0)
+                leaf_cluster_count as f64 / (total_elapsed_nanos as f64 / 1_000_000_000.0)
             };
             let ranking_score = if survived_required_gates {
                 Some(compute_pair_ranking_score(
@@ -1272,7 +1284,7 @@ fn build_pair_report(
                     .execution_budget
                     .as_ref()
                     .map(|budget| budget.wall_clock_limit_millis),
-                build_elapsed_nanos: context.elapsed,
+                build_elapsed_nanos: total_elapsed_nanos,
                 build_throughput_leaf_nodes_per_second,
                 peak_build_memory_bytes: context.peak_build_memory_bytes,
                 gate_results,
@@ -1335,7 +1347,7 @@ fn build_pair_report(
                 .execution_budget
                 .as_ref()
                 .map(|budget| budget.wall_clock_limit_millis),
-            build_elapsed_nanos: context.elapsed,
+            build_elapsed_nanos: total_elapsed_nanos,
             build_throughput_leaf_nodes_per_second: 0.0,
             peak_build_memory_bytes: context.peak_build_memory_bytes,
             gate_results: vec![Section5GateResult {
@@ -1355,6 +1367,13 @@ fn build_pair_report(
             ranking_score: None,
         },
     }
+}
+
+fn total_pair_execution_elapsed_nanos(
+    leaf_summary_elapsed_nanos: u128,
+    hierarchy_build_elapsed_nanos: u128,
+) -> u128 {
+    leaf_summary_elapsed_nanos + hierarchy_build_elapsed_nanos
 }
 
 fn metric_semantics_failure_pair_report(
@@ -2160,7 +2179,8 @@ fn unique_artifact_file_name(
 mod tests {
     use super::{
         Section5GateKind, Section5GateResult, Section5GateStatus, Section5PairReport,
-        Section5PairRunStatus, apply_execution_budget_to_pair_report, validate_section5_contract,
+        Section5PairRunStatus, apply_execution_budget_to_pair_report,
+        total_pair_execution_elapsed_nanos, validate_section5_contract,
     };
     use crate::{
         CandidateIdentity, ExecutionBudget, ProvenanceManifest, ResearchCoverage,
@@ -2236,6 +2256,14 @@ mod tests {
                 && matches!(gate.status, Section5GateStatus::Failed)
                 && gate.detail.contains("ended with status GateFailed")
         }));
+    }
+
+    #[test]
+    fn total_pair_execution_elapsed_nanos_includes_leaf_summary_time() {
+        assert_eq!(
+            total_pair_execution_elapsed_nanos(4_000_000, 2_500_000),
+            6_500_000
+        );
     }
 
     fn successful_pair_report() -> Section5PairReport {

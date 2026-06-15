@@ -23,8 +23,8 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 use crate::{
-    AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
-    BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark,
+    AlignmentPolicy, ArtifactHygieneEvidence, BenchmarkProfile, BlockStoreCorpusReference,
+    BlockStoreEvaluationCorpus, BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
     EvaluationEntity, EvaluationEntitySource, EvaluatorError, ExecutionBudget, GateDeclaration,
     GateKind, GateResult, GateStatus, GroundTruthNeighborhood, LaterPhaseIdentity,
@@ -2246,6 +2246,13 @@ fn apply_execution_budget_to_candidate_run_report(
     run_report.run_status = CandidateRunStatus::GateFailed;
     run_report.survived_required_gates = false;
     run_report.ranking_score = None;
+    run_report.artifact_hygiene = ArtifactHygieneEvidence {
+        comparative_metrics_emitted: run_report.artifact_hygiene.comparative_metrics_emitted,
+        success_shaped_completion_artifacts_emitted: false,
+        detail:
+            "comparative metrics may have been emitted before the post-run execution budget disqualification, but no success-shaped completion artifact remains valid for the rejected run"
+                .into(),
+    };
     run_report.terminal_failure_code = Some("gate-failure".into());
     run_report.terminal_failure_message = Some(detail.clone());
     run_report.terminal_failure = Some(StructuredFailure::GateFailure {
@@ -2497,6 +2504,18 @@ mod tests {
         assert!(report.gate_results.iter().any(|gate| {
             gate.gate_id == "execution-budget" && matches!(gate.status, GateStatus::Failed)
         }));
+        assert!(report.artifact_hygiene.comparative_metrics_emitted);
+        assert!(
+            !report
+                .artifact_hygiene
+                .success_shaped_completion_artifacts_emitted
+        );
+        assert!(
+            report
+                .artifact_hygiene
+                .detail
+                .contains("post-run execution budget disqualification")
+        );
     }
 
     #[test]
