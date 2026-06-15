@@ -1,7 +1,7 @@
 {
   "materialization_id": "real-world-harvested-realistic-qualification-v1",
   "external_source": {
-    "archive_path_hint": "C:\\data2\\block-store.zip",
+    "archive_identity_hint": "operator-provided external zip archive used for realistic qualification harvesting",
     "root_block_id": "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8",
     "entity_id_metadata_key": "chunk_locator"
   },
