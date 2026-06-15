@@ -2181,12 +2181,12 @@ fn apply_execution_budget_to_candidate_run_report(
     elapsed_nanos: u128,
     execution_budget: Option<&ExecutionBudget>,
 ) -> crate::CandidateRunReport {
-    run_report.observed_elapsed_nanos = Some(elapsed_nanos);
     run_report.execution_budget_millis =
         execution_budget.map(|budget| budget.wall_clock_limit_millis);
     let Some(execution_budget) = execution_budget else {
         return run_report;
     };
+    run_report.observed_elapsed_nanos = Some(elapsed_nanos);
     let budget_nanos = execution_budget.wall_clock_limit_millis as u128 * 1_000_000;
     let elapsed_millis = elapsed_nanos as f64 / 1_000_000.0;
     let within_budget = elapsed_nanos <= budget_nanos;
@@ -2522,6 +2522,24 @@ mod tests {
                     .detail
                     .contains("ended with status CandidateSharedContractFailure")
         }));
+    }
+
+    #[test]
+    fn execution_budget_fields_remain_absent_without_budget() {
+        let report = apply_execution_budget_to_candidate_run_report(
+            successful_candidate_run_report(),
+            2_500_000,
+            None,
+        );
+
+        assert_eq!(report.execution_budget_millis, None);
+        assert_eq!(report.observed_elapsed_nanos, None);
+        assert!(
+            !report
+                .gate_results
+                .iter()
+                .any(|gate| gate.gate_id == "execution-budget")
+        );
     }
 
     fn realistic_qualification_suite_spec(real_entity_count: usize) -> Section4SuiteSpec {
