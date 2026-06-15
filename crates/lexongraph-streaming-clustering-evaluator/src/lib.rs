@@ -48,14 +48,14 @@ pub use section4::{
     Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
     Section4FrozenContractItem, Section4GeneratedProfile, Section4HarvestEmbeddingAdmissibility,
     Section4HarvestPolicy, Section4HarvestSubsetSelection, Section4MetricContract,
-    Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface, Section4ScaleTierKind,
-    Section4SuiteManifest, Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport,
-    Section4SuiteRunProfileReport, Section4SuiteRunReport, Section4SuiteSpec,
-    generate_section4_suite_assets, materialize_section4_archive_from_json,
-    render_section4_suite_scorecard, render_section4_survivor_decision,
-    resolve_profile_block_store_paths, resolve_registered_candidates,
-    resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths, run_section4_suite,
-    write_section4_suite_artifacts,
+    Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
+    Section4QualificationSurface, Section4ScaleTierKind, Section4SuiteManifest,
+    Section4SuiteRunArtifacts, Section4SuiteRunCandidateReport, Section4SuiteRunProfileReport,
+    Section4SuiteRunReport, Section4SuiteSpec, generate_section4_suite_assets,
+    materialize_section4_archive_from_json, render_section4_suite_scorecard,
+    render_section4_survivor_decision, resolve_profile_block_store_paths,
+    resolve_registered_candidates, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_section4_suite, write_section4_suite_artifacts,
 };
 pub use section5::{
     RegisteredHierarchyStrategy, Section5CampaignArtifacts, Section5CampaignReport,
@@ -119,6 +119,11 @@ pub enum ResearchCoverage {
     Direct,
     Proxy,
     Deferred,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionBudget {
+    pub wall_clock_limit_millis: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -588,6 +593,7 @@ pub enum GateKind {
     OneClusterPerEntity,
     NoEmptyDeclaredClusters,
     DeterministicObservableResults,
+    ExecutionBudget,
     MetricAtLeast { metric_id: String, minimum: f64 },
 }
 
@@ -819,6 +825,10 @@ pub struct CandidateRunReport {
     pub gate_results: Vec<GateResult>,
     pub deferred_research_goals: Vec<DeferredResearchGoalResult>,
     pub artifact_hygiene: ArtifactHygieneEvidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_budget_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_elapsed_nanos: Option<u128>,
     pub run_status: CandidateRunStatus,
     pub survived_required_gates: bool,
     pub ranking_score: Option<f64>,
@@ -1666,6 +1676,8 @@ fn failed_candidate_run(
                 "candidate execution failed before comparative metrics or success-shaped completion artifacts could be emitted"
                     .into(),
         },
+        execution_budget_millis: None,
+        observed_elapsed_nanos: None,
         run_status: CandidateRunStatus::CandidateSharedContractFailure,
         survived_required_gates: false,
         ranking_score: None,
@@ -1725,6 +1737,8 @@ fn failed_corpus_source_run(
                 "corpus-source resolution failed before comparative metrics or success-shaped completion artifacts could be emitted"
                     .into(),
         },
+        execution_budget_millis: None,
+        observed_elapsed_nanos: None,
         run_status: CandidateRunStatus::CorpusSourceFailure,
         survived_required_gates: false,
         ranking_score: None,
@@ -1858,6 +1872,8 @@ fn finalize_successful_run(
             })
             .collect(),
         artifact_hygiene,
+        execution_budget_millis: None,
+        observed_elapsed_nanos: None,
         run_status: if survived_required_gates {
             CandidateRunStatus::Succeeded
         } else {
@@ -1939,7 +1955,7 @@ fn compute_gate_results_with_filter(
     profile
         .gate_declarations
         .iter()
-        .filter(|gate| include_gate(&gate.kind))
+        .filter(|gate| include_gate(&gate.kind) && !matches!(gate.kind, GateKind::ExecutionBudget))
         .map(|gate| match &gate.kind {
             GateKind::ExactLeafOccupancy => GateResult {
                 gate_id: gate.gate_id.clone(),
@@ -2027,6 +2043,11 @@ fn compute_gate_results_with_filter(
                         metric_id, minimum, observed
                     ),
                 }
+            }
+            GateKind::ExecutionBudget => {
+                unreachable!(
+                    "execution-budget gates are applied by section-4/section-5 suite workflows"
+                )
             }
         })
         .collect()

@@ -1,0 +1,12 @@
+{
+  "identity_id": "real-world-harvested-realistic-heldout-queries",
+  "corpus_id": "real-world-harvested-realistic",
+  "scale_tier_id": "n-10017",
+  "entity_id_metadata_key": "entity_id",
+  "query_entity_ids": [
+    "afa26c5df1782d007bf261037fe77ebf3cdecdea13bcf012c182c7f968daa54a:0"
+  ],
+  "source_chunk_locators": [
+    "afa26c5df1782d007bf261037fe77ebf3cdecdea13bcf012c182c7f968daa54a:0"
+  ]
+}

@@ -529,6 +529,12 @@ section-4 candidate comparisons are not allowed to reinterpret, including:
 - the declared reduction-order strategy for any deterministic parallel or
   aggregate computation permitted by the track
 - the declared hardware profile
+- any declared wall-clock execution budget or timeout-disqualification policy
+
+When an experiment track is intended to qualify realistic corpus behavior rather
+than only smoke or regression behavior, the frozen contract shall also identify
+that track as a realistic qualification track and shall freeze a primary
+`leaf_size` in the `64..128` regime for that track.
 
 ### REQ-STREAM-EVAL-032
 
@@ -562,6 +568,18 @@ repeated-comparison small, medium, and large tiers for the harvested,
 well-clustered, weak-cluster or uniform, anisotropic or manifold, and
 near-duplicate-heavy families, plus at least one explicit deterministic-padding
 profile used to compare strict-alignment versus padding behavior.
+
+The canonical repository-managed realistic qualification panel shall include at
+least one harvested real-world corpus family whose checked-in qualification tier
+or deterministic nearest-practical equivalent:
+
+- contains tens of thousands of real entities
+- uses a dimensionality within the `384..4096` range
+- is not evenly divisible by the track's primary `leaf_size`
+
+Smaller fixture or smoke-oriented corpora may remain in the repository for
+regression ergonomics, but they shall not be the only checked-in basis for
+claiming realistic-corpus qualification.
 
 ### REQ-STREAM-EVAL-033
 
@@ -638,6 +656,10 @@ applicable to the same corpus family or comparison study, the workflow shall
 report their distinct invariant and metric outcomes together with the declared
 normalized build-cost comparison used to judge the alignment-policy tradeoff.
 
+For realistic qualification tracks, the workflow shall also apply the declared
+bounded-time contract and record deterministic timeout-disqualification outcomes
+for candidates that fail to complete within the frozen execution budget.
+
 ### REQ-STREAM-EVAL-037
 
 For section-4 benchmark executions, the evaluator shall report leaf-stage
@@ -651,6 +673,9 @@ At minimum, this revision shall support deterministic reporting of:
 - build time per vector or an equivalent normalized leaf-stage build-cost
   measure declared by the benchmark suite
 - peak build memory during section-4 execution
+- wall-clock elapsed time relative to the declared execution budget, including
+  whether the candidate completed, timed out, or was disqualified on bounded-
+  time grounds
 
 When the frozen experiment-track contract carries a later-phase loaded-index
 memory obligation but section-4 does not materialize a persisted loadable
@@ -799,6 +824,11 @@ At minimum, that frozen contract shall declare:
 The suite shall also label which frozen items are measured directly during
 section-4 screening versus carried forward as deferred obligations.
 
+For realistic qualification tracks, the frozen contract shall also distinguish
+the realistic qualification surface from smoke or regression-only tracks and
+shall record the realistic dimensionality band and non-aligned corpus
+expectation used to interpret qualification claims.
+
 ### REQ-STREAM-EVAL-044
 
 When a frozen benchmark-contract item from
@@ -849,6 +879,11 @@ For any corpus family intended to carry forward into later routing phases, this
 scale-tier contract shall declare held-out query-set identities for those later
 studies even though section-4 execution in this revision shall not depend on
 consuming those later-phase query assets.
+
+For the canonical realistic qualification panel, this scale-tier contract shall
+include at least one repository-managed harvested real-world tier in the tens-
+of-thousands regime whose real-entity count is not an exact multiple of the
+primary `leaf_size`.
 
 The first complete checked-in section-4 panel in this revision shall include at
 least one such held-out query-set identity for a checked-in harvested
@@ -993,6 +1028,10 @@ benchmark-declared metric semantics. If the declared combination is unsupported
 or internally inconsistent, the evaluator shall reject the contract
 deterministically before pair execution begins.
 
+The same hierarchy-stage contract shall also declare the bounded-time execution
+budget shared by all compared pairs together with the timeout-disqualification
+semantics used when a pair exceeds that budget.
+
 ### REQ-STREAM-EVAL-056
 
 For each surviving section-4 leaf strategy × registered hierarchy strategy
@@ -1066,6 +1105,38 @@ the evaluator boundary again:
 Section-5 direct hierarchy measurements shall therefore be reported as staged
 evidence toward the parent research goals rather than as proof of those later
 phases.
+
+### REQ-STREAM-EVAL-060
+
+The repository shall define a canonical realistic-corpus qualification surface
+for the streaming clustering evaluator that is distinct from fixture-only or
+smoke-only validation surfaces.
+
+At minimum, this canonical qualification surface shall be repository-managed and
+reproducible from checked-in assets or checked-in generation specifications and
+shall include at least one harvested real-world corpus family whose
+qualification tier:
+
+- contains tens of thousands of real entities
+- uses a uniform dimensionality in the `384..4096` range
+- is not an exact multiple of the primary `leaf_size`
+- participates in the same section-4 and later section-5 qualification workflow
+  used for candidate down-selection
+
+### REQ-STREAM-EVAL-061
+
+The evaluator shall treat bounded-time completion as a qualification constraint
+for both section-4 and section-5 realistic-corpus runs.
+
+At minimum:
+
+- each realistic qualification track shall declare a deterministic wall-clock
+  execution budget or equivalent timeout contract for section-4 candidate runs
+  and for section-5 hierarchy-stage pairs
+- a candidate or pair that exceeds the declared budget shall be reported as a
+  deterministic timeout-disqualification outcome rather than as a survivor
+- timeout-disqualification shall preserve deterministic artifact hygiene and
+  provenance in the same report model used for other gate or contract failures
 
 ## Out of Scope
 

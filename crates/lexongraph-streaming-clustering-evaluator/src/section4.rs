@@ -23,15 +23,16 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 use crate::{
-    AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreEvaluationCorpus,
-    BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark,
+    AlignmentPolicy, ArtifactHygieneEvidence, BenchmarkProfile, BlockStoreCorpusReference,
+    BlockStoreEvaluationCorpus, BlockStoreReferenceStore, CandidateRunStatus, CompressionBenchmark,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredResearchGoal, EmbeddingWorkloadSource,
-    EvaluationEntity, EvaluationEntitySource, EvaluatorError, GateDeclaration, GateKind,
-    GroundTruthNeighborhood, LaterPhaseIdentity, LaterPhaseIdentityKind, MetricDeclaration,
-    MetricKind, ProbeWorkload, RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage,
-    SharedBalanceConstraints, SharedCandidateConfig, TrainingPassSource, decode_embedding_to_f32,
-    emit_campaign_artifacts, load_leaf_records, metadata_value, rank_candidates, run_candidate,
-    validate_candidates, validate_profile, write_campaign_artifacts,
+    EvaluationEntity, EvaluationEntitySource, EvaluatorError, ExecutionBudget, GateDeclaration,
+    GateKind, GateResult, GateStatus, GroundTruthNeighborhood, LaterPhaseIdentity,
+    LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
+    ReproducibilityMetadata, ResearchCoverage, SharedBalanceConstraints, SharedCandidateConfig,
+    StructuredFailure, TrainingPassSource, decode_embedding_to_f32, emit_campaign_artifacts,
+    load_leaf_records, metadata_value, rank_candidates, run_candidate, validate_candidates,
+    validate_profile, write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +45,13 @@ pub enum Section4MetricContract {
 pub enum Section4ProofSurface {
     Direct,
     Deferred,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Section4QualificationSurface {
+    #[default]
+    SmokeRegression,
+    RealisticQualification,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +79,8 @@ pub struct Section4FrozenContractItem {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Section4ExperimentTrackContract {
     pub track_id: String,
+    #[serde(default)]
+    pub qualification_surface: Section4QualificationSurface,
     pub sensitivity_leaf_sizes: Vec<usize>,
     pub dimensionality_contract: Section4DimensionalityContract,
     pub declared_search_target: Option<String>,
@@ -94,6 +104,8 @@ pub struct Section4ExperimentTrackContract {
     pub candidate_threading_model: String,
     #[serde(default)]
     pub reduction_order_strategy: String,
+    #[serde(default)]
+    pub execution_budget: Option<ExecutionBudget>,
     #[serde(default)]
     pub one_thread_vs_n_thread_identity_proof_surface: Option<Section4ProofSurface>,
     #[serde(default)]
@@ -218,6 +230,8 @@ pub struct Section4SuiteRunCandidateReport {
     pub run_status: CandidateRunStatus,
     pub survived_required_gates: bool,
     pub ranking_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_budget_millis: Option<u64>,
     pub campaign_elapsed_nanos: u128,
     pub campaign_time_per_vector_nanos: f64,
     pub peak_build_memory_bytes: u64,
@@ -381,7 +395,9 @@ pub fn generate_section4_suite_assets(
             locality_ground_truth,
             compression_benchmark: spec.compression_benchmark.clone(),
             metric_declarations: section4_metric_declarations(),
-            gate_declarations: section4_gate_declarations(),
+            gate_declarations: section4_gate_declarations(
+                spec.experiment_track_contract.execution_budget.is_some(),
+            ),
             deferred_research_goals: default_deferred_research_goals(),
             later_phase_identities: later_phase_identities.clone(),
             reproducibility: spec.reproducibility.clone(),
@@ -617,6 +633,11 @@ pub fn run_section4_suite(
                     let run_report = run_candidate(&profile, candidate);
                     (run_report, started.elapsed().as_nanos())
                 });
+            let run_report = apply_execution_budget_to_candidate_run_report(
+                run_report,
+                elapsed,
+                manifest.experiment_track_contract.execution_budget.as_ref(),
+            );
             timings.insert(
                 candidate.identity.candidate_id.clone(),
                 (
@@ -624,6 +645,7 @@ pub fn run_section4_suite(
                     run_report.run_status.clone(),
                     run_report.survived_required_gates,
                     run_report.ranking_score,
+                    run_report.execution_budget_millis,
                     peak_build_memory_bytes,
                 ),
             );
@@ -641,7 +663,14 @@ pub fn run_section4_suite(
 
         let mut candidate_reports = Vec::with_capacity(comparative_report.run_reports.len());
         for run_report in &comparative_report.run_reports {
-            let (elapsed, status, survived, ranking_score, peak_build_memory_bytes) = timings
+            let (
+                elapsed,
+                status,
+                survived,
+                ranking_score,
+                execution_budget_millis,
+                peak_build_memory_bytes,
+            ) = timings
                 .get(&run_report.candidate_identity.candidate_id)
                 .cloned()
                 .ok_or_else(|| {
@@ -655,6 +684,7 @@ pub fn run_section4_suite(
                 run_status: status,
                 survived_required_gates: survived,
                 ranking_score,
+                execution_budget_millis,
                 campaign_elapsed_nanos: elapsed,
                 campaign_time_per_vector_nanos: elapsed as f64
                     / generated.evaluated_entity_count as f64,
@@ -723,13 +753,18 @@ pub fn render_section4_suite_scorecard(report: &Section4SuiteRunReport) -> Strin
             }
         ));
         for candidate in &profile.candidate_reports {
+            let execution_budget = candidate
+                .execution_budget_millis
+                .map(|budget| format!(", execution_budget_millis={budget}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "  candidate {}: {:?}, survived={}, campaign_time_per_vector_nanos={:.3}, peak_build_memory_bytes={}",
+                "  candidate {}: {:?}, survived={}, campaign_time_per_vector_nanos={:.3}, peak_build_memory_bytes={}{}",
                 candidate.candidate_id,
                 candidate.run_status,
                 candidate.survived_required_gates,
                 candidate.campaign_time_per_vector_nanos,
-                candidate.peak_build_memory_bytes
+                candidate.peak_build_memory_bytes,
+                execution_budget
             ));
         }
     }
@@ -1174,6 +1209,35 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             "section-4 suite must declare one_thread_vs_n_thread_identity_proof_surface".into(),
         ));
     }
+    if let Some(execution_budget) = &spec.experiment_track_contract.execution_budget
+        && execution_budget.wall_clock_limit_millis == 0
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-4 suite execution budget must be positive when declared".into(),
+        ));
+    }
+    if matches!(
+        spec.experiment_track_contract.qualification_surface,
+        Section4QualificationSurface::RealisticQualification
+    ) {
+        if spec.leaf_size < 64 || spec.leaf_size > 128 {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "realistic qualification track leaf_size {} must lie within 64..=128",
+                spec.leaf_size
+            )));
+        }
+        if spec.dimensions < 384 || spec.dimensions > 4096 {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "realistic qualification track dimensions {} must lie within 384..=4096",
+                spec.dimensions
+            )));
+        }
+        if spec.experiment_track_contract.execution_budget.is_none() {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "realistic qualification track must declare an execution budget".into(),
+            ));
+        }
+    }
     for identity in &spec.experiment_track_contract.later_phase_identities {
         if identity.identity_id.trim().is_empty() {
             return Err(EvaluatorError::InvalidConfiguration(
@@ -1241,6 +1305,7 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
     let mut declared_corpus_ids = HashSet::new();
     let mut declared_scale_tier_ids = HashSet::new();
     let mut declared_profile_coordinates = HashSet::new();
+    let mut has_realistic_harvested_profile = false;
     for profile in &spec.profiles {
         validate_profile_id(&profile.profile_id)?;
         if profile.corpus_id.trim().is_empty() {
@@ -1279,6 +1344,29 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
                 profile.profile_id, spec.neighbor_count
             )));
         }
+        if matches!(
+            spec.experiment_track_contract.qualification_surface,
+            Section4QualificationSurface::RealisticQualification
+        ) && matches!(
+            &profile.source,
+            Section4ProfileSourceSpec::Harvested {
+                family: Section4CorpusFamily::RealWorldHarvested,
+                ..
+            }
+        ) && real_entity_count >= 10_000
+            && !real_entity_count.is_multiple_of(spec.leaf_size)
+        {
+            has_realistic_harvested_profile = true;
+        }
+    }
+    if matches!(
+        spec.experiment_track_contract.qualification_surface,
+        Section4QualificationSurface::RealisticQualification
+    ) && !has_realistic_harvested_profile
+    {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "realistic qualification track must declare at least one harvested real-world profile with tens-of-thousands real entities and a real-entity count that is not divisible by leaf_size".into(),
+        ));
     }
     for identity in &spec.experiment_track_contract.later_phase_identities {
         if let Some(corpus_id) = &identity.corpus_id
@@ -2038,8 +2126,8 @@ fn section4_metric_declarations() -> Vec<MetricDeclaration> {
     ]
 }
 
-fn section4_gate_declarations() -> Vec<GateDeclaration> {
-    vec![
+fn section4_gate_declarations(include_execution_budget: bool) -> Vec<GateDeclaration> {
+    let mut gates = vec![
         GateDeclaration {
             gate_id: "exact-leaf-occupancy".into(),
             label: "Exact leaf occupancy".into(),
@@ -2075,7 +2163,104 @@ fn section4_gate_declarations() -> Vec<GateDeclaration> {
             coverage: ResearchCoverage::Direct,
             research_goal_ids: vec!["RG-DETERMINISM".into()],
         },
-    ]
+    ];
+    if include_execution_budget {
+        gates.push(GateDeclaration {
+            gate_id: "execution-budget".into(),
+            label: "Execution budget".into(),
+            kind: GateKind::ExecutionBudget,
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-PERFORMANCE".into()],
+        });
+    }
+    gates
+}
+
+fn apply_execution_budget_to_candidate_run_report(
+    mut run_report: crate::CandidateRunReport,
+    elapsed_nanos: u128,
+    execution_budget: Option<&ExecutionBudget>,
+) -> crate::CandidateRunReport {
+    run_report.execution_budget_millis =
+        execution_budget.map(|budget| budget.wall_clock_limit_millis);
+    let Some(execution_budget) = execution_budget else {
+        return run_report;
+    };
+    run_report.observed_elapsed_nanos = Some(elapsed_nanos);
+    let budget_nanos = execution_budget.wall_clock_limit_millis as u128 * 1_000_000;
+    let elapsed_millis = elapsed_nanos as f64 / 1_000_000.0;
+    let within_budget = elapsed_nanos <= budget_nanos;
+    let succeeded = matches!(&run_report.run_status, CandidateRunStatus::Succeeded);
+    if within_budget {
+        run_report.gate_results.push(GateResult {
+            gate_id: "execution-budget".into(),
+            label: "Execution budget".into(),
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-PERFORMANCE".into()],
+            status: GateStatus::Passed,
+            observed_value: Some(elapsed_millis),
+            detail: if succeeded {
+                format!(
+                    "completed in {:.3} ms within the declared execution budget of {} ms",
+                    elapsed_millis, execution_budget.wall_clock_limit_millis
+                )
+            } else {
+                format!(
+                    "run ended with status {:?} in {:.3} ms within the declared execution budget of {} ms",
+                    run_report.run_status, elapsed_millis, execution_budget.wall_clock_limit_millis
+                )
+            },
+        });
+        return run_report;
+    }
+
+    if !succeeded {
+        run_report.gate_results.push(GateResult {
+            gate_id: "execution-budget".into(),
+            label: "Execution budget".into(),
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-PERFORMANCE".into()],
+            status: GateStatus::Failed,
+            observed_value: Some(elapsed_millis),
+            detail: format!(
+                "run ended with status {:?} after {:.3} ms, exceeding the declared execution budget of {} ms",
+                run_report.run_status, elapsed_millis, execution_budget.wall_clock_limit_millis
+            ),
+        });
+        return run_report;
+    }
+
+    let detail = format!(
+        "observed wall-clock elapsed time {:.3} ms exceeded the declared execution budget of {} ms",
+        elapsed_millis, execution_budget.wall_clock_limit_millis
+    );
+    run_report.gate_results.push(GateResult {
+        gate_id: "execution-budget".into(),
+        label: "Execution budget".into(),
+        coverage: ResearchCoverage::Direct,
+        research_goal_ids: vec!["RG-PERFORMANCE".into()],
+        status: GateStatus::Failed,
+        observed_value: Some(elapsed_nanos as f64 / 1_000_000.0),
+        detail: detail.clone(),
+    });
+    run_report.run_status = CandidateRunStatus::GateFailed;
+    run_report.survived_required_gates = false;
+    run_report.ranking_score = None;
+    run_report.artifact_hygiene = ArtifactHygieneEvidence {
+        comparative_metrics_emitted: run_report.artifact_hygiene.comparative_metrics_emitted,
+        success_shaped_completion_artifacts_emitted: false,
+        detail:
+            "comparative metrics may have been emitted before the post-run execution budget disqualification, but no success-shaped completion artifact remains valid for the rejected run"
+                .into(),
+    };
+    run_report.terminal_failure_code = Some("gate-failure".into());
+    run_report.terminal_failure_message = Some(detail.clone());
+    run_report.terminal_failure = Some(StructuredFailure::GateFailure {
+        candidate_id: run_report.candidate_identity.candidate_id.clone(),
+        gate_id: "execution-budget".into(),
+        message: detail,
+    });
+    run_report
 }
 
 fn default_deferred_research_goals() -> Vec<DeferredResearchGoal> {
@@ -2195,10 +2380,24 @@ pub fn resolve_registered_candidates(
 #[cfg(test)]
 mod tests {
     use super::{
-        AlignmentPolicy, EvaluationEntity, Section4MetricContract, apply_alignment_policy,
-        compute_ground_truth, cosine_distance, euclidean_distance,
+        AlignmentPolicy, EvaluationEntity, Section4CorpusFamily, Section4DimensionalityContract,
+        Section4ExperimentTrackContract, Section4FrozenContractItem,
+        Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy,
+        Section4HarvestSubsetSelection, Section4MetricContract, Section4ProfileSourceSpec,
+        Section4ProfileSpec, Section4ProofSurface, Section4QualificationSurface,
+        Section4ScaleTierKind, Section4SuiteSpec, apply_alignment_policy,
+        apply_execution_budget_to_candidate_run_report, compute_ground_truth, cosine_distance,
+        euclidean_distance, validate_suite_spec,
     };
-    use crate::EvaluatorError;
+    use crate::{
+        ArtifactHygieneEvidence, CandidateIdentity, CandidateRunReport, CandidateRunStatus,
+        CompressionBenchmark, CompressionMethod, DeferredMeasurementStatus,
+        DeferredResearchGoalResult, DeterminismReport, ExecutionBudget, GateResult, GateStatus,
+        MetricResult, ObservablePassReport, PrerequisiteCheckResult, ProbeAssignmentResult,
+        ProvenanceManifest, ResearchCoverage, SharedCandidateConfig, StructuredFailure,
+    };
+    use crate::{BlockStoreCorpusReference, BlockStoreReferenceStore, EvaluatorError};
+    use std::path::PathBuf;
 
     #[test]
     fn cosine_distance_rejects_dimension_mismatch() {
@@ -2265,5 +2464,277 @@ mod tests {
             Err(EvaluatorError::InvalidConfiguration(message))
                 if message.contains("must include at least one real entity")
         ));
+    }
+
+    #[test]
+    fn realistic_qualification_track_requires_non_aligned_large_harvested_profile() {
+        let result = validate_suite_spec(&realistic_qualification_suite_spec(9_984));
+
+        assert!(matches!(
+            result,
+            Err(EvaluatorError::InvalidConfiguration(message))
+                if message.contains("tens-of-thousands real entities")
+        ));
+    }
+
+    #[test]
+    fn realistic_qualification_track_accepts_large_non_aligned_harvested_profile() {
+        let result = validate_suite_spec(&realistic_qualification_suite_spec(10_001));
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn execution_budget_gate_disqualifies_slow_successful_candidate_runs() {
+        let report = apply_execution_budget_to_candidate_run_report(
+            successful_candidate_run_report(),
+            2_500_000,
+            Some(&ExecutionBudget {
+                wall_clock_limit_millis: 1,
+            }),
+        );
+
+        assert_eq!(report.run_status, CandidateRunStatus::GateFailed);
+        assert!(!report.survived_required_gates);
+        assert!(report.ranking_score.is_none());
+        assert!(matches!(
+            report.terminal_failure,
+            Some(StructuredFailure::GateFailure { gate_id, .. }) if gate_id == "execution-budget"
+        ));
+        assert!(report.gate_results.iter().any(|gate| {
+            gate.gate_id == "execution-budget" && matches!(gate.status, GateStatus::Failed)
+        }));
+        assert!(report.artifact_hygiene.comparative_metrics_emitted);
+        assert!(
+            !report
+                .artifact_hygiene
+                .success_shaped_completion_artifacts_emitted
+        );
+        assert!(
+            report
+                .artifact_hygiene
+                .detail
+                .contains("post-run execution budget disqualification")
+        );
+    }
+
+    #[test]
+    fn execution_budget_gate_reports_prior_failures_that_also_exceed_budget() {
+        let mut prior_failure = successful_candidate_run_report();
+        prior_failure.run_status = CandidateRunStatus::CandidateSharedContractFailure;
+        let report = apply_execution_budget_to_candidate_run_report(
+            prior_failure,
+            2_500_000,
+            Some(&ExecutionBudget {
+                wall_clock_limit_millis: 1,
+            }),
+        );
+
+        assert_eq!(
+            report.run_status,
+            CandidateRunStatus::CandidateSharedContractFailure
+        );
+        assert!(report.gate_results.iter().any(|gate| {
+            gate.gate_id == "execution-budget"
+                && matches!(gate.status, GateStatus::Failed)
+                && gate
+                    .detail
+                    .contains("ended with status CandidateSharedContractFailure")
+        }));
+    }
+
+    #[test]
+    fn execution_budget_fields_remain_absent_without_budget() {
+        let report = apply_execution_budget_to_candidate_run_report(
+            successful_candidate_run_report(),
+            2_500_000,
+            None,
+        );
+
+        assert_eq!(report.execution_budget_millis, None);
+        assert_eq!(report.observed_elapsed_nanos, None);
+        assert!(
+            !report
+                .gate_results
+                .iter()
+                .any(|gate| gate.gate_id == "execution-budget")
+        );
+    }
+
+    fn realistic_qualification_suite_spec(real_entity_count: usize) -> Section4SuiteSpec {
+        Section4SuiteSpec {
+            suite_id: "realistic-track".into(),
+            experiment_track_contract: Section4ExperimentTrackContract {
+                track_id: "realistic-track".into(),
+                qualification_surface: Section4QualificationSurface::RealisticQualification,
+                sensitivity_leaf_sizes: vec![64, 128],
+                dimensionality_contract: Section4DimensionalityContract {
+                    min_dimensions: 384,
+                    max_dimensions: 4096,
+                    out_of_range_behavior: "reject out-of-range dimensions".into(),
+                },
+                declared_search_target: Some("TNN Recall@10 >= 90%".into()),
+                beam_width_policy: Some("beam width 1".into()),
+                transformed_metric_policy: Some("no transformed metric".into()),
+                build_metric_role: "build role".into(),
+                locality_metric_role: "locality role".into(),
+                compression_metric_role: "compression role".into(),
+                deferred_routing_metric_role: "routing role".into(),
+                metric_contract_consistency_checks: vec!["consistent metric".into()],
+                metric_contract_audit_result: "consistent".into(),
+                dispersion_functional: "variance".into(),
+                candidate_threading_model: "single-threaded".into(),
+                reduction_order_strategy: "sequential".into(),
+                execution_budget: Some(ExecutionBudget {
+                    wall_clock_limit_millis: 60_000,
+                }),
+                one_thread_vs_n_thread_identity_proof_surface: Some(Section4ProofSurface::Deferred),
+                later_phase_identities: Vec::new(),
+                frozen_items: vec![Section4FrozenContractItem {
+                    item_id: "leaf-size".into(),
+                    label: "Leaf size".into(),
+                    proof_surface: Section4ProofSurface::Direct,
+                }],
+            },
+            tier_growth_rule: "realistic panel".into(),
+            leaf_size: 64,
+            dimensions: 384,
+            batch_size: 256,
+            metric_contract: Section4MetricContract::Euclidean,
+            neighbor_count: 10,
+            balance_constraints: None,
+            random_seed: Some(7),
+            compression_benchmark: CompressionBenchmark {
+                method: CompressionMethod::ScalarQuantization8Bit,
+                global_baseline_label: "global".into(),
+            },
+            reproducibility: crate::ReproducibilityMetadata {
+                seed_policy: "fixed-seed-7".into(),
+                software_identity: "section4-tests".into(),
+                floating_point_profile: "ieee754-deterministic-no-fma".into(),
+                hardware_profile: "fixture-cpu".into(),
+            },
+            profiles: vec![Section4ProfileSpec {
+                profile_id: "harvested-realistic".into(),
+                corpus_id: "harvested-realistic".into(),
+                scale_tier_id: "n-10001".into(),
+                scale_tier_kind: Section4ScaleTierKind::DeterministicNearestPracticalEquivalent,
+                source: Section4ProfileSourceSpec::Harvested {
+                    family: Section4CorpusFamily::RealWorldHarvested,
+                    source: BlockStoreCorpusReference {
+                        source_id: "realistic-source".into(),
+                        root_block_id: "abc123".into(),
+                        store: BlockStoreReferenceStore::ZipArchive {
+                            archive_path: PathBuf::from("realistic-source.zip"),
+                        },
+                    },
+                    entity_id_metadata_key: "entity_id".into(),
+                    harvesting_policy: Section4HarvestPolicy {
+                        embedding_admissibility:
+                            Section4HarvestEmbeddingAdmissibility::FiniteF32MatchingSuiteDimensions,
+                        subset_selection: Section4HarvestSubsetSelection::SortByEntityIdTakeFirst,
+                    },
+                    real_entity_count,
+                    alignment_policy: AlignmentPolicy::DeterministicSyntheticPadding,
+                },
+            }],
+        }
+    }
+
+    fn successful_candidate_run_report() -> CandidateRunReport {
+        CandidateRunReport {
+            candidate_identity: CandidateIdentity {
+                candidate_id: "balanced".into(),
+                implementation_label: "Balanced fixture".into(),
+                software_identity: "balanced-fixture-v1".into(),
+            },
+            provenance: ProvenanceManifest {
+                profile_id: "fixture".into(),
+                corpus_ids: vec!["fixture".into()],
+                source_reference_ids: vec!["fixture-source".into()],
+                candidate_identity: CandidateIdentity {
+                    candidate_id: "balanced".into(),
+                    implementation_label: "Balanced fixture".into(),
+                    software_identity: "balanced-fixture-v1".into(),
+                },
+                shared_candidate_config: SharedCandidateConfig {
+                    cluster_count: 2,
+                    dimensions: 2,
+                    balance_constraints: None,
+                    random_seed: Some(7),
+                },
+                seed_policy: "fixed-seed-7".into(),
+                software_identity: "fixture".into(),
+                floating_point_profile: "ieee754-deterministic-no-fma".into(),
+                hardware_profile: "fixture-cpu".into(),
+            },
+            prerequisite_checks: vec![PrerequisiteCheckResult {
+                check_id: "shared-contract-execution".into(),
+                label: "Shared contract execution".into(),
+                passed: true,
+                detail: "completed".into(),
+            }],
+            pass_reports: vec![ObservablePassReport {
+                observed_count: 4,
+                quality_metric: 0.0,
+                balance_metric: 0.0,
+                quality_direction: crate::ObservableMetricDirection::SmallerIsBetter,
+                balance_direction: crate::ObservableMetricDirection::SmallerIsBetter,
+                cluster_ids: vec![0, 1],
+            }],
+            probe_results: vec![ProbeAssignmentResult {
+                workload_id: "probes".into(),
+                assignments: vec![0, 1],
+            }],
+            leaf_membership: Vec::new(),
+            cluster_occupancies: Vec::new(),
+            synthetic_padding_concentration: None,
+            determinism: DeterminismReport {
+                deterministic: true,
+                compared_fields: vec!["pass_reports".into()],
+                mismatch_details: Vec::new(),
+            },
+            compression_analysis: None,
+            metric_results: vec![MetricResult {
+                metric_id: "same-leaf".into(),
+                label: "Same-leaf".into(),
+                kind: crate::MetricKind::SameLeafNeighborhoodCoherence,
+                coverage: ResearchCoverage::Direct,
+                research_goal_ids: vec!["RG-LOCALITY".into()],
+                ranking_weight: 1.0,
+                value: 1.0,
+            }],
+            gate_results: vec![GateResult {
+                gate_id: "exact-leaf-occupancy".into(),
+                label: "Exact leaf occupancy".into(),
+                coverage: ResearchCoverage::Direct,
+                research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+                status: GateStatus::Passed,
+                observed_value: Some(2.0),
+                detail: "passed".into(),
+            }],
+            deferred_research_goals: vec![DeferredResearchGoalResult {
+                deferred_id: "deferred".into(),
+                label: "Deferred".into(),
+                reason: "later".into(),
+                research_goal_ids: vec!["RG-HIERARCHY".into()],
+                coverage: ResearchCoverage::Deferred,
+                status: DeferredMeasurementStatus::Deferred,
+                later_evaluation_line: "future".into(),
+            }],
+            artifact_hygiene: ArtifactHygieneEvidence {
+                comparative_metrics_emitted: true,
+                success_shaped_completion_artifacts_emitted: true,
+                detail: "completed".into(),
+            },
+            execution_budget_millis: None,
+            observed_elapsed_nanos: None,
+            run_status: CandidateRunStatus::Succeeded,
+            survived_required_gates: true,
+            ranking_score: Some(1.0),
+            terminal_failure_code: None,
+            terminal_failure_message: None,
+            terminal_failure: None,
+        }
     }
 }

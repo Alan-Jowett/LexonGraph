@@ -58,6 +58,8 @@ Before comparing approaches, lock these items so results are comparable:
 | Threading contract | Declare candidate threading model and reduction-order strategy; require 1-thread vs N-thread bitwise identity |
 | Hardware profile | Single named machine for all benchmark runs |
 | Dataset alignment policy | Strict alignment or deterministic synthetic padding |
+| Execution budget | Fixed wall-clock budget or equivalent timeout per dataset size; timeout is a deterministic disqualifier |
+| Qualification realism | At least one canonical real-world qualification corpus must be non-aligned to `L`, within `384..4096` dimensions, and in the tens-of-thousands entry range |
 
 For section-4 leaf-stage screening, some frozen items are measured directly
 (for example deterministic behavior, exact leaf capacity, padding handling, and
@@ -101,6 +103,12 @@ For each corpus family, prepare at least:
 
 If possible, use three sizes such as `50k`, `200k`, and `800k` vectors, or the closest practical equivalents from the sample corpus.
 
+For the canonical realistic qualification surface, at least one real-world
+harvested family should be repository-managed at tens-of-thousands scale, use a
+dimensionality in the `384..4096` range, and intentionally avoid exact
+divisibility by the primary `leaf_size` so alignment-policy behavior is tested
+under realistic conditions.
+
 For any corpus used in leaf-stage locality screening, materialize deterministic
 top-10 exact-nearest-neighbor ground truth tied to the corpus identity,
 scale-tier identity, and declared metric contract. For real-world corpora, use
@@ -136,7 +144,8 @@ requirements.
    benchmark outputs, and persisted-artifact evidence once hierarchy-stage work
    begins.
 4. Failure report: deterministic error code and message when a build or
-   benchmark precondition is invalid.
+   benchmark precondition is invalid, including deterministic timeout or
+   bounded-runtime disqualification outcomes.
 
 ### Hard-invariant gates that must be implemented in the harness
 
@@ -205,14 +214,20 @@ use the same evaluator-owned registration and reporting surface.
 For each corpus slice and each candidate:
 
 1. Build only the leaf partition.
-2. Enforce exact leaf size using the same alignment policy.
+2. Enforce exact leaf size using the same alignment policy. For realistic
+   qualification tracks, the primary `leaf_size` should lie in the `64..128`
+   regime; smaller fixtures may still exist for smoke and regression coverage
+   but do not count as realistic qualification evidence.
 3. Measure:
    - exact-size compliance
    - determinism across repeated runs
    - top-10 neighborhood coherence
    - local compression gain vs global quantization
    - build time per vector
-4. Reject any candidate that cannot reliably produce exact-size leaves deterministically.
+   - wall-clock elapsed time against the declared timeout budget
+4. Reject any candidate that cannot reliably produce exact-size leaves
+   deterministically or that exceeds the declared bounded-time qualification
+   budget.
 
 ### Required padding sub-experiment
 
@@ -249,7 +264,8 @@ Carry forward only the top 2-3 leaf strategies that:
 - rank highest on same-leaf neighborhood coherence as a proxy toward the
   `>=80%` same-or-sibling end-state locality target from `clustering.md`
 - show meaningful local compression benefit
-- do not have obviously unacceptable build cost
+- stay within the declared bounded-time qualification budget and do not have
+  obviously unacceptable build cost
 
 ---
 

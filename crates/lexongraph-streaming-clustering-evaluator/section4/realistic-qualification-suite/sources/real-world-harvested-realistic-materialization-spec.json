@@ -1,0 +1,32 @@
+{
+  "materialization_id": "real-world-harvested-realistic-qualification-v1",
+  "external_source": {
+    "archive_identity_hint": "operator-provided external zip archive used for realistic qualification harvesting",
+    "root_block_id": "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8",
+    "entity_id_metadata_key": "chunk_locator"
+  },
+  "source_observation": {
+    "branch_fanouts_along_first_path": [41, 41, 21],
+    "dimensions_along_first_path": [384, 384, 384, 384],
+    "first_observed_chunk_locator": "afa26c5df1782d007bf261037fe77ebf3cdecdea13bcf012c182c7f968daa54a:0"
+  },
+  "qualification_target": {
+    "suite_spec_path": "section4-suite-spec.json",
+    "target_source_archive_path": "sources/real-world-harvested-realistic-source.zip",
+    "target_corpus_family": "RealWorldHarvested",
+    "target_entity_id_metadata_key": "entity_id",
+    "target_real_entity_count": 10017,
+    "expected_dimensions": 384,
+    "leaf_size": 64,
+    "non_aligned_to_leaf_size": true
+  },
+  "harvesting_policy": {
+    "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
+    "subset_selection": "DeterministicDepthFirstGraphTraversalTakeFirst",
+    "entity_id_normalization": "copy chunk_locator into entity_id on the generated suite source archive"
+  },
+  "later_phase_assets": {
+    "heldout_query_asset_path": "sources/real-world-harvested-realistic-heldout-queries.json",
+    "section5_contract_path": "section5-contract.json"
+  }
+}
