@@ -3293,8 +3293,13 @@ fn val_stream_eval_051_repository_defines_a_canonical_realistic_qualification_su
             assert_eq!(*family, Section4CorpusFamily::RealWorldHarvested);
             assert_eq!(
                 source.root_block_id,
-                "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8"
+                "fb60ab98e74e1f65d630940e86d70a8f248a4b4688c5725e15d46e1297becd37"
             );
+            if let BlockStoreReferenceStore::ZipArchive { archive_path } = &source.store {
+                assert!(suite_dir.join(archive_path).exists());
+            } else {
+                panic!("realistic qualification suite must use a checked-in zip archive source");
+            }
             assert_eq!(entity_id_metadata_key, "entity_id");
             assert!(*real_entity_count >= 10_000);
             assert_ne!(*real_entity_count % suite_spec.leaf_size, 0);
@@ -3320,6 +3325,19 @@ fn val_stream_eval_051_repository_defines_a_canonical_realistic_qualification_su
     assert_eq!(
         materialization_spec["qualification_target"]["target_real_entity_count"],
         10017
+    );
+    assert_eq!(
+        materialization_spec["harvesting_policy"]["subset_selection"],
+        "DeterministicDepthFirstGraphTraversalTakeFirst"
+    );
+    assert!(
+        suite_dir
+            .join(
+                materialization_spec["qualification_target"]["target_source_archive_path"]
+                    .as_str()
+                    .unwrap()
+            )
+            .exists()
     );
     assert_eq!(
         heldout_queries["query_entity_ids"]

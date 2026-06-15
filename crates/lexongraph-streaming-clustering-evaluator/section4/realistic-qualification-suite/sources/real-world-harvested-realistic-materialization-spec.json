@@ -22,7 +22,7 @@
   },
   "harvesting_policy": {
     "embedding_admissibility": "FiniteF32MatchingSuiteDimensions",
-    "subset_selection": "SortByEntityIdTakeFirst",
+    "subset_selection": "DeterministicDepthFirstGraphTraversalTakeFirst",
     "entity_id_normalization": "copy chunk_locator into entity_id on the generated suite source archive"
   },
   "later_phase_assets": {
