@@ -80,7 +80,7 @@
         "family": "RealWorldHarvested",
         "source": {
           "source_id": "data2-block-store-realistic-qualification-source",
-          "root_block_id": "ee22a9daf7644cc894e5e3a6e1eaa28ba26d615937720ff75b3c41855d17fcc8",
+          "root_block_id": "fb60ab98e74e1f65d630940e86d70a8f248a4b4688c5725e15d46e1297becd37",
           "store_kind": "zip-archive",
           "archive_path": "sources/real-world-harvested-realistic-source.zip"
         },
