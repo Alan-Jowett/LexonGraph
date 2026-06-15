@@ -331,7 +331,7 @@ pub fn run_section5_campaign(
         .iter()
         .filter(|run_report| {
             run_report.survived_required_gates
-                && matches!(run_report.run_status, CandidateRunStatus::Succeeded)
+                && matches!(&run_report.run_status, CandidateRunStatus::Succeeded)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1431,7 +1431,7 @@ fn apply_execution_budget_to_pair_report(
     let budget_nanos = execution_budget.wall_clock_limit_millis as u128 * 1_000_000;
     let elapsed_millis = pair_report.build_elapsed_nanos as f64 / 1_000_000.0;
     let within_budget = pair_report.build_elapsed_nanos <= budget_nanos;
-    let succeeded = matches!(pair_report.run_status, Section5PairRunStatus::Succeeded);
+    let succeeded = matches!(&pair_report.run_status, Section5PairRunStatus::Succeeded);
     if within_budget {
         pair_report.gate_results.push(Section5GateResult {
             gate_id: "execution-budget".into(),

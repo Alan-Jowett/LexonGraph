@@ -1348,7 +1348,7 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
             spec.experiment_track_contract.qualification_surface,
             Section4QualificationSurface::RealisticQualification
         ) && matches!(
-            profile.source,
+            &profile.source,
             Section4ProfileSourceSpec::Harvested {
                 family: Section4CorpusFamily::RealWorldHarvested,
                 ..
@@ -2190,7 +2190,7 @@ fn apply_execution_budget_to_candidate_run_report(
     let budget_nanos = execution_budget.wall_clock_limit_millis as u128 * 1_000_000;
     let elapsed_millis = elapsed_nanos as f64 / 1_000_000.0;
     let within_budget = elapsed_nanos <= budget_nanos;
-    let succeeded = matches!(run_report.run_status, CandidateRunStatus::Succeeded);
+    let succeeded = matches!(&run_report.run_status, CandidateRunStatus::Succeeded);
     if within_budget {
         run_report.gate_results.push(GateResult {
             gate_id: "execution-budget".into(),
