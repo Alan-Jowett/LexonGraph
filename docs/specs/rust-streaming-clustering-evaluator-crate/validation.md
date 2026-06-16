@@ -72,7 +72,9 @@ classifier-side probe workloads, the declared source mode for each workload, the
 leaf model, any declared hierarchy model, metric declarations, gate
 declarations, comparative ranking weights, deferred research-goal records, any
 declared later-phase workload or artifact identities that section-4 or section-5
-must carry forward, and reproducibility metadata for one campaign.
+must carry forward, reproducibility metadata for one campaign, and any declared
+candidate-threading mode together with its deterministic reduction-order
+semantics.
 
 **Traces to:** REQ-STREAM-EVAL-006
 
@@ -540,8 +542,9 @@ compression, and deferred-routing metric roles, any transformed-metric
 ordering-preservation obligation, the metric-contract consistency checks and
 reported audit results, the compatible dispersion functional for any deferred
 summary or refinement obligation, the threading model and deterministic
-reduction-order strategy, and whether 1-thread versus N-thread bitwise
-observable identity is measured directly or deferred.
+reduction-order strategy, whether realistic qualification permits host-scaled
+CPU execution for candidates that support it, and whether 1-thread versus
+N-thread bitwise observable identity is measured directly or deferred.
 
 **Traces to:** REQ-STREAM-EVAL-051
 
@@ -755,3 +758,15 @@ qualification target, preserves evaluator semantics, and reports materially
 improved runtime relative to CPU on the same benchmark surface.
 
 **Traces to:** REQ-STREAM-EVAL-063, REQ-STREAM-EVAL-066
+
+### VAL-STREAM-EVAL-056
+
+Run one realistic-corpus section-4 candidate that can scale with CPU count
+under a track declaring host-scaled candidate-threading.
+
+**Pass condition:** the run is not forced back to one-core execution by the
+track contract, the emitted artifacts record the effective threading mode, and
+gate or survivor semantics remain interpretable under the declared deterministic
+reduction-order strategy.
+
+**Traces to:** REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-061, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-067

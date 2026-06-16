@@ -22,6 +22,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::thread;
 
 use ciborium::value::Value as CborValue;
 use half::f16;
@@ -42,11 +43,13 @@ use lexongraph_streaming_clustering::{
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 pub use acceleration::{
     ExecutionBackendRequest, ExecutionBackendResolution, ExecutionBackendSelection,
+    execution_backend_request, set_execution_backend_request,
 };
 pub use section4::{
     Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
@@ -619,6 +622,18 @@ pub struct ReproducibilityMetadata {
     pub software_identity: String,
     pub floating_point_profile: String,
     pub hardware_profile: String,
+    #[serde(default = "default_candidate_threading_model")]
+    pub candidate_threading_model: String,
+    #[serde(default = "default_reduction_order_strategy")]
+    pub reduction_order_strategy: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateThreadingProvenance {
+    pub declared_model: String,
+    pub reduction_order_strategy: String,
+    pub effective_mode: String,
+    pub effective_thread_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -632,8 +647,17 @@ pub struct ProvenanceManifest {
     pub software_identity: String,
     pub floating_point_profile: String,
     pub hardware_profile: String,
+    pub candidate_threading: CandidateThreadingProvenance,
     #[serde(default)]
     pub execution_backend: ExecutionBackendSelection,
+}
+
+fn default_candidate_threading_model() -> String {
+    "single-threaded section-4 screening".into()
+}
+
+fn default_reduction_order_strategy() -> String {
+    "single-thread sequential reduction order".into()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -904,7 +928,7 @@ where
         + Sync
         + 'static,
     T: StreamingClusterTrainer + 'static,
-    T::Classifier: 'static,
+    T::Classifier: Send + Sync + 'static,
 {
     RegisteredCandidate {
         identity,
@@ -1020,6 +1044,18 @@ pub fn render_scorecard(report: &CampaignReport) -> String {
             "  execution-backend: {} ({})",
             acceleration::backend_resolution_label(&run_report.provenance.execution_backend),
             run_report.provenance.execution_backend.detail
+        ));
+        lines.push(format!(
+            "  candidate-threading: {} [{} thread(s); {}]",
+            run_report.provenance.candidate_threading.effective_mode,
+            run_report
+                .provenance
+                .candidate_threading
+                .effective_thread_count,
+            run_report
+                .provenance
+                .candidate_threading
+                .reduction_order_strategy
         ));
         for gate in &run_report.gate_results {
             lines.push(format!(
@@ -2158,38 +2194,37 @@ fn execute_candidate_once(
     }
     trainer.complete_training()?;
     let classifier = trainer.into_classifier()?;
+    let candidate_threading = candidate_threading_provenance(profile);
+    let host_scaled_candidate_execution = candidate_threading.effective_mode == "host-scaled"
+        && candidate_threading.effective_thread_count > 1;
 
-    let probe_results = resolved
-        .probe_workloads
-        .iter()
-        .map(|workload| {
-            let assignments = classifier.assign_batch(&workload.embeddings)?;
-            Ok(ProbeAssignmentResult {
-                workload_id: workload.workload_id.clone(),
-                assignments: validate_cluster_assignments(
-                    assignments,
-                    profile.leaf_model.declared_final_cluster_count,
-                    &format!("probe workload {}", workload.workload_id),
-                )?,
-            })
-        })
-        .collect::<Result<Vec<_>, StreamingClusteringError>>()?;
+    let probe_results = if host_scaled_candidate_execution {
+        resolved
+            .probe_workloads
+            .par_iter()
+            .map(|workload| assign_probe_workload(&*classifier, profile, workload))
+            .collect::<Result<Vec<_>, StreamingClusteringError>>()?
+    } else {
+        resolved
+            .probe_workloads
+            .iter()
+            .map(|workload| assign_probe_workload(&*classifier, profile, workload))
+            .collect::<Result<Vec<_>, StreamingClusteringError>>()?
+    };
 
-    let leaf_membership = resolved
-        .evaluation_entities
-        .iter()
-        .map(|entity| {
-            Ok(LeafMembershipRecord {
-                entity_id: entity.entity_id.clone(),
-                cluster_id: validate_cluster_id(
-                    classifier.assign(&entity.embedding)?,
-                    profile.leaf_model.declared_final_cluster_count,
-                    &format!("evaluation entity {}", entity.entity_id),
-                )?,
-                synthetic: entity.synthetic,
-            })
-        })
-        .collect::<Result<Vec<_>, StreamingClusteringError>>()?;
+    let leaf_membership = if host_scaled_candidate_execution {
+        resolved
+            .evaluation_entities
+            .par_iter()
+            .map(|entity| assign_evaluation_entity(&*classifier, profile, entity))
+            .collect::<Result<Vec<_>, StreamingClusteringError>>()?
+    } else {
+        resolved
+            .evaluation_entities
+            .iter()
+            .map(|entity| assign_evaluation_entity(&*classifier, profile, entity))
+            .collect::<Result<Vec<_>, StreamingClusteringError>>()?
+    };
 
     let cluster_occupancies = compute_cluster_occupancies(
         profile.leaf_model.declared_final_cluster_count,
@@ -2207,6 +2242,38 @@ fn execute_candidate_once(
         leaf_membership,
         cluster_occupancies,
         evaluation_entities: resolved.evaluation_entities.clone(),
+    })
+}
+
+fn assign_probe_workload(
+    classifier: &dyn DynClassifier,
+    profile: &BenchmarkProfile,
+    workload: &ResolvedProbeWorkload,
+) -> Result<ProbeAssignmentResult, StreamingClusteringError> {
+    let assignments = classifier.assign_batch(&workload.embeddings)?;
+    Ok(ProbeAssignmentResult {
+        workload_id: workload.workload_id.clone(),
+        assignments: validate_cluster_assignments(
+            assignments,
+            profile.leaf_model.declared_final_cluster_count,
+            &format!("probe workload {}", workload.workload_id),
+        )?,
+    })
+}
+
+fn assign_evaluation_entity(
+    classifier: &dyn DynClassifier,
+    profile: &BenchmarkProfile,
+    entity: &EvaluationEntity,
+) -> Result<LeafMembershipRecord, StreamingClusteringError> {
+    Ok(LeafMembershipRecord {
+        entity_id: entity.entity_id.clone(),
+        cluster_id: validate_cluster_id(
+            classifier.assign(&entity.embedding)?,
+            profile.leaf_model.declared_final_cluster_count,
+            &format!("evaluation entity {}", entity.entity_id),
+        )?,
+        synthetic: entity.synthetic,
     })
 }
 
@@ -2239,8 +2306,51 @@ fn build_provenance_with_backend(
         software_identity: profile.reproducibility.software_identity.clone(),
         floating_point_profile: profile.reproducibility.floating_point_profile.clone(),
         hardware_profile: profile.reproducibility.hardware_profile.clone(),
+        candidate_threading: candidate_threading_provenance(profile),
         execution_backend,
     }
+}
+
+fn candidate_threading_provenance(profile: &BenchmarkProfile) -> CandidateThreadingProvenance {
+    let declared_model = normalized_threading_field(
+        &profile.reproducibility.candidate_threading_model,
+        default_candidate_threading_model(),
+    );
+    let reduction_order_strategy = normalized_threading_field(
+        &profile.reproducibility.reduction_order_strategy,
+        default_reduction_order_strategy(),
+    );
+    let effective_mode = if declared_candidate_threading_is_host_scaled(&declared_model) {
+        "host-scaled".into()
+    } else {
+        "single-threaded".into()
+    };
+    let effective_thread_count = if effective_mode == "host-scaled" {
+        thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1)
+    } else {
+        1
+    };
+    CandidateThreadingProvenance {
+        declared_model,
+        reduction_order_strategy,
+        effective_mode,
+        effective_thread_count,
+    }
+}
+
+fn normalized_threading_field(value: &str, fallback: String) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+pub(crate) fn declared_candidate_threading_is_host_scaled(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("host-scaled")
 }
 
 fn declared_source_reference_ids(profile: &BenchmarkProfile) -> Vec<String> {
@@ -3105,7 +3215,7 @@ fn quantization_error(value: f32, min_value: f32, max_value: f32) -> f64 {
     f64::from(delta * delta)
 }
 
-trait DynClassifier {
+trait DynClassifier: Send + Sync {
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError>;
     fn assign_batch(
         &self,
@@ -3140,7 +3250,7 @@ where
         + Sync
         + 'static,
     T: StreamingClusterTrainer + 'static,
-    T::Classifier: 'static,
+    T::Classifier: Send + Sync + 'static,
 {
     fn create(
         &self,
@@ -3155,7 +3265,7 @@ struct TrainerAdapter<T>(T);
 impl<T> DynTrainer for TrainerAdapter<T>
 where
     T: StreamingClusterTrainer + 'static,
-    T::Classifier: 'static,
+    T::Classifier: Send + Sync + 'static,
 {
     fn ingest_batch(&mut self, embeddings: &[Embedding]) -> Result<(), StreamingClusteringError> {
         self.0.ingest_batch(embeddings)
@@ -3181,7 +3291,7 @@ struct ClassifierAdapter<C>(C);
 
 impl<C> DynClassifier for ClassifierAdapter<C>
 where
-    C: StreamingClusterClassifier + 'static,
+    C: StreamingClusterClassifier + Send + Sync + 'static,
 {
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
         self.0.assign(embedding)
@@ -4434,6 +4544,8 @@ mod tests {
                 software_identity: "fixture-campaign-builder".into(),
                 floating_point_profile: "ieee754-deterministic-no-fma".into(),
                 hardware_profile: "fixture-cpu".into(),
+                candidate_threading_model: "host-scaled deterministic candidate execution".into(),
+                reduction_order_strategy: "deterministic stable input-order reduction".into(),
             },
         }
     }

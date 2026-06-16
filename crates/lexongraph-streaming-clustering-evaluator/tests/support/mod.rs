@@ -212,6 +212,8 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
             software_identity: "fixture-campaign-builder".into(),
             floating_point_profile: "ieee754-deterministic-no-fma".into(),
             hardware_profile: "fixture-cpu".into(),
+            candidate_threading_model: "host-scaled deterministic candidate execution".into(),
+            reduction_order_strategy: "deterministic stable input-order reduction".into(),
         },
     }
 }

@@ -525,7 +525,9 @@ section-4 candidate comparisons are not allowed to reinterpret, including:
 - any declared search-target threshold and beam-width policy that must carry
   forward to later routing phases
 - the declared floating-point profile
-- the declared candidate-threading model
+- the declared candidate-threading model, which for realistic qualification
+  tracks may permit candidates that can scale with host CPU count to use a
+  declared host-scaled execution mode rather than forcing one-core execution
 - the declared reduction-order strategy for any deterministic parallel or
   aggregate computation permitted by the track
 - the declared hardware profile
@@ -660,6 +662,10 @@ For realistic qualification tracks, the workflow shall also apply the declared
 bounded-time contract and record deterministic timeout-disqualification outcomes
 for candidates that fail to complete within the frozen execution budget.
 
+When a realistic qualification track declares a host-scaled candidate-threading
+mode, the workflow shall permit candidates that can scale with CPU count to use
+that mode rather than forcing the entire track back to one-core execution.
+
 ### REQ-STREAM-EVAL-037
 
 For section-4 benchmark executions, the evaluator shall report leaf-stage
@@ -670,6 +676,7 @@ At minimum, this revision shall support deterministic reporting of:
 
 - corpus size or evaluated entity count
 - scale-tier identity
+- the effective candidate-threading mode used for the run
 - build time per vector or an equivalent normalized leaf-stage build-cost
   measure declared by the benchmark suite
 - peak build memory during section-4 execution
@@ -816,7 +823,9 @@ At minimum, that frozen contract shall declare:
 - the quantization or compression baseline policy over real entities only,
   excluding synthetic padding
 - the declared floating-point profile
-- the declared candidate-threading model for the track
+- the declared candidate-threading model for the track, including whether
+  realistic qualification permits host-scaled CPU execution for candidates that
+  support it
 - the declared reduction-order strategy for any deterministic aggregate
   computation permitted by the track
 - the declared hardware profile
@@ -1133,6 +1142,9 @@ At minimum:
 - each realistic qualification track shall declare a deterministic wall-clock
   execution budget or equivalent timeout contract for section-4 candidate runs
   and for section-5 hierarchy-stage pairs
+- a realistic qualification track shall not require one-core execution when a
+  candidate can honor the declared deterministic reduction-order semantics while
+  scaling to available CPU count
 - a candidate or pair that exceeds the declared budget shall be reported as a
   deterministic timeout-disqualification outcome rather than as a survivor
 - timeout-disqualification shall preserve deterministic artifact hygiene and
@@ -1158,13 +1170,15 @@ explicit CPU fallback on unsupported hosts.
 ### REQ-STREAM-EVAL-064
 
 When the accelerated path is used, the evaluator shall record the selected
-execution backend and capability result in provenance or reporting sufficient to
-distinguish:
+execution backend, effective candidate-threading mode, and capability result in
+provenance or reporting sufficient to distinguish:
 
 - CPU execution
 - WGPU-accelerated execution
 - capability probe succeeded but the backend was declined for the run
 - capability probe failed or the host was unsupported and CPU fallback was used
+- one-core candidate execution
+- host-scaled candidate execution under the track's declared threading policy
 
 ### REQ-STREAM-EVAL-065
 
@@ -1179,6 +1193,27 @@ For the realistic qualification surface, at least one accelerated validation
 path shall demonstrate that the WGPU-backed execution preserves campaign verdict
 semantics relative to CPU execution while materially reducing runtime on the
 declared qualification hardware profile.
+
+When such a validation path also relies on host-scaled candidate-threading, the
+artifacts shall report that threading mode so runtime-improvement claims remain
+attributable to the declared execution policy.
+
+### REQ-STREAM-EVAL-067
+
+The realistic section-4 qualification surface shall permit candidates that
+support scalable CPU execution to run under a declared host-scaled
+candidate-threading mode rather than forcing one-core execution.
+
+At minimum:
+
+- the experiment track shall declare the threading policy and deterministic
+  reduction-order semantics explicitly
+- candidates that cannot scale may still run, but shall not force the entire
+  realistic qualification surface back to one-core execution
+- gate outcomes, survivor or disqualification semantics, and artifact schemas
+  shall remain stable in observable meaning under the declared threading policy
+- emitted artifacts shall record the effective threading mode used for each
+  candidate run
 
 ## Out of Scope
 

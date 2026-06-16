@@ -718,7 +718,8 @@ This contract names:
 - the compatible dispersion functional used by deferred summary or refinement
   obligations
 - the threading model and deterministic reduction-order strategy used by the
-  track
+  track, including whether realistic qualification permits host-scaled CPU
+  execution for candidates that can preserve the declared observable semantics
 - whether 1-thread versus N-thread bitwise observable identity is measured
   directly in section-4 or carried as a deferred obligation
 
@@ -912,6 +913,22 @@ verdicts, gate outcomes, and provenance-classified execution mode. Numerical
 implementation details may differ internally, but a conformant accelerated path
 may not silently change survivor or disqualification semantics.
 
+### DSG-STREAM-EVAL-050 `Host-scaled realistic candidate threading`
+
+For realistic section-4 qualification tracks, the experiment-track contract may
+declare a host-scaled candidate-threading mode instead of one-core execution.
+
+When that mode is declared, the evaluator preserves candidate comparability by:
+
+- keeping the threading policy fixed per track rather than allowing ad hoc
+  per-candidate reinterpretation
+- requiring the track to name the deterministic reduction-order strategy that
+  governs any parallel aggregate computation
+- recording the effective threading mode in emitted section-4 artifacts beside
+  execution-backend and timeout-disqualification reporting
+- preserving gate outcomes, survivor semantics, and artifact schema even when a
+  candidate uses more than one CPU core
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -970,3 +987,4 @@ may not silently change survivor or disqualification semantics.
 | DSG-STREAM-EVAL-047 | REQ-STREAM-EVAL-063, REQ-STREAM-EVAL-066 |
 | DSG-STREAM-EVAL-048 | REQ-STREAM-EVAL-065 |
 | DSG-STREAM-EVAL-049 | REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-066 |
+| DSG-STREAM-EVAL-050 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-061, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-067 |
