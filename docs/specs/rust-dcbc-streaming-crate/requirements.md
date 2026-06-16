@@ -203,6 +203,18 @@ The repository shall include executable verification artifacts covering both:
 - this crate's conformance to the shared streaming clustering contract,
   including the opt-in conformance-helper surface
 
+### REQ-DCBC-STREAM-018
+
+The streaming DCBC crate may provide an optional WGPU-backed execution path for
+dense internal kernels, including distance-matrix construction and
+assignment-support computation, provided that:
+
+- the CPU path remains available
+- unsupported or unavailable GPU environments fall back explicitly
+- pass reports, stable cluster IDs, classifier assignments, and shared-contract
+  errors remain equivalent in observable meaning to the CPU path for the same
+  inputs
+
 ## Out of Scope
 
 This crate does not define or own:

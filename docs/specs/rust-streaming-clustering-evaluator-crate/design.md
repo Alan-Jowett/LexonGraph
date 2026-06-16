@@ -886,6 +886,32 @@ budget. When a run exceeds that budget, the evaluator emits a deterministic
 timeout-disqualification outcome through the same artifact and provenance model
 used for gate failures and candidate shared-contract failures.
 
+### DSG-STREAM-EVAL-046 `Optional accelerator backend selection`
+
+The evaluator adds an internal execution-backend selection layer that chooses
+between CPU and optional WGPU acceleration for supported evaluator-owned dense
+kernels. Selection is capability-gated and does not alter benchmark-profile
+shape or candidate registration semantics.
+
+### DSG-STREAM-EVAL-047 `Accelerated realistic qualification target`
+
+The realistic qualification surface records a primary accelerated hardware
+profile that includes Windows on AMD Radeon 780M. Qualification artifacts
+distinguish hardware-targeted accelerated runs from CPU fallback runs.
+
+### DSG-STREAM-EVAL-048 `First-pass accelerated scope boundary`
+
+The first accelerated revision covers evaluator-owned dense kernels and shared
+DCBC dense kernels only. Directional-PCA and PCA eigendecomposition remain on
+CPU in this revision and are not required for accelerated conformance.
+
+### DSG-STREAM-EVAL-049 `Cross-backend verdict preservation`
+
+Accelerated runs are validated against CPU runs at the level of campaign
+verdicts, gate outcomes, and provenance-classified execution mode. Numerical
+implementation details may differ internally, but a conformant accelerated path
+may not silently change survivor or disqualification semantics.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -940,3 +966,7 @@ used for gate failures and candidate shared-contract failures.
 | DSG-STREAM-EVAL-043 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059 |
 | DSG-STREAM-EVAL-044 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-045, REQ-STREAM-EVAL-060 |
 | DSG-STREAM-EVAL-045 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-061 |
+| DSG-STREAM-EVAL-046 | REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064 |
+| DSG-STREAM-EVAL-047 | REQ-STREAM-EVAL-063, REQ-STREAM-EVAL-066 |
+| DSG-STREAM-EVAL-048 | REQ-STREAM-EVAL-065 |
+| DSG-STREAM-EVAL-049 | REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-066 |

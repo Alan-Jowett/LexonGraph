@@ -5,6 +5,9 @@ name = "lexongraph-streaming-clustering-evaluator"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+wgpu-accel = []
+
 [dependencies]
 ciborium = "0.2"
 clap = { version = "4.5.53", features = ["derive"] }

@@ -183,3 +183,14 @@ expectation failure, the returned `ConformanceError` shall use a suite-authored
 message and expose no source error.
 
 **Traces to:** REQ-STREAM-TRAIT-021
+
+### VAL-STREAM-TRAIT-018
+
+Inspect one accelerator-capable concrete implementation and its use of the
+shared contract.
+
+**Pass condition:** optional accelerator use does not widen the shared
+trainer/classifier API, and unsupported-host behavior remains an
+implementation-internal fallback rather than a contract change.
+
+**Traces to:** REQ-STREAM-TRAIT-023

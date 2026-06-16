@@ -1138,6 +1138,48 @@ At minimum:
 - timeout-disqualification shall preserve deterministic artifact hygiene and
   provenance in the same report model used for other gate or contract failures
 
+### REQ-STREAM-EVAL-062
+
+The evaluator may provide an optional WGPU-backed acceleration path for
+evaluator-owned dense kernels, including:
+
+- exact-neighbor ground-truth generation
+- section-4 evaluator replay or dense distance work
+- section-5 dense distance and dispersion work
+
+The CPU path remains required.
+
+### REQ-STREAM-EVAL-063
+
+The first accelerated revision shall target a repository-declared qualification
+hardware profile that includes Windows on AMD Radeon 780M, while preserving
+explicit CPU fallback on unsupported hosts.
+
+### REQ-STREAM-EVAL-064
+
+When the accelerated path is used, the evaluator shall record the selected
+execution backend and capability result in provenance or reporting sufficient to
+distinguish:
+
+- CPU execution
+- WGPU-accelerated execution
+- capability probe succeeded but the backend was declined for the run
+- capability probe failed or the host was unsupported and CPU fallback was used
+
+### REQ-STREAM-EVAL-065
+
+The first accelerated revision may scope GPU support to evaluator-owned dense
+kernels and shared DCBC dense kernels only. It shall not require
+directional-PCA or PCA eigendecomposition acceleration in order to claim
+conformance for this revision.
+
+### REQ-STREAM-EVAL-066
+
+For the realistic qualification surface, at least one accelerated validation
+path shall demonstrate that the WGPU-backed execution preserves campaign verdict
+semantics relative to CPU execution while materially reducing runtime on the
+declared qualification hardware profile.
+
 ## Out of Scope
 
 This crate does not define or own:

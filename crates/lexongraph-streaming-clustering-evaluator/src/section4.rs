@@ -1707,7 +1707,7 @@ fn compute_ground_truth(
     metric_contract: Section4MetricContract,
     neighbor_count: usize,
 ) -> Result<Vec<GroundTruthNeighborhood>, EvaluatorError> {
-    const MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES: usize = 8_192;
+    const MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES: usize = 16_384;
 
     if real_entities.len() <= neighbor_count {
         return Err(EvaluatorError::InvalidConfiguration(format!(
@@ -2667,6 +2667,7 @@ mod tests {
                 software_identity: "fixture".into(),
                 floating_point_profile: "ieee754-deterministic-no-fma".into(),
                 hardware_profile: "fixture-cpu".into(),
+                execution_backend: crate::acceleration::fixture_cpu_execution_backend_selection(),
             },
             prerequisite_checks: vec![PrerequisiteCheckResult {
                 check_id: "shared-contract-execution".into(),

@@ -10,6 +10,7 @@
 //! provenance, leaf-membership scoring, and scorecard generation without
 //! broadening the shared streaming clustering trainer/classifier contract.
 
+mod acceleration;
 mod section4;
 mod section5;
 
@@ -44,6 +45,9 @@ use lexongraph_streaming_clustering::{
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
+pub use acceleration::{
+    ExecutionBackendRequest, ExecutionBackendResolution, ExecutionBackendSelection,
+};
 pub use section4::{
     Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
     Section4FrozenContractItem, Section4GeneratedProfile, Section4HarvestEmbeddingAdmissibility,
@@ -385,6 +389,7 @@ impl FsOverlayZipBlockStore {
                 "forced temporary writable-layer failure for tests".into(),
             ));
         }
+
         let writable_layer = tempfile::tempdir().map_err(|error| {
             ArchiveOverlayStoreError::TemporaryLayer(format!(
                 "failed to create temporary writable block-store layer for archive {}: {error}",
@@ -627,6 +632,8 @@ pub struct ProvenanceManifest {
     pub software_identity: String,
     pub floating_point_profile: String,
     pub hardware_profile: String,
+    #[serde(default)]
+    pub execution_backend: ExecutionBackendSelection,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1008,6 +1015,11 @@ pub fn render_scorecard(report: &CampaignReport) -> String {
         lines.push(format!(
             "- {} [{}; {}]",
             run_report.candidate_identity.candidate_id, status, ranking
+        ));
+        lines.push(format!(
+            "  execution-backend: {} ({})",
+            acceleration::backend_resolution_label(&run_report.provenance.execution_backend),
+            run_report.provenance.execution_backend.detail
         ));
         for gate in &run_report.gate_results {
             lines.push(format!(
@@ -2203,6 +2215,20 @@ fn build_provenance(
     identity: &CandidateIdentity,
     source_reference_ids: Vec<String>,
 ) -> ProvenanceManifest {
+    build_provenance_with_backend(
+        profile,
+        identity,
+        source_reference_ids,
+        acceleration::detected_execution_backend_selection().clone(),
+    )
+}
+
+fn build_provenance_with_backend(
+    profile: &BenchmarkProfile,
+    identity: &CandidateIdentity,
+    source_reference_ids: Vec<String>,
+    execution_backend: ExecutionBackendSelection,
+) -> ProvenanceManifest {
     ProvenanceManifest {
         profile_id: profile.profile_id.clone(),
         corpus_ids: profile.corpus_ids.clone(),
@@ -2213,6 +2239,7 @@ fn build_provenance(
         software_identity: profile.reproducibility.software_identity.clone(),
         floating_point_profile: profile.reproducibility.floating_point_profile.clone(),
         hardware_profile: profile.reproducibility.hardware_profile.clone(),
+        execution_backend,
     }
 }
 
@@ -4110,8 +4137,9 @@ mod tests {
         GateKind, GroundTruthNeighborhood, LaterPhaseIdentity, LaterPhaseIdentityKind,
         MetricDeclaration, MetricKind, ProbeWorkload, ReproducibilityMetadata, ResearchCoverage,
         Section4FamilyStrategyMode, SharedCandidateConfig, TEST_FORCE_TEMP_LAYER_FAILURE,
-        TrainingPassSource, build_section4_family_partitions, built_in_fixture_candidate,
-        decode_embedding_to_f32, embeddings_into_batches, run_evaluation_campaign,
+        TrainingPassSource, build_provenance_with_backend, build_section4_family_partitions,
+        built_in_fixture_candidate, decode_embedding_to_f32, embeddings_into_batches,
+        run_evaluation_campaign,
     };
     use lexongraph_block::EmbeddingSpec;
     use serde_json::json;
@@ -4225,6 +4253,47 @@ mod tests {
                 message
             } if message.contains("at most 2 dimensions")
         ));
+    }
+
+    #[test]
+    fn build_provenance_records_execution_backend_selection() {
+        let profile = archive_training_profile_for_tests();
+        let identity = super::CandidateIdentity {
+            candidate_id: "balanced".into(),
+            implementation_label: "Balanced fixture".into(),
+            software_identity: "balanced-fixture-v1".into(),
+        };
+
+        let provenance = build_provenance_with_backend(
+            &profile,
+            &identity,
+            vec!["archive-training-pass".into()],
+            super::acceleration::fixture_cpu_execution_backend_selection(),
+        );
+
+        assert_eq!(
+            provenance.execution_backend,
+            super::acceleration::fixture_cpu_execution_backend_selection()
+        );
+    }
+
+    #[test]
+    fn render_scorecard_reports_execution_backend_resolution() {
+        let report = run_evaluation_campaign(
+            &archive_training_profile_for_tests(),
+            &[built_in_fixture_candidate("balanced-threshold").unwrap()],
+        )
+        .unwrap();
+
+        let scorecard = super::render_scorecard(&report);
+
+        assert!(scorecard.contains("execution-backend:"));
+        assert!(
+            scorecard.contains("wgpu-unsupported-fallback")
+                || scorecard.contains("wgpu-declined")
+                || scorecard.contains("wgpu")
+                || scorecard.contains("cpu")
+        );
     }
 
     fn archive_training_profile_for_tests() -> BenchmarkProfile {

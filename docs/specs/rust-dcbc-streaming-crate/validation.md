@@ -251,3 +251,14 @@ invalid-transition category, and `complete_training()` places the trainer in the
 terminal error state.
 
 **Traces to:** REQ-DCBC-STREAM-015
+
+### VAL-DCBC-STREAM-024
+
+Run one deterministic DCBC fixture through CPU execution and, on a supported
+host, through the WGPU-backed dense-kernel path.
+
+**Pass condition:** pass reports, stable cluster IDs, classifier assignments,
+and shared error-class outcomes remain observably equivalent; unsupported hosts
+report explicit CPU fallback.
+
+**Traces to:** REQ-DCBC-STREAM-018

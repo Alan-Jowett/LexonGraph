@@ -230,6 +230,14 @@ The repository includes automated tests that exercise both:
 - DCBC-specific mechanics at the new crate's conformant boundary
 - the shared streaming clustering conformance helpers
 
+### DSG-DCBC-STREAM-019 `Optional WGPU dense-kernel backend`
+
+The DCBC crate may layer an optional WGPU backend beneath its existing trainer
+implementation for dense internal kernels such as distance-matrix
+materialization and assignment-support computation. Backend selection is
+internal, capability-gated, and must preserve the CPU-defined observable pass
+results, stable cluster IDs, and classifier semantics.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -248,3 +256,4 @@ The repository includes automated tests that exercise both:
 | DSG-DCBC-STREAM-016 | REQ-DCBC-STREAM-015 |
 | DSG-DCBC-STREAM-017 | REQ-DCBC-STREAM-016 |
 | DSG-DCBC-STREAM-018 | REQ-DCBC-STREAM-017 |
+| DSG-DCBC-STREAM-019 | REQ-DCBC-STREAM-018 |

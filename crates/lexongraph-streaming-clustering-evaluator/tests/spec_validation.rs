@@ -2939,7 +2939,7 @@ fn regression_section4_suite_rejects_bruteforce_ground_truth_on_large_corpora() 
     let spec = section4_suite_spec(vec![strict_synthetic_profile(
         "large-ground-truth",
         "large-corpus",
-        8_194,
+        16_386,
     )]);
 
     let result = generate_section4_suite_assets(&spec, output_dir.path());

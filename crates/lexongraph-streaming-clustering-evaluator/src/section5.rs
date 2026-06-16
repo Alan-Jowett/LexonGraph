@@ -160,6 +160,8 @@ pub struct Section5PairReport {
     pub refinement_edge_count: usize,
     pub maximum_observed_beta: f64,
     pub epsilon_exception_use_count: usize,
+    #[serde(default)]
+    pub execution_backend: crate::ExecutionBackendSelection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_budget_millis: Option<u64>,
     pub build_elapsed_nanos: u128,
@@ -461,10 +463,11 @@ pub fn render_section5_scorecard(report: &Section5CampaignReport) -> String {
             .map(|budget| format!(", execution_budget_millis={budget}"))
             .unwrap_or_default();
         lines.push(format!(
-            "- {} x {}: {:?}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}{}",
+            "- {} x {}: {:?}, backend={}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}{}",
             pair_report.leaf_candidate_identity.candidate_id,
             pair_report.hierarchy_strategy_identity.strategy_id,
             pair_report.run_status,
+            crate::acceleration::backend_resolution_label(&pair_report.execution_backend),
             pair_report.metric_semantics_consistency_result,
             pair_report.max_depth,
             pair_report.theoretical_depth_bound,
@@ -1279,6 +1282,8 @@ fn build_pair_report(
                 refinement_edge_count: analysis.refinement_edge_count,
                 maximum_observed_beta: analysis.max_observed_beta,
                 epsilon_exception_use_count: analysis.epsilon_exception_use_count,
+                execution_backend: crate::acceleration::detected_execution_backend_selection()
+                    .clone(),
                 execution_budget_millis: context
                     .contract
                     .execution_budget
@@ -1342,6 +1347,7 @@ fn build_pair_report(
             refinement_edge_count: 0,
             maximum_observed_beta: f64::INFINITY,
             epsilon_exception_use_count: 0,
+            execution_backend: crate::acceleration::detected_execution_backend_selection().clone(),
             execution_budget_millis: context
                 .contract
                 .execution_budget
@@ -1413,6 +1419,7 @@ fn metric_semantics_failure_pair_report(
         refinement_edge_count: 0,
         maximum_observed_beta: f64::INFINITY,
         epsilon_exception_use_count: 0,
+        execution_backend: crate::acceleration::detected_execution_backend_selection().clone(),
         execution_budget_millis: contract
             .execution_budget
             .as_ref()
@@ -2300,6 +2307,7 @@ mod tests {
                 software_identity: "fixture".into(),
                 floating_point_profile: "ieee754-deterministic-no-fma".into(),
                 hardware_profile: "fixture-cpu".into(),
+                execution_backend: crate::acceleration::fixture_cpu_execution_backend_selection(),
             },
             metric_semantics_profile: "euclidean".into(),
             metric_compatibility_rule: "closed-profile-v1".into(),
@@ -2317,6 +2325,7 @@ mod tests {
             refinement_edge_count: 4,
             maximum_observed_beta: 0.5,
             epsilon_exception_use_count: 0,
+            execution_backend: crate::acceleration::fixture_cpu_execution_backend_selection(),
             execution_budget_millis: None,
             build_elapsed_nanos: 2_500_000,
             build_throughput_leaf_nodes_per_second: 1600.0,

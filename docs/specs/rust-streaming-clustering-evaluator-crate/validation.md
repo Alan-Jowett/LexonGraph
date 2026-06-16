@@ -721,3 +721,37 @@ survivor result, and the emitted artifacts preserve deterministic provenance and
 artifact hygiene consistent with other hard-failure outcomes.
 
 **Traces to:** REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-061
+
+### VAL-STREAM-EVAL-053
+
+Run evaluator backend selection on:
+
+- a host or build where WGPU acceleration is supported
+- a host, build, or configuration where it is unavailable
+
+**Pass condition:** the evaluator reports explicit backend selection or fallback
+status in provenance or campaign artifacts and does not silently claim
+acceleration.
+
+**Traces to:** REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064
+
+### VAL-STREAM-EVAL-054
+
+Run one realistic-corpus section-4 campaign and one section-5 pair both on CPU
+and on the supported WGPU-backed path.
+
+**Pass condition:** campaign verdicts, survivor or disqualification semantics,
+and gate outcomes match in observable meaning across backends.
+
+**Traces to:** REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-066
+
+### VAL-STREAM-EVAL-055
+
+Run at least one accelerated realistic-qualification execution on the declared
+Windows plus AMD Radeon 780M hardware profile.
+
+**Pass condition:** the accelerated path completes on the declared
+qualification target, preserves evaluator semantics, and reports materially
+improved runtime relative to CPU on the same benchmark surface.
+
+**Traces to:** REQ-STREAM-EVAL-063, REQ-STREAM-EVAL-066

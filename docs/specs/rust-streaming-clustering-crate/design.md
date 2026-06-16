@@ -150,6 +150,14 @@ resulting classifier intentionally accepts wrong-dimensional and non-finite
 embeddings as valid assignments. The suite executes this fixture so downstream
 tests can prove the helper rejects malformed-input-accepting implementations.
 
+### DSG-STREAM-TRAIT-018 `Backend-transparent shared contract`
+
+The shared trait crate remains backend-transparent. Concrete implementations may
+ internally choose CPU or optional accelerator-backed execution, but backend
+ selection does not widen the shared API, does not introduce
+ accelerator-shaped trait methods, and does not weaken the contract's
+ observable lifecycle, assignment, or error semantics.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -170,3 +178,4 @@ tests can prove the helper rejects malformed-input-accepting implementations.
 | DSG-STREAM-TRAIT-015 | REQ-STREAM-TRAIT-004, REQ-STREAM-TRAIT-010, REQ-STREAM-TRAIT-020 |
 | DSG-STREAM-TRAIT-016 | REQ-STREAM-TRAIT-021 |
 | DSG-STREAM-TRAIT-017 | REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-022 |
+| DSG-STREAM-TRAIT-018 | REQ-STREAM-TRAIT-023 |
