@@ -726,9 +726,25 @@ pub fn run_section4_suite(
             .map(|candidate| candidate.candidate_id.clone())
             .collect();
         let survivor_pipeline_ids = comparative_report
-            .packing_pipeline_ranking
+            .run_reports
             .iter()
-            .map(|pipeline| pipeline.pipeline_id.clone())
+            .filter(|run_report| {
+                comparative_report
+                    .ranking
+                    .iter()
+                    .any(|ranked| ranked.candidate_id == run_report.candidate_identity.candidate_id)
+            })
+            .filter_map(|run_report| {
+                run_report
+                    .selected_packing_strategy_id
+                    .as_ref()
+                    .map(|strategy_id| {
+                        crate::packing_pipeline_id(
+                            run_report.candidate_identity.candidate_id.as_str(),
+                            strategy_id.as_str(),
+                        )
+                    })
+            })
             .collect();
         let preserved_deferred_goal_ids = profile
             .deferred_research_goals

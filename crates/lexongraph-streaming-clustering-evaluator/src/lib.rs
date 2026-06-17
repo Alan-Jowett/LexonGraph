@@ -2159,22 +2159,27 @@ fn finalize_successful_run(
             .collect::<Vec<_>>()
     };
     let packing_evaluation = select_best_packing_evaluation(&packing_evaluations);
-    let survived_required_gates = packing_evaluation
-        .as_ref()
-        .map(|packing| packing.survived_required_gates)
-        .unwrap_or(raw_survived_required_gates);
+    let survived_required_gates = if raw_hard_gate_failed {
+        raw_survived_required_gates
+    } else {
+        packing_evaluation.is_some()
+    };
     let effective_ranking_score = packing_evaluation
         .as_ref()
         .and_then(|packing| packing.ranking_score)
         .or(ranking_score);
-    let terminal_failure = packing_evaluation
-        .as_ref()
-        .and_then(|packing| packing.terminal_failure.clone())
-        .or_else(|| {
-            first_failed_packing_evaluation(&packing_evaluations)
-                .and_then(|packing| packing.terminal_failure.clone())
-        })
-        .or(raw_terminal_failure);
+    let terminal_failure = if survived_required_gates {
+        None
+    } else {
+        packing_evaluation
+            .as_ref()
+            .and_then(|packing| packing.terminal_failure.clone())
+            .or_else(|| {
+                first_failed_packing_evaluation(&packing_evaluations)
+                    .and_then(|packing| packing.terminal_failure.clone())
+            })
+            .or(raw_terminal_failure)
+    };
     let artifact_hygiene = if raw_hard_gate_failed {
         ArtifactHygieneEvidence {
             comparative_metrics_emitted: false,
@@ -3185,7 +3190,7 @@ fn first_failed_packing_evaluation(
         .min_by(|left, right| left.packer_id.cmp(&right.packer_id))
 }
 
-fn packing_pipeline_id(candidate_id: &str, packing_strategy_id: &str) -> String {
+pub(crate) fn packing_pipeline_id(candidate_id: &str, packing_strategy_id: &str) -> String {
     format!("{candidate_id}::{packing_strategy_id}")
 }
 
@@ -5947,6 +5952,7 @@ mod tests {
         );
         assert_eq!(run_report.packing_evaluations.len(), 2);
         assert_eq!(report.packing_pipeline_ranking.len(), 1);
+        assert!(run_report.terminal_failure.is_none());
         assert!(
             run_report
                 .packing_evaluations
@@ -5954,6 +5960,28 @@ mod tests {
                 .any(|packing| packing.packer_id == super::FAILING_TEST_PACKER_ID
                     && !packing.survived_required_gates)
         );
+    }
+
+    #[test]
+    fn all_failing_packing_strategies_disqualify_candidate() {
+        let mut profile = inline_strict_alignment_profile();
+        profile.packing_strategy_ids = vec![super::FAILING_TEST_PACKER_ID.into()];
+
+        let report =
+            super::with_execution_backend_request(super::ExecutionBackendRequest::Cpu, || {
+                run_evaluation_campaign(
+                    &profile,
+                    &[built_in_fixture_candidate("balanced-threshold").unwrap()],
+                )
+            })
+            .expect("all-failing packers should still produce a deterministic campaign report");
+
+        let run_report = &report.run_reports[0];
+        assert_eq!(run_report.run_status, CandidateRunStatus::GateFailed);
+        assert!(!run_report.survived_required_gates);
+        assert!(run_report.selected_packing_strategy_id.is_none());
+        assert_eq!(report.packing_pipeline_ranking.len(), 0);
+        assert!(run_report.terminal_failure.is_some());
     }
 
     #[test]
