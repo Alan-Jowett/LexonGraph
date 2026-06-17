@@ -3005,7 +3005,10 @@ fn val_stream_eval_044_section5_hierarchy_strategy_registration_uses_surviving_l
             "bottom-up-agglomeration",
             "recursive-top-down",
             "greedy-pack",
-            "hybrid-top-down-bottom-up"
+            "hybrid-top-down-bottom-up",
+            "ward-linkage-agglomeration",
+            "beta-aware-greedy-pack",
+            "pca-variance-top-down"
         ]
     );
 
