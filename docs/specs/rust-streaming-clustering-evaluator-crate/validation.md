@@ -812,3 +812,74 @@ gate or survivor semantics remain interpretable under the declared deterministic
 reduction-order strategy.
 
 **Traces to:** REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-061, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-067
+
+### VAL-STREAM-EVAL-057
+
+Inspect one section-6 summary contract.
+
+**Pass condition:** the contract declares the originating section-5 source
+label, exact-reference semantics, delta floor, perturbation scale, storage-
+measurement semantics, metric-compatibility rule, any declared relative-error
+bound, and the later evaluation line for obligations that remain deferred after
+section 6.
+
+**Traces to:** REQ-STREAM-EVAL-071, REQ-STREAM-EVAL-073
+
+### VAL-STREAM-EVAL-058
+
+Run section-6 with at least two surviving section-5 pairs and at least two
+registered summary candidates.
+
+**Pass condition:** the evaluator emits per-pair per-summary-family reports that
+include exact-reference comparison metrics, stability metrics, storage metrics,
+and summary-candidate identities while consuming the carried-forward section-5
+hierarchy outputs without widening the candidate boundary.
+
+**Traces to:** REQ-STREAM-EVAL-071, REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-073
+
+### VAL-STREAM-EVAL-059
+
+Run section-6 once with an unsupported or incompatible carried-forward
+metric-semantics declaration and once with a declared relative-error bound that
+is exceeded by at least one summary candidate.
+
+**Pass condition:** the evaluator deterministically reports metric-semantics
+rejection and error-bound gate failure through the ordinary section-6
+gate/failure surface rather than silently dropping those outcomes from
+comparative artifacts.
+
+**Traces to:** REQ-STREAM-EVAL-073, REQ-STREAM-EVAL-074
+
+### VAL-STREAM-EVAL-060
+
+Inspect one completed section-6 report and carry-forward summary.
+
+**Pass condition:** each summary result records the originating section-4
+profile, originating section-5 contract and pair identity, inherited
+metric-semantics consistency result, and deterministic carry-forward summary for
+the section-5 pair plus summary-family combination.
+
+**Traces to:** REQ-STREAM-EVAL-075
+
+### VAL-STREAM-EVAL-061
+
+Inspect the deferred-goal records emitted after one completed section-6 run.
+
+**Pass condition:** parent-summary obligations are no longer reported as
+deferred once section 6 executes, while routing, beam-width, serialization, and
+persistence obligations remain explicitly deferred.
+
+**Traces to:** REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059, REQ-STREAM-EVAL-075
+
+### VAL-STREAM-EVAL-062
+
+Inspect repository verification artifacts and registered summary-candidate
+surfaces for section 6.
+
+**Pass condition:** executable coverage exists for section-6 contract
+validation, summary-candidate execution, deterministic rejection or gate
+failure, cross-stage provenance, and deferred-goal narrowing, and the
+repository exposes the checked-in section-6 summary families through a stable
+registration surface.
+
+**Traces to:** REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-076

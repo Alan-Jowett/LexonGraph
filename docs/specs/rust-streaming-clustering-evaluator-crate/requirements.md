@@ -387,9 +387,9 @@ At minimum, the declared comparison shall define:
 
 This revision shall not claim to prove full end-to-end LexonGraph hierarchy
 conformance for properties that still require artifacts outside the staged
-section-4 and section-5 evaluator boundaries, including parent-summary accuracy
-or stability, search routing over a persisted hierarchy, artifact
-serialization, and durable index build semantics.
+section-4, section-5, and section-6 evaluator boundaries, including search
+routing over a persisted hierarchy, artifact serialization, and durable index
+build semantics.
 
 This revision also shall not define the future end-to-end evaluator layered on
 `docs/specs/rust-streaming-indexer-crate/` and
@@ -413,8 +413,9 @@ contract freezes them for the experiment track:
 
 For section-5 hierarchy-stage execution in this revision, the evaluator shall
 preserve as later-phase proof obligations any declared parent-summary accuracy
-or stability target, routing target, routing-procedure assumption, beam-width
-policy, serialization or persistence obligation, or multi-thread
+or stability target until section-6 summary-stage evaluation discharges that
+surface, and shall preserve any routing target, routing-procedure assumption,
+beam-width policy, serialization or persistence obligation, or multi-thread
 reproducibility obligation that the hierarchy-stage campaign does not directly
 prove.
 
@@ -1123,14 +1124,12 @@ Even after section-5 hierarchy-stage execution is added, this revision shall
 continue to treat the following as deferred unless a later specification expands
 the evaluator boundary again:
 
-- parent-summary accuracy and stability comparison from section 6 of
-  `docs/research/clustering_plan.md`
 - routing recall, latency, and beam-width benchmarking from section 7
 - robustness, serialization, and persisted-artifact validation from section 8
 
-Section-5 direct hierarchy measurements shall therefore be reported as staged
-evidence toward the parent research goals rather than as proof of those later
-phases.
+Section-5 direct hierarchy measurements and section-6 direct parent-summary
+measurements shall therefore be reported as staged evidence toward the parent
+research goals rather than as proof of those later phases.
 
 ### REQ-STREAM-EVAL-060
 
@@ -1281,6 +1280,94 @@ including:
 This requirement constrains the evaluator's supported first-class packing
 families for checked-in comparison. It does not require every benchmark profile
 to execute every registered packing strategy.
+
+### REQ-STREAM-EVAL-071
+
+The evaluator shall define a direct section-6 parent-summary comparison stage
+that consumes surviving section-5 hierarchy-stage pairs under a shared
+evaluator-owned summary contract.
+
+This stage shall execute without widening the shared streaming clustering
+trainer/classifier boundary or redefining the hierarchy outputs carried forward
+from section 5.
+
+### REQ-STREAM-EVAL-072
+
+The checked-in section-6 comparison surface in this revision shall support the
+summary families called for by section 6 of
+`docs/research/clustering_plan.md`, including:
+
+- exact centroid
+- composed centroid
+- centroid plus variance
+- low-rank centroid direction
+
+Each summary family shall expose stable evaluator-owned identity metadata for
+provenance, scorecards, comparative reports, and later carry-forward decisions.
+
+### REQ-STREAM-EVAL-073
+
+For each surviving section-5 pair and each declared section-6 summary family,
+the evaluator shall compare the candidate parent summary against an exact
+descendant-derived reference summary under a shared section-6 contract.
+
+At minimum, the section-6 contract shall declare:
+
+- the exact-reference semantics
+- the relative-error floor used to stabilize comparisons
+- the perturbation scale used for stability checks
+- the storage-measurement semantics
+- the metric-compatibility rule used to interpret carried-forward section-5
+  metric semantics
+- any declared error-bound gate applied to surviving summary candidates
+
+The resulting section-6 report surface shall record relative-error, stability,
+and storage measurements per compared summary family.
+
+### REQ-STREAM-EVAL-074
+
+The section-6 stage shall deterministically reject or gate-fail carried-forward
+inputs that do not satisfy the shared section-6 summary contract.
+
+At minimum, this revision shall cover:
+
+- invalid section-6 contract declarations
+- unsupported or incompatible metric-semantics profiles inherited from section 5
+- summary candidates whose measured error exceeds a declared bound
+
+These outcomes shall be reported through the evaluator-owned gate and failure
+surface rather than silently omitted from comparative artifacts.
+
+### REQ-STREAM-EVAL-075
+
+Section-6 reports and scorecards shall preserve explicit cross-stage
+traceability to the originating section-4 profile and section-5 hierarchy-stage
+pair from which each compared summary result was derived.
+
+At minimum, the section-6 artifact set shall:
+
+- identify the originating section-4 profile and section-5 contract for each
+  compared summary result
+- publish a deterministic carry-forward summary for the compared section-5 pair
+  and summary-family combination
+- preserve the metric-semantics consistency result inherited from section 5
+- narrow the remaining deferred-goal ledger so parent-summary obligations are no
+  longer deferred once section 6 has executed, while routing, beam-width,
+  serialization, and persistence obligations remain deferred
+
+### REQ-STREAM-EVAL-076
+
+The repository shall include executable verification artifacts for the section-6
+summary stage.
+
+At minimum, this revision shall verify:
+
+- section-6 contract declaration and validation
+- multi-pair and multi-summary-family execution
+- deterministic rejection or gate failure for unsupported metric semantics and
+  error-bound violations
+- cross-stage provenance and carry-forward reporting
+- narrowed deferred-goal reporting after section-6 execution
 
 ## Out of Scope
 

@@ -25,21 +25,23 @@ use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
     CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
-    EvaluationEntitySource, EvaluatorError, ExecutionBackendRequest, ExecutionBackendResolution,
-    ExecutionBudget, FsOverlayZipBlockStore, GateStatus, LaterPhaseIdentity,
-    LaterPhaseIdentityKind, Section4CorpusFamily, Section4DimensionalityContract,
-    Section4ExperimentTrackContract, Section4FrozenContractItem,
+    EvaluationEntity, EvaluationEntitySource, EvaluatorError, ExecutionBackendRequest,
+    ExecutionBackendResolution, ExecutionBudget, FsOverlayZipBlockStore, GateStatus,
+    LaterPhaseIdentity, LaterPhaseIdentityKind, Section4CorpusFamily,
+    Section4DimensionalityContract, Section4ExperimentTrackContract, Section4FrozenContractItem,
     Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
     Section4QualificationSurface, Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
     Section5HierarchyContract, Section5MetricSemanticsConsistencyResult, Section5PairRunStatus,
-    SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
+    Section6SummaryRunStatus, SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
     built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    emit_section5_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
-    registered_hierarchy_strategy_names, resolve_registered_candidates,
-    resolve_registered_hierarchy_strategies, run_evaluation_campaign, run_section4_suite,
-    run_section5_campaign, section4_family_candidate_names, with_execution_backend_request,
-    write_section4_suite_artifacts,
+    emit_section5_campaign_artifacts, emit_section6_campaign_artifacts,
+    generate_section4_suite_assets, registered_candidate_names,
+    registered_hierarchy_strategy_names, registered_section6_summary_candidate_names,
+    resolve_registered_candidates, resolve_registered_hierarchy_strategies,
+    resolve_registered_section6_summary_candidates, run_evaluation_campaign, run_section4_suite,
+    run_section5_campaign, run_section6_campaign, section4_family_candidate_names,
+    with_execution_backend_request, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -47,7 +49,7 @@ use support::{
     duplicate_evaluation_entities_block_store_profile, duplicate_source_id_profile,
     empty_synthetic_metadata_key_profile, invalid_profile, lib_source,
     missing_synthetic_metadata_key_profile, nondeterministic_candidate,
-    section5_cosine_hierarchy_contract, section5_hierarchy_contract,
+    section5_cosine_hierarchy_contract, section5_hierarchy_contract, section6_summary_contract,
     shared_contract_failure_candidate, strict_alignment_nonzero_profile, strict_alignment_profile,
     synthetic_padding_profile, wrong_entity_count_block_store_profile,
 };
@@ -2993,6 +2995,251 @@ fn regression_realistic_section4_suite_requires_host_scaled_threading() {
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("host-scaled candidate threading"))
     );
+}
+
+#[test]
+fn val_stream_eval_057_section6_summary_contract_declares_required_fields() {
+    let contract = section6_summary_contract();
+
+    assert_eq!(
+        contract.section5_source_label,
+        "fixture-section5-carry-forward"
+    );
+    assert_eq!(
+        contract.exact_reference_semantics,
+        "descendant-exact-summary-v1"
+    );
+    assert_eq!(contract.delta_floor, 1.0e-6);
+    assert_eq!(contract.perturbation_scale, 1.0e-3);
+    assert_eq!(contract.storage_measurement_semantics, "f32-slot-count-v1");
+    assert_eq!(contract.metric_compatibility_rule, "closed-profile-v1");
+    assert_eq!(contract.relative_error_bound_max, Some(0.01));
+    assert_eq!(contract.later_evaluation_line, "future routing evaluator");
+}
+
+#[test]
+fn val_stream_eval_058_section6_campaign_reports_summary_metrics_for_multiple_candidates() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let summary_candidates = resolve_registered_section6_summary_candidates(&[
+        "exact-centroid".to_string(),
+        "centroid-plus-variance".to_string(),
+    ])
+    .unwrap();
+    let report = run_section6_campaign(
+        &strict_alignment_profile(),
+        &section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+
+    assert_eq!(report.carried_forward_pair_ids.len(), 2);
+    assert_eq!(report.summary_reports.len(), 4);
+    assert!(
+        report
+            .summary_reports
+            .iter()
+            .all(|summary| summary.internal_node_count >= 1)
+    );
+    assert!(
+        report
+            .summary_reports
+            .iter()
+            .all(|summary| summary.mean_storage_f32_slot_count > 0.0)
+    );
+    assert!(report.summary_reports.iter().all(|summary| {
+        summary.metric_semantics_consistency_result
+            == lexongraph_streaming_clustering_evaluator::Section6MetricSemanticsConsistencyResult::Consistent
+    }));
+}
+
+#[test]
+fn val_stream_eval_059_section6_campaign_rejects_metric_and_error_bound_failures() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_profile = strict_alignment_nonzero_profile();
+    let section5_report = run_section5_campaign(
+        &section5_profile,
+        &balanced_and_skewed_candidates(),
+        &section5_cosine_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+
+    let mut richer_profile = strict_alignment_nonzero_profile();
+    *richer_profile
+        .inline_evaluation_entities_mut()
+        .expect("section-6 rejection fixture should use inline entities") = vec![
+        EvaluationEntity {
+            entity_id: "a".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![3.0, 0.0],
+            synthetic: false,
+        },
+        EvaluationEntity {
+            entity_id: "b".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![1.0, 0.0],
+            synthetic: false,
+        },
+        EvaluationEntity {
+            entity_id: "c".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![0.0, 2.0],
+            synthetic: false,
+        },
+        EvaluationEntity {
+            entity_id: "d".into(),
+            corpus_id: "fixture-corpus-a".into(),
+            embedding: vec![0.0, 1.0],
+            synthetic: false,
+        },
+    ];
+    let summary_candidates =
+        resolve_registered_section6_summary_candidates(
+            &["low-rank-centroid-direction".to_string()],
+        )
+        .unwrap();
+    let mut tight_contract = section6_summary_contract();
+    tight_contract.relative_error_bound_max = Some(0.0001);
+    let tight_report = run_section6_campaign(
+        &richer_profile,
+        &section5_report,
+        &tight_contract,
+        &summary_candidates,
+    )
+    .unwrap();
+    assert!(tight_report.summary_reports.iter().any(|summary| {
+        matches!(summary.run_status, Section6SummaryRunStatus::GateFailed)
+            && summary.gate_results.iter().any(|gate| {
+                gate.gate_id == "relative-l2-error-bound"
+                    && gate.status
+                        == lexongraph_streaming_clustering_evaluator::Section6GateStatus::Failed
+            })
+    }));
+
+    let mut unsupported_section5_report = section5_report.clone();
+    unsupported_section5_report.pair_reports[0].metric_semantics_profile = "manhattan".into();
+    let unsupported_report = run_section6_campaign(
+        &richer_profile,
+        &unsupported_section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+    assert!(unsupported_report.summary_reports.iter().any(|summary| {
+        matches!(summary.run_status, Section6SummaryRunStatus::GateFailed)
+            && summary.gate_results.iter().any(|gate| {
+                gate.gate_id == "metric-semantics-compatibility"
+                    && gate.status
+                        == lexongraph_streaming_clustering_evaluator::Section6GateStatus::Failed
+            })
+    }));
+}
+
+#[test]
+fn val_stream_eval_060_section6_reports_preserve_cross_stage_traceability_and_artifacts() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let summary_candidates =
+        resolve_registered_section6_summary_candidates(&["exact-centroid".to_string()]).unwrap();
+    let report = run_section6_campaign(
+        &strict_alignment_profile(),
+        &section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+    let artifacts = emit_section6_campaign_artifacts(&report).unwrap();
+
+    assert_eq!(report.section4_profile_id, "strict-alignment-campaign");
+    assert_eq!(report.section5_contract_id, "section5-fixture-contract");
+    assert_eq!(
+        report.summary_reports[0].originating_section4_profile_id,
+        "strict-alignment-campaign"
+    );
+    assert_eq!(
+        report.summary_reports[0].originating_section5_contract_id,
+        "section5-fixture-contract"
+    );
+    assert!(
+        artifacts
+            .carry_forward_summary
+            .contents
+            .contains("balanced-threshold x bottom-up-agglomeration x exact-centroid")
+    );
+}
+
+#[test]
+fn val_stream_eval_061_section6_reports_narrow_remaining_deferred_obligations() {
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_report = run_section5_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let summary_candidates =
+        resolve_registered_section6_summary_candidates(&["exact-centroid".to_string()]).unwrap();
+    let report = run_section6_campaign(
+        &strict_alignment_profile(),
+        &section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+
+    assert!(!report.remaining_deferred_goals.iter().any(|goal| {
+        goal.deferred_id == "section5-deferred-parent-summary"
+            || goal.deferred_id == "section6-deferred-parent-summary"
+    }));
+    assert!(
+        report
+            .remaining_deferred_goals
+            .iter()
+            .any(|goal| goal.deferred_id == "section6-deferred-routing")
+    );
+    assert!(
+        report
+            .remaining_deferred_goals
+            .iter()
+            .any(|goal| goal.deferred_id == "section6-deferred-persistence")
+    );
+}
+
+#[test]
+fn val_stream_eval_062_repository_defines_section6_summary_surface_and_validation_coverage() {
+    let names = registered_section6_summary_candidate_names();
+    assert_eq!(
+        names,
+        vec![
+            "exact-centroid",
+            "composed-centroid",
+            "centroid-plus-variance",
+            "low-rank-centroid-direction"
+        ]
+    );
+
+    let source = lib_source();
+    assert!(source.contains("run_section6_campaign"));
+    assert!(source.contains("registered_section6_summary_candidate_names"));
 }
 
 #[test]

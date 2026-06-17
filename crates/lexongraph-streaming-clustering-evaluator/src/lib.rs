@@ -13,6 +13,7 @@
 mod acceleration;
 mod section4;
 mod section5;
+mod section6;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -74,6 +75,16 @@ pub use section5::{
     registered_hierarchy_strategy_names, render_section5_carry_forward_summary,
     render_section5_scorecard, resolve_registered_hierarchy_strategies, run_section5_campaign,
     write_section5_campaign_artifacts,
+};
+pub use section6::{
+    RegisteredSection6SummaryCandidate, Section6CampaignArtifacts, Section6CampaignReport,
+    Section6DeferredGoalRecord, Section6GateKind, Section6GateResult, Section6GateStatus,
+    Section6MetricSemanticsConsistencyResult, Section6NodeSummaryReport, Section6RankedSummary,
+    Section6SummaryCandidateIdentity, Section6SummaryCandidateKind, Section6SummaryContract,
+    Section6SummaryReport, Section6SummaryRunStatus, emit_section6_campaign_artifacts,
+    registered_section6_summary_candidate_names, render_section6_carry_forward_summary,
+    render_section6_scorecard, resolve_registered_section6_summary_candidates,
+    run_section6_campaign, write_section6_campaign_artifacts,
 };
 
 pub type PassPlan = Vec<Vec<Embedding>>;

@@ -23,8 +23,9 @@ use lexongraph_streaming_clustering_evaluator::{
     EvaluationEntity, EvaluationEntitySource, ExecutionBudget, GateDeclaration, GateKind,
     LaterPhaseIdentity, LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload,
     RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage, Section5DepthBoundPolicy,
-    Section5EpsilonPolicy, Section5HierarchyContract, SharedCandidateConfig, TrainingPassSource,
-    built_in_fixture_candidate, registered_packing_strategy_names,
+    Section5EpsilonPolicy, Section5HierarchyContract, Section6SummaryContract,
+    SharedCandidateConfig, TrainingPassSource, built_in_fixture_candidate,
+    registered_packing_strategy_names,
 };
 use zip::CompressionMethod as ZipCompressionMethod;
 use zip::ZipWriter;
@@ -599,6 +600,23 @@ pub fn strict_alignment_nonzero_profile() -> BenchmarkProfile {
         embeddings: vec![vec![0.95, 0.05], vec![0.05, 0.95]],
     };
     profile
+}
+
+pub fn section6_summary_contract() -> Section6SummaryContract {
+    Section6SummaryContract {
+        contract_id: "section6-fixture-contract".into(),
+        section5_source_label: "fixture-section5-carry-forward".into(),
+        exact_reference_semantics: "descendant-exact-summary-v1".into(),
+        delta_floor: 1.0e-6,
+        perturbation_scale: 1.0e-3,
+        storage_measurement_semantics: "f32-slot-count-v1".into(),
+        metric_compatibility_rule: "closed-profile-v1".into(),
+        relative_error_bound_max: Some(0.01),
+        later_evaluation_line: "future routing evaluator".into(),
+        execution_budget: Some(ExecutionBudget {
+            wall_clock_limit_millis: 60_000,
+        }),
+    }
 }
 
 pub fn crate_root() -> PathBuf {
