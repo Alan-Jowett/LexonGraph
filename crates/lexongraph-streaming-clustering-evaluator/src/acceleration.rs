@@ -5,6 +5,7 @@ use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "wgpu-accel")]
 const QUALIFICATION_HARDWARE_PROFILE: &str = "Windows + AMD Radeon 780M";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
