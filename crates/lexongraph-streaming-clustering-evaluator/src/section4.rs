@@ -30,9 +30,10 @@ use crate::{
     GateKind, GateResult, GateStatus, GroundTruthNeighborhood, LaterPhaseIdentity,
     LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload, RegisteredCandidate,
     ReproducibilityMetadata, ResearchCoverage, SharedBalanceConstraints, SharedCandidateConfig,
-    StructuredFailure, TrainingPassSource, decode_embedding_to_f32, emit_campaign_artifacts,
-    load_leaf_records, metadata_value, rank_candidates, run_candidate, validate_candidates,
-    validate_profile, write_campaign_artifacts,
+    StructuredFailure, TrainingPassSource, declared_candidate_threading_is_host_scaled,
+    decode_embedding_to_f32, emit_campaign_artifacts, load_leaf_records, metadata_value,
+    rank_candidates, run_candidate, validate_candidates, validate_profile,
+    write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,11 +397,12 @@ pub fn generate_section4_suite_assets(
             compression_benchmark: spec.compression_benchmark.clone(),
             metric_declarations: section4_metric_declarations(),
             gate_declarations: section4_gate_declarations(
+                spec.leaf_size,
                 spec.experiment_track_contract.execution_budget.is_some(),
             ),
             deferred_research_goals: default_deferred_research_goals(),
             later_phase_identities: later_phase_identities.clone(),
-            reproducibility: spec.reproducibility.clone(),
+            reproducibility: profile_reproducibility(spec),
         };
         let profile_path = profiles_dir.join(format!("{}.json", profile_spec.profile_id));
         let mut stored_profile = profile.clone();
@@ -615,6 +617,10 @@ pub fn run_section4_suite(
         let profile: BenchmarkProfile = serde_json::from_str(&profile_contents)
             .map_err(|error| EvaluatorError::Json(error.to_string()))?;
         let mut profile = profile;
+        profile.reproducibility = profile_reproducibility_from_track(
+            &profile.reproducibility,
+            &manifest.experiment_track_contract,
+        );
         let profile_base_dir = generated.profile_path.parent().ok_or_else(|| {
             EvaluatorError::InvalidConfiguration(format!(
                 "generated profile path {} has no parent directory",
@@ -627,6 +633,11 @@ pub fn run_section4_suite(
         let mut timings = HashMap::new();
         let mut run_reports = Vec::with_capacity(candidates.len());
         for candidate in candidates {
+            eprintln!(
+                "[TIMING-SUITE] Starting candidate {} for profile {}",
+                candidate.identity.candidate_id, profile.profile_id
+            );
+            let outer_start = std::time::Instant::now();
             let ((run_report, elapsed), peak_build_memory_bytes) =
                 measure_peak_build_memory(|| {
                     let started = Instant::now();
@@ -648,6 +659,12 @@ pub fn run_section4_suite(
                     run_report.execution_budget_millis,
                     peak_build_memory_bytes,
                 ),
+            );
+            eprintln!(
+                "[TIMING-SUITE] Candidate {} completed in {:.2}s ({:?})",
+                candidate.identity.candidate_id,
+                outer_start.elapsed().as_secs_f64(),
+                run_report.run_status
             );
             run_reports.push(run_report);
         }
@@ -1237,6 +1254,13 @@ fn validate_suite_spec(spec: &Section4SuiteSpec) -> Result<(), EvaluatorError> {
                 "realistic qualification track must declare an execution budget".into(),
             ));
         }
+        if !declared_candidate_threading_is_host_scaled(
+            &spec.experiment_track_contract.candidate_threading_model,
+        ) {
+            return Err(EvaluatorError::InvalidConfiguration(
+                "realistic qualification track must declare host-scaled candidate threading".into(),
+            ));
+        }
     }
     for identity in &spec.experiment_track_contract.later_phase_identities {
         if identity.identity_id.trim().is_empty() {
@@ -1707,7 +1731,7 @@ fn compute_ground_truth(
     metric_contract: Section4MetricContract,
     neighbor_count: usize,
 ) -> Result<Vec<GroundTruthNeighborhood>, EvaluatorError> {
-    const MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES: usize = 8_192;
+    const MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES: usize = 16_384;
 
     if real_entities.len() <= neighbor_count {
         return Err(EvaluatorError::InvalidConfiguration(format!(
@@ -1722,6 +1746,16 @@ fn compute_ground_truth(
             MAX_BRUTE_FORCE_GROUND_TRUTH_ENTITIES,
             real_entities.len()
         )));
+    }
+    if matches!(
+        crate::acceleration::detected_execution_backend_selection().resolution,
+        crate::ExecutionBackendResolution::Wgpu
+    ) {
+        return compute_ground_truth_with_accelerated_tiles(
+            real_entities,
+            metric_contract,
+            neighbor_count,
+        );
     }
     let mut ground_truth = Vec::with_capacity(real_entities.len());
     for (entity_index, entity) in real_entities.iter().enumerate() {
@@ -1753,6 +1787,82 @@ fn compute_ground_truth(
                 .collect(),
         });
     }
+    Ok(ground_truth)
+}
+
+fn compute_ground_truth_with_accelerated_tiles(
+    real_entities: &[EvaluationEntity],
+    metric_contract: Section4MetricContract,
+    neighbor_count: usize,
+) -> Result<Vec<GroundTruthNeighborhood>, EvaluatorError> {
+    const TILE_SIZE: usize = 256;
+
+    let metric = match metric_contract {
+        Section4MetricContract::Cosine => crate::acceleration::DenseDistanceMetric::Cosine,
+        Section4MetricContract::Euclidean => crate::acceleration::DenseDistanceMetric::Euclidean,
+    };
+    let embeddings = real_entities
+        .iter()
+        .map(|entity| entity.embedding.as_slice())
+        .collect::<Vec<_>>();
+    let mut ground_truth = Vec::with_capacity(real_entities.len());
+
+    for row_start in (0..real_entities.len()).step_by(TILE_SIZE) {
+        let row_end = (row_start + TILE_SIZE).min(real_entities.len());
+        let row_embeddings = &embeddings[row_start..row_end];
+        let mut nearest =
+            vec![Vec::<(f64, String)>::with_capacity(neighbor_count); row_end - row_start];
+
+        for column_start in (0..real_entities.len()).step_by(TILE_SIZE) {
+            let column_end = (column_start + TILE_SIZE).min(real_entities.len());
+            let column_embeddings = &embeddings[column_start..column_end];
+            let distances = crate::acceleration::dense_distance_matrix(
+                row_embeddings,
+                column_embeddings,
+                metric,
+            )
+            .map_err(|error| {
+                if matches!(metric_contract, Section4MetricContract::Cosine)
+                    && error.contains("non-zero embeddings")
+                {
+                    EvaluatorError::InvalidConfiguration(
+                        "cosine ground-truth generation does not support zero-norm embeddings"
+                            .into(),
+                    )
+                } else {
+                    EvaluatorError::InvalidConfiguration(error)
+                }
+            })?;
+
+            for row_offset in 0..row_embeddings.len() {
+                let global_row_index = row_start + row_offset;
+                for column_offset in 0..column_embeddings.len() {
+                    let global_column_index = column_start + column_offset;
+                    if global_row_index == global_column_index {
+                        continue;
+                    }
+                    let distance = distances[row_offset * column_embeddings.len() + column_offset];
+                    insert_nearest_neighbor(
+                        &mut nearest[row_offset],
+                        neighbor_count,
+                        f64::from(distance),
+                        real_entities[global_column_index].entity_id.clone(),
+                    );
+                }
+            }
+        }
+
+        for (row_offset, top_k) in nearest.into_iter().enumerate() {
+            ground_truth.push(GroundTruthNeighborhood {
+                entity_id: real_entities[row_start + row_offset].entity_id.clone(),
+                neighbor_ids: top_k
+                    .into_iter()
+                    .map(|(_, neighbor_id)| neighbor_id)
+                    .collect(),
+            });
+        }
+    }
+
     Ok(ground_truth)
 }
 
@@ -2016,6 +2126,20 @@ fn clone_reference_with_store_path(
     }
 }
 
+fn profile_reproducibility(spec: &Section4SuiteSpec) -> ReproducibilityMetadata {
+    profile_reproducibility_from_track(&spec.reproducibility, &spec.experiment_track_contract)
+}
+
+fn profile_reproducibility_from_track(
+    reproducibility: &ReproducibilityMetadata,
+    contract: &Section4ExperimentTrackContract,
+) -> ReproducibilityMetadata {
+    let mut profile_reproducibility = reproducibility.clone();
+    profile_reproducibility.candidate_threading_model = contract.candidate_threading_model.clone();
+    profile_reproducibility.reduction_order_strategy = contract.reduction_order_strategy.clone();
+    profile_reproducibility
+}
+
 pub fn resolve_profile_block_store_paths(profile: &mut BenchmarkProfile, base_dir: &Path) {
     for pass in &mut profile.training_passes {
         if let TrainingPassSource::BlockStore { corpus, .. } = pass {
@@ -2126,7 +2250,12 @@ fn section4_metric_declarations() -> Vec<MetricDeclaration> {
     ]
 }
 
-fn section4_gate_declarations(include_execution_budget: bool) -> Vec<GateDeclaration> {
+fn section4_gate_declarations(
+    leaf_size: usize,
+    include_execution_budget: bool,
+) -> Vec<GateDeclaration> {
+    let lower_bound = leaf_size / 2;
+    let upper_bound = leaf_size;
     let mut gates = vec![
         GateDeclaration {
             gate_id: "exact-leaf-occupancy".into(),
@@ -2153,6 +2282,24 @@ fn section4_gate_declarations(include_execution_budget: bool) -> Vec<GateDeclara
             gate_id: "no-empty-declared-clusters".into(),
             label: "No empty declared clusters".into(),
             kind: GateKind::NoEmptyDeclaredClusters,
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+        },
+        GateDeclaration {
+            gate_id: "leaf-size-lower-bound".into(),
+            label: "Leaf size lower bound".into(),
+            kind: GateKind::LeafSizeAtLeast {
+                minimum: lower_bound,
+            },
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+        },
+        GateDeclaration {
+            gate_id: "leaf-size-upper-bound".into(),
+            label: "Leaf size upper bound".into(),
+            kind: GateKind::LeafSizeAtMost {
+                maximum: upper_bound,
+            },
             coverage: ResearchCoverage::Direct,
             research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
         },
@@ -2387,7 +2534,7 @@ mod tests {
         Section4ProfileSpec, Section4ProofSurface, Section4QualificationSurface,
         Section4ScaleTierKind, Section4SuiteSpec, apply_alignment_policy,
         apply_execution_budget_to_candidate_run_report, compute_ground_truth, cosine_distance,
-        euclidean_distance, validate_suite_spec,
+        euclidean_distance, section4_gate_declarations, validate_suite_spec,
     };
     use crate::{
         ArtifactHygieneEvidence, CandidateIdentity, CandidateRunReport, CandidateRunStatus,
@@ -2482,6 +2629,20 @@ mod tests {
         let result = validate_suite_spec(&realistic_qualification_suite_spec(10_001));
 
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn section4_gate_declarations_scale_packing_bounds_with_leaf_size() {
+        let gates = section4_gate_declarations(2, false);
+
+        assert!(gates.iter().any(|gate| {
+            gate.gate_id == "leaf-size-lower-bound"
+                && matches!(gate.kind, crate::GateKind::LeafSizeAtLeast { minimum } if minimum == 1)
+        }));
+        assert!(gates.iter().any(|gate| {
+            gate.gate_id == "leaf-size-upper-bound"
+                && matches!(gate.kind, crate::GateKind::LeafSizeAtMost { maximum } if maximum == 2)
+        }));
     }
 
     #[test]
@@ -2583,8 +2744,8 @@ mod tests {
                 metric_contract_consistency_checks: vec!["consistent metric".into()],
                 metric_contract_audit_result: "consistent".into(),
                 dispersion_functional: "variance".into(),
-                candidate_threading_model: "single-threaded".into(),
-                reduction_order_strategy: "sequential".into(),
+                candidate_threading_model: "host-scaled section-4 screening".into(),
+                reduction_order_strategy: "deterministic stable input-order reduction".into(),
                 execution_budget: Some(ExecutionBudget {
                     wall_clock_limit_millis: 60_000,
                 }),
@@ -2613,6 +2774,8 @@ mod tests {
                 software_identity: "section4-tests".into(),
                 floating_point_profile: "ieee754-deterministic-no-fma".into(),
                 hardware_profile: "fixture-cpu".into(),
+                candidate_threading_model: "host-scaled section-4 screening".into(),
+                reduction_order_strategy: "deterministic stable input-order reduction".into(),
             },
             profiles: vec![Section4ProfileSpec {
                 profile_id: "harvested-realistic".into(),
@@ -2667,6 +2830,13 @@ mod tests {
                 software_identity: "fixture".into(),
                 floating_point_profile: "ieee754-deterministic-no-fma".into(),
                 hardware_profile: "fixture-cpu".into(),
+                candidate_threading: crate::CandidateThreadingProvenance {
+                    declared_model: "host-scaled section-4 screening".into(),
+                    reduction_order_strategy: "deterministic stable input-order reduction".into(),
+                    effective_mode: "host-scaled".into(),
+                    effective_thread_count: 4,
+                },
+                execution_backend: crate::acceleration::fixture_cpu_execution_backend_selection(),
             },
             prerequisite_checks: vec![PrerequisiteCheckResult {
                 check_id: "shared-contract-execution".into(),
@@ -2688,6 +2858,8 @@ mod tests {
             }],
             leaf_membership: Vec::new(),
             cluster_occupancies: Vec::new(),
+            cluster_occupancy_stats: None,
+            packing_evaluation: None,
             synthetic_padding_concentration: None,
             determinism: DeterminismReport {
                 deterministic: true,

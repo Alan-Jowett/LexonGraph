@@ -25,9 +25,10 @@ use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
     CampaignReport, CandidateIdentity, CandidateRunStatus, CompressionBenchmark, CompressionMethod,
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
-    EvaluationEntitySource, EvaluatorError, ExecutionBudget, FsOverlayZipBlockStore, GateStatus,
-    LaterPhaseIdentity, LaterPhaseIdentityKind, Section4CorpusFamily,
-    Section4DimensionalityContract, Section4ExperimentTrackContract, Section4FrozenContractItem,
+    EvaluationEntitySource, EvaluatorError, ExecutionBackendRequest, ExecutionBackendResolution,
+    ExecutionBudget, FsOverlayZipBlockStore, GateStatus, LaterPhaseIdentity,
+    LaterPhaseIdentityKind, Section4CorpusFamily, Section4DimensionalityContract,
+    Section4ExperimentTrackContract, Section4FrozenContractItem,
     Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
     Section4QualificationSurface, Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
@@ -37,7 +38,8 @@ use lexongraph_streaming_clustering_evaluator::{
     emit_section5_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
     registered_hierarchy_strategy_names, resolve_registered_candidates,
     resolve_registered_hierarchy_strategies, run_evaluation_campaign, run_section4_suite,
-    run_section5_campaign, section4_family_candidate_names, write_section4_suite_artifacts,
+    run_section5_campaign, section4_family_candidate_names, with_execution_backend_request,
+    write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -171,6 +173,8 @@ fn section4_reproducibility() -> lexongraph_streaming_clustering_evaluator::Repr
         software_identity: "section4-test-harness".into(),
         floating_point_profile: "ieee754-deterministic-no-fma".into(),
         hardware_profile: "fixture-cpu".into(),
+        candidate_threading_model: "host-scaled deterministic candidate execution".into(),
+        reduction_order_strategy: "deterministic stable input-order reduction".into(),
     }
 }
 
@@ -218,8 +222,8 @@ fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec 
             ],
             metric_contract_audit_result: "metric contract is consistent across build, locality, compression, and deferred routing obligations".into(),
             dispersion_functional: "variance under the declared Euclidean metric".into(),
-            candidate_threading_model: "single-threaded section-4 screening".into(),
-            reduction_order_strategy: "single-thread sequential reduction order".into(),
+            candidate_threading_model: "host-scaled section-4 screening".into(),
+            reduction_order_strategy: "deterministic stable input-order reduction".into(),
             execution_budget: Some(ExecutionBudget {
                 wall_clock_limit_millis: 60_000,
             }),
@@ -890,9 +894,13 @@ fn val_stream_eval_013_report_distinguishes_prerequisites_gates_and_metrics_and_
     assert!(!balanced.metric_results.is_empty());
     assert!(!balanced.gate_results.is_empty());
     assert_eq!(balanced.run_status, CandidateRunStatus::Succeeded);
-    assert_eq!(skewed.run_status, CandidateRunStatus::GateFailed);
-    assert!(skewed.ranking_score.is_none());
-    assert_eq!(report.ranking.len(), 1);
+    assert!(skewed.gate_results.iter().any(|gate| {
+        gate.gate_id == "exact-leaf-occupancy" && gate.status == GateStatus::Failed
+    }));
+    assert!(skewed.packing_evaluation.is_some());
+    assert_eq!(skewed.run_status, CandidateRunStatus::Succeeded);
+    assert!(skewed.ranking_score.is_some());
+    assert_eq!(report.ranking.len(), 2);
 }
 
 #[test]
@@ -2207,7 +2215,7 @@ fn val_stream_eval_036_section4_track_contract_freezes_declared_direct_and_defer
     );
     assert_eq!(
         spec.experiment_track_contract.reduction_order_strategy,
-        "single-thread sequential reduction order"
+        "deterministic stable input-order reduction"
     );
     assert_eq!(
         spec.experiment_track_contract
@@ -2310,12 +2318,15 @@ fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
     let profile = &report.profile_reports[0];
     assert_eq!(
         profile.survivor_candidate_ids,
-        vec!["pca-sort-exact-chunking"]
+        vec![
+            "pca-sort-exact-chunking".to_string(),
+            "skewed-gate-fail".to_string()
+        ]
     );
     assert!(profile.candidate_reports.iter().any(|candidate| {
         candidate.candidate_id == "skewed-gate-fail"
-            && candidate.run_status == CandidateRunStatus::GateFailed
-            && !candidate.survived_required_gates
+            && candidate.run_status == CandidateRunStatus::Succeeded
+            && candidate.survived_required_gates
     }));
 }
 
@@ -2939,13 +2950,48 @@ fn regression_section4_suite_rejects_bruteforce_ground_truth_on_large_corpora() 
     let spec = section4_suite_spec(vec![strict_synthetic_profile(
         "large-ground-truth",
         "large-corpus",
-        8_194,
+        16_386,
     )]);
 
     let result = generate_section4_suite_assets(&spec, output_dir.path());
 
     assert!(
         matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("brute-force exact neighbors"))
+    );
+}
+
+#[test]
+fn val_stream_eval_056_realistic_tracks_record_host_scaled_threading_mode() {
+    let report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &balanced_and_skewed_candidates(),
+    )
+    .expect("host-scaled evaluation campaign should succeed");
+    let provenance = &report.run_reports[0].provenance;
+
+    assert_eq!(
+        provenance.candidate_threading.declared_model,
+        "host-scaled deterministic candidate execution"
+    );
+    assert_eq!(provenance.candidate_threading.effective_mode, "host-scaled");
+    assert!(provenance.candidate_threading.effective_thread_count >= 1);
+    assert_eq!(
+        provenance.candidate_threading.reduction_order_strategy,
+        "deterministic stable input-order reduction"
+    );
+}
+
+#[test]
+fn regression_realistic_section4_suite_requires_host_scaled_threading() {
+    let output_dir = tempdir().unwrap();
+    let mut spec = realistic_qualification_suite_spec();
+    spec.experiment_track_contract.candidate_threading_model =
+        "single-threaded section-4 screening".into();
+
+    let result = generate_section4_suite_assets(&spec, output_dir.path());
+
+    assert!(
+        matches!(result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("host-scaled candidate threading"))
     );
 }
 
@@ -3009,8 +3055,11 @@ fn val_stream_eval_046_section5_campaign_reports_hierarchy_metrics_for_multiple_
     )
     .unwrap();
 
-    assert_eq!(report.survivor_candidate_ids, vec!["balanced-threshold"]);
-    assert_eq!(report.pair_reports.len(), 2);
+    assert_eq!(
+        report.survivor_candidate_ids,
+        vec!["balanced-threshold", "skewed-gate-fail"]
+    );
+    assert_eq!(report.pair_reports.len(), 4);
     assert!(
         report
             .pair_reports
@@ -3059,7 +3108,7 @@ fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_p
     )
     .unwrap();
 
-    assert_eq!(fanout_report.pair_reports.len(), 1);
+    assert_eq!(fanout_report.pair_reports.len(), 2);
     let fanout_pair = &fanout_report.pair_reports[0];
     assert!(matches!(
         fanout_pair.run_status,
@@ -3090,7 +3139,7 @@ fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_p
     )
     .unwrap();
 
-    assert_eq!(refinement_report.pair_reports.len(), 1);
+    assert_eq!(refinement_report.pair_reports.len(), 2);
     let refinement_pair = &refinement_report.pair_reports[0];
     assert!(matches!(
         refinement_pair.run_status,
@@ -3765,4 +3814,121 @@ fn regression_section4_suite_rejects_invalid_harvested_embeddings_and_underfille
     assert!(
         matches!(underfilled_result, Err(EvaluatorError::InvalidConfiguration(message)) if message.contains("contains only 0 real entities"))
     );
+}
+
+#[test]
+fn val_stream_eval_053_backend_selection_reports_explicit_status() {
+    let auto_report = with_execution_backend_request(ExecutionBackendRequest::Auto, || {
+        run_evaluation_campaign(
+            &strict_alignment_nonzero_profile(),
+            &[
+                lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                    "balanced-threshold",
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    });
+    let auto_selection = &auto_report.run_reports[0].provenance.execution_backend;
+    assert!(matches!(
+        auto_selection.resolution,
+        ExecutionBackendResolution::Cpu
+            | ExecutionBackendResolution::Wgpu
+            | ExecutionBackendResolution::WgpuUnsupportedFallback
+            | ExecutionBackendResolution::WgpuProbeFailed
+    ));
+    assert!(!auto_selection.detail.trim().is_empty());
+
+    let cpu_report = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+        run_evaluation_campaign(
+            &strict_alignment_nonzero_profile(),
+            &[
+                lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                    "balanced-threshold",
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    });
+    let cpu_selection = &cpu_report.run_reports[0].provenance.execution_backend;
+    assert!(matches!(
+        cpu_selection.resolution,
+        ExecutionBackendResolution::Cpu
+            | ExecutionBackendResolution::WgpuAvailableButDeclined
+            | ExecutionBackendResolution::WgpuUnsupportedFallback
+            | ExecutionBackendResolution::WgpuProbeFailed
+    ));
+    assert!(!cpu_selection.detail.trim().is_empty());
+}
+
+#[test]
+fn val_stream_eval_054_cpu_and_wgpu_leaf_stage_semantics_match_when_wgpu_is_available() {
+    let wgpu_report = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+        run_evaluation_campaign(
+            &strict_alignment_nonzero_profile(),
+            &[
+                lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                    "balanced-threshold",
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    });
+    if wgpu_report.run_reports[0]
+        .provenance
+        .execution_backend
+        .resolution
+        != ExecutionBackendResolution::Wgpu
+    {
+        return;
+    }
+
+    let cpu_report = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+        run_evaluation_campaign(
+            &strict_alignment_nonzero_profile(),
+            &[
+                lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                    "balanced-threshold",
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    });
+
+    let cpu_run = &cpu_report.run_reports[0];
+    let wgpu_run = &wgpu_report.run_reports[0];
+    assert_eq!(cpu_run.run_status, wgpu_run.run_status);
+    assert_eq!(
+        cpu_run.survived_required_gates,
+        wgpu_run.survived_required_gates
+    );
+    assert_eq!(cpu_run.leaf_membership, wgpu_run.leaf_membership);
+    assert_eq!(cpu_run.probe_results, wgpu_run.probe_results);
+    assert_eq!(cpu_run.gate_results, wgpu_run.gate_results);
+}
+
+#[test]
+fn val_stream_eval_055_accelerated_target_runs_report_target_match_when_available() {
+    let report = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+        run_evaluation_campaign(
+            &strict_alignment_nonzero_profile(),
+            &[
+                lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                    "balanced-threshold",
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    });
+    let selection = &report.run_reports[0].provenance.execution_backend;
+    if selection.resolution != ExecutionBackendResolution::Wgpu {
+        return;
+    }
+
+    assert!(selection.detail.contains("target profile match:"));
 }

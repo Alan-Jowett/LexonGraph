@@ -160,6 +160,18 @@ The conformance harness contract shall provide a trainer fixture whose
 resulting classifier accepts wrong-dimensional or non-finite embeddings as
 valid so the suite can verify malformed-input rejection behavior.
 
+### REQ-STREAM-TRAIT-023
+
+Concrete implementations may realize internal compute through optional
+heterogeneous-acceleration backends, provided that:
+
+- the shared public trainer/classifier contract remains unchanged
+- unsupported hosts or unavailable accelerator paths fall back explicitly rather
+  than silently changing observable semantics
+- the observable lifecycle, assignment semantics, error categories, and
+  deterministic guarantees required by this specification remain authoritative
+  at the shared boundary
+
 ## Out of Scope
 
 This crate does not define or own:

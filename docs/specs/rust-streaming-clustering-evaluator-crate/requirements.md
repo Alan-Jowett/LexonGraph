@@ -324,16 +324,17 @@ introduced by this revision.
 
 ### REQ-STREAM-EVAL-017
 
-The evaluator shall directly verify leaf-stage fixed-capacity invariants against
-the leaf membership artifact according to the benchmark profile's leaf model.
+The evaluator shall directly verify bounded leaf-capacity invariants against the
+packed leaf membership artifact according to the benchmark profile's leaf model.
 
 At minimum, this includes:
 
-- exact final cluster occupancy when the benchmark profile declares strict
-  alignment or synthetic padding sufficient to realize exact occupancy
+- packed final cluster occupancy within the declared lower and upper bounds for
+  the checked-in section-4 packing stage of this revision (`32..=64`)
 - complete coverage of all evaluated entities
-- exactly one final cluster assignment per evaluated entity
-- no empty clusters among the declared `K` final clusters
+- exactly one packed final cluster assignment per evaluated entity
+- no packed clusters below the declared lower bound or above the declared upper
+  bound
 
 ### REQ-STREAM-EVAL-018
 
@@ -525,7 +526,9 @@ section-4 candidate comparisons are not allowed to reinterpret, including:
 - any declared search-target threshold and beam-width policy that must carry
   forward to later routing phases
 - the declared floating-point profile
-- the declared candidate-threading model
+- the declared candidate-threading model, which for realistic qualification
+  tracks may permit candidates that can scale with host CPU count to use a
+  declared host-scaled execution mode rather than forcing one-core execution
 - the declared reduction-order strategy for any deterministic parallel or
   aggregate computation permitted by the track
 - the declared hardware profile
@@ -630,24 +633,28 @@ tree.
 
 ### REQ-STREAM-EVAL-036
 
-The section-4 benchmark suite shall define a leaf-stage screening workflow that
-executes each compared candidate against the same corpus-panel profiles and
-reports, at minimum:
+The section-4 benchmark suite shall define a two-part leaf-stage screening
+workflow that executes each compared candidate against the same corpus-panel
+profiles and reports, at minimum:
 
-- exact leaf-size compliance and related leaf-stage invariant gates
-- repeated-run observable determinism
-- same-leaf neighborhood coherence over exact-neighbor ground truth
-- local-versus-global compression gain
-- strict-alignment and deterministic-synthetic-padding outcomes where both are
-  applicable to the evaluated corpus family
+- a **clustering-only** stage that records repeated-run observable determinism,
+  same-leaf neighborhood coherence over exact-neighbor ground truth,
+  local-versus-global compression gain, raw cluster-size diagnostics, and
+  strict-alignment or deterministic-synthetic-padding outcomes where applicable
+- a **clustering-plus-packing** stage that records bounded packed leaf-size
+  compliance, repeated-run observable determinism, post-packing same-leaf
+  neighborhood coherence, post-packing local-versus-global compression gain,
+  packing-cost evidence, and strict-alignment or deterministic-synthetic-
+  padding outcomes where applicable
 
 For the checked-in section-4 screening panel in this revision, the workflow
 shall execute across the expanded synthetic-plus-harvested profile set and
 shall use top-10 exact-neighbor ground truth for locality-scored profiles.
 
 The resulting comparative outputs shall be sufficient to down-select candidate
-leaf strategies for later hierarchy-stage work without claiming hierarchy-stage
-proof. The workflow therefore serves the broader end-state requirements from
+clustering strategies and clustering-plus-packing pipelines for later
+hierarchy-stage work without claiming hierarchy-stage proof. The workflow
+therefore serves the broader end-state requirements from
 `docs/research/clustering.md` by staged screening rather than by redefining
 those requirements at the evaluator boundary.
 
@@ -660,18 +667,27 @@ For realistic qualification tracks, the workflow shall also apply the declared
 bounded-time contract and record deterministic timeout-disqualification outcomes
 for candidates that fail to complete within the frozen execution budget.
 
+When a realistic qualification track declares a host-scaled candidate-threading
+mode, the workflow shall permit candidates that can scale with CPU count to use
+that mode rather than forcing the entire track back to one-core execution.
+
 ### REQ-STREAM-EVAL-037
 
 For section-4 benchmark executions, the evaluator shall report leaf-stage
-build-cost measurements sufficient to compare candidate strategies across corpus
-scale tiers.
+build-cost measurements sufficient to compare candidate strategies and packing
+pipelines across corpus scale tiers.
 
 At minimum, this revision shall support deterministic reporting of:
 
 - corpus size or evaluated entity count
 - scale-tier identity
-- build time per vector or an equivalent normalized leaf-stage build-cost
-  measure declared by the benchmark suite
+- the effective candidate-threading mode used for the run
+- clustering-stage build time per vector or an equivalent normalized
+  clustering-stage build-cost measure declared by the benchmark suite
+- packing-stage build time per vector or an equivalent normalized packing-stage
+  build-cost measure declared by the benchmark suite
+- total clustering-plus-packing build time per vector or equivalent normalized
+  combined build-cost measure
 - peak build memory during section-4 execution
 - wall-clock elapsed time relative to the declared execution budget, including
   whether the candidate completed, timed out, or was disqualified on bounded-
@@ -816,7 +832,9 @@ At minimum, that frozen contract shall declare:
 - the quantization or compression baseline policy over real entities only,
   excluding synthetic padding
 - the declared floating-point profile
-- the declared candidate-threading model for the track
+- the declared candidate-threading model for the track, including whether
+  realistic qualification permits host-scaled CPU execution for candidates that
+  support it
 - the declared reduction-order strategy for any deterministic aggregate
   computation permitted by the track
 - the declared hardware profile
@@ -962,16 +980,24 @@ retain a checked-in materialized asset path.
 
 ### REQ-STREAM-EVAL-053
 
-The section-4 workflow shall define a deterministic carry-forward rule for
-choosing which candidates survive leaf-stage screening for later hierarchy-stage
-comparison.
+The section-4 workflow shall define deterministic carry-forward rules for
+choosing which candidates survive the clustering-only stage and which
+clustering-plus-packing pipelines survive the packed stage for later
+hierarchy-stage comparison.
 
 At minimum, the rule shall:
 
-- reject any candidate/configuration that fails a hard invariant gate
-- rank surviving candidates using same-leaf locality evidence, declared local
-  compression benefit, and normalized leaf-stage build-cost evidence
-- prefer the highest-quality surviving candidates without allowing build-cost
+- in the clustering-only stage, reject any candidate/configuration that fails a
+  hard structural gate other than raw cluster-size diagnostics
+- in the clustering-only stage, rank surviving candidates using same-leaf
+  locality evidence, declared local compression benefit, and normalized
+  clustering-stage build-cost evidence
+- in the clustering-plus-packing stage, reject any pipeline that fails the hard
+  packed leaf-size bounds or other packed-stage hard gates
+- in the clustering-plus-packing stage, rank surviving pipelines using
+  post-packing same-leaf locality evidence, declared local compression benefit,
+  and normalized combined build-cost evidence
+- prefer the highest-quality surviving outputs without allowing build-cost
   comparisons to rescue a hard-gate failure
 - define deterministic tie-breaking behavior when surviving candidates remain
   otherwise indistinguishable on the declared comparison surface
@@ -1133,10 +1159,78 @@ At minimum:
 - each realistic qualification track shall declare a deterministic wall-clock
   execution budget or equivalent timeout contract for section-4 candidate runs
   and for section-5 hierarchy-stage pairs
+- a realistic qualification track shall not require one-core execution when a
+  candidate can honor the declared deterministic reduction-order semantics while
+  scaling to available CPU count
 - a candidate or pair that exceeds the declared budget shall be reported as a
   deterministic timeout-disqualification outcome rather than as a survivor
 - timeout-disqualification shall preserve deterministic artifact hygiene and
   provenance in the same report model used for other gate or contract failures
+
+### REQ-STREAM-EVAL-062
+
+The evaluator may provide an optional WGPU-backed acceleration path for
+evaluator-owned dense kernels, including:
+
+- exact-neighbor ground-truth generation
+- section-4 evaluator replay or dense distance work
+- section-5 dense distance and dispersion work
+
+The CPU path remains required.
+
+### REQ-STREAM-EVAL-063
+
+The first accelerated revision shall target a repository-declared qualification
+hardware profile that includes Windows on AMD Radeon 780M, while preserving
+explicit CPU fallback on unsupported hosts.
+
+### REQ-STREAM-EVAL-064
+
+When the accelerated path is used, the evaluator shall record the selected
+execution backend, effective candidate-threading mode, and capability result in
+provenance or reporting sufficient to distinguish:
+
+- CPU execution
+- WGPU-accelerated execution
+- capability probe succeeded but the backend was declined for the run
+- capability probe failed or the host was unsupported and CPU fallback was used
+- one-core candidate execution
+- host-scaled candidate execution under the track's declared threading policy
+
+### REQ-STREAM-EVAL-065
+
+The first accelerated revision may scope GPU support to evaluator-owned dense
+kernels and shared DCBC dense kernels only. It shall not require
+directional-PCA or PCA eigendecomposition acceleration in order to claim
+conformance for this revision.
+
+### REQ-STREAM-EVAL-066
+
+For the realistic qualification surface, at least one accelerated validation
+path shall demonstrate that the WGPU-backed execution preserves campaign verdict
+semantics relative to CPU execution while materially reducing runtime on the
+declared qualification hardware profile.
+
+When such a validation path also relies on host-scaled candidate-threading, the
+artifacts shall report that threading mode so runtime-improvement claims remain
+attributable to the declared execution policy.
+
+### REQ-STREAM-EVAL-067
+
+The realistic section-4 qualification surface shall permit candidates that
+support scalable CPU execution to run under a declared host-scaled
+candidate-threading mode rather than forcing one-core execution.
+
+At minimum:
+
+- the experiment track shall declare the threading policy and deterministic
+  reduction-order semantics explicitly
+- candidates that cannot scale may still run, but shall not force the entire
+  realistic qualification surface back to one-core execution
+- gate outcomes, survivor or disqualification semantics, and artifact schemas
+  shall remain stable in observable meaning under the declared threading policy
+- emitted artifacts shall record the effective threading mode used for each
+  candidate run
 
 ## Out of Scope
 

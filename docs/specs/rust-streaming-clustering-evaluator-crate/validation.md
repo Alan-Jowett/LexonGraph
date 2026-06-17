@@ -72,7 +72,9 @@ classifier-side probe workloads, the declared source mode for each workload, the
 leaf model, any declared hierarchy model, metric declarations, gate
 declarations, comparative ranking weights, deferred research-goal records, any
 declared later-phase workload or artifact identities that section-4 or section-5
-must carry forward, and reproducibility metadata for one campaign.
+must carry forward, reproducibility metadata for one campaign, and any declared
+candidate-threading mode together with its deterministic reduction-order
+semantics.
 
 **Traces to:** REQ-STREAM-EVAL-006
 
@@ -116,28 +118,32 @@ block-store implementations.
 
 ### VAL-STREAM-EVAL-009
 
-Run the evaluator on a benchmark profile with declared strict alignment and leaf
-size `L`.
+Run the evaluator on a benchmark profile with declared strict alignment and a
+two-stage section-4 workflow.
 
-**Pass condition:** the evaluator verifies exact final cluster occupancy,
-complete coverage, one-cluster-per-entity assignment, and absence of empty
-declared clusters from the leaf membership artifact.
+**Pass condition:** the clustering-only stage reports raw cluster-size
+diagnostics without rejecting the candidate solely for out-of-range raw cluster
+sizes, and the clustering-plus-packing stage verifies packed final cluster
+occupancy within the declared lower and upper bounds, complete coverage, and
+one-cluster-per-entity assignment from the packed leaf membership artifact.
 
 **Traces to:** REQ-STREAM-EVAL-017
 
 ### VAL-STREAM-EVAL-010
 
-Run the evaluator on a benchmark profile with deterministic synthetic padding.
+Run the evaluator on a benchmark profile with deterministic synthetic padding
+and a two-stage section-4 workflow.
 
 **Pass condition:** the evaluator distinguishes real from synthetic entities in
-the leaf membership artifact, enforces exact final occupancy against the padded
-evaluated set, and excludes synthetic entities from externally reported
-locality and compression metrics, while also reporting whether synthetic
-padding is concentrated into the minimum possible number of final clusters
-permitted by the deterministic procedure. Synthetic padding identities are
-stably tagged, do not collide with real-entity identities in the evaluated
-corpus, and are not misreported as real benchmark members in externally visible
-evaluator entity listings.
+the leaf membership artifact, enforces the declared packed lower and upper
+bounds against the padded evaluated set in the clustering-plus-packing stage,
+and excludes synthetic entities from externally reported locality and
+compression metrics, while also reporting whether synthetic padding is
+concentrated into the minimum possible number of final clusters permitted by
+the deterministic procedure. Synthetic padding identities are stably tagged, do
+not collide with real-entity identities in the evaluated corpus, and are not
+misreported as real benchmark members in externally visible evaluator entity
+listings.
 
 **Traces to:** REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018
 
@@ -540,8 +546,9 @@ compression, and deferred-routing metric roles, any transformed-metric
 ordering-preservation obligation, the metric-contract consistency checks and
 reported audit results, the compatible dispersion functional for any deferred
 summary or refinement obligation, the threading model and deterministic
-reduction-order strategy, and whether 1-thread versus N-thread bitwise
-observable identity is measured directly or deferred.
+reduction-order strategy, whether realistic qualification permits host-scaled
+CPU execution for candidates that support it, and whether 1-thread versus
+N-thread bitwise observable identity is measured directly or deferred.
 
 **Traces to:** REQ-STREAM-EVAL-051
 
@@ -564,13 +571,15 @@ checked-in asset path.
 ### VAL-STREAM-EVAL-042
 
 Inspect one completed section-4 campaign with more than one surviving
-candidate/configuration pair.
+candidate/configuration pair in the clustering-only stage and at least one
+surviving clustering-plus-packing pipeline in the packed stage.
 
-**Pass condition:** the workflow's carry-forward decision rule rejects hard-gate
-failures first, ranks surviving candidates using same-leaf locality evidence,
-declared compression benefit, and normalized build-cost evidence, and applies a
-deterministic tie-break when survivors remain otherwise indistinguishable on
-the declared comparison surface.
+**Pass condition:** the workflow's carry-forward decision rules reject raw hard
+structural failures before ranking clustering candidates, reject packed-stage
+bound failures before ranking clustering-plus-packing pipelines, rank surviving
+outputs using the declared locality, compression, and build-cost evidence for
+their stage, and apply a deterministic tie-break when survivors remain
+otherwise indistinguishable on the declared comparison surface.
 
 **Traces to:** REQ-STREAM-EVAL-053
 
@@ -721,3 +730,49 @@ survivor result, and the emitted artifacts preserve deterministic provenance and
 artifact hygiene consistent with other hard-failure outcomes.
 
 **Traces to:** REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-061
+
+### VAL-STREAM-EVAL-053
+
+Run evaluator backend selection on:
+
+- a host or build where WGPU acceleration is supported
+- a host, build, or configuration where it is unavailable
+
+**Pass condition:** the evaluator reports explicit backend selection or fallback
+status in provenance or campaign artifacts and does not silently claim
+acceleration.
+
+**Traces to:** REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064
+
+### VAL-STREAM-EVAL-054
+
+Run one realistic-corpus section-4 campaign and one section-5 pair both on CPU
+and on the supported WGPU-backed path.
+
+**Pass condition:** campaign verdicts, survivor or disqualification semantics,
+and gate outcomes match in observable meaning across backends.
+
+**Traces to:** REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-066
+
+### VAL-STREAM-EVAL-055
+
+Run at least one accelerated realistic-qualification execution on the declared
+Windows plus AMD Radeon 780M hardware profile.
+
+**Pass condition:** the accelerated path completes on the declared
+qualification target, preserves evaluator semantics, and reports materially
+improved runtime relative to CPU on the same benchmark surface.
+
+**Traces to:** REQ-STREAM-EVAL-063, REQ-STREAM-EVAL-066
+
+### VAL-STREAM-EVAL-056
+
+Run one realistic-corpus section-4 candidate that can scale with CPU count
+under a track declaring host-scaled candidate-threading.
+
+**Pass condition:** the run is not forced back to one-core execution by the
+track contract, the emitted artifacts record the effective threading mode, and
+gate or survivor semantics remain interpretable under the declared deterministic
+reduction-order strategy.
+
+**Traces to:** REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-061, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-067

@@ -160,6 +160,8 @@ pub struct Section5PairReport {
     pub refinement_edge_count: usize,
     pub maximum_observed_beta: f64,
     pub epsilon_exception_use_count: usize,
+    #[serde(default)]
+    pub execution_backend: crate::ExecutionBackendSelection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_budget_millis: Option<u64>,
     pub build_elapsed_nanos: u128,
@@ -461,10 +463,11 @@ pub fn render_section5_scorecard(report: &Section5CampaignReport) -> String {
             .map(|budget| format!(", execution_budget_millis={budget}"))
             .unwrap_or_default();
         lines.push(format!(
-            "- {} x {}: {:?}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}{}",
+            "- {} x {}: {:?}, backend={}, metric_semantics={:?}, depth={}/{}, max_beta={:.6}, epsilon_uses={}, throughput={:.3}, peak_build_memory_bytes={}{}",
             pair_report.leaf_candidate_identity.candidate_id,
             pair_report.hierarchy_strategy_identity.strategy_id,
             pair_report.run_status,
+            crate::acceleration::backend_resolution_label(&pair_report.execution_backend),
             pair_report.metric_semantics_consistency_result,
             pair_report.max_depth,
             pair_report.theoretical_depth_bound,
@@ -834,7 +837,7 @@ fn build_leaf_cluster_summaries(
         })
         .collect::<HashMap<_, _>>();
     let mut grouped = BTreeMap::<u32, Vec<&str>>::new();
-    for membership in &survivor.leaf_membership {
+    for membership in survivor.effective_leaf_membership() {
         grouped
             .entry(membership.cluster_id)
             .or_default()
@@ -1060,25 +1063,16 @@ fn sort_nodes_by_metric_walk(
     let mut ordered = vec![first];
     while !remaining.is_empty() {
         let last = ordered.last().expect("metric walk should keep one node");
-        let Some((next_index, _)) = remaining
-            .iter()
-            .enumerate()
-            .map(|(index, candidate)| {
-                let distance = distance_between_centroids(
-                    resolved_metric_semantics,
-                    &last.centroid,
-                    &candidate.centroid,
-                )?;
-                Ok::<_, String>((index, distance))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .min_by(|left, right| {
-                left.1
-                    .partial_cmp(&right.1)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| remaining[left.0].node_id.cmp(&remaining[right.0].node_id))
-            })
+        let Some((next_index, _)) =
+            centroid_distances_from_one(resolved_metric_semantics, &last.centroid, &remaining)?
+                .into_iter()
+                .enumerate()
+                .min_by(|left, right| {
+                    left.1
+                        .partial_cmp(&right.1)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| remaining[left.0].node_id.cmp(&remaining[right.0].node_id))
+                })
         else {
             return Err(
                 "metric-aware hierarchy ordering exhausted its remaining nodes prematurely".into(),
@@ -1099,19 +1093,15 @@ fn sort_nodes_by_metric_partition(
     }
     let anchors = sort_nodes_lexicographically(current);
     let anchor_left = &anchors[0];
+    let anchor_distances = centroid_distances_from_one(
+        resolved_metric_semantics,
+        &anchor_left.centroid,
+        &anchors[1..],
+    )?;
     let anchor_right = anchors
         .iter()
         .skip(1)
-        .map(|candidate| {
-            let distance = distance_between_centroids(
-                resolved_metric_semantics,
-                &anchor_left.centroid,
-                &candidate.centroid,
-            )?;
-            Ok::<_, String>((candidate, distance))
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
+        .zip(anchor_distances)
         .max_by(|left, right| {
             left.1
                 .partial_cmp(&right.1)
@@ -1120,16 +1110,22 @@ fn sort_nodes_by_metric_partition(
         })
         .map(|(candidate, _)| candidate)
         .unwrap_or(anchor_left);
+    let projections = metric_partition_projections(
+        current,
+        anchor_left,
+        anchor_right,
+        resolved_metric_semantics,
+    )?;
     let mut ordered = current.to_vec();
     ordered.sort_by(|left, right| {
-        let left_projection =
-            metric_partition_projection(left, anchor_left, anchor_right, resolved_metric_semantics);
-        let right_projection = metric_partition_projection(
-            right,
-            anchor_left,
-            anchor_right,
-            resolved_metric_semantics,
-        );
+        let left_projection = projections
+            .get(left.node_id.as_str())
+            .copied()
+            .unwrap_or(f64::INFINITY);
+        let right_projection = projections
+            .get(right.node_id.as_str())
+            .copied()
+            .unwrap_or(f64::INFINITY);
         let comparison = left_projection
             .partial_cmp(&right_projection)
             .unwrap_or(Ordering::Equal)
@@ -1160,26 +1156,19 @@ fn greedy_pack_groups(
         remaining.remove(0);
         let mut group = vec![seed];
         while group.len() < *target_size {
-            let Some((next_index, _)) = remaining
-                .iter()
-                .enumerate()
-                .map(|(index, candidate)| {
-                    let distance = distance_between_centroids(
-                        resolved_metric_semantics,
-                        &group[0].centroid,
-                        &candidate.centroid,
-                    )?;
-                    Ok::<_, String>((index, distance))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .min_by(|left, right| {
-                    left.1
-                        .partial_cmp(&right.1)
-                        .unwrap_or(Ordering::Equal)
-                        .then_with(|| remaining[left.0].node_id.cmp(&remaining[right.0].node_id))
-                })
-            else {
+            let Some((next_index, _)) = centroid_distances_from_one(
+                resolved_metric_semantics,
+                &group[0].centroid,
+                &remaining,
+            )?
+            .into_iter()
+            .enumerate()
+            .min_by(|left, right| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| remaining[left.0].node_id.cmp(&remaining[right.0].node_id))
+            }) else {
                 return Err(
                     "greedy hierarchy packing could not satisfy its target group sizes".into(),
                 );
@@ -1279,6 +1268,8 @@ fn build_pair_report(
                 refinement_edge_count: analysis.refinement_edge_count,
                 maximum_observed_beta: analysis.max_observed_beta,
                 epsilon_exception_use_count: analysis.epsilon_exception_use_count,
+                execution_backend: crate::acceleration::detected_execution_backend_selection()
+                    .clone(),
                 execution_budget_millis: context
                     .contract
                     .execution_budget
@@ -1330,18 +1321,19 @@ fn build_pair_report(
                 .metric_semantics_report
                 .consistency_detail
                 .clone(),
-            leaf_cluster_count: context.survivor.cluster_occupancies.len(),
+            leaf_cluster_count: context.survivor.effective_cluster_occupancies().len(),
             internal_node_count: 0,
             max_depth: 0,
             theoretical_depth_bound: theoretical_depth_bound(
                 context.contract,
-                context.survivor.cluster_occupancies.len(),
+                context.survivor.effective_cluster_occupancies().len(),
             ),
             minimum_observed_fanout: 0,
             maximum_observed_fanout: 0,
             refinement_edge_count: 0,
             maximum_observed_beta: f64::INFINITY,
             epsilon_exception_use_count: 0,
+            execution_backend: crate::acceleration::detected_execution_backend_selection().clone(),
             execution_budget_millis: context
                 .contract
                 .execution_budget
@@ -1401,18 +1393,19 @@ fn metric_semantics_failure_pair_report(
             .clone(),
         metric_semantics_consistency_result: metric_semantics_report.consistency_result.clone(),
         metric_semantics_consistency_detail: metric_semantics_report.consistency_detail.clone(),
-        leaf_cluster_count: survivor.cluster_occupancies.len(),
+        leaf_cluster_count: survivor.effective_cluster_occupancies().len(),
         internal_node_count: 0,
         max_depth: 0,
         theoretical_depth_bound: theoretical_depth_bound(
             contract,
-            survivor.cluster_occupancies.len(),
+            survivor.effective_cluster_occupancies().len(),
         ),
         minimum_observed_fanout: 0,
         maximum_observed_fanout: 0,
         refinement_edge_count: 0,
         maximum_observed_beta: f64::INFINITY,
         epsilon_exception_use_count: 0,
+        execution_backend: crate::acceleration::detected_execution_backend_selection().clone(),
         execution_budget_millis: contract
             .execution_budget
             .as_ref()
@@ -1847,9 +1840,7 @@ fn dispersion_from_metric(
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<f64, String> {
     match resolved_metric_semantics.kind {
-        Section5ResolvedMetricSemanticsKind::Euclidean => {
-            Ok(mean_squared_radius(member_embeddings))
-        }
+        Section5ResolvedMetricSemanticsKind::Euclidean => mean_squared_radius(member_embeddings),
         Section5ResolvedMetricSemanticsKind::Cosine => mean_cosine_deviation(member_embeddings),
     }
 }
@@ -1914,37 +1905,9 @@ fn compare_centroids(left: &[f32], right: &[f32]) -> Ordering {
         .unwrap_or_else(|| left.len().cmp(&right.len()))
 }
 
-fn euclidean_distance(left: &[f32], right: &[f32]) -> f64 {
-    left.iter()
-        .zip(right)
-        .map(|(left, right)| {
-            let delta = f64::from(*left) - f64::from(*right);
-            delta * delta
-        })
-        .sum::<f64>()
-        .sqrt()
-}
-
-fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f64, String> {
-    let left_norm = l2_norm(left);
-    let right_norm = l2_norm(right);
-    if left_norm == 0.0 || right_norm == 0.0 {
-        return Err(
-            "cosine metric semantics require non-zero centroid and member embeddings".into(),
-        );
-    }
-    let cosine_similarity = left
-        .iter()
-        .zip(right)
-        .map(|(left, right)| f64::from(*left) * f64::from(*right))
-        .sum::<f64>()
-        / (left_norm * right_norm);
-    Ok((1.0 - cosine_similarity).max(0.0))
-}
-
-fn mean_squared_radius(member_embeddings: &[&[f32]]) -> f64 {
+fn mean_squared_radius(member_embeddings: &[&[f32]]) -> Result<f64, String> {
     if member_embeddings.is_empty() {
-        return 0.0;
+        return Ok(0.0);
     }
     let dimensions = member_embeddings[0].len();
     let mut sum = vec![0.0f64; dimensions];
@@ -1954,11 +1917,15 @@ fn mean_squared_radius(member_embeddings: &[&[f32]]) -> f64 {
         }
     }
     let centroid = centroid_from_sum(&sum, member_embeddings.len());
-    member_embeddings
-        .iter()
-        .map(|embedding| euclidean_distance(embedding, &centroid).powi(2))
-        .sum::<f64>()
-        / member_embeddings.len() as f64
+    Ok(distances_from_source_to_targets(
+        Section5ResolvedMetricSemanticsKind::Euclidean,
+        &centroid,
+        member_embeddings,
+    )?
+    .into_iter()
+    .map(|distance| distance.powi(2))
+    .sum::<f64>()
+        / member_embeddings.len() as f64)
 }
 
 fn mean_cosine_deviation(member_embeddings: &[&[f32]]) -> Result<f64, String> {
@@ -1974,12 +1941,13 @@ fn mean_cosine_deviation(member_embeddings: &[&[f32]]) -> Result<f64, String> {
     }
     let centroid = centroid_from_sum(&sum, member_embeddings.len());
     let centroid_direction = normalized_embedding(&centroid)?;
-    Ok(member_embeddings
-        .iter()
-        .map(|embedding| cosine_distance(embedding, &centroid_direction))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .sum::<f64>()
+    Ok(distances_from_source_to_targets(
+        Section5ResolvedMetricSemanticsKind::Cosine,
+        &centroid_direction,
+        member_embeddings,
+    )?
+    .into_iter()
+    .sum::<f64>()
         / member_embeddings.len() as f64)
 }
 
@@ -2004,36 +1972,59 @@ fn l2_norm(embedding: &[f32]) -> f64 {
         .sqrt()
 }
 
-fn distance_between_centroids(
+fn centroid_distances_from_one(
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
-    left: &[f32],
-    right: &[f32],
-) -> Result<f64, String> {
-    match resolved_metric_semantics.kind {
-        Section5ResolvedMetricSemanticsKind::Euclidean => Ok(euclidean_distance(left, right)),
-        Section5ResolvedMetricSemanticsKind::Cosine => cosine_distance(left, right),
-    }
+    source: &[f32],
+    targets: &[BuiltNode],
+) -> Result<Vec<f64>, String> {
+    let target_centroids = targets
+        .iter()
+        .map(|node| node.centroid.as_slice())
+        .collect::<Vec<_>>();
+    distances_from_source_to_targets(resolved_metric_semantics.kind, source, &target_centroids)
 }
 
-fn metric_partition_projection(
-    node: &BuiltNode,
+fn distances_from_source_to_targets(
+    metric_kind: Section5ResolvedMetricSemanticsKind,
+    source: &[f32],
+    targets: &[&[f32]],
+) -> Result<Vec<f64>, String> {
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let metric = match metric_kind {
+        Section5ResolvedMetricSemanticsKind::Euclidean => {
+            crate::acceleration::DenseDistanceMetric::Euclidean
+        }
+        Section5ResolvedMetricSemanticsKind::Cosine => {
+            crate::acceleration::DenseDistanceMetric::Cosine
+        }
+    };
+    let left = [source];
+    crate::acceleration::dense_distance_matrix(left.as_slice(), targets, metric)
+        .map(|distances| distances.into_iter().map(f64::from).collect::<Vec<_>>())
+}
+
+fn metric_partition_projections(
+    nodes: &[BuiltNode],
     anchor_left: &BuiltNode,
     anchor_right: &BuiltNode,
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
-) -> f64 {
-    let left_distance = distance_between_centroids(
-        resolved_metric_semantics,
-        &node.centroid,
-        &anchor_left.centroid,
-    )
-    .unwrap_or(f64::INFINITY);
-    let right_distance = distance_between_centroids(
-        resolved_metric_semantics,
-        &node.centroid,
-        &anchor_right.centroid,
-    )
-    .unwrap_or(f64::INFINITY);
-    left_distance - right_distance
+) -> Result<HashMap<String, f64>, String> {
+    let left_distances =
+        centroid_distances_from_one(resolved_metric_semantics, &anchor_left.centroid, nodes)?;
+    let right_distances =
+        centroid_distances_from_one(resolved_metric_semantics, &anchor_right.centroid, nodes)?;
+    Ok(nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| {
+            (
+                node.node_id.clone(),
+                left_distances[index] - right_distances[index],
+            )
+        })
+        .collect())
 }
 
 fn resolve_metric_semantics(
@@ -2300,6 +2291,13 @@ mod tests {
                 software_identity: "fixture".into(),
                 floating_point_profile: "ieee754-deterministic-no-fma".into(),
                 hardware_profile: "fixture-cpu".into(),
+                candidate_threading: crate::CandidateThreadingProvenance {
+                    declared_model: "host-scaled section-4 screening".into(),
+                    reduction_order_strategy: "deterministic stable input-order reduction".into(),
+                    effective_mode: "host-scaled".into(),
+                    effective_thread_count: 4,
+                },
+                execution_backend: crate::acceleration::fixture_cpu_execution_backend_selection(),
             },
             metric_semantics_profile: "euclidean".into(),
             metric_compatibility_rule: "closed-profile-v1".into(),
@@ -2317,6 +2315,7 @@ mod tests {
             refinement_edge_count: 4,
             maximum_observed_beta: 0.5,
             epsilon_exception_use_count: 0,
+            execution_backend: crate::acceleration::fixture_cpu_execution_backend_selection(),
             execution_budget_millis: None,
             build_elapsed_nanos: 2_500_000,
             build_throughput_leaf_nodes_per_second: 1600.0,

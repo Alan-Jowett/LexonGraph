@@ -24,8 +24,8 @@
     ],
     "metric_contract_audit_result": "metric contract is consistent across build, locality, compression, and deferred routing obligations",
     "dispersion_functional": "variance under the declared Euclidean metric",
-    "candidate_threading_model": "single-threaded section-4 screening",
-    "reduction_order_strategy": "single-thread sequential reduction order",
+    "candidate_threading_model": "host-scaled section-4 screening",
+    "reduction_order_strategy": "deterministic stable input-order reduction",
     "one_thread_vs_n_thread_identity_proof_surface": "Deferred",
     "later_phase_identities": [
       {

@@ -258,21 +258,27 @@ The artifact is the common basis for:
 The artifact's semantics are independent of whether evaluation entities were
 declared inline or loaded through block-store-backed corpus references.
 
-### DSG-STREAM-EVAL-011 `Leaf-stage invariant scoring`
+### DSG-STREAM-EVAL-011 `Two-stage leaf evaluation`
 
-The evaluator applies the benchmark profile's leaf model to the leaf membership
-artifact to verify exact occupancy, full coverage, one-cluster-per-entity
-assignment, and absence of empty declared clusters.
+The evaluator applies the benchmark profile's leaf model through two distinct
+section-4 substages:
 
-If the benchmark profile uses strict alignment, occupancy checks apply directly
-to real entities. If the profile uses deterministic synthetic padding, the
+1. a **clustering-only** stage that scores the raw leaf membership artifact for
+   coverage, one-cluster-per-entity assignment, determinism, locality,
+   compression, and raw cluster-size diagnostics
+2. a **clustering-plus-packing** stage that applies an evaluator-owned
+   deterministic packer to the raw clustering output, then scores the packed
+   leaf membership artifact for bounded occupancy, coverage,
+   one-cluster-per-entity assignment, determinism, locality, and compression
+
+If the benchmark profile uses strict alignment, both stages score directly over
+real entities. If the profile uses deterministic synthetic padding, the
 evaluator adds or consumes the declared synthetic entities before scoring and
-still requires exact final occupancy against the combined evaluated entity set.
-The same padding-aware scoring step also reports whether synthetic padding
-concentrates into the minimum possible number of final clusters permitted by
-the deterministic procedure. Synthetic padding identities remain stably tagged,
-collision-free with real-entity identities in the evaluated corpus, and
-externally distinguishable from real benchmark members.
+reports whether synthetic padding concentrates into the minimum possible number
+of final clusters permitted by the deterministic procedure. Synthetic padding
+identities remain stably tagged, collision-free with real-entity identities in
+the evaluated corpus, and externally distinguishable from real benchmark
+members.
 
 ### DSG-STREAM-EVAL-012 `Leaf-stage locality scoring`
 
@@ -299,8 +305,9 @@ whether compression benefit is broad or concentrated.
 The evaluator result model separates:
 
 - shared-contract prerequisite checks needed before comparative interpretation
-- must-pass gates that decide campaign survival
-- comparative metrics used to rank only surviving candidates
+- clustering-stage gates and metrics over raw cluster output
+- packing-stage gates and metrics over packed cluster output
+- comparative metrics used to rank only surviving candidates or pipelines
 
 Each metric, gate, or deferred research-goal record carries traceability to its
 motivating research goal and is tagged as direct, proxy, or deferred. When a
@@ -328,7 +335,8 @@ The evaluator emits:
 - a machine-readable run report per candidate
 - a machine-readable comparative campaign report spanning all candidates
 - a human-readable scorecard that summarizes gates, direct metrics, proxy
-  metrics, deferred goals, and survivor ranking
+  metrics, deferred goals, and survivor ranking for both the clustering-only
+  and clustering-plus-packing substages
 
 Output artifacts remain source-neutral. When block-store-backed corpus
 references are used, provenance expands to identify those sources, but run
@@ -718,7 +726,8 @@ This contract names:
 - the compatible dispersion functional used by deferred summary or refinement
   obligations
 - the threading model and deterministic reduction-order strategy used by the
-  track
+  track, including whether realistic qualification permits host-scaled CPU
+  execution for candidates that can preserve the declared observable semantics
 - whether 1-thread versus N-thread bitwise observable identity is measured
   directly in section-4 or carried as a deferred obligation
 
@@ -740,23 +749,31 @@ preserved identity set includes at least one held-out query-set identity for a
 harvested real-world corpus family that later routing phases are expected to
 consume.
 
-### DSG-STREAM-EVAL-037 `Deterministic survivor-selection rule`
+### DSG-STREAM-EVAL-037 `Deterministic two-stage survivor-selection rule`
 
-The section-4 workflow applies a deterministic carry-forward rule after hard
-gates and direct measurements have been recorded.
+The section-4 workflow applies deterministic carry-forward rules after the
+clustering-stage and packing-stage measurements have been recorded.
 
-That rule:
+Those rules:
 
-1. rejects any candidate/configuration that fails a hard invariant gate
-2. ranks surviving candidates using same-leaf locality evidence, declared local
-   compression benefit, and normalized leaf-stage build-cost evidence
-3. prevents build-cost comparisons from rescuing a hard-gate failure
-4. defines deterministic tie-breaking when surviving candidates remain otherwise
-   indistinguishable on the declared comparison surface
+1. in the clustering-only stage, rejects any candidate/configuration that fails
+   a raw structural gate other than cluster-size diagnostics
+2. in the clustering-only stage, ranks surviving candidates using same-leaf
+   locality evidence, declared local compression benefit, and normalized
+   clustering-stage build-cost evidence
+3. in the clustering-plus-packing stage, rejects any pipeline that fails the
+   hard packed leaf-size bounds or other packed-stage hard gates
+4. in the clustering-plus-packing stage, ranks surviving pipelines using
+   post-packing locality evidence, declared local compression benefit, and
+   normalized combined build-cost evidence
+5. prevents build-cost comparisons from rescuing a hard-gate failure
+6. defines deterministic tie-breaking when surviving candidates remain
+   otherwise indistinguishable on the declared comparison surface
 
 The checked-in workflow materializes that decision as a stable human-readable
-survivor summary listing carried-forward candidates, average ranking evidence,
-and rejected or non-carried-forward candidates.
+survivor summary listing carried-forward clustering candidates, carried-forward
+clustering-plus-packing pipelines, average ranking evidence, and rejected or
+non-carried-forward candidates.
 
 ### DSG-STREAM-EVAL-038 `Hierarchy-strategy registration surface`
 
@@ -886,6 +903,48 @@ budget. When a run exceeds that budget, the evaluator emits a deterministic
 timeout-disqualification outcome through the same artifact and provenance model
 used for gate failures and candidate shared-contract failures.
 
+### DSG-STREAM-EVAL-046 `Optional accelerator backend selection`
+
+The evaluator adds an internal execution-backend selection layer that chooses
+between CPU and optional WGPU acceleration for supported evaluator-owned dense
+kernels. Selection is capability-gated and does not alter benchmark-profile
+shape or candidate registration semantics.
+
+### DSG-STREAM-EVAL-047 `Accelerated realistic qualification target`
+
+The realistic qualification surface records a primary accelerated hardware
+profile that includes Windows on AMD Radeon 780M. Qualification artifacts
+distinguish hardware-targeted accelerated runs from CPU fallback runs.
+
+### DSG-STREAM-EVAL-048 `First-pass accelerated scope boundary`
+
+The first accelerated revision covers evaluator-owned dense kernels and shared
+DCBC dense kernels only. Directional-PCA and PCA eigendecomposition remain on
+CPU in this revision and are not required for accelerated conformance.
+
+### DSG-STREAM-EVAL-049 `Cross-backend verdict preservation`
+
+Accelerated runs are validated against CPU runs at the level of campaign
+verdicts, gate outcomes, and provenance-classified execution mode. Numerical
+implementation details may differ internally, but a conformant accelerated path
+may not silently change survivor or disqualification semantics.
+
+### DSG-STREAM-EVAL-050 `Host-scaled realistic candidate threading`
+
+For realistic section-4 qualification tracks, the experiment-track contract may
+declare a host-scaled candidate-threading mode instead of one-core execution.
+
+When that mode is declared, the evaluator preserves candidate comparability by:
+
+- keeping the threading policy fixed per track rather than allowing ad hoc
+  per-candidate reinterpretation
+- requiring the track to name the deterministic reduction-order strategy that
+  governs any parallel aggregate computation
+- recording the effective threading mode in emitted section-4 artifacts beside
+  execution-backend and timeout-disqualification reporting
+- preserving gate outcomes, survivor semantics, and artifact schema even when a
+  candidate uses more than one CPU core
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -940,3 +999,8 @@ used for gate failures and candidate shared-contract failures.
 | DSG-STREAM-EVAL-043 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059 |
 | DSG-STREAM-EVAL-044 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-045, REQ-STREAM-EVAL-060 |
 | DSG-STREAM-EVAL-045 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-055, REQ-STREAM-EVAL-061 |
+| DSG-STREAM-EVAL-046 | REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064 |
+| DSG-STREAM-EVAL-047 | REQ-STREAM-EVAL-063, REQ-STREAM-EVAL-066 |
+| DSG-STREAM-EVAL-048 | REQ-STREAM-EVAL-065 |
+| DSG-STREAM-EVAL-049 | REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-066 |
+| DSG-STREAM-EVAL-050 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-061, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-067 |

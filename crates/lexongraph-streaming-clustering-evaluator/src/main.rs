@@ -3,16 +3,17 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use lexongraph_streaming_clustering_evaluator::{
-    BenchmarkProfile, EvaluatorError, Section4SuiteManifest, Section4SuiteSpec,
-    Section5HierarchyContract, emit_campaign_artifacts, emit_section5_campaign_artifacts,
-    generate_section4_suite_assets, materialize_section4_archive_from_json,
-    registered_candidate_names, registered_hierarchy_strategy_names,
-    resolve_profile_block_store_paths, resolve_registered_candidates,
-    resolve_registered_hierarchy_strategies, resolve_section4_suite_manifest_paths,
-    resolve_section4_suite_spec_paths, run_evaluation_campaign, run_section4_suite,
-    run_section5_campaign, write_campaign_artifacts, write_section4_suite_artifacts,
+    BenchmarkProfile, EvaluatorError, ExecutionBackendRequest, Section4SuiteManifest,
+    Section4SuiteSpec, Section5HierarchyContract, emit_campaign_artifacts,
+    emit_section5_campaign_artifacts, generate_section4_suite_assets,
+    materialize_section4_archive_from_json, registered_candidate_names,
+    registered_hierarchy_strategy_names, resolve_profile_block_store_paths,
+    resolve_registered_candidates, resolve_registered_hierarchy_strategies,
+    resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
+    run_evaluation_campaign, run_section4_suite, run_section5_campaign,
+    with_execution_backend_request, write_campaign_artifacts, write_section4_suite_artifacts,
     write_section5_campaign_artifacts,
 };
 
@@ -21,6 +22,23 @@ use lexongraph_streaming_clustering_evaluator::{
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CliExecutionBackend {
+    Auto,
+    Cpu,
+    Wgpu,
+}
+
+impl CliExecutionBackend {
+    fn into_request(self) -> ExecutionBackendRequest {
+        match self {
+            Self::Auto => ExecutionBackendRequest::Auto,
+            Self::Cpu => ExecutionBackendRequest::Cpu,
+            Self::Wgpu => ExecutionBackendRequest::Wgpu,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -38,6 +56,8 @@ enum Command {
         candidates: Vec<String>,
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
+        #[arg(long, value_enum, default_value = "auto")]
+        execution_backend: CliExecutionBackend,
     },
     /// Generate section-4 benchmark assets and profile JSON files.
     GenerateSection4Assets {
@@ -45,6 +65,8 @@ enum Command {
         suite: PathBuf,
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
+        #[arg(long, value_enum, default_value = "auto")]
+        execution_backend: CliExecutionBackend,
     },
     /// Materialize a block-store zip archive from a section-4 JSON entity list.
     MaterializeSection4Archive {
@@ -65,6 +87,8 @@ enum Command {
         candidates: Vec<String>,
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
+        #[arg(long, value_enum, default_value = "auto")]
+        execution_backend: CliExecutionBackend,
     },
     /// Run section-5 hierarchy construction over the survivors from a leaf-stage profile.
     RunSection5 {
@@ -78,6 +102,8 @@ enum Command {
         hierarchy_strategies: Vec<String>,
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
+        #[arg(long, value_enum, default_value = "auto")]
+        execution_backend: CliExecutionBackend,
     },
 }
 
@@ -106,7 +132,8 @@ fn run() -> Result<(), EvaluatorError> {
             profile,
             candidates,
             output_dir,
-        } => {
+            execution_backend,
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -133,8 +160,12 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
-        Command::GenerateSection4Assets { suite, output_dir } => {
+        }),
+        Command::GenerateSection4Assets {
+            suite,
+            output_dir,
+            execution_backend,
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let suite_path = suite;
             let suite = std::fs::read_to_string(&suite_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -160,7 +191,7 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", generated.corpus_archive_path.display());
             }
             Ok(())
-        }
+        }),
         Command::MaterializeSection4Archive {
             input,
             output,
@@ -181,7 +212,8 @@ fn run() -> Result<(), EvaluatorError> {
             manifest,
             candidates,
             output_dir,
-        } => {
+            execution_backend,
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let manifest_path = manifest;
             let manifest = std::fs::read_to_string(&manifest_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -210,14 +242,15 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
+        }),
         Command::RunSection5 {
             profile,
             candidates,
             contract,
             hierarchy_strategies,
             output_dir,
-        } => {
+            execution_backend,
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -266,6 +299,6 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
+        }),
     }
 }
