@@ -202,6 +202,13 @@ enum SummaryState {
     },
 }
 
+#[derive(Default)]
+struct SummaryComputationCaches {
+    descendant_indices: HashMap<String, Vec<usize>>,
+    exact_summaries: HashMap<String, ExactNodeSummary>,
+    summary_states: HashMap<String, SummaryState>,
+}
+
 pub fn registered_section6_summary_candidate_names() -> Vec<String> {
     vec![
         "exact-centroid".into(),
@@ -616,8 +623,7 @@ fn build_section6_summary_report(
     let mut total_relative_l2_error = 0.0f64;
     let mut total_perturbation_sensitivity = 0.0f64;
     let mut total_storage_f32_slot_count = 0usize;
-    let mut exact_cache = HashMap::<String, ExactNodeSummary>::new();
-    let mut state_cache = HashMap::<String, SummaryState>::new();
+    let mut caches = SummaryComputationCaches::default();
 
     for node in tree
         .nodes
@@ -629,7 +635,7 @@ fn build_section6_summary_report(
             tree,
             cluster_memberships,
             evaluation_entities,
-            &mut exact_cache,
+            &mut caches,
         )?;
         let candidate_state = summary_state_for_node(
             node.node_id.as_str(),
@@ -637,8 +643,7 @@ fn build_section6_summary_report(
             cluster_memberships,
             evaluation_entities,
             summary_candidate.identity.kind.clone(),
-            &mut exact_cache,
-            &mut state_cache,
+            &mut caches,
         )?;
         let exact_vector = exact_reference_vector(&exact, &summary_candidate.identity.kind);
         let candidate_vector = summary_state_vector(&candidate_state);
@@ -656,8 +661,7 @@ fn build_section6_summary_report(
                 cluster_memberships,
                 evaluation_entities,
                 summary_candidate.identity.kind.clone(),
-                &mut exact_cache,
-                &mut state_cache,
+                &mut caches,
             )?;
             let perturbed_state = compose_state_from_children(
                 &summary_candidate.identity.kind,
@@ -822,7 +826,12 @@ fn remaining_section6_deferred_goals(
 ) -> Vec<Section6DeferredGoalRecord> {
     let mut deferred = BTreeMap::<String, Section6DeferredGoalRecord>::new();
     for goal in section5_goals {
-        if goal.deferred_id == "section5-deferred-parent-summary" {
+        if matches!(
+            goal.deferred_id.as_str(),
+            "section5-deferred-parent-summary"
+                | "section5-deferred-routing"
+                | "section5-deferred-persistence"
+        ) {
             continue;
         }
         deferred.insert(
@@ -1060,20 +1069,15 @@ fn exact_summary_for_node(
     tree: &PairTree,
     cluster_memberships: &HashMap<u32, Vec<usize>>,
     evaluation_entities: &[EvaluationEntity],
-    cache: &mut HashMap<String, ExactNodeSummary>,
+    caches: &mut SummaryComputationCaches,
 ) -> Result<ExactNodeSummary, EvaluatorError> {
-    if let Some(existing) = cache.get(node_id) {
+    if let Some(existing) = caches.exact_summaries.get(node_id) {
         return Ok(existing.clone());
     }
-    let mut descendant_cache = HashMap::<String, Vec<usize>>::new();
-    let entity_indices = descendant_entity_indices_for_node(
-        node_id,
-        tree,
-        cluster_memberships,
-        &mut descendant_cache,
-    )?;
+    let entity_indices =
+        descendant_entity_indices_for_node(node_id, tree, cluster_memberships, caches)?;
     let exact = exact_summary_from_entity_indices(&entity_indices, evaluation_entities)?;
-    cache.insert(node_id.into(), exact.clone());
+    caches.exact_summaries.insert(node_id.into(), exact.clone());
     Ok(exact)
 }
 
@@ -1081,9 +1085,9 @@ fn descendant_entity_indices_for_node(
     node_id: &str,
     tree: &PairTree,
     cluster_memberships: &HashMap<u32, Vec<usize>>,
-    cache: &mut HashMap<String, Vec<usize>>,
+    caches: &mut SummaryComputationCaches,
 ) -> Result<Vec<usize>, EvaluatorError> {
-    if let Some(existing) = cache.get(node_id) {
+    if let Some(existing) = caches.descendant_indices.get(node_id) {
         return Ok(existing.clone());
     }
     let node = tree.nodes.get(node_id).ok_or_else(|| {
@@ -1112,13 +1116,15 @@ fn descendant_entity_indices_for_node(
                     child_id.as_str(),
                     tree,
                     cluster_memberships,
-                    cache,
+                    caches,
                 )?);
             }
             indices
         }
     };
-    cache.insert(node_id.into(), indices.clone());
+    caches
+        .descendant_indices
+        .insert(node_id.into(), indices.clone());
     Ok(indices)
 }
 
@@ -1172,10 +1178,9 @@ fn summary_state_for_node(
     cluster_memberships: &HashMap<u32, Vec<usize>>,
     evaluation_entities: &[EvaluationEntity],
     kind: Section6SummaryCandidateKind,
-    exact_cache: &mut HashMap<String, ExactNodeSummary>,
-    state_cache: &mut HashMap<String, SummaryState>,
+    caches: &mut SummaryComputationCaches,
 ) -> Result<SummaryState, EvaluatorError> {
-    if let Some(existing) = state_cache.get(node_id) {
+    if let Some(existing) = caches.summary_states.get(node_id) {
         return Ok(existing.clone());
     }
     let node = tree.nodes.get(node_id).ok_or_else(|| {
@@ -1191,7 +1196,7 @@ fn summary_state_for_node(
                 tree,
                 cluster_memberships,
                 evaluation_entities,
-                exact_cache,
+                caches,
             )?;
             match kind {
                 Section6SummaryCandidateKind::ExactCentroid => SummaryState::ExactCentroid {
@@ -1225,7 +1230,7 @@ fn summary_state_for_node(
                     tree,
                     cluster_memberships,
                     evaluation_entities,
-                    exact_cache,
+                    caches,
                 )?;
                 SummaryState::ExactCentroid {
                     count: exact.member_count,
@@ -1238,14 +1243,13 @@ fn summary_state_for_node(
                     cluster_memberships,
                     evaluation_entities,
                     kind.clone(),
-                    exact_cache,
-                    state_cache,
+                    caches,
                 )?;
                 compose_state_from_children(&kind, child_states)?
             }
         }
     };
-    state_cache.insert(node_id.into(), state.clone());
+    caches.summary_states.insert(node_id.into(), state.clone());
     Ok(state)
 }
 
@@ -1255,8 +1259,7 @@ fn child_states_for_node(
     cluster_memberships: &HashMap<u32, Vec<usize>>,
     evaluation_entities: &[EvaluationEntity],
     kind: Section6SummaryCandidateKind,
-    exact_cache: &mut HashMap<String, ExactNodeSummary>,
-    state_cache: &mut HashMap<String, SummaryState>,
+    caches: &mut SummaryComputationCaches,
 ) -> Result<Vec<SummaryState>, EvaluatorError> {
     tree.children
         .get(node_id)
@@ -1270,8 +1273,7 @@ fn child_states_for_node(
                 cluster_memberships,
                 evaluation_entities,
                 kind.clone(),
-                exact_cache,
-                state_cache,
+                caches,
             )
         })
         .collect()

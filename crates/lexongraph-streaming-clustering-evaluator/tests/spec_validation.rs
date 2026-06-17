@@ -3208,6 +3208,8 @@ fn val_stream_eval_061_section6_reports_narrow_remaining_deferred_obligations() 
 
     assert!(!report.remaining_deferred_goals.iter().any(|goal| {
         goal.deferred_id == "section5-deferred-parent-summary"
+            || goal.deferred_id == "section5-deferred-routing"
+            || goal.deferred_id == "section5-deferred-persistence"
             || goal.deferred_id == "section6-deferred-parent-summary"
     }));
     assert!(
