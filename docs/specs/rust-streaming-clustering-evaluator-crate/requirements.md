@@ -1232,6 +1232,56 @@ At minimum:
 - emitted artifacts shall record the effective threading mode used for each
   candidate run
 
+### REQ-STREAM-EVAL-068
+
+The evaluator shall define a first-class, evaluator-owned packing-strategy
+registration surface for section-4B.
+
+Each registered packing strategy shall:
+
+- consume the evaluator-owned raw leaf-membership artifact emitted by a
+  clustering-stage survivor
+- remain subordinate to the benchmark profile's shared packed-stage contract
+- execute without widening the shared streaming clustering trainer/classifier
+  boundary used by clustering candidates
+- expose deterministic strategy identity metadata sufficient for provenance,
+  scorecards, and comparative reports
+
+### REQ-STREAM-EVAL-069
+
+For each clustering-stage survivor and each declared packing strategy in the
+benchmark profile, the evaluator shall execute one clustering-plus-packing
+pipeline result under the shared section-4B contract.
+
+At minimum, the packed-stage artifact set shall:
+
+- record the originating clustering candidate identity
+- record the packing-strategy identity
+- record a deterministic combined pipeline identity
+- report packer-specific elapsed time, packed-stage metrics, packed-stage gates,
+  and survivor status
+- rank surviving pipelines independently of the clustering-only ranking surface
+
+When multiple packing strategies survive for the same clustering candidate, the
+checked-in section-4 workflow shall deterministically select the best surviving
+packing strategy per clustering candidate for section-5 carry-forward while
+still preserving the full pipeline ranking surface in the emitted section-4
+artifacts.
+
+### REQ-STREAM-EVAL-070
+
+The checked-in section-4B packing-strategy surface in this revision shall
+support first-class comparison of canonical bounded-leaf packing families,
+including:
+
+- order-preserving balanced range packing
+- contiguous bounded segmentation
+- geometry-aware split/merge packing
+
+This requirement constrains the evaluator's supported first-class packing
+families for checked-in comparison. It does not require every benchmark profile
+to execute every registered packing strategy.
+
 ## Out of Scope
 
 This crate does not define or own:

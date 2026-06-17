@@ -9,12 +9,12 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4SuiteSpec, Section5HierarchyContract, emit_campaign_artifacts,
     emit_section5_campaign_artifacts, generate_section4_suite_assets,
     materialize_section4_archive_from_json, registered_candidate_names,
-    registered_hierarchy_strategy_names, resolve_profile_block_store_paths,
-    resolve_registered_candidates, resolve_registered_hierarchy_strategies,
-    resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
-    run_evaluation_campaign, run_section4_suite, run_section5_campaign,
-    with_execution_backend_request, write_campaign_artifacts, write_section4_suite_artifacts,
-    write_section5_campaign_artifacts,
+    registered_hierarchy_strategy_names, registered_packing_strategy_names,
+    resolve_profile_block_store_paths, resolve_registered_candidates,
+    resolve_registered_hierarchy_strategies, resolve_section4_suite_manifest_paths,
+    resolve_section4_suite_spec_paths, run_evaluation_campaign, run_section4_suite,
+    run_section5_campaign, with_execution_backend_request, write_campaign_artifacts,
+    write_section4_suite_artifacts, write_section5_campaign_artifacts,
 };
 
 #[derive(Parser, Debug)]
@@ -48,6 +48,8 @@ enum Command {
     ListCandidates,
     /// List the registered hierarchy strategies that section-5 execution can run.
     ListHierarchyStrategies,
+    /// List the registered packing strategies that section-4B execution can run.
+    ListPackingStrategies,
     /// Run one benchmark profile against one or more registered candidates.
     Run {
         #[arg(long, value_name = "PATH")]
@@ -124,6 +126,12 @@ fn run() -> Result<(), EvaluatorError> {
         }
         Command::ListHierarchyStrategies => {
             for strategy in registered_hierarchy_strategy_names() {
+                println!("{strategy}");
+            }
+            Ok(())
+        }
+        Command::ListPackingStrategies => {
+            for strategy in registered_packing_strategy_names() {
                 println!("{strategy}");
             }
             Ok(())

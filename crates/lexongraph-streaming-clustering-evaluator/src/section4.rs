@@ -32,8 +32,8 @@ use crate::{
     ReproducibilityMetadata, ResearchCoverage, SharedBalanceConstraints, SharedCandidateConfig,
     StructuredFailure, TrainingPassSource, declared_candidate_threading_is_host_scaled,
     decode_embedding_to_f32, emit_campaign_artifacts, load_leaf_records, metadata_value,
-    rank_candidates, run_candidate, validate_candidates, validate_profile,
-    write_campaign_artifacts,
+    rank_candidates, rank_packing_pipelines, rank_raw_candidates, run_candidate,
+    validate_candidates, validate_profile, write_campaign_artifacts,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,8 +229,12 @@ pub struct Section4SuiteManifest {
 pub struct Section4SuiteRunCandidateReport {
     pub candidate_id: String,
     pub run_status: CandidateRunStatus,
+    pub raw_survived_required_gates: bool,
     pub survived_required_gates: bool,
+    pub raw_ranking_score: Option<f64>,
     pub ranking_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_packing_strategy_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_budget_millis: Option<u64>,
     pub campaign_elapsed_nanos: u128,
@@ -251,6 +255,7 @@ pub struct Section4SuiteRunProfileReport {
     pub preserved_deferred_goal_ids: Vec<String>,
     pub preserved_later_phase_identity_ids: Vec<String>,
     pub survivor_candidate_ids: Vec<String>,
+    pub survivor_pipeline_ids: Vec<String>,
     pub candidate_reports: Vec<Section4SuiteRunCandidateReport>,
 }
 
@@ -400,6 +405,7 @@ pub fn generate_section4_suite_assets(
                 spec.leaf_size,
                 spec.experiment_track_contract.execution_budget.is_some(),
             ),
+            packing_strategy_ids: crate::registered_packing_strategy_names(),
             deferred_research_goals: default_deferred_research_goals(),
             later_phase_identities: later_phase_identities.clone(),
             reproducibility: profile_reproducibility(spec),
@@ -672,6 +678,8 @@ pub fn run_section4_suite(
         let comparative_report = crate::CampaignReport {
             profile_id: profile.profile_id.clone(),
             ranking: rank_candidates(&run_reports),
+            raw_ranking: rank_raw_candidates(&run_reports),
+            packing_pipeline_ranking: rank_packing_pipelines(&run_reports),
             run_reports,
         };
         let comparative_artifacts = emit_campaign_artifacts(&comparative_report)?;
@@ -699,8 +707,11 @@ pub fn run_section4_suite(
             candidate_reports.push(Section4SuiteRunCandidateReport {
                 candidate_id: run_report.candidate_identity.candidate_id.clone(),
                 run_status: status,
+                raw_survived_required_gates: run_report.raw_survived_required_gates,
                 survived_required_gates: survived,
+                raw_ranking_score: run_report.raw_ranking_score,
                 ranking_score,
+                selected_packing_strategy_id: run_report.selected_packing_strategy_id.clone(),
                 execution_budget_millis,
                 campaign_elapsed_nanos: elapsed,
                 campaign_time_per_vector_nanos: elapsed as f64
@@ -713,6 +724,27 @@ pub fn run_section4_suite(
             .ranking
             .iter()
             .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        let survivor_pipeline_ids = comparative_report
+            .run_reports
+            .iter()
+            .filter(|run_report| {
+                comparative_report
+                    .ranking
+                    .iter()
+                    .any(|ranked| ranked.candidate_id == run_report.candidate_identity.candidate_id)
+            })
+            .filter_map(|run_report| {
+                run_report
+                    .selected_packing_strategy_id
+                    .as_ref()
+                    .map(|strategy_id| {
+                        crate::packing_pipeline_id(
+                            run_report.candidate_identity.candidate_id.as_str(),
+                            strategy_id.as_str(),
+                        )
+                    })
+            })
             .collect();
         let preserved_deferred_goal_ids = profile
             .deferred_research_goals
@@ -737,6 +769,7 @@ pub fn run_section4_suite(
             preserved_deferred_goal_ids,
             preserved_later_phase_identity_ids,
             survivor_candidate_ids,
+            survivor_pipeline_ids,
             candidate_reports,
         });
     }
@@ -774,14 +807,23 @@ pub fn render_section4_suite_scorecard(report: &Section4SuiteRunReport) -> Strin
                 .execution_budget_millis
                 .map(|budget| format!(", execution_budget_millis={budget}"))
                 .unwrap_or_default();
+            let selected_packer = candidate
+                .selected_packing_strategy_id
+                .as_deref()
+                .map(|strategy| format!(", selected_packing_strategy_id={strategy}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "  candidate {}: {:?}, survived={}, campaign_time_per_vector_nanos={:.3}, peak_build_memory_bytes={}{}",
+                "  candidate {}: {:?}, raw_survived={}, survived={}, raw_ranking_score={:?}, ranking_score={:?}, campaign_time_per_vector_nanos={:.3}, peak_build_memory_bytes={}{}{}",
                 candidate.candidate_id,
                 candidate.run_status,
+                candidate.raw_survived_required_gates,
                 candidate.survived_required_gates,
+                candidate.raw_ranking_score,
+                candidate.ranking_score,
                 candidate.campaign_time_per_vector_nanos,
                 candidate.peak_build_memory_bytes,
-                execution_budget
+                execution_budget,
+                selected_packer
             ));
         }
     }
@@ -2859,7 +2901,9 @@ mod tests {
             leaf_membership: Vec::new(),
             cluster_occupancies: Vec::new(),
             cluster_occupancy_stats: None,
+            packing_evaluations: Vec::new(),
             packing_evaluation: None,
+            selected_packing_strategy_id: None,
             synthetic_padding_concentration: None,
             determinism: DeterminismReport {
                 deterministic: true,
@@ -2902,7 +2946,9 @@ mod tests {
             execution_budget_millis: None,
             observed_elapsed_nanos: None,
             run_status: CandidateRunStatus::Succeeded,
+            raw_survived_required_gates: true,
             survived_required_gates: true,
+            raw_ranking_score: Some(1.0),
             ranking_score: Some(1.0),
             terminal_failure_code: None,
             terminal_failure_message: None,

@@ -24,7 +24,7 @@ use lexongraph_streaming_clustering_evaluator::{
     LaterPhaseIdentity, LaterPhaseIdentityKind, MetricDeclaration, MetricKind, ProbeWorkload,
     RegisteredCandidate, ReproducibilityMetadata, ResearchCoverage, Section5DepthBoundPolicy,
     Section5EpsilonPolicy, Section5HierarchyContract, SharedCandidateConfig, TrainingPassSource,
-    built_in_fixture_candidate,
+    built_in_fixture_candidate, registered_packing_strategy_names,
 };
 use zip::CompressionMethod as ZipCompressionMethod;
 use zip::ZipWriter;
@@ -204,6 +204,7 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
                 research_goal_ids: vec!["RG-COMPRESSION".into()],
             },
         ],
+        packing_strategy_ids: registered_packing_strategy_names(),
         deferred_research_goals: vec![DeferredResearchGoal {
             deferred_id: "deferred-hierarchy-routing".into(),
             label: "Hierarchy routing proof".into(),
