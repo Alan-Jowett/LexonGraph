@@ -129,11 +129,9 @@ pub(crate) fn with_execution_backend_request_for_test<T>(
     request: ExecutionBackendRequest,
     run: impl FnOnce() -> T,
 ) -> T {
-    let previous = execution_backend_request();
+    let _reset = ExecutionBackendRequestResetGuard::new();
     set_execution_backend_request(request);
-    let result = run();
-    set_execution_backend_request(previous);
-    result
+    run()
 }
 
 fn backend_request_lock() -> &'static RwLock<ExecutionBackendRequest> {
@@ -186,11 +184,44 @@ fn resolve_execution_backend_selection(
     }
     #[cfg(not(feature = "wgpu-accel"))]
     {
-        ExecutionBackendSelection {
-            request,
-            resolution: ExecutionBackendResolution::WgpuUnsupportedFallback,
-            detail: "binary was built without the wgpu-accel feature; using cpu backend".into(),
+        match request {
+            ExecutionBackendRequest::Cpu => ExecutionBackendSelection {
+                request,
+                resolution: ExecutionBackendResolution::Cpu,
+                detail:
+                    "execution was pinned to cpu; binary was built without the wgpu-accel feature"
+                        .into(),
+            },
+            ExecutionBackendRequest::Auto | ExecutionBackendRequest::Wgpu => {
+                ExecutionBackendSelection {
+                    request,
+                    resolution: ExecutionBackendResolution::WgpuUnsupportedFallback,
+                    detail: "binary was built without the wgpu-accel feature; using cpu backend"
+                        .into(),
+                }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+struct ExecutionBackendRequestResetGuard {
+    previous: ExecutionBackendRequest,
+}
+
+#[cfg(test)]
+impl ExecutionBackendRequestResetGuard {
+    fn new() -> Self {
+        Self {
+            previous: execution_backend_request(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ExecutionBackendRequestResetGuard {
+    fn drop(&mut self) {
+        set_execution_backend_request(self.previous);
     }
 }
 
@@ -726,5 +757,25 @@ mod tests {
         for (left, right) in expected.iter().zip(actual.iter()) {
             assert!((left - right).abs() < 1e-4);
         }
+    }
+
+    #[cfg(not(feature = "wgpu-accel"))]
+    #[test]
+    fn cpu_request_reports_cpu_when_wgpu_feature_is_disabled() {
+        let selection = resolve_execution_backend_selection(ExecutionBackendRequest::Cpu);
+        assert_eq!(selection.resolution, ExecutionBackendResolution::Cpu);
+        assert!(selection.detail.contains("pinned to cpu"));
+    }
+
+    #[test]
+    fn backend_request_is_restored_after_panicking_test_helper() {
+        set_execution_backend_request(ExecutionBackendRequest::Auto);
+        let panic_result = std::panic::catch_unwind(|| {
+            with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
+                panic!("intentional panic to verify reset guard");
+            });
+        });
+        assert!(panic_result.is_err());
+        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
     }
 }

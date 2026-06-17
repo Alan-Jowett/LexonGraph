@@ -22,7 +22,6 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::thread;
 use std::time::Instant;
 
 use ciborium::value::Value as CborValue;
@@ -1931,10 +1930,9 @@ fn finalize_successful_run(
         );
         (metric_results, gate_results)
     };
-    let raw_survived_required_gates = gate_results
-        .iter()
-        .filter(|gate| is_clustering_stage_required_gate_id(gate.gate_id.as_str()))
-        .all(|gate| gate.status == GateStatus::Passed);
+    let raw_required_gate_status =
+        evaluate_required_gate_status(&gate_results, is_clustering_stage_required_gate_id);
+    let raw_survived_required_gates = raw_required_gate_status == Some(true);
     let ranking_score = if raw_survived_required_gates {
         Some(
             metric_results
@@ -1948,21 +1946,32 @@ fn finalize_successful_run(
     let raw_terminal_failure = if raw_survived_required_gates {
         None
     } else {
-        let failed_gate = failed_raw_hard_gate.unwrap_or_else(|| {
-            gate_results
+        match failed_raw_hard_gate {
+            Some(failed_gate) => Some(StructuredFailure::GateFailure {
+                candidate_id: identity.candidate_id.clone(),
+                gate_id: failed_gate.gate_id,
+                message: failed_gate.detail,
+            }),
+            None => gate_results
                 .iter()
                 .find(|gate| {
                     is_clustering_stage_required_gate_id(gate.gate_id.as_str())
                         && gate.status == GateStatus::Failed
                 })
                 .cloned()
-                .expect("a non-surviving candidate must have a failed gate")
-        });
-        Some(StructuredFailure::GateFailure {
-            candidate_id: identity.candidate_id.clone(),
-            gate_id: failed_gate.gate_id,
-            message: failed_gate.detail,
-        })
+                .map(|failed_gate| StructuredFailure::GateFailure {
+                    candidate_id: identity.candidate_id.clone(),
+                    gate_id: failed_gate.gate_id,
+                    message: failed_gate.detail,
+                })
+                .or_else(|| {
+                    Some(missing_required_gate_failure(
+                        identity.candidate_id.as_str(),
+                        "clustering-stage",
+                        CLUSTERING_STAGE_REQUIRED_GATE_IDS,
+                    ))
+                }),
+        }
     };
     let packing_evaluation = if raw_hard_gate_failed {
         None
@@ -2091,11 +2100,22 @@ fn is_clustering_stage_visible_gate_kind(kind: &GateKind) -> bool {
     )
 }
 
+const CLUSTERING_STAGE_REQUIRED_GATE_IDS: &[&str] = &[
+    "complete-coverage",
+    "one-cluster-per-entity",
+    "deterministic-observable-results",
+];
+
+const PACKING_STAGE_REQUIRED_GATE_IDS: &[&str] = &[
+    "leaf-size-lower-bound",
+    "leaf-size-upper-bound",
+    "complete-coverage",
+    "one-cluster-per-entity",
+    "deterministic-observable-results",
+];
+
 fn is_clustering_stage_required_gate_id(gate_id: &str) -> bool {
-    matches!(
-        gate_id,
-        "complete-coverage" | "one-cluster-per-entity" | "deterministic-observable-results"
-    )
+    CLUSTERING_STAGE_REQUIRED_GATE_IDS.contains(&gate_id)
 }
 
 fn is_packing_stage_visible_gate_kind(kind: &GateKind) -> bool {
@@ -2108,14 +2128,36 @@ fn is_packing_stage_visible_gate_kind(kind: &GateKind) -> bool {
 }
 
 fn is_packing_stage_required_gate_id(gate_id: &str) -> bool {
-    matches!(
-        gate_id,
-        "leaf-size-lower-bound"
-            | "leaf-size-upper-bound"
-            | "complete-coverage"
-            | "one-cluster-per-entity"
-            | "deterministic-observable-results"
-    )
+    PACKING_STAGE_REQUIRED_GATE_IDS.contains(&gate_id)
+}
+
+fn evaluate_required_gate_status(
+    gate_results: &[GateResult],
+    is_required_gate_id: impl Fn(&str) -> bool,
+) -> Option<bool> {
+    let mut saw_required_gate = false;
+    for gate in gate_results {
+        if is_required_gate_id(gate.gate_id.as_str()) {
+            saw_required_gate = true;
+            if gate.status != GateStatus::Passed {
+                return Some(false);
+            }
+        }
+    }
+    saw_required_gate.then_some(true)
+}
+
+fn missing_required_gate_failure(
+    candidate_id: &str,
+    stage_label: &str,
+    required_gate_ids: &[&str],
+) -> StructuredFailure {
+    StructuredFailure::InvalidConfiguration {
+        message: format!(
+            "candidate {candidate_id} produced no required {stage_label} gate results; expected at least one of [{}]",
+            required_gate_ids.join(", ")
+        ),
+    }
 }
 
 fn build_packed_execution(
@@ -2195,10 +2237,9 @@ fn evaluate_packing_stage(
         &determinism,
         is_packing_stage_visible_gate_kind,
     );
-    let survived_required_gates = gate_results
-        .iter()
-        .filter(|gate| is_packing_stage_required_gate_id(gate.gate_id.as_str()))
-        .all(|gate| gate.status == GateStatus::Passed);
+    let required_gate_status =
+        evaluate_required_gate_status(&gate_results, is_packing_stage_required_gate_id);
+    let survived_required_gates = required_gate_status == Some(true);
     let ranking_score = if survived_required_gates {
         Some(
             metric_results
@@ -2223,6 +2264,13 @@ fn evaluate_packing_stage(
                 candidate_id: candidate_id.into(),
                 gate_id: failed_gate.gate_id,
                 message: failed_gate.detail,
+            })
+            .or_else(|| {
+                Some(missing_required_gate_failure(
+                    candidate_id,
+                    "packing-stage",
+                    PACKING_STAGE_REQUIRED_GATE_IDS,
+                ))
             })
     };
     let terminal_failure_code = terminal_failure
@@ -2465,6 +2513,10 @@ fn bool_to_status(value: bool) -> GateStatus {
 fn rank_candidates(run_reports: &[CandidateRunReport]) -> Vec<RankedCandidate> {
     let mut ranked = run_reports
         .iter()
+        .filter(|run_report| {
+            run_report.run_status == CandidateRunStatus::Succeeded
+                && run_report.survived_required_gates
+        })
         .filter_map(|run_report| {
             run_report
                 .packing_evaluation
@@ -2705,9 +2757,7 @@ fn candidate_threading_provenance(profile: &BenchmarkProfile) -> CandidateThread
         "single-threaded".into()
     };
     let effective_thread_count = if effective_mode == "host-scaled" {
-        thread::available_parallelism()
-            .map(|parallelism| parallelism.get())
-            .unwrap_or(1)
+        rayon::current_num_threads()
     } else {
         1
     };
@@ -4690,6 +4740,91 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
+    fn fixture_gate_result(gate_id: &str, status: super::GateStatus) -> super::GateResult {
+        super::GateResult {
+            gate_id: gate_id.into(),
+            label: gate_id.into(),
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: Vec::new(),
+            status,
+            observed_value: None,
+            detail: "fixture".into(),
+        }
+    }
+
+    fn fixture_run_report(
+        candidate_id: &str,
+        run_status: CandidateRunStatus,
+        survived_required_gates: bool,
+        ranking_score: Option<f64>,
+        packing_ranking_score: Option<f64>,
+    ) -> super::CandidateRunReport {
+        let identity = super::CandidateIdentity {
+            candidate_id: candidate_id.into(),
+            implementation_label: format!("{candidate_id} fixture"),
+            software_identity: format!("{candidate_id}-fixture-v1"),
+        };
+        super::CandidateRunReport {
+            candidate_identity: identity.clone(),
+            provenance: build_provenance_with_backend(
+                &archive_training_profile_for_tests(),
+                &identity,
+                vec!["archive-training-pass".into()],
+                super::acceleration::fixture_cpu_execution_backend_selection(),
+            ),
+            prerequisite_checks: Vec::new(),
+            pass_reports: Vec::new(),
+            probe_results: Vec::new(),
+            leaf_membership: Vec::new(),
+            cluster_occupancies: Vec::new(),
+            cluster_occupancy_stats: None,
+            packing_evaluation: packing_ranking_score.map(|score| super::PackingEvaluationReport {
+                packer_id: "fixture-packer".into(),
+                lower_bound: 1,
+                upper_bound: 2,
+                packing_elapsed_nanos: 1,
+                leaf_membership: Vec::new(),
+                cluster_occupancies: Vec::new(),
+                cluster_occupancy_stats: super::ClusterOccupancyStats {
+                    mean_total_count: 0.0,
+                    stddev_total_count: 0.0,
+                    min_total_count: 0,
+                    max_total_count: 0,
+                },
+                metric_results: Vec::new(),
+                gate_results: Vec::new(),
+                survived_required_gates,
+                ranking_score: Some(score),
+                terminal_failure_code: None,
+                terminal_failure_message: None,
+                terminal_failure: None,
+            }),
+            synthetic_padding_concentration: None,
+            determinism: super::DeterminismReport {
+                deterministic: true,
+                compared_fields: Vec::new(),
+                mismatch_details: Vec::new(),
+            },
+            compression_analysis: None,
+            metric_results: Vec::new(),
+            gate_results: Vec::new(),
+            deferred_research_goals: Vec::new(),
+            artifact_hygiene: super::ArtifactHygieneEvidence {
+                comparative_metrics_emitted: false,
+                success_shaped_completion_artifacts_emitted: false,
+                detail: "fixture".into(),
+            },
+            execution_budget_millis: None,
+            observed_elapsed_nanos: None,
+            run_status,
+            survived_required_gates,
+            ranking_score,
+            terminal_failure_code: None,
+            terminal_failure_message: None,
+            terminal_failure: None,
+        }
+    }
+
     #[test]
     fn embeddings_into_batches_preserves_order_without_dropping_tail_items() {
         let batches = embeddings_into_batches(
@@ -4917,6 +5052,76 @@ mod tests {
 
         assert!(
             scorecard.contains("cluster-size-stats: mean=64.000, stddev=1.000, min=63, max=65")
+        );
+    }
+
+    #[test]
+    fn required_gate_status_distinguishes_missing_passed_and_failed_required_gates() {
+        assert_eq!(
+            super::evaluate_required_gate_status(&[], super::is_clustering_stage_required_gate_id,),
+            None
+        );
+        assert_eq!(
+            super::evaluate_required_gate_status(
+                &[fixture_gate_result(
+                    "complete-coverage",
+                    super::GateStatus::Passed,
+                )],
+                super::is_clustering_stage_required_gate_id,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            super::evaluate_required_gate_status(
+                &[fixture_gate_result(
+                    "complete-coverage",
+                    super::GateStatus::Failed,
+                )],
+                super::is_clustering_stage_required_gate_id,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn rank_candidates_ignores_non_survivors_even_when_they_have_scores() {
+        let ranked = super::rank_candidates(&[
+            fixture_run_report(
+                "disqualified",
+                CandidateRunStatus::GateFailed,
+                false,
+                Some(99.0),
+                Some(99.0),
+            ),
+            fixture_run_report(
+                "packed-survivor",
+                CandidateRunStatus::Succeeded,
+                true,
+                Some(0.1),
+                Some(2.0),
+            ),
+            fixture_run_report(
+                "raw-survivor",
+                CandidateRunStatus::Succeeded,
+                true,
+                Some(1.0),
+                None,
+            ),
+        ]);
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].candidate_id, "packed-survivor");
+        assert_eq!(ranked[1].candidate_id, "raw-survivor");
+    }
+
+    #[test]
+    fn host_scaled_threading_provenance_uses_rayon_thread_count() {
+        let provenance =
+            super::candidate_threading_provenance(&archive_training_profile_for_tests());
+        assert_eq!(provenance.effective_mode, "host-scaled");
+        assert_eq!(
+            provenance.effective_thread_count,
+            rayon::current_num_threads()
         );
     }
 

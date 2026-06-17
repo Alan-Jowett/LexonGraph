@@ -182,11 +182,21 @@ fn with_execution_backend_request<T>(
     request: ExecutionBackendRequest,
     run: impl FnOnce() -> T,
 ) -> T {
-    let previous = execution_backend_request();
+    struct ExecutionBackendRequestResetGuard {
+        previous: ExecutionBackendRequest,
+    }
+
+    impl Drop for ExecutionBackendRequestResetGuard {
+        fn drop(&mut self) {
+            set_execution_backend_request(self.previous);
+        }
+    }
+
+    let _reset = ExecutionBackendRequestResetGuard {
+        previous: execution_backend_request(),
+    };
     set_execution_backend_request(request);
-    let result = run();
-    set_execution_backend_request(previous);
-    result
+    run()
 }
 
 fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec {
