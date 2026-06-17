@@ -594,6 +594,42 @@ consistent with the current checked-in suite manifest and candidate identities.
 
 **Traces to:** REQ-STREAM-EVAL-014, REQ-STREAM-EVAL-046, REQ-STREAM-EVAL-053
 
+### VAL-STREAM-EVAL-043A
+
+Run one section-4 campaign in which a raw clustering-stage survivor is evaluated
+ under more than one registered packing strategy.
+
+**Pass condition:** the campaign emits distinct packed pipeline results per
+`(clustering candidate, packing strategy)` pair, preserves raw clustering-stage
+ranking separately from packed pipeline ranking, and records the selected
+best-surviving packing strategy per clustering candidate for section-5
+carry-forward.
+
+**Traces to:** REQ-STREAM-EVAL-068, REQ-STREAM-EVAL-069
+
+### VAL-STREAM-EVAL-043B
+
+Run one section-4 campaign in which at least one registered packing strategy
+fails while another packing strategy for the same clustering candidate
+succeeds.
+
+**Pass condition:** the failing packing strategy is reported as a failed packed
+pipeline result without invalidating the unrelated successful packed pipeline,
+and the successful packed pipeline remains eligible for ranking and later
+section-5 carry-forward.
+
+**Traces to:** REQ-STREAM-EVAL-069
+
+### VAL-STREAM-EVAL-043C
+
+Inspect the checked-in section-4B packing-strategy registry.
+
+**Pass condition:** the checked-in evaluator exposes first-class packing
+strategies for order-preserving balanced range packing, contiguous bounded
+segmentation, and geometry-aware split/merge packing.
+
+**Traces to:** REQ-STREAM-EVAL-070
+
 ### VAL-STREAM-EVAL-044
 
 Inspect the evaluator's hierarchy-strategy discovery and registration surface.

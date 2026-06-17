@@ -775,6 +775,37 @@ survivor summary listing carried-forward clustering candidates, carried-forward
 clustering-plus-packing pipelines, average ranking evidence, and rejected or
 non-carried-forward candidates.
 
+### DSG-STREAM-EVAL-037A `Packing-strategy registration surface`
+
+Section-4B uses an evaluator-owned packing-strategy registration surface that
+combines:
+
+- a named packing-strategy identity
+- a deterministic evaluator-owned transformation from the raw leaf-membership
+  artifact to a packed leaf-membership artifact
+- any benchmark-frozen packer-local configuration
+
+This registration surface remains downstream of clustering-stage execution and
+does not widen the shared streaming clustering trainer/classifier contract.
+
+### DSG-STREAM-EVAL-037B `Pipeline-aware packed-stage reporting`
+
+After section-4A materializes raw clustering outputs, section-4B applies each
+declared registered packing strategy to each clustering-stage survivor and emits
+one comparable pipeline result per `(clustering candidate, packing strategy)`
+pair.
+
+The packed-stage report model therefore preserves:
+
+- raw clustering-stage ranking evidence
+- packed pipeline ranking evidence
+- a deterministic combined pipeline identity for each packed result
+- the selected best surviving packing strategy per clustering candidate used for
+  section-5 carry-forward
+
+Packed-stage failure for one packing strategy does not invalidate unrelated
+packing strategies for the same clustering candidate.
+
 ### DSG-STREAM-EVAL-038 `Hierarchy-strategy registration surface`
 
 Section-5 hierarchy construction uses an evaluator-owned registration surface
