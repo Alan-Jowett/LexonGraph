@@ -2420,6 +2420,9 @@ fn build_balanced_range_packed_execution(
 ) -> Result<SingleExecution, String> {
     let (_, upper_bound) = packing_bounds(profile);
     let ordered_members = ordered_members_by_cluster(execution);
+    if ordered_members.is_empty() {
+        return Ok(materialize_packed_execution(execution, Vec::new()));
+    }
     let packed_cluster_count = ordered_members.len().div_ceil(upper_bound);
     let packed_cluster_sizes = balanced_cluster_counts(ordered_members.len(), packed_cluster_count);
     let mut offset = 0usize;
@@ -3130,31 +3133,45 @@ fn rank_packing_pipelines(run_reports: &[CandidateRunReport]) -> Vec<RankedPacki
                 })
         })
         .collect::<Vec<_>>();
-    ranked.sort_by(|left, right| {
-        right
-            .ranking_score
-            .partial_cmp(&left.ranking_score)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| left.candidate_id.cmp(&right.candidate_id))
-            .then_with(|| left.packing_strategy_id.cmp(&right.packing_strategy_id))
-    });
+    ranked.sort_by(compare_ranked_packing_pipelines);
     for (index, pipeline) in ranked.iter_mut().enumerate() {
         pipeline.rank = index + 1;
     }
     ranked
 }
 
+fn compare_ranked_packing_pipelines(
+    left: &RankedPackingPipeline,
+    right: &RankedPackingPipeline,
+) -> Ordering {
+    right
+        .ranking_score
+        .partial_cmp(&left.ranking_score)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| left.candidate_id.cmp(&right.candidate_id))
+        .then_with(|| left.packing_strategy_id.cmp(&right.packing_strategy_id))
+}
+
 fn select_best_packing_evaluation(
     packing_evaluations: &[PackingEvaluationReport],
 ) -> Option<PackingEvaluationReport> {
-    packing_evaluations
+    let mut ranked = packing_evaluations
         .iter()
         .filter(|packing| packing.survived_required_gates)
-        .max_by(|left, right| {
-            left.ranking_score
-                .partial_cmp(&right.ranking_score)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| right.packer_id.cmp(&left.packer_id))
+        .map(|packing| RankedPackingPipeline {
+            pipeline_id: packing.pipeline_id.clone(),
+            candidate_id: String::new(),
+            packing_strategy_id: packing.packer_id.clone(),
+            ranking_score: packing.ranking_score.unwrap_or(f64::NEG_INFINITY),
+            rank: 0,
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(compare_ranked_packing_pipelines);
+    let best_strategy_id = ranked.first()?.packing_strategy_id.as_str();
+    packing_evaluations
+        .iter()
+        .find(|packing| {
+            packing.survived_required_gates && packing.packer_id.as_str() == best_strategy_id
         })
         .cloned()
 }
@@ -5937,6 +5954,122 @@ mod tests {
                 .any(|packing| packing.packer_id == super::FAILING_TEST_PACKER_ID
                     && !packing.survived_required_gates)
         );
+    }
+
+    #[test]
+    fn balanced_range_packer_accepts_empty_leaf_membership() {
+        let profile = inline_strict_alignment_profile();
+        let empty_execution = super::SingleExecution {
+            provenance: build_provenance_with_backend(
+                &profile,
+                &super::CandidateIdentity {
+                    candidate_id: "empty".into(),
+                    implementation_label: "Empty fixture".into(),
+                    software_identity: "empty-fixture-v1".into(),
+                },
+                Vec::new(),
+                super::acceleration::fixture_cpu_execution_backend_selection(),
+            ),
+            pass_reports: Vec::new(),
+            probe_results: Vec::new(),
+            leaf_membership: Vec::new(),
+            cluster_occupancies: Vec::new(),
+            evaluation_entities: Vec::new(),
+        };
+
+        let packed = super::build_balanced_range_packed_execution(&empty_execution, &profile)
+            .expect("empty leaf membership should pack to an empty result");
+
+        assert!(packed.leaf_membership.is_empty());
+        assert!(packed.cluster_occupancies.is_empty());
+    }
+
+    #[test]
+    fn select_best_packing_evaluation_matches_pipeline_ranking_tie_break() {
+        let left = super::PackingEvaluationReport {
+            pipeline_id: super::packing_pipeline_id("fixture", "alpha-packer"),
+            packer_id: "alpha-packer".into(),
+            lower_bound: 1,
+            upper_bound: 2,
+            packing_elapsed_nanos: 1,
+            leaf_membership: Vec::new(),
+            cluster_occupancies: Vec::new(),
+            cluster_occupancy_stats: super::ClusterOccupancyStats {
+                mean_total_count: 0.0,
+                stddev_total_count: 0.0,
+                min_total_count: 0,
+                max_total_count: 0,
+            },
+            metric_results: Vec::new(),
+            gate_results: Vec::new(),
+            survived_required_gates: true,
+            ranking_score: Some(1.0),
+            terminal_failure_code: None,
+            terminal_failure_message: None,
+            terminal_failure: None,
+        };
+        let right = super::PackingEvaluationReport {
+            pipeline_id: super::packing_pipeline_id("fixture", "beta-packer"),
+            packer_id: "beta-packer".into(),
+            ..left.clone()
+        };
+
+        let selected = super::select_best_packing_evaluation(&[right.clone(), left.clone()])
+            .expect("one tied winner should be selected deterministically");
+
+        let ranked = super::rank_packing_pipelines(&[super::CandidateRunReport {
+            candidate_identity: super::CandidateIdentity {
+                candidate_id: "fixture".into(),
+                implementation_label: "Fixture".into(),
+                software_identity: "fixture-v1".into(),
+            },
+            provenance: build_provenance_with_backend(
+                &archive_training_profile_for_tests(),
+                &super::CandidateIdentity {
+                    candidate_id: "fixture".into(),
+                    implementation_label: "Fixture".into(),
+                    software_identity: "fixture-v1".into(),
+                },
+                vec!["archive-training-pass".into()],
+                super::acceleration::fixture_cpu_execution_backend_selection(),
+            ),
+            prerequisite_checks: Vec::new(),
+            pass_reports: Vec::new(),
+            probe_results: Vec::new(),
+            leaf_membership: Vec::new(),
+            cluster_occupancies: Vec::new(),
+            cluster_occupancy_stats: None,
+            packing_evaluations: vec![right, left.clone()],
+            packing_evaluation: Some(left.clone()),
+            selected_packing_strategy_id: Some(left.packer_id.clone()),
+            synthetic_padding_concentration: None,
+            determinism: super::DeterminismReport {
+                deterministic: true,
+                compared_fields: Vec::new(),
+                mismatch_details: Vec::new(),
+            },
+            compression_analysis: None,
+            metric_results: Vec::new(),
+            gate_results: Vec::new(),
+            deferred_research_goals: Vec::new(),
+            artifact_hygiene: super::ArtifactHygieneEvidence {
+                comparative_metrics_emitted: true,
+                success_shaped_completion_artifacts_emitted: true,
+                detail: "fixture".into(),
+            },
+            execution_budget_millis: None,
+            observed_elapsed_nanos: None,
+            run_status: super::CandidateRunStatus::Succeeded,
+            raw_survived_required_gates: true,
+            survived_required_gates: true,
+            raw_ranking_score: Some(1.0),
+            ranking_score: Some(1.0),
+            terminal_failure_code: None,
+            terminal_failure_message: None,
+            terminal_failure: None,
+        }]);
+
+        assert_eq!(selected.packer_id, ranked[0].packing_strategy_id);
     }
 
     #[test]
