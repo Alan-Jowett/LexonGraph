@@ -324,16 +324,17 @@ introduced by this revision.
 
 ### REQ-STREAM-EVAL-017
 
-The evaluator shall directly verify leaf-stage fixed-capacity invariants against
-the leaf membership artifact according to the benchmark profile's leaf model.
+The evaluator shall directly verify bounded leaf-capacity invariants against the
+packed leaf membership artifact according to the benchmark profile's leaf model.
 
 At minimum, this includes:
 
-- exact final cluster occupancy when the benchmark profile declares strict
-  alignment or synthetic padding sufficient to realize exact occupancy
+- packed final cluster occupancy within the declared lower and upper bounds for
+  the checked-in section-4 packing stage of this revision (`32..=64`)
 - complete coverage of all evaluated entities
-- exactly one final cluster assignment per evaluated entity
-- no empty clusters among the declared `K` final clusters
+- exactly one packed final cluster assignment per evaluated entity
+- no packed clusters below the declared lower bound or above the declared upper
+  bound
 
 ### REQ-STREAM-EVAL-018
 
@@ -632,24 +633,28 @@ tree.
 
 ### REQ-STREAM-EVAL-036
 
-The section-4 benchmark suite shall define a leaf-stage screening workflow that
-executes each compared candidate against the same corpus-panel profiles and
-reports, at minimum:
+The section-4 benchmark suite shall define a two-part leaf-stage screening
+workflow that executes each compared candidate against the same corpus-panel
+profiles and reports, at minimum:
 
-- exact leaf-size compliance and related leaf-stage invariant gates
-- repeated-run observable determinism
-- same-leaf neighborhood coherence over exact-neighbor ground truth
-- local-versus-global compression gain
-- strict-alignment and deterministic-synthetic-padding outcomes where both are
-  applicable to the evaluated corpus family
+- a **clustering-only** stage that records repeated-run observable determinism,
+  same-leaf neighborhood coherence over exact-neighbor ground truth,
+  local-versus-global compression gain, raw cluster-size diagnostics, and
+  strict-alignment or deterministic-synthetic-padding outcomes where applicable
+- a **clustering-plus-packing** stage that records bounded packed leaf-size
+  compliance, repeated-run observable determinism, post-packing same-leaf
+  neighborhood coherence, post-packing local-versus-global compression gain,
+  packing-cost evidence, and strict-alignment or deterministic-synthetic-
+  padding outcomes where applicable
 
 For the checked-in section-4 screening panel in this revision, the workflow
 shall execute across the expanded synthetic-plus-harvested profile set and
 shall use top-10 exact-neighbor ground truth for locality-scored profiles.
 
 The resulting comparative outputs shall be sufficient to down-select candidate
-leaf strategies for later hierarchy-stage work without claiming hierarchy-stage
-proof. The workflow therefore serves the broader end-state requirements from
+clustering strategies and clustering-plus-packing pipelines for later
+hierarchy-stage work without claiming hierarchy-stage proof. The workflow
+therefore serves the broader end-state requirements from
 `docs/research/clustering.md` by staged screening rather than by redefining
 those requirements at the evaluator boundary.
 
@@ -669,16 +674,20 @@ that mode rather than forcing the entire track back to one-core execution.
 ### REQ-STREAM-EVAL-037
 
 For section-4 benchmark executions, the evaluator shall report leaf-stage
-build-cost measurements sufficient to compare candidate strategies across corpus
-scale tiers.
+build-cost measurements sufficient to compare candidate strategies and packing
+pipelines across corpus scale tiers.
 
 At minimum, this revision shall support deterministic reporting of:
 
 - corpus size or evaluated entity count
 - scale-tier identity
 - the effective candidate-threading mode used for the run
-- build time per vector or an equivalent normalized leaf-stage build-cost
-  measure declared by the benchmark suite
+- clustering-stage build time per vector or an equivalent normalized
+  clustering-stage build-cost measure declared by the benchmark suite
+- packing-stage build time per vector or an equivalent normalized packing-stage
+  build-cost measure declared by the benchmark suite
+- total clustering-plus-packing build time per vector or equivalent normalized
+  combined build-cost measure
 - peak build memory during section-4 execution
 - wall-clock elapsed time relative to the declared execution budget, including
   whether the candidate completed, timed out, or was disqualified on bounded-
@@ -971,16 +980,24 @@ retain a checked-in materialized asset path.
 
 ### REQ-STREAM-EVAL-053
 
-The section-4 workflow shall define a deterministic carry-forward rule for
-choosing which candidates survive leaf-stage screening for later hierarchy-stage
-comparison.
+The section-4 workflow shall define deterministic carry-forward rules for
+choosing which candidates survive the clustering-only stage and which
+clustering-plus-packing pipelines survive the packed stage for later
+hierarchy-stage comparison.
 
 At minimum, the rule shall:
 
-- reject any candidate/configuration that fails a hard invariant gate
-- rank surviving candidates using same-leaf locality evidence, declared local
-  compression benefit, and normalized leaf-stage build-cost evidence
-- prefer the highest-quality surviving candidates without allowing build-cost
+- in the clustering-only stage, reject any candidate/configuration that fails a
+  hard structural gate other than raw cluster-size diagnostics
+- in the clustering-only stage, rank surviving candidates using same-leaf
+  locality evidence, declared local compression benefit, and normalized
+  clustering-stage build-cost evidence
+- in the clustering-plus-packing stage, reject any pipeline that fails the hard
+  packed leaf-size bounds or other packed-stage hard gates
+- in the clustering-plus-packing stage, rank surviving pipelines using
+  post-packing same-leaf locality evidence, declared local compression benefit,
+  and normalized combined build-cost evidence
+- prefer the highest-quality surviving outputs without allowing build-cost
   comparisons to rescue a hard-gate failure
 - define deterministic tie-breaking behavior when surviving candidates remain
   otherwise indistinguishable on the declared comparison surface

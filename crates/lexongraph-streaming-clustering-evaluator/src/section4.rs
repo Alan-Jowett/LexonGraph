@@ -632,6 +632,11 @@ pub fn run_section4_suite(
         let mut timings = HashMap::new();
         let mut run_reports = Vec::with_capacity(candidates.len());
         for candidate in candidates {
+            eprintln!(
+                "[TIMING-SUITE] Starting candidate {} for profile {}",
+                candidate.identity.candidate_id, profile.profile_id
+            );
+            let outer_start = std::time::Instant::now();
             let ((run_report, elapsed), peak_build_memory_bytes) =
                 measure_peak_build_memory(|| {
                     let started = Instant::now();
@@ -653,6 +658,12 @@ pub fn run_section4_suite(
                     run_report.execution_budget_millis,
                     peak_build_memory_bytes,
                 ),
+            );
+            eprintln!(
+                "[TIMING-SUITE] Candidate {} completed in {:.2}s ({:?})",
+                candidate.identity.candidate_id,
+                outer_start.elapsed().as_secs_f64(),
+                run_report.run_status
             );
             run_reports.push(run_report);
         }
@@ -2269,6 +2280,20 @@ fn section4_gate_declarations(include_execution_budget: bool) -> Vec<GateDeclara
             research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
         },
         GateDeclaration {
+            gate_id: "leaf-size-lower-bound".into(),
+            label: "Leaf size lower bound".into(),
+            kind: GateKind::LeafSizeAtLeast { minimum: 32 },
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+        },
+        GateDeclaration {
+            gate_id: "leaf-size-upper-bound".into(),
+            label: "Leaf size upper bound".into(),
+            kind: GateKind::LeafSizeAtMost { maximum: 64 },
+            coverage: ResearchCoverage::Direct,
+            research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+        },
+        GateDeclaration {
             gate_id: "deterministic-observable-results".into(),
             label: "Deterministic observable results".into(),
             kind: GateKind::DeterministicObservableResults,
@@ -2809,6 +2834,8 @@ mod tests {
             }],
             leaf_membership: Vec::new(),
             cluster_occupancies: Vec::new(),
+            cluster_occupancy_stats: None,
+            packing_evaluation: None,
             synthetic_padding_concentration: None,
             determinism: DeterminismReport {
                 deterministic: true,

@@ -837,7 +837,7 @@ fn build_leaf_cluster_summaries(
         })
         .collect::<HashMap<_, _>>();
     let mut grouped = BTreeMap::<u32, Vec<&str>>::new();
-    for membership in &survivor.leaf_membership {
+    for membership in survivor.effective_leaf_membership() {
         grouped
             .entry(membership.cluster_id)
             .or_default()
@@ -1321,12 +1321,12 @@ fn build_pair_report(
                 .metric_semantics_report
                 .consistency_detail
                 .clone(),
-            leaf_cluster_count: context.survivor.cluster_occupancies.len(),
+            leaf_cluster_count: context.survivor.effective_cluster_occupancies().len(),
             internal_node_count: 0,
             max_depth: 0,
             theoretical_depth_bound: theoretical_depth_bound(
                 context.contract,
-                context.survivor.cluster_occupancies.len(),
+                context.survivor.effective_cluster_occupancies().len(),
             ),
             minimum_observed_fanout: 0,
             maximum_observed_fanout: 0,
@@ -1393,12 +1393,12 @@ fn metric_semantics_failure_pair_report(
             .clone(),
         metric_semantics_consistency_result: metric_semantics_report.consistency_result.clone(),
         metric_semantics_consistency_detail: metric_semantics_report.consistency_detail.clone(),
-        leaf_cluster_count: survivor.cluster_occupancies.len(),
+        leaf_cluster_count: survivor.effective_cluster_occupancies().len(),
         internal_node_count: 0,
         max_depth: 0,
         theoretical_depth_bound: theoretical_depth_bound(
             contract,
-            survivor.cluster_occupancies.len(),
+            survivor.effective_cluster_occupancies().len(),
         ),
         minimum_observed_fanout: 0,
         maximum_observed_fanout: 0,

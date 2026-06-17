@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::thread;
+use std::time::Instant;
 
 use ciborium::value::Value as CborValue;
 use half::f16;
@@ -597,6 +598,8 @@ pub struct GateDeclaration {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GateKind {
     ExactLeafOccupancy,
+    LeafSizeAtLeast { minimum: usize },
+    LeafSizeAtMost { maximum: usize },
     CompleteCoverage,
     OneClusterPerEntity,
     NoEmptyDeclaredClusters,
@@ -687,6 +690,32 @@ pub struct SyntheticPaddingConcentrationReport {
     pub clusters_with_synthetic_entities: usize,
     pub minimum_possible_cluster_count: usize,
     pub satisfies_minimum_concentration: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClusterOccupancyStats {
+    pub mean_total_count: f64,
+    pub stddev_total_count: f64,
+    pub min_total_count: usize,
+    pub max_total_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PackingEvaluationReport {
+    pub packer_id: String,
+    pub lower_bound: usize,
+    pub upper_bound: usize,
+    pub packing_elapsed_nanos: u128,
+    pub leaf_membership: Vec<LeafMembershipRecord>,
+    pub cluster_occupancies: Vec<ClusterOccupancy>,
+    pub cluster_occupancy_stats: ClusterOccupancyStats,
+    pub metric_results: Vec<MetricResult>,
+    pub gate_results: Vec<GateResult>,
+    pub survived_required_gates: bool,
+    pub ranking_score: Option<f64>,
+    pub terminal_failure_code: Option<String>,
+    pub terminal_failure_message: Option<String>,
+    pub terminal_failure: Option<StructuredFailure>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -849,6 +878,10 @@ pub struct CandidateRunReport {
     pub probe_results: Vec<ProbeAssignmentResult>,
     pub leaf_membership: Vec<LeafMembershipRecord>,
     pub cluster_occupancies: Vec<ClusterOccupancy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_occupancy_stats: Option<ClusterOccupancyStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packing_evaluation: Option<PackingEvaluationReport>,
     pub synthetic_padding_concentration: Option<SyntheticPaddingConcentrationReport>,
     pub determinism: DeterminismReport,
     pub compression_analysis: Option<CompressionAnalysis>,
@@ -866,6 +899,22 @@ pub struct CandidateRunReport {
     pub terminal_failure_code: Option<String>,
     pub terminal_failure_message: Option<String>,
     pub terminal_failure: Option<StructuredFailure>,
+}
+
+impl CandidateRunReport {
+    pub fn effective_leaf_membership(&self) -> &[LeafMembershipRecord] {
+        self.packing_evaluation
+            .as_ref()
+            .map(|packing| packing.leaf_membership.as_slice())
+            .unwrap_or(self.leaf_membership.as_slice())
+    }
+
+    pub fn effective_cluster_occupancies(&self) -> &[ClusterOccupancy] {
+        self.packing_evaluation
+            .as_ref()
+            .map(|packing| packing.cluster_occupancies.as_slice())
+            .unwrap_or(self.cluster_occupancies.as_slice())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1080,6 +1129,43 @@ pub fn render_scorecard(report: &CampaignReport) -> String {
                 } else {
                     "FAIL"
                 }
+            ));
+        }
+        if let Some(stats) = &run_report.cluster_occupancy_stats {
+            lines.push(format!(
+                "  clustering-stage cluster-size-stats: mean={:.3}, stddev={:.3}, min={}, max={}",
+                stats.mean_total_count,
+                stats.stddev_total_count,
+                stats.min_total_count,
+                stats.max_total_count
+            ));
+        }
+        if let Some(packing) = &run_report.packing_evaluation {
+            lines.push(format!(
+                "  packing-stage: {} [bounds={},{}; packing_elapsed_nanos={}]",
+                packing.packer_id,
+                packing.lower_bound,
+                packing.upper_bound,
+                packing.packing_elapsed_nanos
+            ));
+            for gate in &packing.gate_results {
+                lines.push(format!(
+                    "  packed gate {}: {:?} ({})",
+                    gate.gate_id, gate.status, gate.detail
+                ));
+            }
+            for metric in &packing.metric_results {
+                lines.push(format!(
+                    "  packed metric {}: {:.6}",
+                    metric.metric_id, metric.value
+                ));
+            }
+            lines.push(format!(
+                "  packed cluster-size-stats: mean={:.3}, stddev={:.3}, min={}, max={}",
+                packing.cluster_occupancy_stats.mean_total_count,
+                packing.cluster_occupancy_stats.stddev_total_count,
+                packing.cluster_occupancy_stats.min_total_count,
+                packing.cluster_occupancy_stats.max_total_count
             ));
         }
         for deferred in &run_report.deferred_research_goals {
@@ -1695,6 +1781,8 @@ fn failed_candidate_run(
         probe_results: Vec::new(),
         leaf_membership: Vec::new(),
         cluster_occupancies: Vec::new(),
+        cluster_occupancy_stats: None,
+        packing_evaluation: None,
         synthetic_padding_concentration: None,
         determinism: DeterminismReport {
             deterministic: false,
@@ -1756,6 +1844,8 @@ fn failed_corpus_source_run(
         probe_results: Vec::new(),
         leaf_membership: Vec::new(),
         cluster_occupancies: Vec::new(),
+        cluster_occupancy_stats: None,
+        packing_evaluation: None,
         synthetic_padding_concentration: None,
         determinism: DeterminismReport {
             deterministic: false,
@@ -1803,16 +1893,22 @@ fn finalize_successful_run(
     repeated: SingleExecution,
 ) -> CandidateRunReport {
     let determinism = compare_executions(&primary, &repeated);
-    let hard_gate_results =
-        compute_gate_results_with_filter(profile, &primary, &[], &determinism, is_hard_gate_kind);
-    let failed_hard_gate = hard_gate_results
+    let cluster_occupancy_stats = compute_cluster_occupancy_stats(&primary.cluster_occupancies);
+    let synthetic_padding_concentration =
+        compute_synthetic_padding_concentration(&primary.cluster_occupancies, profile);
+    let raw_hard_gate_results = compute_gate_results_with_filter(
+        profile,
+        &primary,
+        &[],
+        &determinism,
+        is_clustering_stage_hard_gate_kind,
+    );
+    let failed_raw_hard_gate = raw_hard_gate_results
         .iter()
         .find(|gate| gate.status == GateStatus::Failed)
         .cloned();
-    let hard_gate_failed = failed_hard_gate.is_some();
-    let synthetic_padding_concentration =
-        compute_synthetic_padding_concentration(&primary.cluster_occupancies, profile);
-    let compression_analysis = if hard_gate_failed {
+    let raw_hard_gate_failed = failed_raw_hard_gate.is_some();
+    let compression_analysis = if raw_hard_gate_failed {
         None
     } else {
         compute_compression_analysis(
@@ -1821,18 +1917,25 @@ fn finalize_successful_run(
             &profile.compression_benchmark,
         )
     };
-    let (metric_results, gate_results) = if failed_hard_gate.is_some() {
-        (Vec::new(), hard_gate_results)
+    let (metric_results, gate_results) = if raw_hard_gate_failed {
+        (Vec::new(), raw_hard_gate_results)
     } else {
         let metric_results =
             compute_metric_results(&primary, profile, compression_analysis.as_ref());
-        let gate_results = compute_gate_results(profile, &primary, &metric_results, &determinism);
+        let gate_results = compute_gate_results_with_filter(
+            profile,
+            &primary,
+            &metric_results,
+            &determinism,
+            is_clustering_stage_visible_gate_kind,
+        );
         (metric_results, gate_results)
     };
-    let survived_required_gates = gate_results
+    let raw_survived_required_gates = gate_results
         .iter()
+        .filter(|gate| is_clustering_stage_required_gate_id(gate.gate_id.as_str()))
         .all(|gate| gate.status == GateStatus::Passed);
-    let ranking_score = if survived_required_gates {
+    let ranking_score = if raw_survived_required_gates {
         Some(
             metric_results
                 .iter()
@@ -1842,13 +1945,16 @@ fn finalize_successful_run(
     } else {
         None
     };
-    let terminal_failure = if survived_required_gates {
+    let raw_terminal_failure = if raw_survived_required_gates {
         None
     } else {
-        let failed_gate = failed_hard_gate.unwrap_or_else(|| {
+        let failed_gate = failed_raw_hard_gate.unwrap_or_else(|| {
             gate_results
                 .iter()
-                .find(|gate| gate.status == GateStatus::Failed)
+                .find(|gate| {
+                    is_clustering_stage_required_gate_id(gate.gate_id.as_str())
+                        && gate.status == GateStatus::Failed
+                })
                 .cloned()
                 .expect("a non-surviving candidate must have a failed gate")
         });
@@ -1858,7 +1964,30 @@ fn finalize_successful_run(
             message: failed_gate.detail,
         })
     };
-    let artifact_hygiene = if hard_gate_failed {
+    let packing_evaluation = if raw_hard_gate_failed {
+        None
+    } else {
+        Some(evaluate_packing_stage(
+            profile,
+            identity,
+            &primary,
+            &repeated,
+            identity.candidate_id.as_str(),
+        ))
+    };
+    let survived_required_gates = packing_evaluation
+        .as_ref()
+        .map(|packing| packing.survived_required_gates)
+        .unwrap_or(raw_survived_required_gates);
+    let effective_ranking_score = match &packing_evaluation {
+        Some(packing) => packing.ranking_score,
+        None => ranking_score,
+    };
+    let terminal_failure = packing_evaluation
+        .as_ref()
+        .and_then(|packing| packing.terminal_failure.clone())
+        .or(raw_terminal_failure);
+    let artifact_hygiene = if raw_hard_gate_failed {
         ArtifactHygieneEvidence {
             comparative_metrics_emitted: false,
             success_shaped_completion_artifacts_emitted: false,
@@ -1871,7 +2000,7 @@ fn finalize_successful_run(
             comparative_metrics_emitted: !metric_results.is_empty(),
             success_shaped_completion_artifacts_emitted: true,
             detail:
-                "the candidate satisfied the required gates and emitted the full comparative artifact surface"
+                "the candidate satisfied the required clustering and packing-stage gates and emitted the full comparative artifact surface"
                     .into(),
         }
     } else {
@@ -1879,7 +2008,7 @@ fn finalize_successful_run(
             comparative_metrics_emitted: !metric_results.is_empty(),
             success_shaped_completion_artifacts_emitted: false,
             detail:
-                "comparative metrics were emitted before a non-hard gate failed, but no success-shaped completion artifact was emitted for the rejected run"
+                "comparative metrics were emitted, but the candidate did not survive the full clustering-plus-packing evaluation surface"
                     .into(),
         }
     };
@@ -1901,6 +2030,8 @@ fn finalize_successful_run(
         probe_results: primary.probe_results,
         leaf_membership: primary.leaf_membership,
         cluster_occupancies: primary.cluster_occupancies,
+        cluster_occupancy_stats: Some(cluster_occupancy_stats),
+        packing_evaluation,
         synthetic_padding_concentration,
         determinism,
         compression_analysis,
@@ -1927,6 +2058,189 @@ fn finalize_successful_run(
         } else {
             CandidateRunStatus::GateFailed
         },
+        survived_required_gates,
+        ranking_score: effective_ranking_score,
+        terminal_failure_code,
+        terminal_failure_message,
+        terminal_failure,
+    }
+}
+
+fn packing_bounds(profile: &BenchmarkProfile) -> (usize, usize) {
+    (
+        profile.leaf_model.leaf_size / 2,
+        profile.leaf_model.leaf_size,
+    )
+}
+
+fn is_clustering_stage_hard_gate_kind(kind: &GateKind) -> bool {
+    matches!(
+        kind,
+        GateKind::CompleteCoverage
+            | GateKind::OneClusterPerEntity
+            | GateKind::DeterministicObservableResults
+    )
+}
+
+fn is_clustering_stage_visible_gate_kind(kind: &GateKind) -> bool {
+    !matches!(
+        kind,
+        GateKind::LeafSizeAtLeast { .. }
+            | GateKind::LeafSizeAtMost { .. }
+            | GateKind::ExecutionBudget
+    )
+}
+
+fn is_clustering_stage_required_gate_id(gate_id: &str) -> bool {
+    matches!(
+        gate_id,
+        "complete-coverage" | "one-cluster-per-entity" | "deterministic-observable-results"
+    )
+}
+
+fn is_packing_stage_visible_gate_kind(kind: &GateKind) -> bool {
+    !matches!(
+        kind,
+        GateKind::ExactLeafOccupancy
+            | GateKind::NoEmptyDeclaredClusters
+            | GateKind::ExecutionBudget
+    )
+}
+
+fn is_packing_stage_required_gate_id(gate_id: &str) -> bool {
+    matches!(
+        gate_id,
+        "leaf-size-lower-bound"
+            | "leaf-size-upper-bound"
+            | "complete-coverage"
+            | "one-cluster-per-entity"
+            | "deterministic-observable-results"
+    )
+}
+
+fn build_packed_execution(
+    execution: &SingleExecution,
+    profile: &BenchmarkProfile,
+) -> SingleExecution {
+    let (_, upper_bound) = packing_bounds(profile);
+    let packed_cluster_count = execution.evaluation_entities.len().div_ceil(upper_bound);
+    let packed_cluster_sizes =
+        balanced_cluster_counts(execution.evaluation_entities.len(), packed_cluster_count);
+    let mut members_by_cluster = execution.leaf_membership.iter().cloned().fold(
+        BTreeMap::<ClusterId, Vec<LeafMembershipRecord>>::new(),
+        |mut acc, member| {
+            acc.entry(member.cluster_id).or_default().push(member);
+            acc
+        },
+    );
+    for members in members_by_cluster.values_mut() {
+        members.sort_by(|left, right| {
+            left.entity_id
+                .cmp(&right.entity_id)
+                .then_with(|| left.synthetic.cmp(&right.synthetic))
+        });
+    }
+    let ordered_members = members_by_cluster
+        .into_values()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut offset = 0usize;
+    let mut packed_membership = Vec::with_capacity(ordered_members.len());
+    for (cluster_id, cluster_size) in packed_cluster_sizes.into_iter().enumerate() {
+        for member in &ordered_members[offset..offset + cluster_size] {
+            packed_membership.push(LeafMembershipRecord {
+                entity_id: member.entity_id.clone(),
+                cluster_id: cluster_id as ClusterId,
+                synthetic: member.synthetic,
+            });
+        }
+        offset += cluster_size;
+    }
+    let cluster_occupancies =
+        compute_cluster_occupancies(packed_cluster_count as u32, &packed_membership);
+    SingleExecution {
+        provenance: execution.provenance.clone(),
+        pass_reports: execution.pass_reports.clone(),
+        probe_results: execution.probe_results.clone(),
+        leaf_membership: packed_membership,
+        cluster_occupancies,
+        evaluation_entities: execution.evaluation_entities.clone(),
+    }
+}
+
+fn evaluate_packing_stage(
+    profile: &BenchmarkProfile,
+    _identity: &CandidateIdentity,
+    primary: &SingleExecution,
+    repeated: &SingleExecution,
+    candidate_id: &str,
+) -> PackingEvaluationReport {
+    let (lower_bound, upper_bound) = packing_bounds(profile);
+    let started = Instant::now();
+    let packed_primary = build_packed_execution(primary, profile);
+    let packed_repeated = build_packed_execution(repeated, profile);
+    let packing_elapsed_nanos = started.elapsed().as_nanos();
+    let determinism = compare_executions(&packed_primary, &packed_repeated);
+    let compression_analysis = compute_compression_analysis(
+        &packed_primary.leaf_membership,
+        &packed_primary.evaluation_entities,
+        &profile.compression_benchmark,
+    );
+    let metric_results =
+        compute_metric_results(&packed_primary, profile, compression_analysis.as_ref());
+    let gate_results = compute_gate_results_with_filter(
+        profile,
+        &packed_primary,
+        &metric_results,
+        &determinism,
+        is_packing_stage_visible_gate_kind,
+    );
+    let survived_required_gates = gate_results
+        .iter()
+        .filter(|gate| is_packing_stage_required_gate_id(gate.gate_id.as_str()))
+        .all(|gate| gate.status == GateStatus::Passed);
+    let ranking_score = if survived_required_gates {
+        Some(
+            metric_results
+                .iter()
+                .map(|metric| metric.value * metric.ranking_weight)
+                .sum(),
+        )
+    } else {
+        None
+    };
+    let terminal_failure = if survived_required_gates {
+        None
+    } else {
+        gate_results
+            .iter()
+            .find(|gate| {
+                is_packing_stage_required_gate_id(gate.gate_id.as_str())
+                    && gate.status == GateStatus::Failed
+            })
+            .cloned()
+            .map(|failed_gate| StructuredFailure::GateFailure {
+                candidate_id: candidate_id.into(),
+                gate_id: failed_gate.gate_id,
+                message: failed_gate.detail,
+            })
+    };
+    let terminal_failure_code = terminal_failure
+        .as_ref()
+        .map(|failure| failure.error_code().to_string());
+    let terminal_failure_message = terminal_failure.as_ref().map(structured_failure_detail);
+    PackingEvaluationReport {
+        packer_id: "cluster-order-balanced-range-packer-v1".into(),
+        lower_bound,
+        upper_bound,
+        packing_elapsed_nanos,
+        leaf_membership: packed_primary.leaf_membership.clone(),
+        cluster_occupancies: packed_primary.cluster_occupancies.clone(),
+        cluster_occupancy_stats: compute_cluster_occupancy_stats(
+            &packed_primary.cluster_occupancies,
+        ),
+        metric_results,
+        gate_results,
         survived_required_gates,
         ranking_score,
         terminal_failure_code,
@@ -1961,15 +2275,6 @@ fn compute_metric_results(
             },
         })
         .collect()
-}
-
-fn compute_gate_results(
-    profile: &BenchmarkProfile,
-    execution: &SingleExecution,
-    metric_results: &[MetricResult],
-    determinism: &DeterminismReport,
-) -> Vec<GateResult> {
-    compute_gate_results_with_filter(profile, execution, metric_results, determinism, |_| true)
 }
 
 fn compute_gate_results_with_filter(
@@ -2021,6 +2326,54 @@ fn compute_gate_results_with_filter(
                 detail: format!(
                     "expected every cluster to contain exactly {} entities",
                     profile.leaf_model.leaf_size
+                ),
+            },
+            GateKind::LeafSizeAtLeast { minimum } => GateResult {
+                gate_id: gate.gate_id.clone(),
+                label: gate.label.clone(),
+                coverage: gate.coverage.clone(),
+                research_goal_ids: gate.research_goal_ids.clone(),
+                status: bool_to_status(
+                    execution
+                        .cluster_occupancies
+                        .iter()
+                        .all(|occupancy| occupancy.total_count >= *minimum),
+                ),
+                observed_value: Some(
+                    execution
+                        .cluster_occupancies
+                        .iter()
+                        .map(|occupancy| occupancy.total_count)
+                        .min()
+                        .unwrap_or_default() as f64,
+                ),
+                detail: format!(
+                    "expected every packed cluster to contain at least {} entities",
+                    minimum
+                ),
+            },
+            GateKind::LeafSizeAtMost { maximum } => GateResult {
+                gate_id: gate.gate_id.clone(),
+                label: gate.label.clone(),
+                coverage: gate.coverage.clone(),
+                research_goal_ids: gate.research_goal_ids.clone(),
+                status: bool_to_status(
+                    execution
+                        .cluster_occupancies
+                        .iter()
+                        .all(|occupancy| occupancy.total_count <= *maximum),
+                ),
+                observed_value: Some(
+                    execution
+                        .cluster_occupancies
+                        .iter()
+                        .map(|occupancy| occupancy.total_count)
+                        .max()
+                        .unwrap_or_default() as f64,
+                ),
+                detail: format!(
+                    "expected every packed cluster to contain at most {} entities",
+                    maximum
                 ),
             },
             GateKind::CompleteCoverage => GateResult {
@@ -2101,10 +2454,6 @@ fn compute_gate_results_with_filter(
         .collect()
 }
 
-fn is_hard_gate_kind(kind: &GateKind) -> bool {
-    !matches!(kind, GateKind::MetricAtLeast { .. })
-}
-
 fn bool_to_status(value: bool) -> GateStatus {
     if value {
         GateStatus::Passed
@@ -2118,7 +2467,10 @@ fn rank_candidates(run_reports: &[CandidateRunReport]) -> Vec<RankedCandidate> {
         .iter()
         .filter_map(|run_report| {
             run_report
-                .ranking_score
+                .packing_evaluation
+                .as_ref()
+                .and_then(|packing| packing.ranking_score)
+                .or(run_report.ranking_score)
                 .map(|ranking_score| RankedCandidate {
                     candidate_id: run_report.candidate_identity.candidate_id.clone(),
                     ranking_score,
@@ -2185,6 +2537,11 @@ fn execute_candidate_once(
 ) -> Result<SingleExecution, CandidateExecutionError> {
     let streaming_config = profile.shared_candidate_config.to_streaming_config();
     let mut trainer = candidate.factory.create(&streaming_config)?;
+    eprintln!(
+        "[TIMING] Starting training phase for {}",
+        candidate.identity.candidate_id
+    );
+    let train_start = std::time::Instant::now();
     let mut pass_reports = Vec::with_capacity(resolved.training_passes.len());
     for pass in &resolved.training_passes {
         for batch in pass {
@@ -2194,10 +2551,19 @@ fn execute_candidate_once(
     }
     trainer.complete_training()?;
     let classifier = trainer.into_classifier()?;
+    eprintln!(
+        "[TIMING] Training phase completed in {:.2}s",
+        train_start.elapsed().as_secs_f64()
+    );
     let candidate_threading = candidate_threading_provenance(profile);
     let host_scaled_candidate_execution = candidate_threading.effective_mode == "host-scaled"
         && candidate_threading.effective_thread_count > 1;
 
+    eprintln!(
+        "[TIMING] Starting probe workload phase ({} workloads)",
+        resolved.probe_workloads.len()
+    );
+    let probe_start = std::time::Instant::now();
     let probe_results = if host_scaled_candidate_execution {
         resolved
             .probe_workloads
@@ -2211,7 +2577,16 @@ fn execute_candidate_once(
             .map(|workload| assign_probe_workload(&*classifier, profile, workload))
             .collect::<Result<Vec<_>, StreamingClusteringError>>()?
     };
+    eprintln!(
+        "[TIMING] Probe workload phase completed in {:.2}s",
+        probe_start.elapsed().as_secs_f64()
+    );
 
+    eprintln!(
+        "[TIMING] Starting leaf membership phase ({} entities)",
+        resolved.evaluation_entities.len()
+    );
+    let membership_start = std::time::Instant::now();
     let leaf_membership = if host_scaled_candidate_execution {
         resolved
             .evaluation_entities
@@ -2225,6 +2600,10 @@ fn execute_candidate_once(
             .map(|entity| assign_evaluation_entity(&*classifier, profile, entity))
             .collect::<Result<Vec<_>, StreamingClusteringError>>()?
     };
+    eprintln!(
+        "[TIMING] Leaf membership phase completed in {:.2}s",
+        membership_start.elapsed().as_secs_f64()
+    );
 
     let cluster_occupancies = compute_cluster_occupancies(
         profile.leaf_model.declared_final_cluster_count,
@@ -2430,8 +2809,12 @@ fn determinism_compared_fields() -> Vec<String> {
 fn resolve_profile_inputs(
     profile: &BenchmarkProfile,
 ) -> Result<ResolvedProfileInputs, CandidateExecutionError> {
+    eprintln!("[TIMING-RESOLVE] Starting profile input resolution");
+    let resolve_start = std::time::Instant::now();
     let mut source_reference_ids = BTreeMap::<String, ()>::new();
 
+    eprintln!("[TIMING-RESOLVE] Loading training passes");
+    let training_passes_start = std::time::Instant::now();
     let training_passes = profile
         .training_passes
         .iter()
@@ -2453,7 +2836,13 @@ fn resolve_profile_inputs(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    eprintln!(
+        "[TIMING-RESOLVE] Training passes loaded in {:.2}s",
+        training_passes_start.elapsed().as_secs_f64()
+    );
 
+    eprintln!("[TIMING-RESOLVE] Loading probe workloads");
+    let probe_workloads_start = std::time::Instant::now();
     let probe_workloads = profile
         .probe_workloads
         .iter()
@@ -2474,7 +2863,13 @@ fn resolve_profile_inputs(
             })
         })
         .collect::<Result<Vec<_>, CandidateExecutionError>>()?;
+    eprintln!(
+        "[TIMING-RESOLVE] Probe workloads loaded in {:.2}s",
+        probe_workloads_start.elapsed().as_secs_f64()
+    );
 
+    eprintln!("[TIMING-RESOLVE] Loading evaluation entities");
+    let evaluation_entities_start = std::time::Instant::now();
     let evaluation_entities = match &profile.evaluation_entities {
         EvaluationEntitySource::Inline { entities } => entities.clone(),
         EvaluationEntitySource::BlockStore { corpora } => {
@@ -2486,6 +2881,10 @@ fn resolve_profile_inputs(
             entities
         }
     };
+    eprintln!(
+        "[TIMING-RESOLVE] Evaluation entities loaded in {:.2}s",
+        evaluation_entities_start.elapsed().as_secs_f64()
+    );
 
     assert_unique(
         evaluation_entities
@@ -2506,6 +2905,10 @@ fn resolve_profile_inputs(
         )
     })?;
 
+    eprintln!(
+        "[TIMING-RESOLVE] Total resolution time: {:.2}s",
+        resolve_start.elapsed().as_secs_f64()
+    );
     Ok(ResolvedProfileInputs {
         training_passes,
         probe_workloads,
@@ -3009,6 +3412,38 @@ fn compute_cluster_occupancies(
     }
 
     by_cluster.into_values().collect()
+}
+
+fn compute_cluster_occupancy_stats(
+    cluster_occupancies: &[ClusterOccupancy],
+) -> ClusterOccupancyStats {
+    let counts = cluster_occupancies
+        .iter()
+        .map(|occupancy| occupancy.total_count as f64)
+        .collect::<Vec<_>>();
+    let mean_total_count = counts.iter().sum::<f64>() / counts.len() as f64;
+    let variance = counts
+        .iter()
+        .map(|count| {
+            let delta = count - mean_total_count;
+            delta * delta
+        })
+        .sum::<f64>()
+        / counts.len() as f64;
+    ClusterOccupancyStats {
+        mean_total_count,
+        stddev_total_count: variance.sqrt(),
+        min_total_count: cluster_occupancies
+            .iter()
+            .map(|occupancy| occupancy.total_count)
+            .min()
+            .expect("cluster occupancies are always materialized for declared clusters"),
+        max_total_count: cluster_occupancies
+            .iter()
+            .map(|occupancy| occupancy.total_count)
+            .max()
+            .expect("cluster occupancies are always materialized for declared clusters"),
+    }
 }
 
 fn compute_synthetic_padding_concentration(
@@ -4403,6 +4838,85 @@ mod tests {
                 || scorecard.contains("wgpu-declined")
                 || scorecard.contains("wgpu")
                 || scorecard.contains("cpu")
+        );
+    }
+
+    #[test]
+    fn render_scorecard_reports_cluster_size_stats() {
+        let report = super::CampaignReport {
+            profile_id: "fixture".into(),
+            run_reports: vec![super::CandidateRunReport {
+                candidate_identity: super::CandidateIdentity {
+                    candidate_id: "balanced".into(),
+                    implementation_label: "Balanced fixture".into(),
+                    software_identity: "balanced-fixture-v1".into(),
+                },
+                provenance: build_provenance_with_backend(
+                    &archive_training_profile_for_tests(),
+                    &super::CandidateIdentity {
+                        candidate_id: "balanced".into(),
+                        implementation_label: "Balanced fixture".into(),
+                        software_identity: "balanced-fixture-v1".into(),
+                    },
+                    vec!["archive-training-pass".into()],
+                    super::acceleration::fixture_cpu_execution_backend_selection(),
+                ),
+                prerequisite_checks: Vec::new(),
+                pass_reports: Vec::new(),
+                probe_results: Vec::new(),
+                leaf_membership: Vec::new(),
+                cluster_occupancies: vec![
+                    super::ClusterOccupancy {
+                        cluster_id: 0,
+                        total_count: 63,
+                        real_count: 63,
+                        synthetic_count: 0,
+                    },
+                    super::ClusterOccupancy {
+                        cluster_id: 1,
+                        total_count: 65,
+                        real_count: 65,
+                        synthetic_count: 0,
+                    },
+                ],
+                cluster_occupancy_stats: Some(super::ClusterOccupancyStats {
+                    mean_total_count: 64.0,
+                    stddev_total_count: 1.0,
+                    min_total_count: 63,
+                    max_total_count: 65,
+                }),
+                packing_evaluation: None,
+                synthetic_padding_concentration: None,
+                determinism: super::DeterminismReport {
+                    deterministic: true,
+                    compared_fields: Vec::new(),
+                    mismatch_details: Vec::new(),
+                },
+                compression_analysis: None,
+                metric_results: Vec::new(),
+                gate_results: Vec::new(),
+                deferred_research_goals: Vec::new(),
+                artifact_hygiene: super::ArtifactHygieneEvidence {
+                    comparative_metrics_emitted: false,
+                    success_shaped_completion_artifacts_emitted: false,
+                    detail: "fixture".into(),
+                },
+                execution_budget_millis: None,
+                observed_elapsed_nanos: None,
+                run_status: super::CandidateRunStatus::GateFailed,
+                survived_required_gates: false,
+                ranking_score: None,
+                terminal_failure_code: None,
+                terminal_failure_message: None,
+                terminal_failure: None,
+            }],
+            ranking: Vec::new(),
+        };
+
+        let scorecard = super::render_scorecard(&report);
+
+        assert!(
+            scorecard.contains("cluster-size-stats: mean=64.000, stddev=1.000, min=63, max=65")
         );
     }
 

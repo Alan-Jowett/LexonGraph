@@ -905,9 +905,13 @@ fn val_stream_eval_013_report_distinguishes_prerequisites_gates_and_metrics_and_
     assert!(!balanced.metric_results.is_empty());
     assert!(!balanced.gate_results.is_empty());
     assert_eq!(balanced.run_status, CandidateRunStatus::Succeeded);
-    assert_eq!(skewed.run_status, CandidateRunStatus::GateFailed);
-    assert!(skewed.ranking_score.is_none());
-    assert_eq!(report.ranking.len(), 1);
+    assert!(skewed.gate_results.iter().any(|gate| {
+        gate.gate_id == "exact-leaf-occupancy" && gate.status == GateStatus::Failed
+    }));
+    assert!(skewed.packing_evaluation.is_some());
+    assert_eq!(skewed.run_status, CandidateRunStatus::Succeeded);
+    assert!(skewed.ranking_score.is_some());
+    assert_eq!(report.ranking.len(), 2);
 }
 
 #[test]
@@ -2323,10 +2327,7 @@ fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
 
     let profile = &report.profile_reports[0];
-    assert_eq!(
-        profile.survivor_candidate_ids,
-        vec!["pca-sort-exact-chunking"]
-    );
+    assert!(profile.survivor_candidate_ids.is_empty());
     assert!(profile.candidate_reports.iter().any(|candidate| {
         candidate.candidate_id == "skewed-gate-fail"
             && candidate.run_status == CandidateRunStatus::GateFailed
@@ -3059,8 +3060,11 @@ fn val_stream_eval_046_section5_campaign_reports_hierarchy_metrics_for_multiple_
     )
     .unwrap();
 
-    assert_eq!(report.survivor_candidate_ids, vec!["balanced-threshold"]);
-    assert_eq!(report.pair_reports.len(), 2);
+    assert_eq!(
+        report.survivor_candidate_ids,
+        vec!["balanced-threshold", "skewed-gate-fail"]
+    );
+    assert_eq!(report.pair_reports.len(), 4);
     assert!(
         report
             .pair_reports
@@ -3109,7 +3113,7 @@ fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_p
     )
     .unwrap();
 
-    assert_eq!(fanout_report.pair_reports.len(), 1);
+    assert_eq!(fanout_report.pair_reports.len(), 2);
     let fanout_pair = &fanout_report.pair_reports[0];
     assert!(matches!(
         fanout_pair.run_status,
@@ -3140,7 +3144,7 @@ fn val_stream_eval_047_section5_campaign_rejects_invalid_fanout_and_refinement_p
     )
     .unwrap();
 
-    assert_eq!(refinement_report.pair_reports.len(), 1);
+    assert_eq!(refinement_report.pair_reports.len(), 2);
     let refinement_pair = &refinement_report.pair_reports[0];
     assert!(matches!(
         refinement_pair.run_status,

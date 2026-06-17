@@ -7,7 +7,7 @@
 
 Identify the simplest design that can satisfy the black-box requirements in `clustering.md`, especially:
 
-- exact leaf size `L`
+- bounded leaf-size range `[lower, upper]` after packing
 - deterministic build behavior
 - bounded fanout/depth
 - strong greedy-routing recall
@@ -22,10 +22,11 @@ This plan is designed to be executable on a representative sample corpus before 
 
 At the end of this plan, we should be able to answer:
 
-1. Which leaf-construction strategy best satisfies exact-size leaves without destroying locality?
-2. Which hierarchy-construction strategy gives the best recall/latency tradeoff under greedy routing?
-3. Which parent-summary method is accurate and stable enough for routing?
-4. Whether one design can satisfy the hard invariants and quality thresholds together, or whether the requirements need revision.
+1. Which raw leaf-construction strategy best preserves locality before any packing normalization?
+2. Which packing strategy best converts raw clusters into bounded leaves without destroying locality?
+3. Which hierarchy-construction strategy gives the best recall/latency tradeoff under greedy routing?
+4. Which parent-summary method is accurate and stable enough for routing?
+5. Whether one design can satisfy the hard invariants and quality thresholds together, or whether the requirements need revision.
 
 ---
 
@@ -149,22 +150,25 @@ requirements.
 
 ### Hard-invariant gates that must be implemented in the harness
 
-1. Section-4 direct gates: exact leaf-size check, complete-coverage check,
-   repeated-run determinism, and padding-hygiene validation.
-2. Section-4 precondition rejection gate: deterministic rejection of malformed
+1. Section-4A direct gates: complete-coverage check, repeated-run determinism,
+   and padding-hygiene validation for raw clustering outputs.
+2. Section-4B direct gates: packed leaf-size range compliance, complete
+   coverage, repeated-run determinism, and padding-hygiene validation for
+   clustering-plus-packing outputs.
+3. Section-4 precondition rejection gate: deterministic rejection of malformed
    suite configuration, invalid alignment-policy inputs, malformed harvested
    corpora, and invalid exact-neighbor ground-truth inputs.
-3. Later-phase end-state gates: serialization round-trip identity,
+4. Later-phase end-state gates: serialization round-trip identity,
    persisted-artifact durability, bounded hierarchy shape, and routing-service
    verification once hierarchy and query artifacts exist.
-4. Structured-failure gate: deterministic error code, no exposed partial
+5. Structured-failure gate: deterministic error code, no exposed partial
    artifact, and explicit artifact-hygiene verification on injected failures.
 
 ### Metrics to compute for every run
 
 | Category | Metrics |
 | --- | --- |
-| Hard invariants | exact leaf sizes, no duplicates, no dropped vectors, direct repeated-run determinism; depth bound, fanout bound, and serialization round-trip identity are carried as later-phase obligations until hierarchy artifacts exist |
+| Hard invariants | for section-4A: no duplicates, no dropped vectors, direct repeated-run determinism; for section-4B: bounded packed leaf sizes, no duplicates, no dropped vectors, direct repeated-run determinism; depth bound, fanout bound, and serialization round-trip identity are carried as later-phase obligations until hierarchy artifacts exist |
 | Search | TNN recall@10, routing path length, beam width, p95 latency, QPS, all deferred to the full-tree routing phases |
 | Locality | for section-4 screening, percent of true top-10 neighbors in the same leaf as a direct proxy; same-or-sibling locality remains the end-state target carried forward from `clustering.md` |
 | Compression | local-vs-global reconstruction error delta under the fixed quantization scheme, where the global baseline is computed over the unindexed real dataset excluding synthetic padding, plus per-bucket distribution |
@@ -178,9 +182,11 @@ requirements.
 
 ---
 
-## 4. Compare Candidate Leaf-Formation Strategies First
+## 4. Compare Candidate Clustering Strategies First, Then Compare Packing
 
-The leaf layer is the most constrained part of the problem because exact leaf size interacts directly with locality and compression.
+The leaf layer is the most constrained part of the problem because semantic
+grouping and bounded leaf packing interact directly with locality, compression,
+and retrieval cost.
 
 This stage is still subordinate to the full hierarchy goals in
 `clustering.md`, but it intentionally screens the leaf-formation problem first
@@ -209,32 +215,51 @@ initial candidate set used for repeated comparisons, including at least:
 Additional fixture or null-baseline candidates may be included as long as they
 use the same evaluator-owned registration and reporting surface.
 
-### Leaf-stage experiments
+### 4A. Raw clustering experiments
 
 For each corpus slice and each candidate:
 
 1. Build only the leaf partition.
-2. Enforce exact leaf size using the same alignment policy. For realistic
-   qualification tracks, the primary `leaf_size` should lie in the `64..128`
-   regime; smaller fixtures may still exist for smoke and regression coverage
-   but do not count as realistic qualification evidence.
+2. Do not reject the raw clustering output solely because cluster sizes fall
+   outside the desired bounded range. Instead, record the raw cluster-size
+   distribution as diagnostics.
 3. Measure:
-   - exact-size compliance
    - determinism across repeated runs
    - top-10 neighborhood coherence
    - local compression gain vs global quantization
+   - raw cluster-size diagnostics such as mean, standard deviation, minimum,
+     maximum, and counts below/within/above the target range
    - build time per vector
    - wall-clock elapsed time against the declared timeout budget
-4. Reject any candidate that cannot reliably produce exact-size leaves
+4. Reject any candidate that cannot reliably produce valid raw clustering output
    deterministically or that exceeds the declared bounded-time qualification
    budget.
 
+### 4B. Clustering-plus-packing experiments
+
+For each promising clustering candidate and each packing strategy:
+
+1. Apply a deterministic packing algorithm to the raw clustering output.
+2. Enforce a bounded leaf-size range `[lower, upper]` at the packed output.
+3. Measure:
+   - packed leaf-size compliance
+   - determinism across repeated runs
+   - post-packing top-10 neighborhood coherence
+   - post-packing local compression gain vs global quantization
+   - packing cost and total clustering-plus-packing cost
+   - degradation from raw clustering quality to packed quality
+4. Reject any clustering-plus-packing pipeline that cannot satisfy the bounded
+   leaf-size range deterministically or that exceeds the declared bounded-time
+   qualification budget.
+
 ### Required padding sub-experiment
 
-For each leaf strategy, run an explicit `N mod L != 0` experiment under deterministic synthetic padding:
+For each leaf strategy and packing strategy, run an explicit `N mod L != 0`
+experiment under deterministic synthetic padding:
 
 1. Verify padding entities are uniquely tagged and never duplicate real vectors.
-2. Verify padding is concentrated into the minimum possible number of leaves allowed by the deterministic procedure.
+2. Verify padding is concentrated into the minimum possible number of packed
+   leaves allowed by the deterministic procedure.
 3. Verify padding never appears in externally visible search results.
 4. Verify padding is excluded from recall, locality, and compression metrics.
 5. Compare strict-alignment rejection vs deterministic-padding behavior and cost.
@@ -258,12 +283,14 @@ that protect the screening contract:
 
 ### Decision rule
 
-Carry forward only the top 2-3 leaf strategies that:
+Carry forward only the top 2-3 clustering strategies and the top 2-3
+clustering-plus-packing pipelines that:
 
-- never violate the hard invariants
-- rank highest on same-leaf neighborhood coherence as a proxy toward the
+- never violate the relevant hard invariants for their stage
+- in 4A, rank highest on same-leaf neighborhood coherence as a proxy toward the
   `>=80%` same-or-sibling end-state locality target from `clustering.md`
-- show meaningful local compression benefit
+- in 4B, preserve as much locality and compression benefit as possible while
+  satisfying the bounded packed leaf-size range
 - stay within the declared bounded-time qualification budget and do not have
   obviously unacceptable build cost
 

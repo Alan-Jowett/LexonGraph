@@ -118,28 +118,32 @@ block-store implementations.
 
 ### VAL-STREAM-EVAL-009
 
-Run the evaluator on a benchmark profile with declared strict alignment and leaf
-size `L`.
+Run the evaluator on a benchmark profile with declared strict alignment and a
+two-stage section-4 workflow.
 
-**Pass condition:** the evaluator verifies exact final cluster occupancy,
-complete coverage, one-cluster-per-entity assignment, and absence of empty
-declared clusters from the leaf membership artifact.
+**Pass condition:** the clustering-only stage reports raw cluster-size
+diagnostics without rejecting the candidate solely for out-of-range raw cluster
+sizes, and the clustering-plus-packing stage verifies packed final cluster
+occupancy within the declared lower and upper bounds, complete coverage, and
+one-cluster-per-entity assignment from the packed leaf membership artifact.
 
 **Traces to:** REQ-STREAM-EVAL-017
 
 ### VAL-STREAM-EVAL-010
 
-Run the evaluator on a benchmark profile with deterministic synthetic padding.
+Run the evaluator on a benchmark profile with deterministic synthetic padding
+and a two-stage section-4 workflow.
 
 **Pass condition:** the evaluator distinguishes real from synthetic entities in
-the leaf membership artifact, enforces exact final occupancy against the padded
-evaluated set, and excludes synthetic entities from externally reported
-locality and compression metrics, while also reporting whether synthetic
-padding is concentrated into the minimum possible number of final clusters
-permitted by the deterministic procedure. Synthetic padding identities are
-stably tagged, do not collide with real-entity identities in the evaluated
-corpus, and are not misreported as real benchmark members in externally visible
-evaluator entity listings.
+the leaf membership artifact, enforces the declared packed lower and upper
+bounds against the padded evaluated set in the clustering-plus-packing stage,
+and excludes synthetic entities from externally reported locality and
+compression metrics, while also reporting whether synthetic padding is
+concentrated into the minimum possible number of final clusters permitted by
+the deterministic procedure. Synthetic padding identities are stably tagged, do
+not collide with real-entity identities in the evaluated corpus, and are not
+misreported as real benchmark members in externally visible evaluator entity
+listings.
 
 **Traces to:** REQ-STREAM-EVAL-017, REQ-STREAM-EVAL-018
 
@@ -567,13 +571,15 @@ checked-in asset path.
 ### VAL-STREAM-EVAL-042
 
 Inspect one completed section-4 campaign with more than one surviving
-candidate/configuration pair.
+candidate/configuration pair in the clustering-only stage and at least one
+surviving clustering-plus-packing pipeline in the packed stage.
 
-**Pass condition:** the workflow's carry-forward decision rule rejects hard-gate
-failures first, ranks surviving candidates using same-leaf locality evidence,
-declared compression benefit, and normalized build-cost evidence, and applies a
-deterministic tie-break when survivors remain otherwise indistinguishable on
-the declared comparison surface.
+**Pass condition:** the workflow's carry-forward decision rules reject raw hard
+structural failures before ranking clustering candidates, reject packed-stage
+bound failures before ranking clustering-plus-packing pipelines, rank surviving
+outputs using the declared locality, compression, and build-cost evidence for
+their stage, and apply a deterministic tie-break when survivors remain
+otherwise indistinguishable on the declared comparison surface.
 
 **Traces to:** REQ-STREAM-EVAL-053
 
