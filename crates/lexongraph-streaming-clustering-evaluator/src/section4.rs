@@ -1744,10 +1744,14 @@ fn apply_alignment_policy(
                 .iter()
                 .flat_map(|entity| entity.embedding.iter().copied())
                 .fold(1.0f32, |current, value| current.max(value.abs()));
+            let target_padding_norm = representative_positive_embedding_norm(real_entities);
             for padding_index in 0..padding_needed {
                 let mut embedding = Vec::with_capacity(real_entities[0].embedding.len());
                 for dim in 0..real_entities[0].embedding.len() {
                     embedding.push(max_abs + 10.0 + padding_index as f32 + dim as f32 * 0.125);
+                }
+                if let Some(target_norm) = target_padding_norm {
+                    rescale_embedding_to_norm(&mut embedding, target_norm);
                 }
                 let mut entity_id = format!(
                     "{}-synthetic-{padding_index:06}",
@@ -1766,6 +1770,38 @@ fn apply_alignment_policy(
             Ok(entities)
         }
     }
+}
+
+fn representative_positive_embedding_norm(entities: &[EvaluationEntity]) -> Option<f32> {
+    let mut norms = entities
+        .iter()
+        .map(|entity| embedding_l2_norm(entity.embedding.as_slice()))
+        .filter(|norm| norm.is_finite() && *norm > 0.0)
+        .collect::<Vec<_>>();
+    if norms.is_empty() {
+        return None;
+    }
+    norms.sort_by(|left, right| left.total_cmp(right));
+    Some(norms[norms.len() / 2])
+}
+
+fn rescale_embedding_to_norm(embedding: &mut [f32], target_norm: f32) {
+    let current_norm = embedding_l2_norm(embedding);
+    if current_norm <= 0.0 || !current_norm.is_finite() || !target_norm.is_finite() {
+        return;
+    }
+    let scale = target_norm / current_norm;
+    for value in embedding.iter_mut() {
+        *value *= scale;
+    }
+}
+
+fn embedding_l2_norm(embedding: &[f32]) -> f32 {
+    embedding
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt()
 }
 
 fn compute_ground_truth(
@@ -2653,6 +2689,48 @@ mod tests {
             Err(EvaluatorError::InvalidConfiguration(message))
                 if message.contains("must include at least one real entity")
         ));
+    }
+
+    #[test]
+    fn deterministic_padding_matches_real_embedding_norm_shell() {
+        let padded = apply_alignment_policy(
+            &[
+                EvaluationEntity {
+                    entity_id: "a".into(),
+                    corpus_id: "fixture".into(),
+                    embedding: vec![1.0, 0.0, 0.0],
+                    synthetic: false,
+                },
+                EvaluationEntity {
+                    entity_id: "b".into(),
+                    corpus_id: "fixture".into(),
+                    embedding: vec![0.0, 1.0, 0.0],
+                    synthetic: false,
+                },
+                EvaluationEntity {
+                    entity_id: "c".into(),
+                    corpus_id: "fixture".into(),
+                    embedding: vec![0.0, 0.0, 1.0],
+                    synthetic: false,
+                },
+            ],
+            4,
+            &AlignmentPolicy::DeterministicSyntheticPadding,
+        )
+        .expect("deterministic padding should add one synthetic entity");
+
+        assert_eq!(padded.len(), 4);
+        let synthetic = padded
+            .iter()
+            .find(|entity| entity.synthetic)
+            .expect("expected a synthetic padding entity");
+        let synthetic_norm = synthetic
+            .embedding
+            .iter()
+            .map(|value| (*value as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!((synthetic_norm - 1.0).abs() < 1.0e-6, "{synthetic_norm}");
     }
 
     #[test]
