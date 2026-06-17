@@ -49,7 +49,7 @@ use tempfile::TempDir;
 
 pub use acceleration::{
     ExecutionBackendRequest, ExecutionBackendResolution, ExecutionBackendSelection,
-    execution_backend_request, set_execution_backend_request,
+    execution_backend_request, set_execution_backend_request, with_execution_backend_request,
 };
 pub use section4::{
     Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
@@ -1931,7 +1931,7 @@ fn finalize_successful_run(
         (metric_results, gate_results)
     };
     let raw_required_gate_status =
-        evaluate_required_gate_status(&gate_results, is_clustering_stage_required_gate_id);
+        evaluate_required_gate_status(&gate_results, CLUSTERING_STAGE_REQUIRED_GATE_IDS);
     let raw_survived_required_gates = raw_required_gate_status == Some(true);
     let ranking_score = if raw_survived_required_gates {
         Some(
@@ -1968,6 +1968,7 @@ fn finalize_successful_run(
                     Some(missing_required_gate_failure(
                         identity.candidate_id.as_str(),
                         "clustering-stage",
+                        &gate_results,
                         CLUSTERING_STAGE_REQUIRED_GATE_IDS,
                     ))
                 }),
@@ -2133,28 +2134,39 @@ fn is_packing_stage_required_gate_id(gate_id: &str) -> bool {
 
 fn evaluate_required_gate_status(
     gate_results: &[GateResult],
-    is_required_gate_id: impl Fn(&str) -> bool,
+    required_gate_ids: &[&str],
 ) -> Option<bool> {
-    let mut saw_required_gate = false;
+    let mut observed_required_gate_ids = BTreeMap::<&str, ()>::new();
     for gate in gate_results {
-        if is_required_gate_id(gate.gate_id.as_str()) {
-            saw_required_gate = true;
+        if required_gate_ids.contains(&gate.gate_id.as_str()) {
             if gate.status != GateStatus::Passed {
                 return Some(false);
             }
+            observed_required_gate_ids.insert(gate.gate_id.as_str(), ());
         }
     }
-    saw_required_gate.then_some(true)
+    (observed_required_gate_ids.len() == required_gate_ids.len()).then_some(true)
 }
 
 fn missing_required_gate_failure(
     candidate_id: &str,
     stage_label: &str,
+    gate_results: &[GateResult],
     required_gate_ids: &[&str],
 ) -> StructuredFailure {
+    let missing_gate_ids = required_gate_ids
+        .iter()
+        .copied()
+        .filter(|required_gate_id| {
+            !gate_results
+                .iter()
+                .any(|gate| gate.gate_id.as_str() == *required_gate_id)
+        })
+        .collect::<Vec<_>>();
     StructuredFailure::InvalidConfiguration {
         message: format!(
-            "candidate {candidate_id} produced no required {stage_label} gate results; expected at least one of [{}]",
+            "candidate {candidate_id} did not emit the full required {stage_label} gate set; missing [{}] from required [{}]",
+            missing_gate_ids.join(", "),
             required_gate_ids.join(", ")
         ),
     }
@@ -2238,7 +2250,7 @@ fn evaluate_packing_stage(
         is_packing_stage_visible_gate_kind,
     );
     let required_gate_status =
-        evaluate_required_gate_status(&gate_results, is_packing_stage_required_gate_id);
+        evaluate_required_gate_status(&gate_results, PACKING_STAGE_REQUIRED_GATE_IDS);
     let survived_required_gates = required_gate_status == Some(true);
     let ranking_score = if survived_required_gates {
         Some(
@@ -2269,6 +2281,7 @@ fn evaluate_packing_stage(
                 Some(missing_required_gate_failure(
                     candidate_id,
                     "packing-stage",
+                    &gate_results,
                     PACKING_STAGE_REQUIRED_GATE_IDS,
                 ))
             })
@@ -5058,7 +5071,7 @@ mod tests {
     #[test]
     fn required_gate_status_distinguishes_missing_passed_and_failed_required_gates() {
         assert_eq!(
-            super::evaluate_required_gate_status(&[], super::is_clustering_stage_required_gate_id,),
+            super::evaluate_required_gate_status(&[], super::CLUSTERING_STAGE_REQUIRED_GATE_IDS,),
             None
         );
         assert_eq!(
@@ -5067,7 +5080,21 @@ mod tests {
                     "complete-coverage",
                     super::GateStatus::Passed,
                 )],
-                super::is_clustering_stage_required_gate_id,
+                super::CLUSTERING_STAGE_REQUIRED_GATE_IDS,
+            ),
+            None
+        );
+        assert_eq!(
+            super::evaluate_required_gate_status(
+                &[
+                    fixture_gate_result("complete-coverage", super::GateStatus::Passed),
+                    fixture_gate_result("one-cluster-per-entity", super::GateStatus::Passed),
+                    fixture_gate_result(
+                        "deterministic-observable-results",
+                        super::GateStatus::Passed,
+                    ),
+                ],
+                super::CLUSTERING_STAGE_REQUIRED_GATE_IDS,
             ),
             Some(true)
         );
@@ -5077,7 +5104,7 @@ mod tests {
                     "complete-coverage",
                     super::GateStatus::Failed,
                 )],
-                super::is_clustering_stage_required_gate_id,
+                super::CLUSTERING_STAGE_REQUIRED_GATE_IDS,
             ),
             Some(false)
         );
@@ -5234,11 +5261,39 @@ mod tests {
                     research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
                 },
                 GateDeclaration {
+                    gate_id: "leaf-size-lower-bound".into(),
+                    label: "Leaf size lower bound".into(),
+                    kind: GateKind::LeafSizeAtLeast { minimum: 1 },
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+                },
+                GateDeclaration {
+                    gate_id: "leaf-size-upper-bound".into(),
+                    label: "Leaf size upper bound".into(),
+                    kind: GateKind::LeafSizeAtMost { maximum: 2 },
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+                },
+                GateDeclaration {
                     gate_id: "complete-coverage".into(),
                     label: "Complete coverage".into(),
                     kind: GateKind::CompleteCoverage,
                     coverage: ResearchCoverage::Direct,
                     research_goal_ids: vec!["RG-COVERAGE".into()],
+                },
+                GateDeclaration {
+                    gate_id: "one-cluster-per-entity".into(),
+                    label: "One cluster per entity".into(),
+                    kind: GateKind::OneClusterPerEntity,
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-COVERAGE".into()],
+                },
+                GateDeclaration {
+                    gate_id: "deterministic-observable-results".into(),
+                    label: "Deterministic observable results".into(),
+                    kind: GateKind::DeterministicObservableResults,
+                    coverage: ResearchCoverage::Direct,
+                    research_goal_ids: vec!["RG-DETERMINISM".into()],
                 },
             ],
             deferred_research_goals: vec![DeferredResearchGoal {

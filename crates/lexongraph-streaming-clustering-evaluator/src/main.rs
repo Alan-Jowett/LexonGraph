@@ -13,7 +13,7 @@ use lexongraph_streaming_clustering_evaluator::{
     resolve_registered_candidates, resolve_registered_hierarchy_strategies,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
     run_evaluation_campaign, run_section4_suite, run_section5_campaign,
-    set_execution_backend_request, write_campaign_artifacts, write_section4_suite_artifacts,
+    with_execution_backend_request, write_campaign_artifacts, write_section4_suite_artifacts,
     write_section5_campaign_artifacts,
 };
 
@@ -133,8 +133,7 @@ fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
             execution_backend,
-        } => {
-            set_execution_backend_request(execution_backend.into_request());
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -161,13 +160,12 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
+        }),
         Command::GenerateSection4Assets {
             suite,
             output_dir,
             execution_backend,
-        } => {
-            set_execution_backend_request(execution_backend.into_request());
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let suite_path = suite;
             let suite = std::fs::read_to_string(&suite_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -193,7 +191,7 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", generated.corpus_archive_path.display());
             }
             Ok(())
-        }
+        }),
         Command::MaterializeSection4Archive {
             input,
             output,
@@ -215,8 +213,7 @@ fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
             execution_backend,
-        } => {
-            set_execution_backend_request(execution_backend.into_request());
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let manifest_path = manifest;
             let manifest = std::fs::read_to_string(&manifest_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -245,7 +242,7 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
+        }),
         Command::RunSection5 {
             profile,
             candidates,
@@ -253,8 +250,7 @@ fn run() -> Result<(), EvaluatorError> {
             hierarchy_strategies,
             output_dir,
             execution_backend,
-        } => {
-            set_execution_backend_request(execution_backend.into_request());
+        } => with_execution_backend_request(execution_backend.into_request(), || {
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -303,6 +299,6 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }
+        }),
     }
 }

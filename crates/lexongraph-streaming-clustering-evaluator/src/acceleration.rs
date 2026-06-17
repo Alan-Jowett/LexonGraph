@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 
-use std::sync::{OnceLock, RwLock};
+use std::cell::{Cell, RefCell};
+use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +54,11 @@ pub struct ExecutionBackendSelection {
 
 impl Default for ExecutionBackendSelection {
     fn default() -> Self {
-        resolve_execution_backend_selection(ExecutionBackendRequest::Auto)
+        Self {
+            request: ExecutionBackendRequest::Auto,
+            resolution: ExecutionBackendResolution::Cpu,
+            detail: "execution backend selection was not recorded in this artifact".into(),
+        }
     }
 }
 
@@ -73,6 +78,14 @@ pub fn set_execution_backend_request(request: ExecutionBackendRequest) {
     *backend_request_lock()
         .write()
         .expect("execution backend request lock poisoned") = request;
+}
+
+pub fn with_execution_backend_request<T>(
+    request: ExecutionBackendRequest,
+    run: impl FnOnce() -> T,
+) -> T {
+    let _scope = ExecutionBackendRequestScope::new(request);
+    run()
 }
 
 pub(crate) fn detected_execution_backend_selection() -> ExecutionBackendSelection {
@@ -129,14 +142,22 @@ pub(crate) fn with_execution_backend_request_for_test<T>(
     request: ExecutionBackendRequest,
     run: impl FnOnce() -> T,
 ) -> T {
-    let _reset = ExecutionBackendRequestResetGuard::new();
-    set_execution_backend_request(request);
-    run()
+    with_execution_backend_request(request, run)
 }
 
 fn backend_request_lock() -> &'static RwLock<ExecutionBackendRequest> {
     static REQUEST: OnceLock<RwLock<ExecutionBackendRequest>> = OnceLock::new();
     REQUEST.get_or_init(|| RwLock::new(ExecutionBackendRequest::Auto))
+}
+
+fn backend_request_scope_lock() -> &'static Mutex<()> {
+    static REQUEST_SCOPE: OnceLock<Mutex<()>> = OnceLock::new();
+    REQUEST_SCOPE.get_or_init(|| Mutex::new(()))
+}
+
+thread_local! {
+    static BACKEND_REQUEST_SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static BACKEND_REQUEST_SCOPE_GUARD: RefCell<Option<MutexGuard<'static, ()>>> = const { RefCell::new(None) };
 }
 
 fn resolve_execution_backend_selection(
@@ -204,24 +225,44 @@ fn resolve_execution_backend_selection(
     }
 }
 
-#[cfg(test)]
-struct ExecutionBackendRequestResetGuard {
+struct ExecutionBackendRequestScope {
     previous: ExecutionBackendRequest,
 }
 
-#[cfg(test)]
-impl ExecutionBackendRequestResetGuard {
-    fn new() -> Self {
-        Self {
-            previous: execution_backend_request(),
-        }
+impl ExecutionBackendRequestScope {
+    fn new(request: ExecutionBackendRequest) -> Self {
+        let previous = execution_backend_request();
+        BACKEND_REQUEST_SCOPE_DEPTH.with(|depth| {
+            if depth.get() == 0 {
+                let lock = backend_request_scope_lock()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                BACKEND_REQUEST_SCOPE_GUARD.with(|guard| {
+                    *guard.borrow_mut() = Some(lock);
+                });
+            }
+            depth.set(depth.get() + 1);
+        });
+        set_execution_backend_request(request);
+        Self { previous }
     }
 }
 
-#[cfg(test)]
-impl Drop for ExecutionBackendRequestResetGuard {
+impl Drop for ExecutionBackendRequestScope {
     fn drop(&mut self) {
         set_execution_backend_request(self.previous);
+        BACKEND_REQUEST_SCOPE_DEPTH.with(|depth| {
+            let next_depth = depth
+                .get()
+                .checked_sub(1)
+                .expect("execution backend request scope depth underflow");
+            depth.set(next_depth);
+            if next_depth == 0 {
+                BACKEND_REQUEST_SCOPE_GUARD.with(|guard| {
+                    guard.borrow_mut().take();
+                });
+            }
+        });
     }
 }
 
@@ -712,6 +753,17 @@ mod tests {
     }
 
     #[test]
+    fn execution_backend_selection_default_is_stable_for_deserialization() {
+        let selection = ExecutionBackendSelection::default();
+        assert_eq!(selection.request, ExecutionBackendRequest::Auto);
+        assert_eq!(selection.resolution, ExecutionBackendResolution::Cpu);
+        assert_eq!(
+            selection.detail,
+            "execution backend selection was not recorded in this artifact"
+        );
+    }
+
+    #[test]
     fn dense_distance_matrix_cpu_matches_expected_euclidean_values() {
         let distances =
             with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
@@ -769,13 +821,14 @@ mod tests {
 
     #[test]
     fn backend_request_is_restored_after_panicking_test_helper() {
-        set_execution_backend_request(ExecutionBackendRequest::Auto);
-        let panic_result = std::panic::catch_unwind(|| {
-            with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
-                panic!("intentional panic to verify reset guard");
+        with_execution_backend_request_for_test(ExecutionBackendRequest::Auto, || {
+            let panic_result = std::panic::catch_unwind(|| {
+                with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
+                    panic!("intentional panic to verify reset guard");
+                });
             });
+            assert!(panic_result.is_err());
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
         });
-        assert!(panic_result.is_err());
-        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
     }
 }

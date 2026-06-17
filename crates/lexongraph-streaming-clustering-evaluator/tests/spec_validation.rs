@@ -35,10 +35,10 @@ use lexongraph_streaming_clustering_evaluator::{
     Section5HierarchyContract, Section5MetricSemanticsConsistencyResult, Section5PairRunStatus,
     SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
     built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    emit_section5_campaign_artifacts, execution_backend_request, generate_section4_suite_assets,
-    registered_candidate_names, registered_hierarchy_strategy_names, resolve_registered_candidates,
+    emit_section5_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
+    registered_hierarchy_strategy_names, resolve_registered_candidates,
     resolve_registered_hierarchy_strategies, run_evaluation_campaign, run_section4_suite,
-    run_section5_campaign, section4_family_candidate_names, set_execution_backend_request,
+    run_section5_campaign, section4_family_candidate_names, with_execution_backend_request,
     write_section4_suite_artifacts,
 };
 use support::{
@@ -176,27 +176,6 @@ fn section4_reproducibility() -> lexongraph_streaming_clustering_evaluator::Repr
         candidate_threading_model: "host-scaled deterministic candidate execution".into(),
         reduction_order_strategy: "deterministic stable input-order reduction".into(),
     }
-}
-
-fn with_execution_backend_request<T>(
-    request: ExecutionBackendRequest,
-    run: impl FnOnce() -> T,
-) -> T {
-    struct ExecutionBackendRequestResetGuard {
-        previous: ExecutionBackendRequest,
-    }
-
-    impl Drop for ExecutionBackendRequestResetGuard {
-        fn drop(&mut self) {
-            set_execution_backend_request(self.previous);
-        }
-    }
-
-    let _reset = ExecutionBackendRequestResetGuard {
-        previous: execution_backend_request(),
-    };
-    set_execution_backend_request(request);
-    run()
 }
 
 fn section4_suite_spec(profiles: Vec<Section4ProfileSpec>) -> Section4SuiteSpec {

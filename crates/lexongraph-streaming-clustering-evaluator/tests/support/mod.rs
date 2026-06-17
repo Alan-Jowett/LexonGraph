@@ -142,6 +142,20 @@ pub fn strict_alignment_profile() -> BenchmarkProfile {
                 research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
             },
             GateDeclaration {
+                gate_id: "leaf-size-lower-bound".into(),
+                label: "Leaf size lower bound".into(),
+                kind: GateKind::LeafSizeAtLeast { minimum: 1 },
+                coverage: ResearchCoverage::Direct,
+                research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+            },
+            GateDeclaration {
+                gate_id: "leaf-size-upper-bound".into(),
+                label: "Leaf size upper bound".into(),
+                kind: GateKind::LeafSizeAtMost { maximum: 2 },
+                coverage: ResearchCoverage::Direct,
+                research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
+            },
+            GateDeclaration {
                 gate_id: "complete-coverage".into(),
                 label: "Complete coverage".into(),
                 kind: GateKind::CompleteCoverage,
