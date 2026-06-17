@@ -25,6 +25,9 @@ pub enum Section5HierarchyStrategyKind {
     RecursiveTopDownPartitioning,
     GreedyPackByCentroidNearestGrouping,
     HybridTopDownBottomUp,
+    WardLinkageAgglomeration,
+    BetaAwareGreedyPackByCentroidNearestGrouping,
+    PcaVarianceAwareRecursiveTopDown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +255,25 @@ struct PairReportContext<'a> {
     peak_build_memory_bytes: u64,
 }
 
+#[derive(Clone, Copy)]
+struct GroupingEvaluationContext<'a> {
+    leaf_summaries: &'a [LeafClusterSummary],
+    evaluation_entities: &'a [EvaluationEntity],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+}
+
+#[derive(Clone, Copy)]
+enum GroupScoringObjective {
+    ParentDispersion,
+    MaxChildBeta,
+}
+
+#[derive(Clone, Copy)]
+struct GroupScore {
+    parent_dispersion: f64,
+    max_child_beta: f64,
+}
+
 #[derive(Clone)]
 struct PairMetricSemanticsReportContext {
     metric_semantics_profile: String,
@@ -287,6 +309,9 @@ pub fn registered_hierarchy_strategy_names() -> Vec<&'static str> {
         "recursive-top-down",
         "greedy-pack",
         "hybrid-top-down-bottom-up",
+        "ward-linkage-agglomeration",
+        "beta-aware-greedy-pack",
+        "pca-variance-top-down",
     ]
 }
 
@@ -572,6 +597,23 @@ fn registered_hierarchy_strategy(name: &str) -> Option<RegisteredHierarchyStrate
             strategy_id: "hybrid-top-down-bottom-up".into(),
             label: "Hybrid top-down coarse partitioning with lower-level bottom-up grouping".into(),
             kind: Section5HierarchyStrategyKind::HybridTopDownBottomUp,
+        },
+        "ward-linkage-agglomeration" => Section5HierarchyStrategyIdentity {
+            strategy_id: "ward-linkage-agglomeration".into(),
+            label: "Ward-linkage-style agglomeration minimizing parent dispersion".into(),
+            kind: Section5HierarchyStrategyKind::WardLinkageAgglomeration,
+        },
+        "beta-aware-greedy-pack" => Section5HierarchyStrategyIdentity {
+            strategy_id: "beta-aware-greedy-pack".into(),
+            label: "Greedy pack grouping that minimizes worst child beta".into(),
+            kind: Section5HierarchyStrategyKind::BetaAwareGreedyPackByCentroidNearestGrouping,
+        },
+        "pca-variance-top-down" => Section5HierarchyStrategyIdentity {
+            strategy_id: "pca-variance-top-down".into(),
+            label:
+                "Recursive top-down splitting with local PCA projections and variance-aware cuts"
+                    .into(),
+            kind: Section5HierarchyStrategyKind::PcaVarianceAwareRecursiveTopDown,
         },
         _ => return None,
     };
@@ -897,6 +939,11 @@ fn build_hierarchy(
     contract: &Section5HierarchyContract,
     resolved_metric_semantics: Section5ResolvedMetricSemantics,
 ) -> Result<HierarchyBuild, String> {
+    let grouping_context = GroupingEvaluationContext {
+        leaf_summaries,
+        evaluation_entities,
+        resolved_metric_semantics,
+    };
     let mut nodes = leaf_summaries
         .iter()
         .enumerate()
@@ -916,13 +963,8 @@ fn build_hierarchy(
     let mut next_internal_index = 0usize;
     let mut layer_index = 0usize;
     while current.len() > 1 {
-        let groups = group_current_nodes(
-            &current,
-            strategy,
-            contract,
-            layer_index,
-            resolved_metric_semantics,
-        )?;
+        let groups =
+            group_current_nodes(&current, strategy, contract, layer_index, grouping_context)?;
         current = groups
             .into_iter()
             .map(|group| {
@@ -983,29 +1025,54 @@ fn group_current_nodes(
     strategy: &RegisteredHierarchyStrategy,
     contract: &Section5HierarchyContract,
     layer_index: usize,
-    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+    grouping_context: GroupingEvaluationContext<'_>,
 ) -> Result<Vec<Vec<BuiltNode>>, String> {
     let sizes = group_sizes(current.len(), contract.fanout_min, contract.fanout_max)?;
     match strategy.identity.kind {
         Section5HierarchyStrategyKind::BottomUpAgglomeration => {
-            let ordered = sort_nodes_by_metric_walk(current, resolved_metric_semantics)?;
+            let ordered =
+                sort_nodes_by_metric_walk(current, grouping_context.resolved_metric_semantics)?;
             Ok(chunk_by_sizes(&ordered, &sizes))
         }
         Section5HierarchyStrategyKind::RecursiveTopDownPartitioning => {
-            let ordered =
-                sort_nodes_by_metric_partition(current, resolved_metric_semantics, false)?;
+            let ordered = sort_nodes_by_metric_partition(
+                current,
+                grouping_context.resolved_metric_semantics,
+                false,
+            )?;
             Ok(chunk_by_sizes(&ordered, &sizes))
         }
         Section5HierarchyStrategyKind::GreedyPackByCentroidNearestGrouping => {
-            greedy_pack_groups(current, &sizes, resolved_metric_semantics)
+            greedy_pack_groups(current, &sizes, grouping_context.resolved_metric_semantics)
         }
         Section5HierarchyStrategyKind::HybridTopDownBottomUp => {
             let ordered = if layer_index.is_multiple_of(2) {
-                sort_nodes_by_metric_partition(current, resolved_metric_semantics, true)?
+                sort_nodes_by_metric_partition(
+                    current,
+                    grouping_context.resolved_metric_semantics,
+                    true,
+                )?
             } else {
-                sort_nodes_by_metric_walk(current, resolved_metric_semantics)?
+                sort_nodes_by_metric_walk(current, grouping_context.resolved_metric_semantics)?
             };
             Ok(chunk_by_sizes(&ordered, &sizes))
+        }
+        Section5HierarchyStrategyKind::WardLinkageAgglomeration => greedy_objective_groups(
+            current,
+            &sizes,
+            grouping_context,
+            GroupScoringObjective::ParentDispersion,
+        ),
+        Section5HierarchyStrategyKind::BetaAwareGreedyPackByCentroidNearestGrouping => {
+            greedy_objective_groups(
+                current,
+                &sizes,
+                grouping_context,
+                GroupScoringObjective::MaxChildBeta,
+            )
+        }
+        Section5HierarchyStrategyKind::PcaVarianceAwareRecursiveTopDown => {
+            pca_variance_aware_top_down_groups(current, &sizes, grouping_context)
         }
     }
 }
@@ -1178,6 +1245,423 @@ fn greedy_pack_groups(
         groups.push(group);
     }
     Ok(groups)
+}
+
+fn greedy_objective_groups(
+    current: &[BuiltNode],
+    sizes: &[usize],
+    grouping_context: GroupingEvaluationContext<'_>,
+    objective: GroupScoringObjective,
+) -> Result<Vec<Vec<BuiltNode>>, String> {
+    let mut remaining = sort_nodes_lexicographically(current);
+    let mut groups = Vec::with_capacity(sizes.len());
+    for target_size in sizes {
+        if remaining.len() < *target_size {
+            return Err(
+                "objective-aware hierarchy grouping exhausted its remaining nodes prematurely"
+                    .into(),
+            );
+        }
+        let seed_pair = best_seed_pair(&remaining, grouping_context, objective)?;
+        let mut selected_indices = vec![seed_pair.0, seed_pair.1];
+        selected_indices.sort_unstable();
+        selected_indices.reverse();
+        let mut group = Vec::with_capacity(*target_size);
+        for index in selected_indices {
+            group.push(remaining.remove(index));
+        }
+        while group.len() < *target_size {
+            let next_index = best_group_extension(&group, &remaining, grouping_context, objective)?;
+            group.push(remaining.remove(next_index));
+        }
+        group.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+fn best_seed_pair(
+    remaining: &[BuiltNode],
+    grouping_context: GroupingEvaluationContext<'_>,
+    objective: GroupScoringObjective,
+) -> Result<(usize, usize), String> {
+    let mut best_pair = None::<(usize, usize, GroupScore)>;
+    for left_index in 0..remaining.len() {
+        for right_index in left_index + 1..remaining.len() {
+            let candidate_nodes = [&remaining[left_index], &remaining[right_index]];
+            let score = score_node_group(&candidate_nodes, grouping_context)?;
+            if best_pair
+                .as_ref()
+                .map(|(best_left, best_right, best_score)| {
+                    compare_group_scores(
+                        score,
+                        remaining[left_index].node_id.as_str(),
+                        remaining[right_index].node_id.as_str(),
+                        *best_score,
+                        remaining[*best_left].node_id.as_str(),
+                        remaining[*best_right].node_id.as_str(),
+                        objective,
+                    ) == Ordering::Less
+                })
+                .unwrap_or(true)
+            {
+                best_pair = Some((left_index, right_index, score));
+            }
+        }
+    }
+    best_pair
+        .map(|(left_index, right_index, _)| (left_index, right_index))
+        .ok_or_else(|| {
+            "objective-aware hierarchy grouping requires at least two remaining nodes".into()
+        })
+}
+
+fn best_group_extension(
+    group: &[BuiltNode],
+    remaining: &[BuiltNode],
+    grouping_context: GroupingEvaluationContext<'_>,
+    objective: GroupScoringObjective,
+) -> Result<usize, String> {
+    let mut best_index = None::<(usize, GroupScore)>;
+    for (candidate_index, candidate) in remaining.iter().enumerate() {
+        let candidate_nodes = group
+            .iter()
+            .chain(std::iter::once(candidate))
+            .collect::<Vec<_>>();
+        let score = score_node_group(&candidate_nodes, grouping_context)?;
+        if best_index
+            .as_ref()
+            .map(|(best_candidate_index, best_score)| {
+                compare_group_scores(
+                    score,
+                    candidate.node_id.as_str(),
+                    candidate.node_id.as_str(),
+                    *best_score,
+                    remaining[*best_candidate_index].node_id.as_str(),
+                    remaining[*best_candidate_index].node_id.as_str(),
+                    objective,
+                ) == Ordering::Less
+            })
+            .unwrap_or(true)
+        {
+            best_index = Some((candidate_index, score));
+        }
+    }
+    best_index
+        .map(|(candidate_index, _)| candidate_index)
+        .ok_or_else(|| {
+            "objective-aware hierarchy grouping could not satisfy its target group sizes".into()
+        })
+}
+
+fn compare_group_scores(
+    left: GroupScore,
+    left_primary_id: &str,
+    left_secondary_id: &str,
+    right: GroupScore,
+    right_primary_id: &str,
+    right_secondary_id: &str,
+    objective: GroupScoringObjective,
+) -> Ordering {
+    let score_ordering = match objective {
+        GroupScoringObjective::ParentDispersion => left
+            .parent_dispersion
+            .partial_cmp(&right.parent_dispersion)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                left.max_child_beta
+                    .partial_cmp(&right.max_child_beta)
+                    .unwrap_or(Ordering::Equal)
+            }),
+        GroupScoringObjective::MaxChildBeta => left
+            .max_child_beta
+            .partial_cmp(&right.max_child_beta)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                left.parent_dispersion
+                    .partial_cmp(&right.parent_dispersion)
+                    .unwrap_or(Ordering::Equal)
+            }),
+    };
+    score_ordering
+        .then_with(|| left_primary_id.cmp(right_primary_id))
+        .then_with(|| left_secondary_id.cmp(right_secondary_id))
+}
+
+fn score_node_group(
+    group: &[&BuiltNode],
+    grouping_context: GroupingEvaluationContext<'_>,
+) -> Result<GroupScore, String> {
+    let parent_dispersion = dispersion_from_nodes(group, grouping_context)?;
+    let max_child_beta = group
+        .iter()
+        .map(|node| beta_for_edge(node.dispersion, parent_dispersion))
+        .fold(0.0f64, f64::max);
+    Ok(GroupScore {
+        parent_dispersion,
+        max_child_beta,
+    })
+}
+
+fn dispersion_from_nodes(
+    group: &[&BuiltNode],
+    grouping_context: GroupingEvaluationContext<'_>,
+) -> Result<f64, String> {
+    match grouping_context.resolved_metric_semantics.kind {
+        Section5ResolvedMetricSemanticsKind::Euclidean => {
+            Ok(euclidean_dispersion_from_nodes(group))
+        }
+        Section5ResolvedMetricSemanticsKind::Cosine => {
+            let mut descendant_leaf_indices = group
+                .iter()
+                .flat_map(|node| node.descendant_leaf_indices.iter().copied())
+                .collect::<Vec<_>>();
+            descendant_leaf_indices.sort_unstable();
+            dispersion_from_descendant_leaves(
+                &descendant_leaf_indices,
+                grouping_context.leaf_summaries,
+                grouping_context.evaluation_entities,
+                grouping_context.resolved_metric_semantics,
+            )
+        }
+    }
+}
+
+fn euclidean_dispersion_from_nodes(group: &[&BuiltNode]) -> f64 {
+    let total_member_count = group.iter().map(|node| node.member_count).sum::<usize>();
+    if total_member_count == 0 {
+        return 0.0;
+    }
+    let dimension_count = group.first().map(|node| node.sum.len()).unwrap_or_default();
+    let mut total_sum = vec![0.0f64; dimension_count];
+    let mut total_squared_norm = 0.0f64;
+    for node in group {
+        for (index, value) in node.sum.iter().enumerate() {
+            total_sum[index] += *value;
+        }
+        let centroid_norm_term =
+            node.sum.iter().map(|value| value * value).sum::<f64>() / node.member_count as f64;
+        total_squared_norm += node.dispersion * node.member_count as f64 + centroid_norm_term;
+    }
+    let merged_centroid_norm_term =
+        total_sum.iter().map(|value| value * value).sum::<f64>() / total_member_count as f64;
+    let total_squared_error = (total_squared_norm - merged_centroid_norm_term).max(0.0);
+    total_squared_error / total_member_count as f64
+}
+
+fn pca_variance_aware_top_down_groups(
+    current: &[BuiltNode],
+    sizes: &[usize],
+    grouping_context: GroupingEvaluationContext<'_>,
+) -> Result<Vec<Vec<BuiltNode>>, String> {
+    if sizes.is_empty() {
+        return Ok(Vec::new());
+    }
+    if sizes.len() == 1 {
+        let mut group = current.to_vec();
+        group.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        return Ok(vec![group]);
+    }
+    if current.len() != sizes.iter().sum::<usize>() {
+        return Err(
+            "PCA variance-aware grouping received inconsistent node and group counts".into(),
+        );
+    }
+
+    let ordered =
+        sort_nodes_by_pca_projection(current, grouping_context.resolved_metric_semantics)?;
+    let mut best_split = None::<(usize, f64, f64)>;
+    let mut running_left_count = 0usize;
+    for split_group_index in 1..sizes.len() {
+        running_left_count += sizes[split_group_index - 1];
+        let left_group = ordered[..running_left_count].iter().collect::<Vec<_>>();
+        let right_group = ordered[running_left_count..].iter().collect::<Vec<_>>();
+        let left_score = score_node_group(&left_group, grouping_context)?;
+        let right_score = score_node_group(&right_group, grouping_context)?;
+        let dispersion_sum = left_score.parent_dispersion + right_score.parent_dispersion;
+        let max_child_beta = left_score.max_child_beta.max(right_score.max_child_beta);
+        if best_split
+            .as_ref()
+            .map(|(_, best_dispersion_sum, best_max_child_beta)| {
+                dispersion_sum
+                    .partial_cmp(best_dispersion_sum)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| {
+                        max_child_beta
+                            .partial_cmp(best_max_child_beta)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    == Ordering::Less
+            })
+            .unwrap_or(true)
+        {
+            best_split = Some((split_group_index, dispersion_sum, max_child_beta));
+        }
+    }
+
+    let Some((split_group_index, _, _)) = best_split else {
+        return Err("PCA variance-aware grouping could not choose a valid recursive split".into());
+    };
+    let left_count = sizes[..split_group_index].iter().sum::<usize>();
+    let mut left_groups = pca_variance_aware_top_down_groups(
+        &ordered[..left_count],
+        &sizes[..split_group_index],
+        grouping_context,
+    )?;
+    let mut right_groups = pca_variance_aware_top_down_groups(
+        &ordered[left_count..],
+        &sizes[split_group_index..],
+        grouping_context,
+    )?;
+    left_groups.append(&mut right_groups);
+    Ok(left_groups)
+}
+
+fn sort_nodes_by_pca_projection(
+    current: &[BuiltNode],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> Result<Vec<BuiltNode>, String> {
+    if current.len() <= 1 {
+        return Ok(current.to_vec());
+    }
+    let axis = dominant_pca_axis(current, resolved_metric_semantics)?;
+    let mut ordered = current.to_vec();
+    ordered.sort_by(|left, right| {
+        let left_projection = projection_onto_axis(left, &axis, resolved_metric_semantics);
+        let right_projection = projection_onto_axis(right, &axis, resolved_metric_semantics);
+        left_projection
+            .partial_cmp(&right_projection)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| compare_centroids(&left.centroid, &right.centroid))
+            .then_with(|| left.node_id.cmp(&right.node_id))
+    });
+    Ok(ordered)
+}
+
+fn dominant_pca_axis(
+    current: &[BuiltNode],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> Result<Vec<f64>, String> {
+    let dimensions = current
+        .first()
+        .map(|node| node.centroid.len())
+        .unwrap_or_default();
+    if dimensions == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut weighted_mean = vec![0.0f64; dimensions];
+    let mut total_weight = 0.0f64;
+    for node in current {
+        let weight = node.member_count as f64;
+        total_weight += weight;
+        let centroid = centroid_for_projection(node, resolved_metric_semantics)?;
+        for (index, value) in centroid.iter().enumerate() {
+            weighted_mean[index] += weight * *value;
+        }
+    }
+    if total_weight == 0.0 {
+        return Ok(vec![1.0; dimensions]);
+    }
+    for value in &mut weighted_mean {
+        *value /= total_weight;
+    }
+
+    let mut axis =
+        principal_variance_dimension_axis(current, resolved_metric_semantics, &weighted_mean)?;
+    for _ in 0..8 {
+        let mut next = vec![0.0f64; dimensions];
+        for node in current {
+            let weight = node.member_count as f64;
+            let centroid = centroid_for_projection(node, resolved_metric_semantics)?;
+            let centered = centroid
+                .iter()
+                .zip(&weighted_mean)
+                .map(|(value, mean)| value - mean)
+                .collect::<Vec<_>>();
+            let coefficient = centered
+                .iter()
+                .zip(&axis)
+                .map(|(value, axis_value)| value * axis_value)
+                .sum::<f64>();
+            for (index, value) in centered.iter().enumerate() {
+                next[index] += weight * coefficient * *value;
+            }
+        }
+        let norm = next.iter().map(|value| value * value).sum::<f64>().sqrt();
+        if norm <= f64::EPSILON {
+            break;
+        }
+        for value in &mut next {
+            *value /= norm;
+        }
+        axis = next;
+    }
+    Ok(axis)
+}
+
+fn principal_variance_dimension_axis(
+    current: &[BuiltNode],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+    weighted_mean: &[f64],
+) -> Result<Vec<f64>, String> {
+    let dimensions = weighted_mean.len();
+    let mut variances = vec![0.0f64; dimensions];
+    for node in current {
+        let weight = node.member_count as f64;
+        let centroid = centroid_for_projection(node, resolved_metric_semantics)?;
+        for (index, value) in centroid.iter().enumerate() {
+            let delta = *value - weighted_mean[index];
+            variances[index] += weight * delta * delta;
+        }
+    }
+    let best_index = variances
+        .iter()
+        .enumerate()
+        .max_by(|left, right| {
+            left.1
+                .partial_cmp(right.1)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| left.0.cmp(&right.0).reverse())
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let mut axis = vec![0.0f64; dimensions];
+    axis[best_index] = 1.0;
+    Ok(axis)
+}
+
+fn centroid_for_projection(
+    node: &BuiltNode,
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> Result<Vec<f64>, String> {
+    match resolved_metric_semantics.kind {
+        Section5ResolvedMetricSemanticsKind::Euclidean => Ok(node
+            .centroid
+            .iter()
+            .map(|value| f64::from(*value))
+            .collect::<Vec<_>>()),
+        Section5ResolvedMetricSemanticsKind::Cosine => Ok(normalized_embedding(&node.centroid)?
+            .into_iter()
+            .map(f64::from)
+            .collect::<Vec<_>>()),
+    }
+}
+
+fn projection_onto_axis(
+    node: &BuiltNode,
+    axis: &[f64],
+    resolved_metric_semantics: Section5ResolvedMetricSemantics,
+) -> f64 {
+    centroid_for_projection(node, resolved_metric_semantics)
+        .map(|centroid| {
+            centroid
+                .iter()
+                .zip(axis)
+                .map(|(value, axis_value)| value * axis_value)
+                .sum::<f64>()
+        })
+        .unwrap_or(f64::INFINITY)
 }
 
 fn chunk_by_sizes(nodes: &[BuiltNode], sizes: &[usize]) -> Vec<Vec<BuiltNode>> {
@@ -2169,14 +2653,17 @@ fn unique_artifact_file_name(
 #[cfg(test)]
 mod tests {
     use super::{
-        Section5GateKind, Section5GateResult, Section5GateStatus, Section5PairReport,
-        Section5PairRunStatus, apply_execution_budget_to_pair_report,
-        total_pair_execution_elapsed_nanos, validate_section5_contract,
+        BuiltNode, GroupScoringObjective, GroupingEvaluationContext, Section5GateKind,
+        Section5GateResult, Section5GateStatus, Section5PairReport, Section5PairRunStatus,
+        Section5ResolvedMetricSemantics, Section5ResolvedMetricSemanticsKind,
+        apply_execution_budget_to_pair_report, greedy_objective_groups,
+        pca_variance_aware_top_down_groups, total_pair_execution_elapsed_nanos,
+        validate_section5_contract,
     };
     use crate::{
         CandidateIdentity, ExecutionBudget, ProvenanceManifest, ResearchCoverage,
         Section5DepthBoundPolicy, Section5EpsilonPolicy, Section5HierarchyContract,
-        Section5HierarchyNodeReport, Section5HierarchyStrategyIdentity,
+        Section5HierarchyNodeKind, Section5HierarchyNodeReport, Section5HierarchyStrategyIdentity,
         Section5HierarchyStrategyKind, Section5MetricSemanticsConsistencyResult,
         SharedCandidateConfig,
     };
@@ -2255,6 +2742,114 @@ mod tests {
             total_pair_execution_elapsed_nanos(4_000_000, 2_500_000),
             6_500_000
         );
+    }
+
+    #[test]
+    fn ward_linkage_grouping_prefers_low_dispersion_pairs() {
+        let groups = greedy_objective_groups(
+            &beta_fixture_nodes(),
+            &[2, 2],
+            euclidean_grouping_context(),
+            GroupScoringObjective::ParentDispersion,
+        )
+        .expect("ward-linkage-style grouping should succeed on the beta fixture");
+
+        assert_eq!(
+            group_node_ids(&groups),
+            vec![
+                vec!["leaf-a".to_string(), "leaf-b".to_string()],
+                vec!["leaf-c".to_string(), "leaf-d".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn beta_aware_grouping_prefers_lower_max_beta_pairs() {
+        let groups = greedy_objective_groups(
+            &beta_fixture_nodes(),
+            &[2, 2],
+            euclidean_grouping_context(),
+            GroupScoringObjective::MaxChildBeta,
+        )
+        .expect("beta-aware grouping should succeed on the beta fixture");
+
+        assert_eq!(
+            group_node_ids(&groups),
+            vec![
+                vec!["leaf-a".to_string(), "leaf-c".to_string()],
+                vec!["leaf-b".to_string(), "leaf-d".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn pca_variance_aware_top_down_prefers_projection_clusters() {
+        let groups = pca_variance_aware_top_down_groups(
+            &beta_fixture_nodes(),
+            &[2, 2],
+            euclidean_grouping_context(),
+        )
+        .expect("PCA variance-aware grouping should succeed on the beta fixture");
+
+        assert_eq!(
+            group_node_ids(&groups),
+            vec![
+                vec!["leaf-a".to_string(), "leaf-b".to_string()],
+                vec!["leaf-c".to_string(), "leaf-d".to_string()],
+            ]
+        );
+    }
+
+    fn euclidean_grouping_context() -> GroupingEvaluationContext<'static> {
+        GroupingEvaluationContext {
+            leaf_summaries: &[],
+            evaluation_entities: &[],
+            resolved_metric_semantics: Section5ResolvedMetricSemantics {
+                kind: Section5ResolvedMetricSemanticsKind::Euclidean,
+                effective_grouping_functional: "euclidean-centroid-distance",
+                effective_dispersion_functional: "mean-squared-radius",
+            },
+        }
+    }
+
+    fn beta_fixture_nodes() -> Vec<BuiltNode> {
+        vec![
+            fixture_built_node("leaf-a", 0.0, 10.0),
+            fixture_built_node("leaf-b", 0.1, 0.1),
+            fixture_built_node("leaf-c", 10.0, 10.0),
+            fixture_built_node("leaf-d", 10.1, 0.1),
+        ]
+    }
+
+    fn fixture_built_node(node_id: &str, centroid_value: f32, dispersion: f64) -> BuiltNode {
+        let member_count = 64usize;
+        BuiltNode {
+            node_id: node_id.into(),
+            kind: Section5HierarchyNodeKind::LeafCluster,
+            member_count,
+            leaf_descendant_count: 1,
+            sum: vec![f64::from(centroid_value) * member_count as f64],
+            centroid: vec![centroid_value],
+            dispersion,
+            child_ids: Vec::new(),
+            descendant_leaf_indices: Vec::new(),
+        }
+    }
+
+    fn group_node_ids(groups: &[Vec<BuiltNode>]) -> Vec<Vec<String>> {
+        let mut ids = groups
+            .iter()
+            .map(|group| {
+                let mut ids = group
+                    .iter()
+                    .map(|node| node.node_id.clone())
+                    .collect::<Vec<_>>();
+                ids.sort();
+                ids
+            })
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
     }
 
     fn successful_pair_report() -> Section5PairReport {

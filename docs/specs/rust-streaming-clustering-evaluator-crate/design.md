@@ -360,9 +360,9 @@ later comparative metrics beyond the gate that failed.
 ### DSG-STREAM-EVAL-018 `Explicit non-goal boundary`
 
 This revision does not model or claim proof of full end-to-end LexonGraph
-hierarchy properties that still require artifacts beyond the staged leaf and
-hierarchy-construction boundaries, such as parent-summary accuracy or
-stability, persisted-hierarchy routing, or durable storage semantics.
+hierarchy properties that still require artifacts beyond the staged leaf,
+hierarchy-construction, and parent-summary boundaries, such as persisted-
+hierarchy routing or durable storage semantics.
 
 The future end-to-end evaluator on top of the streaming indexer and search
 specifications is called out as a separate later line rather than collapsed into
@@ -901,13 +901,13 @@ auditable rather than implicit.
 ### DSG-STREAM-EVAL-043 `Remaining deferred hierarchy obligations`
 
 Even after section-5 hierarchy construction is added, the crate still records
-parent-summary accuracy or stability, routing recall or latency, beam-width
-outcomes, serialization identity, persistence durability, and broader
-service-level behavior as deferred unless a later specification expands the
-boundary again.
+routing recall or latency, beam-width outcomes, serialization identity,
+persistence durability, and broader service-level behavior as deferred unless a
+later specification expands the boundary again.
 
-Section-5 direct hierarchy measurements therefore remain staged evidence toward
-the parent research goals rather than proof of the later plan sections.
+Section-5 direct hierarchy measurements and section-6 direct parent-summary
+measurements therefore remain staged evidence toward the parent research goals
+rather than proof of the later plan sections.
 
 ### DSG-STREAM-EVAL-044 `Canonical realistic qualification surface`
 
@@ -976,6 +976,83 @@ When that mode is declared, the evaluator preserves candidate comparability by:
 - preserving gate outcomes, survivor semantics, and artifact schema even when a
   candidate uses more than one CPU core
 
+### DSG-STREAM-EVAL-051 `Section-6 summary-stage runner`
+
+The evaluator adds a direct section-6 runner that consumes:
+
+1. the benchmark profile whose entities define the exact descendant reference
+2. one completed section-5 campaign report
+3. one shared section-6 summary contract
+4. one or more registered section-6 summary candidates
+
+The runner executes only on surviving section-5 pairs and preserves the
+section-5 hierarchy as carried-forward evaluator-owned input rather than
+recomputing hierarchy construction from candidate-private state.
+
+### DSG-STREAM-EVAL-052 `Evaluator-owned summary candidates`
+
+Section-6 summary families are represented through an evaluator-owned
+registration surface with stable identities and deterministic composition
+semantics.
+
+In this revision, the checked-in summary families are:
+
+- exact centroid
+- composed centroid
+- centroid plus variance
+- low-rank centroid direction
+
+For each internal hierarchy node, the runner derives the exact descendant
+reference summary from the profile entities assigned below that node and derives
+ each candidate summary from the node's carried-forward children.
+
+### DSG-STREAM-EVAL-053 `Section-6 metric and gate model`
+
+The section-6 contract defines the exact-reference semantics, delta floor,
+perturbation scale, storage measurement semantics, and metric-compatibility
+rule used by all compared summary candidates within one run.
+
+For each surviving section-5 pair and summary candidate, the runner computes:
+
+- relative error against the exact descendant reference summary
+- perturbation sensitivity under the declared small child-summary perturbation
+- storage cost under the declared f32-slot-count semantics
+- metric-semantics consistency inherited from the carried-forward section-5 pair
+
+If the carried-forward metric semantics are unsupported or the summary exceeds a
+declared error bound, the runner emits a deterministic gate-failed summary
+result instead of a passing carry-forward outcome.
+
+### DSG-STREAM-EVAL-054 `Section-6 artifacts and deferred-goal narrowing`
+
+Section-6 emits machine-readable reports and human-readable scorecards that
+preserve the originating section-4 profile, originating section-5 contract, and
+originating pair identity for each compared summary result.
+
+The artifact set also emits a deterministic carry-forward summary naming the
+section-5 pair plus summary-family combination being compared. After section-6
+execution, the deferred-goal ledger removes parent-summary obligations while
+preserving later routing, beam-width, serialization, and persistence
+obligations.
+
+### DSG-STREAM-EVAL-055 `Section-6 library and CLI surface`
+
+The crate exposes a reusable library surface for listing registered section-6
+summary candidates, resolving selected candidates, executing section-6 runs,
+and writing section-6 artifacts.
+
+The executable front end mirrors that reusable surface with commands for:
+
+- listing registered section-6 summary candidates
+- running section-6 over a benchmark profile, carried-forward section-5 report,
+  section-6 contract, and selected summary candidates
+
+### DSG-STREAM-EVAL-056 `Section-6 verification surface`
+
+The repository extends evaluator verification artifacts to cover section-6
+contract validation, summary-candidate execution, metric-semantics rejection,
+error-bound gate failure, cross-stage provenance, and deferred-goal narrowing.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1035,3 +1112,9 @@ When that mode is declared, the evaluator preserves candidate comparability by:
 | DSG-STREAM-EVAL-048 | REQ-STREAM-EVAL-065 |
 | DSG-STREAM-EVAL-049 | REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-066 |
 | DSG-STREAM-EVAL-050 | REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-037, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-061, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-067 |
+| DSG-STREAM-EVAL-051 | REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-071 |
+| DSG-STREAM-EVAL-052 | REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-073 |
+| DSG-STREAM-EVAL-053 | REQ-STREAM-EVAL-073, REQ-STREAM-EVAL-074 |
+| DSG-STREAM-EVAL-054 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059, REQ-STREAM-EVAL-075 |
+| DSG-STREAM-EVAL-055 | REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-071, REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-075 |
+| DSG-STREAM-EVAL-056 | REQ-STREAM-EVAL-016, REQ-STREAM-EVAL-076 |
