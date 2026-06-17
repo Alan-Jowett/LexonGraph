@@ -2389,6 +2389,8 @@ fn materialize_packed_execution(
     execution: &SingleExecution,
     packed_groups: Vec<Vec<LeafMembershipRecord>>,
 ) -> SingleExecution {
+    let cluster_count =
+        ClusterId::try_from(packed_groups.len()).expect("packed group count exceeds ClusterId");
     let packed_membership = packed_groups
         .into_iter()
         .enumerate()
@@ -2400,15 +2402,7 @@ fn materialize_packed_execution(
             })
         })
         .collect::<Vec<_>>();
-    let cluster_occupancies = compute_cluster_occupancies(
-        packed_membership
-            .iter()
-            .map(|member| member.cluster_id)
-            .max()
-            .map(|cluster_id| cluster_id + 1)
-            .unwrap_or(0),
-        &packed_membership,
-    );
+    let cluster_occupancies = compute_cluster_occupancies(cluster_count, &packed_membership);
     SingleExecution {
         provenance: execution.provenance.clone(),
         pass_reports: execution.pass_reports.clone(),
@@ -2474,7 +2468,7 @@ fn build_geometry_split_merge_packed_execution(
     let entity_embeddings = execution
         .evaluation_entities
         .iter()
-        .map(|entity| (entity.entity_id.as_str(), entity.embedding.clone()))
+        .map(|entity| (entity.entity_id.as_str(), entity.embedding.as_slice()))
         .collect::<HashMap<_, _>>();
     let mut raw_clusters = execution.leaf_membership.iter().cloned().fold(
         BTreeMap::<ClusterId, Vec<LeafMembershipRecord>>::new(),
@@ -2769,7 +2763,7 @@ fn reconstruct_partition_predecessors(
 
 fn dominant_embedding_dimension(
     members: &[LeafMembershipRecord],
-    entity_embeddings: &HashMap<&str, Embedding>,
+    entity_embeddings: &HashMap<&str, &[f32]>,
 ) -> Result<usize, String> {
     let first = members
         .first()
@@ -2797,7 +2791,7 @@ fn dominant_embedding_dimension(
 
 fn centroid_for_members(
     members: &[LeafMembershipRecord],
-    entity_embeddings: &HashMap<&str, Embedding>,
+    entity_embeddings: &HashMap<&str, &[f32]>,
 ) -> Result<Vec<f32>, String> {
     let first = members
         .first()
