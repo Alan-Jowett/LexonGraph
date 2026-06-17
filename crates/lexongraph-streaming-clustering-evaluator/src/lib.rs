@@ -638,6 +638,17 @@ pub struct CandidateThreadingProvenance {
     pub effective_thread_count: usize,
 }
 
+impl Default for CandidateThreadingProvenance {
+    fn default() -> Self {
+        Self {
+            declared_model: default_candidate_threading_model(),
+            reduction_order_strategy: default_reduction_order_strategy(),
+            effective_mode: "single-threaded".into(),
+            effective_thread_count: 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceManifest {
     pub profile_id: String,
@@ -649,6 +660,7 @@ pub struct ProvenanceManifest {
     pub software_identity: String,
     pub floating_point_profile: String,
     pub hardware_profile: String,
+    #[serde(default)]
     pub candidate_threading: CandidateThreadingProvenance,
     #[serde(default)]
     pub execution_backend: ExecutionBackendSelection,
@@ -5149,6 +5161,40 @@ mod tests {
         assert_eq!(
             provenance.effective_thread_count,
             rayon::current_num_threads()
+        );
+    }
+
+    #[test]
+    fn provenance_manifest_deserializes_without_candidate_threading_or_backend() {
+        let parsed: super::ProvenanceManifest = serde_json::from_value(json!({
+            "profile_id": "fixture-profile",
+            "corpus_ids": ["fixture-corpus-a"],
+            "source_reference_ids": ["fixture-source"],
+            "candidate_identity": {
+                "candidate_id": "balanced",
+                "implementation_label": "Balanced fixture",
+                "software_identity": "balanced-fixture-v1"
+            },
+            "shared_candidate_config": {
+                "cluster_count": 2,
+                "dimensions": 2,
+                "balance_constraints": null,
+                "random_seed": 7
+            },
+            "seed_policy": "fixed-seed-7",
+            "software_identity": "fixture-campaign-builder",
+            "floating_point_profile": "ieee754-deterministic-no-fma",
+            "hardware_profile": "fixture-cpu"
+        }))
+        .expect("older artifacts should deserialize with default threading/backend provenance");
+
+        assert_eq!(
+            parsed.candidate_threading,
+            super::CandidateThreadingProvenance::default()
+        );
+        assert_eq!(
+            parsed.execution_backend,
+            super::ExecutionBackendSelection::default()
         );
     }
 

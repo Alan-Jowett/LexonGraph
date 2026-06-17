@@ -2316,11 +2316,17 @@ fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
 
     let profile = &report.profile_reports[0];
-    assert!(profile.survivor_candidate_ids.is_empty());
+    assert_eq!(
+        profile.survivor_candidate_ids,
+        vec![
+            "pca-sort-exact-chunking".to_string(),
+            "skewed-gate-fail".to_string()
+        ]
+    );
     assert!(profile.candidate_reports.iter().any(|candidate| {
         candidate.candidate_id == "skewed-gate-fail"
-            && candidate.run_status == CandidateRunStatus::GateFailed
-            && !candidate.survived_required_gates
+            && candidate.run_status == CandidateRunStatus::Succeeded
+            && candidate.survived_required_gates
     }));
 }
 

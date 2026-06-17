@@ -397,6 +397,7 @@ pub fn generate_section4_suite_assets(
             compression_benchmark: spec.compression_benchmark.clone(),
             metric_declarations: section4_metric_declarations(),
             gate_declarations: section4_gate_declarations(
+                spec.leaf_size,
                 spec.experiment_track_contract.execution_budget.is_some(),
             ),
             deferred_research_goals: default_deferred_research_goals(),
@@ -2249,7 +2250,12 @@ fn section4_metric_declarations() -> Vec<MetricDeclaration> {
     ]
 }
 
-fn section4_gate_declarations(include_execution_budget: bool) -> Vec<GateDeclaration> {
+fn section4_gate_declarations(
+    leaf_size: usize,
+    include_execution_budget: bool,
+) -> Vec<GateDeclaration> {
+    let lower_bound = leaf_size / 2;
+    let upper_bound = leaf_size;
     let mut gates = vec![
         GateDeclaration {
             gate_id: "exact-leaf-occupancy".into(),
@@ -2282,14 +2288,18 @@ fn section4_gate_declarations(include_execution_budget: bool) -> Vec<GateDeclara
         GateDeclaration {
             gate_id: "leaf-size-lower-bound".into(),
             label: "Leaf size lower bound".into(),
-            kind: GateKind::LeafSizeAtLeast { minimum: 32 },
+            kind: GateKind::LeafSizeAtLeast {
+                minimum: lower_bound,
+            },
             coverage: ResearchCoverage::Direct,
             research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
         },
         GateDeclaration {
             gate_id: "leaf-size-upper-bound".into(),
             label: "Leaf size upper bound".into(),
-            kind: GateKind::LeafSizeAtMost { maximum: 64 },
+            kind: GateKind::LeafSizeAtMost {
+                maximum: upper_bound,
+            },
             coverage: ResearchCoverage::Direct,
             research_goal_ids: vec!["RG-FIXED-LEAF-SIZE".into()],
         },
@@ -2524,7 +2534,7 @@ mod tests {
         Section4ProfileSpec, Section4ProofSurface, Section4QualificationSurface,
         Section4ScaleTierKind, Section4SuiteSpec, apply_alignment_policy,
         apply_execution_budget_to_candidate_run_report, compute_ground_truth, cosine_distance,
-        euclidean_distance, validate_suite_spec,
+        euclidean_distance, section4_gate_declarations, validate_suite_spec,
     };
     use crate::{
         ArtifactHygieneEvidence, CandidateIdentity, CandidateRunReport, CandidateRunStatus,
@@ -2619,6 +2629,20 @@ mod tests {
         let result = validate_suite_spec(&realistic_qualification_suite_spec(10_001));
 
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn section4_gate_declarations_scale_packing_bounds_with_leaf_size() {
+        let gates = section4_gate_declarations(2, false);
+
+        assert!(gates.iter().any(|gate| {
+            gate.gate_id == "leaf-size-lower-bound"
+                && matches!(gate.kind, crate::GateKind::LeafSizeAtLeast { minimum } if minimum == 1)
+        }));
+        assert!(gates.iter().any(|gate| {
+            gate.gate_id == "leaf-size-upper-bound"
+                && matches!(gate.kind, crate::GateKind::LeafSizeAtMost { maximum } if maximum == 2)
+        }));
     }
 
     #[test]
