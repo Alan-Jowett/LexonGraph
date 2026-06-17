@@ -5874,22 +5874,21 @@ mod tests {
 
     #[test]
     fn evaluation_campaign_reports_multiple_packing_strategies() {
-        let report = super::with_execution_backend_request(
-            super::ExecutionBackendRequest::Cpu,
-            || {
+        let report =
+            super::with_execution_backend_request(super::ExecutionBackendRequest::Cpu, || {
                 run_evaluation_campaign(
                     &inline_strict_alignment_profile(),
                     &[built_in_fixture_candidate("balanced-threshold").unwrap()],
                 )
-            },
-        )
-        .expect("inline fixture profile should evaluate successfully");
+            })
+            .expect("inline fixture profile should evaluate successfully");
 
         assert_eq!(report.run_reports.len(), 1);
         assert_eq!(report.run_reports[0].packing_evaluations.len(), 3);
         assert!(!report.packing_pipeline_ranking.is_empty());
         assert!(
-            report.packing_pipeline_ranking.len() <= report.run_reports[0].packing_evaluations.len()
+            report.packing_pipeline_ranking.len()
+                <= report.run_reports[0].packing_evaluations.len()
         );
         assert!(report.run_reports[0].selected_packing_strategy_id.is_some());
         assert!(
@@ -5914,16 +5913,14 @@ mod tests {
             super::FAILING_TEST_PACKER_ID.into(),
         ];
 
-        let report = super::with_execution_backend_request(
-            super::ExecutionBackendRequest::Cpu,
-            || {
+        let report =
+            super::with_execution_backend_request(super::ExecutionBackendRequest::Cpu, || {
                 run_evaluation_campaign(
                     &profile,
                     &[built_in_fixture_candidate("balanced-threshold").unwrap()],
                 )
-            },
-        )
-        .expect("test-only failing packer should be isolated inside the campaign report");
+            })
+            .expect("test-only failing packer should be isolated inside the campaign report");
 
         let run_report = &report.run_reports[0];
         assert_eq!(run_report.run_status, CandidateRunStatus::Succeeded);
