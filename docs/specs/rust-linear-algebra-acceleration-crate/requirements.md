@@ -62,6 +62,8 @@ The crate shall expose a shared execution-backend surface with at least:
 - automatic selection
 - explicit CPU selection
 - explicit WGPU selection
+- persistent process-wide set/get/reset control for the selected request until
+  changed
 
 ### REQ-ACCEL-004
 
@@ -108,3 +110,9 @@ parity and backend-attribution behavior.
 The crate shall not, by itself, claim that GPU offload is worthwhile. Any claim
 of net acceleration remains the responsibility of the consuming specification
 and its benchmark validation surface.
+
+### REQ-ACCEL-011
+
+The crate shall allow callers to persistently pin the process-wide backend
+request to CPU, WGPU, or automatic selection until changed, while preserving
+compatible scoped-override behavior for temporary call-site control.

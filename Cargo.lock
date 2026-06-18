@@ -1784,6 +1784,7 @@ version = "0.1.0"
 dependencies = [
  "lexongraph-linear-algebra-acceleration",
  "lexongraph-streaming-clustering",
+ "rayon",
 ]
 
 [[package]]

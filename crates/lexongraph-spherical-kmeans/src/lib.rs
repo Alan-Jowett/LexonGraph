@@ -13,6 +13,7 @@ use lexongraph_streaming_clustering::{
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
+use rayon::prelude::*;
 
 pub const SPHERICAL_KMEANS_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-spherical-kmeans-v", env!("CARGO_PKG_VERSION"));
@@ -226,6 +227,27 @@ impl StreamingClusterClassifier for SphericalKmeansStreamingClassifier {
             None,
         )? as ClusterId)
     }
+
+    fn assign_batch(
+        &self,
+        embeddings: &[Embedding],
+    ) -> Result<Vec<ClusterId>, StreamingClusteringError> {
+        let assignments = embeddings
+            .par_iter()
+            .map(|embedding| {
+                validate_embedding(embedding, self.config.dimensions)?;
+                ensure_non_zero_norm(embedding)?;
+                let normalized_embedding = normalize_embedding(embedding)?;
+                best_cluster(
+                    normalized_embedding.as_slice(),
+                    self.normalized_centroids.as_slice(),
+                    None,
+                )
+                .map(|cluster_id| cluster_id as ClusterId)
+            })
+            .collect::<Vec<_>>();
+        assignments.into_iter().collect()
+    }
 }
 
 fn validate_params(params: &SphericalKmeansParams) -> Result<(), StreamingClusteringError> {
@@ -414,6 +436,26 @@ fn assign_points(
 }
 
 fn assign_points_cpu(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+    previous_assignments: Option<&[usize]>,
+) -> Result<Vec<usize>, StreamingClusteringError> {
+    let assignments = normalized_embeddings
+        .par_iter()
+        .enumerate()
+        .map(|(point_index, embedding)| {
+            best_cluster(
+                embedding.as_slice(),
+                normalized_centroids,
+                previous_assignments.and_then(|values| values.get(point_index).copied()),
+            )
+        })
+        .collect::<Vec<_>>();
+    assignments.into_iter().collect()
+}
+
+#[cfg(test)]
+fn assign_points_serial(
     normalized_embeddings: &[Vec<f32>],
     normalized_centroids: &[Vec<f32>],
     previous_assignments: Option<&[usize]>,
@@ -780,7 +822,8 @@ mod tests {
     use lexongraph_streaming_clustering::StreamingClusteringError;
 
     use super::{
-        assign_points_accelerated, assign_points_cpu, best_cluster, best_cluster_from_distances,
+        assign_points_accelerated, assign_points_cpu, assign_points_serial, best_cluster,
+        best_cluster_from_distances,
     };
 
     #[test]
@@ -870,6 +913,68 @@ mod tests {
             StreamingClusteringError::MalformedInput { message }
                 if message.contains("dense distance matrix requires finite vector values")
         ));
+    }
+
+    #[test]
+    fn cpu_parallel_assignment_preserves_serial_baseline_and_ties() {
+        let centroids = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+        ];
+        let embeddings = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+        ];
+        let previous_assignments = vec![1usize, 0usize, 2usize, 1usize];
+
+        let serial = assign_points_serial(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+        let parallel = assign_points_cpu(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+
+        assert_eq!(parallel, serial);
+        assert_eq!(parallel, vec![1, 0, 2, 1]);
+    }
+
+    #[test]
+    fn cpu_parallel_assignment_preserves_serial_baseline_for_large_fixture() {
+        let embeddings = (0..1024)
+            .map(|index| normalized_test_pattern(index, 32))
+            .collect::<Vec<_>>();
+        let centroids = (0..24)
+            .map(|index| normalized_test_pattern(index + 50_000, 32))
+            .collect::<Vec<_>>();
+        let previous_assignments = embeddings
+            .iter()
+            .enumerate()
+            .map(|(index, _)| index % centroids.len())
+            .collect::<Vec<_>>();
+
+        let serial = assign_points_serial(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+        let parallel = assign_points_cpu(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+
+        assert_eq!(parallel, serial);
     }
 
     #[test]

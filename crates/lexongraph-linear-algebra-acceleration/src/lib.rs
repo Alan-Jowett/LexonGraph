@@ -74,7 +74,17 @@ pub fn execution_backend_request() -> ExecutionBackendRequest {
         .expect("execution backend request lock poisoned")
 }
 
-fn set_execution_backend_request(request: ExecutionBackendRequest) {
+pub fn set_execution_backend_request(request: ExecutionBackendRequest) {
+    with_backend_request_mutation(|| {
+        set_execution_backend_request_raw(request);
+    });
+}
+
+pub fn reset_execution_backend_request() {
+    set_execution_backend_request(ExecutionBackendRequest::Auto);
+}
+
+fn set_execution_backend_request_raw(request: ExecutionBackendRequest) {
     *backend_request_lock()
         .write()
         .expect("execution backend request lock poisoned") = request;
@@ -208,6 +218,23 @@ fn backend_request_scope_lock() -> &'static Mutex<()> {
     REQUEST_SCOPE.get_or_init(|| Mutex::new(()))
 }
 
+fn with_backend_request_mutation<T>(run: impl FnOnce() -> T) -> T {
+    let scope_guard = BACKEND_REQUEST_SCOPE_DEPTH.with(|depth| {
+        if depth.get() == 0 {
+            Some(
+                backend_request_scope_lock()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            )
+        } else {
+            None
+        }
+    });
+    let result = run();
+    drop(scope_guard);
+    result
+}
+
 thread_local! {
     static BACKEND_REQUEST_SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
     static BACKEND_REQUEST_SCOPE_GUARD: RefCell<Option<MutexGuard<'static, ()>>> = const { RefCell::new(None) };
@@ -297,14 +324,14 @@ impl ExecutionBackendRequestScope {
             depth.set(depth.get() + 1);
             previous = execution_backend_request();
         });
-        set_execution_backend_request(request);
+        set_execution_backend_request_raw(request);
         Self { previous }
     }
 }
 
 impl Drop for ExecutionBackendRequestScope {
     fn drop(&mut self) {
-        set_execution_backend_request(self.previous);
+        set_execution_backend_request_raw(self.previous);
         BACKEND_REQUEST_SCOPE_DEPTH.with(|depth| {
             let next_depth = depth
                 .get()
@@ -895,6 +922,28 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+    }
+
+    #[test]
+    fn persistent_backend_request_can_be_set_and_reset() {
+        reset_execution_backend_request();
+        set_execution_backend_request(ExecutionBackendRequest::Cpu);
+        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+        reset_execution_backend_request();
+        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+    }
+
+    #[test]
+    fn scoped_backend_request_restores_persistent_request() {
+        reset_execution_backend_request();
+        set_execution_backend_request(ExecutionBackendRequest::Cpu);
+
+        with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Wgpu);
+        });
+
+        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+        reset_execution_backend_request();
     }
 
     #[cfg(feature = "wgpu-accel")]

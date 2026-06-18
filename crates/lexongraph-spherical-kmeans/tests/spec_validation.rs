@@ -6,6 +6,9 @@ mod support;
 use std::fs;
 use std::path::Path;
 
+use lexongraph_linear_algebra_acceleration::{
+    ExecutionBackendRequest, with_execution_backend_request,
+};
 use lexongraph_spherical_kmeans::{
     SPHERICAL_KMEANS_SOFTWARE_IDENTITY, SphericalKmeansStreamingTrainer,
 };
@@ -219,6 +222,54 @@ fn val_sphkm_011_classifier_assigns_deterministically() {
 }
 
 #[test]
+fn val_sphkm_011_classifier_batch_assignment_matches_pointwise_assignment() {
+    let mut trainer = conforming_trainer();
+    for pass in sample_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        trainer.finish_pass().unwrap();
+    }
+    trainer.complete_training().unwrap();
+    let classifier = trainer.into_classifier().unwrap();
+    let queries = vec![vec![1.0, 0.0], vec![-1.0, 0.0], vec![1.0, 0.0]];
+
+    let batch = classifier.assign_batch(&queries).unwrap();
+    let pointwise = queries
+        .iter()
+        .map(|query| classifier.assign(query.as_slice()).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(batch, pointwise);
+}
+
+#[test]
+fn val_sphkm_018_large_cpu_runs_preserve_reports_and_batch_assignments() {
+    let embeddings = large_normalized_pass();
+
+    let first = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+        let mut trainer = SphericalKmeansStreamingTrainer::new(large_config(), params()).unwrap();
+        trainer.ingest_batch(embeddings.as_slice()).unwrap();
+        let report = trainer.finish_pass().unwrap();
+        trainer.complete_training().unwrap();
+        let classifier = trainer.into_classifier().unwrap();
+        let assignments = classifier.assign_batch(embeddings.as_slice()).unwrap();
+        (report, assignments)
+    });
+    let second = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+        let mut trainer = SphericalKmeansStreamingTrainer::new(large_config(), params()).unwrap();
+        trainer.ingest_batch(embeddings.as_slice()).unwrap();
+        let report = trainer.finish_pass().unwrap();
+        trainer.complete_training().unwrap();
+        let classifier = trainer.into_classifier().unwrap();
+        let assignments = classifier.assign_batch(embeddings.as_slice()).unwrap();
+        (report, assignments)
+    });
+
+    assert_eq!(first, second);
+}
+
+#[test]
 fn val_sphkm_014_shared_conformance_helpers_pass() {
     let harness = support::Harness;
     lexongraph_streaming_clustering::conformance::run_streaming_clustering_suite(&harness).unwrap();
@@ -241,4 +292,29 @@ fn val_sphkm_012_014_015_016_and_017_acceleration_artifacts_exist() {
     let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
     assert!(manifest.contains("wgpu-accel"));
     assert!(manifest.contains("lexongraph-linear-algebra-acceleration"));
+}
+
+fn large_config() -> StreamingClusteringConfig {
+    StreamingClusteringConfig {
+        cluster_count: 16,
+        dimensions: 32,
+        balance_constraints: None,
+        random_seed: config().random_seed,
+    }
+}
+
+fn large_normalized_pass() -> Vec<Vec<f32>> {
+    (0..512)
+        .map(|index| normalized_pattern(index, 32))
+        .collect()
+}
+
+fn normalized_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
+    let mut values = Vec::with_capacity(dimensions);
+    for dimension in 0..dimensions {
+        let angle = ((seed * 37 + dimension * 17 + 1) % 997) as f32;
+        values.push((angle * 0.013).sin() + (angle * 0.007).cos() * 0.5);
+    }
+    let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+    values.into_iter().map(|value| value / norm).collect()
 }

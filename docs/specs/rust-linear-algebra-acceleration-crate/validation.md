@@ -85,3 +85,13 @@ WGPU is worthwhile; net-benefit proof remains owned by the consuming
 specification and benchmark surface.
 
 **Traces to:** REQ-ACCEL-010
+
+### VAL-ACCEL-008
+
+Exercise persistent process-wide backend pinning together with the scoped
+override helper.
+
+**Pass condition:** callers can set, read, and reset the persistent request, and
+any scoped override restores the previous persistent request even on unwind.
+
+**Traces to:** REQ-ACCEL-003, REQ-ACCEL-005, REQ-ACCEL-011
