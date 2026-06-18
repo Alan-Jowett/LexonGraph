@@ -74,7 +74,7 @@ pub fn execution_backend_request() -> ExecutionBackendRequest {
         .expect("execution backend request lock poisoned")
 }
 
-pub fn set_execution_backend_request(request: ExecutionBackendRequest) {
+fn set_execution_backend_request(request: ExecutionBackendRequest) {
     *backend_request_lock()
         .write()
         .expect("execution backend request lock poisoned") = request;
@@ -865,6 +865,54 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+    }
+
+    #[cfg(feature = "wgpu-accel")]
+    #[test]
+    fn chunked_dense_distance_matrix_wgpu_matches_unchunked_when_supported() {
+        let selection =
+            with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+                detected_execution_backend_selection()
+            });
+        if selection.resolution != ExecutionBackendResolution::Wgpu {
+            return;
+        }
+
+        let left = [
+            &[1.0, 0.0, 0.0][..],
+            &[0.0, 1.0, 0.0][..],
+            &[0.0, 0.0, 1.0][..],
+            &[1.0, 1.0, 0.0][..],
+            &[0.5, 0.5, 0.70710677][..],
+        ];
+        let right = [
+            &[1.0, 0.0, 0.0][..],
+            &[0.0, 1.0, 0.0][..],
+            &[0.0, 0.0, 1.0][..],
+        ];
+
+        let expected =
+            with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+                dense_distance_matrix(
+                    left.as_slice(),
+                    right.as_slice(),
+                    DenseDistanceMetric::Cosine,
+                )
+                .unwrap()
+            });
+        let actual = with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+            chunked_dense_distance_matrix(
+                left.as_slice(),
+                right.as_slice(),
+                DenseDistanceMetric::Cosine,
+                2,
+            )
+            .unwrap()
+        });
+
+        for (left, right) in expected.iter().zip(actual.iter()) {
+            assert!((left - right).abs() < 1e-4);
+        }
     }
 
     #[cfg(feature = "wgpu-accel")]
