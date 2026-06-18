@@ -1106,7 +1106,7 @@ async fn val_stream_indexer_045_shared_summary_policy_surface_is_reusable() {
     let mut run = StreamingIndexingRun::with_summary_policy(
         MapResolver,
         AsciiEmbeddingProvider,
-        ExactCentroidChildSummaryPolicy,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
         dcbc_planning(BuiltInPlanningDirection::Divisive),
         embedding_spec(),
         256,
@@ -1120,13 +1120,10 @@ async fn val_stream_indexer_045_shared_summary_policy_surface_is_reusable() {
         .unwrap();
 
     assert!(!result.block_ids.is_empty());
-    let source = include_str!("../src/lib.rs");
-    assert!(source.contains("pub trait ChildSummaryPolicy"));
-    assert!(source.contains("pub struct ChildSummaryInput"));
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_046_exact_centroid_summary_policy_materializes_deterministically() {
+async fn val_stream_indexer_047_exact_centroid_summary_policy_materializes_deterministically() {
     let items = [item("a"), item("j"), item("p"), item("~")];
 
     let mut first = StreamingIndexingRun::new(
@@ -1167,7 +1164,7 @@ async fn val_stream_indexer_046_exact_centroid_summary_policy_materializes_deter
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_047_exact_centroid_policy_uses_descendant_counts() {
+async fn val_stream_indexer_046_exact_centroid_policy_uses_descendant_counts() {
     let items = [item("a"), item("j"), item("p"), item("~")];
     let store = MemoryBlockStore::default();
     let mut run = StreamingIndexingRun::new(

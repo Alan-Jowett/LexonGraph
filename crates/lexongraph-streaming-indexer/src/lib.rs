@@ -155,11 +155,42 @@ pub trait ChildSummaryPolicy {
     ) -> Result<Vec<u8>, Self::Error>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanonicalChildSummaryAdapterError<E> {
+    InvalidBranchBlock(BlockError),
+    CanonicalEmbedding(E),
+}
+
+impl<E> fmt::Display for CanonicalChildSummaryAdapterError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidBranchBlock(error) => write!(f, "{error}"),
+            Self::CanonicalEmbedding(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl<E> std::error::Error for CanonicalChildSummaryAdapterError<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidBranchBlock(error) => Some(error),
+            Self::CanonicalEmbedding(error) => Some(error),
+        }
+    }
+}
+
 impl<T> ChildSummaryPolicy for T
 where
     T: CanonicalEmbeddingPolicy,
+    T::Error: 'static,
 {
-    type Error = T::Error;
+    type Error = CanonicalChildSummaryAdapterError<T::Error>;
 
     fn summarize_children(
         &self,
@@ -179,8 +210,9 @@ where
                 .collect(),
             None,
         )
-        .expect("child summary policy adapter requires a conforming child summary set");
+        .map_err(CanonicalChildSummaryAdapterError::InvalidBranchBlock)?;
         self.canonical_embedding(&branch)
+            .map_err(CanonicalChildSummaryAdapterError::CanonicalEmbedding)
     }
 }
 
@@ -3778,6 +3810,7 @@ mod conformance_support {
         CH: ContentResolverConformanceHarness,
         AH: CanonicalEmbeddingPolicyConformanceHarness,
         FH: StreamingClusteringFactoryConformanceHarness,
+        <AH::Policy as CanonicalEmbeddingPolicy>::Error: 'static,
     {
         run_content_resolver_suite(content_harness)?;
         pollster::block_on(async {

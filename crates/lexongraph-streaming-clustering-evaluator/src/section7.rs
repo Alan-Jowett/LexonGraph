@@ -576,7 +576,7 @@ fn run_section7_design(
         materialized_entities.len(),
         materialized_entities[0].encoded_embedding.len(),
     );
-    let (store, root_id) = materialize_design_tree(
+    let design_tree = materialize_design_tree(
         &materialized_entities,
         &hierarchy,
         summary_policy,
@@ -592,10 +592,11 @@ fn run_section7_design(
                 &summary_report.metric_semantics_profile,
             )?;
             let predicted_neighbor_ids = search_neighbors(
-                &store,
-                root_id,
+                &design_tree.store,
+                design_tree.root_id,
                 query,
                 exact_neighbor_ids.len(),
+                materialized_entities.len(),
                 beam_width,
                 &summary_report.metric_semantics_profile,
             )?;
@@ -701,28 +702,27 @@ fn build_real_only_hierarchy(
         .map(|node| (node.node_id.as_str(), node.kind.clone()))
         .collect::<HashMap<_, _>>();
     let mut child_map = BTreeMap::<String, Vec<String>>::new();
-    let mut parent_ids = HashSet::new();
     for edge in &pair_report.hierarchy_edges {
         child_map
             .entry(edge.parent_node_id.clone())
             .or_default()
             .push(edge.child_node_id.clone());
-        parent_ids.insert(edge.child_node_id.clone());
     }
-    let root_id = pair_report
+    let root_ids = pair_report
         .hierarchy_nodes
         .iter()
-        .find(|node| !parent_ids.contains(&node.node_id))
+        .filter(|node| node.depth_from_root == 0)
         .map(|node| node.node_id.clone())
-        .ok_or_else(|| {
-            EvaluatorError::InvalidConfiguration(
-                "section-7 could not determine hierarchy root".into(),
-            )
-        })?;
+        .collect::<Vec<_>>();
+    let [root_id] = root_ids.as_slice() else {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-7 expected exactly one hierarchy root at depth 0".into(),
+        ));
+    };
 
     let mut partitions = Vec::new();
-    let Some(root_partition_id) = prune_and_collect_partitions(
-        &root_id,
+    let Some(root_partition) = prune_and_collect_partitions(
+        root_id,
         None,
         &node_kinds,
         &child_map,
@@ -735,9 +735,15 @@ fn build_real_only_hierarchy(
         ));
     };
     Ok(FinalizedPartitionHierarchy {
-        root_partition_id,
+        root_partition_id: root_partition.id,
         partitions,
     })
+}
+
+#[derive(Clone, Debug)]
+struct PrunedPartitionSummary {
+    id: String,
+    item_indices: Vec<usize>,
 }
 
 fn prune_and_collect_partitions(
@@ -747,7 +753,7 @@ fn prune_and_collect_partitions(
     child_map: &BTreeMap<String, Vec<String>>,
     leaf_items: &BTreeMap<String, Vec<usize>>,
     partitions: &mut Vec<FinalizedPartition>,
-) -> Result<Option<String>, EvaluatorError> {
+) -> Result<Option<PrunedPartitionSummary>, EvaluatorError> {
     let kind = node_kinds.get(node_id).ok_or_else(|| {
         EvaluatorError::InvalidConfiguration(format!(
             "section-7 hierarchy node {} was missing from the section-5 node set",
@@ -765,14 +771,17 @@ fn prune_and_collect_partitions(
             id: node_id.into(),
             parent_id: parent_id.map(str::to_owned),
             child_ids: Vec::new(),
-            item_indices,
+            item_indices: item_indices.clone(),
             terminal: true,
             planning_stage: PlanningStage::Custom,
         });
-        return Ok(Some(node_id.into()));
+        return Ok(Some(PrunedPartitionSummary {
+            id: node_id.into(),
+            item_indices,
+        }));
     }
 
-    let mut child_ids = Vec::new();
+    let mut child_summaries = Vec::new();
     for child_id in child_map.get(node_id).into_iter().flatten() {
         if let Some(pruned_child) = prune_and_collect_partitions(
             child_id,
@@ -782,38 +791,43 @@ fn prune_and_collect_partitions(
             leaf_items,
             partitions,
         )? {
-            child_ids.push(pruned_child);
+            child_summaries.push(pruned_child);
         }
     }
-    if child_ids.is_empty() {
+    if child_summaries.is_empty() {
         return Ok(None);
     }
-    if child_ids.len() == 1 {
-        let single_child = child_ids.remove(0);
+    if child_summaries.len() == 1 {
+        let single_child = child_summaries.remove(0);
         if let Some(partition) = partitions
             .iter_mut()
-            .find(|partition| partition.id == single_child)
+            .find(|partition| partition.id == single_child.id)
         {
             partition.parent_id = parent_id.map(str::to_owned);
         }
         return Ok(Some(single_child));
     }
-    let item_indices = partitions
+    let child_ids = child_summaries
         .iter()
-        .filter(|partition| child_ids.iter().any(|child_id| child_id == &partition.id))
-        .flat_map(|partition| partition.item_indices.iter().copied())
+        .map(|child| child.id.clone())
         .collect::<Vec<_>>();
-    let mut item_indices = item_indices;
+    let mut item_indices = child_summaries
+        .into_iter()
+        .flat_map(|child| child.item_indices)
+        .collect::<Vec<_>>();
     normalize_item_indices(node_id, &mut item_indices)?;
     partitions.push(FinalizedPartition {
         id: node_id.into(),
         parent_id: parent_id.map(str::to_owned),
         child_ids,
-        item_indices,
+        item_indices: item_indices.clone(),
         terminal: false,
         planning_stage: PlanningStage::Custom,
     });
-    Ok(Some(node_id.into()))
+    Ok(Some(PrunedPartitionSummary {
+        id: node_id.into(),
+        item_indices,
+    }))
 }
 
 fn normalize_item_indices(node_id: &str, item_indices: &mut [usize]) -> Result<(), EvaluatorError> {
@@ -829,12 +843,18 @@ fn normalize_item_indices(node_id: &str, item_indices: &mut [usize]) -> Result<(
     Ok(())
 }
 
+struct MaterializedDesignTree {
+    _store_root: tempfile::TempDir,
+    store: FilesystemBlockStore,
+    root_id: BlockHash,
+}
+
 fn materialize_design_tree(
     materialized_entities: &[MaterializedEntity],
     hierarchy: &FinalizedPartitionHierarchy,
     summary_policy: SummaryPolicyKind,
     block_size_target: usize,
-) -> Result<(FilesystemBlockStore, BlockHash), EvaluatorError> {
+) -> Result<MaterializedDesignTree, EvaluatorError> {
     let embedding_spec = EmbeddingSpec {
         dims: u64::try_from(materialized_entities[0].encoded_embedding.len() / 4).map_err(
             |_| EvaluatorError::InvalidConfiguration("section-7 dimensions overflowed u64".into()),
@@ -866,8 +886,7 @@ fn materialize_design_tree(
     let store_root = tempfile::tempdir().map_err(|error| {
         EvaluatorError::Io(format!("failed to create section-7 tempdir: {error}"))
     })?;
-    let store_path = store_root.keep();
-    let store = FilesystemBlockStore::new(&store_path)
+    let store = FilesystemBlockStore::new(store_root.path())
         .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?;
     let root_id = match summary_policy {
         SummaryPolicyKind::ExactCentroid => materialize_with_policy(
@@ -895,7 +914,11 @@ fn materialize_design_tree(
             },
         )?,
     };
-    Ok((store, root_id))
+    Ok(MaterializedDesignTree {
+        _store_root: store_root,
+        store,
+        root_id,
+    })
 }
 
 fn materialize_with_policy<P>(
@@ -1026,6 +1049,7 @@ fn search_neighbors(
     root_id: BlockHash,
     query: &Section7HeldOutQuery,
     neighbor_count: usize,
+    indexed_entity_count: usize,
     beam_width: usize,
     metric_semantics_profile: &str,
 ) -> Result<(Vec<String>, SearchTelemetrySummary), EvaluatorError> {
@@ -1041,7 +1065,7 @@ fn search_neighbors(
     let requested = if neighbor_count == 0 {
         0
     } else {
-        neighbor_count + 1
+        neighbor_count.saturating_add(1).min(indexed_entity_count)
     };
     let (neighbor_ids, telemetry) = match metric_semantics_profile {
         "cosine" => greedy_route_with_telemetry(
