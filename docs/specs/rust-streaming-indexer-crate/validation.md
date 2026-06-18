@@ -34,7 +34,7 @@ Inspect the new crate's public surface and specification references.
 
 **Pass condition:** the crate exposes a caller-visible streaming replay
 lifecycle, remains subordinate to the indexing and block protocols, and
-consumes the shared streaming clustering contract, references the built-in DCBC
+consumes the shared streaming clustering contract, references the built-in DCBC,
 directional-PCA, and spherical-k-means specification packages for their owned
 clustering algorithms, and does not define a new clustering contract locally or
 depend on a retired legacy batch-oriented indexing crate/specification package

@@ -443,7 +443,16 @@ fn recompute_centroids(
         }
     }
     sums.into_iter()
-        .map(|centroid| normalize_embedding(centroid.as_slice()))
+        .enumerate()
+        .map(|(cluster_index, centroid)| {
+            let squared_norm = centroid.iter().map(|value| value * value).sum::<f32>();
+            if !squared_norm.is_finite() || squared_norm <= f32::EPSILON {
+                return Err(unsatisfiable_constraint(format!(
+                    "spherical k-means produced a zero-norm centroid for cluster {cluster_index}"
+                )));
+            }
+            normalize_embedding(centroid.as_slice())
+        })
         .collect()
 }
 

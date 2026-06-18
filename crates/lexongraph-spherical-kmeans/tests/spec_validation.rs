@@ -10,8 +10,8 @@ use lexongraph_spherical_kmeans::{
     SPHERICAL_KMEANS_SOFTWARE_IDENTITY, SphericalKmeansStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
-    MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringError,
-    TrainerState,
+    MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer,
+    StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
 use support::{
     config, conforming_trainer, expected_assignments, expected_pass_reports, invalid_params,
@@ -138,6 +138,26 @@ fn val_sphkm_005_first_pass_rejects_underfull_input() {
     for batch in underfull_first_pass() {
         trainer.ingest_batch(batch.as_slice()).unwrap();
     }
+    assert!(matches!(
+        trainer.finish_pass(),
+        Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
+    ));
+}
+
+#[test]
+fn regression_zero_norm_recomputed_centroid_is_unsatisfiable_not_malformed() {
+    let mut trainer = SphericalKmeansStreamingTrainer::new(
+        StreamingClusteringConfig {
+            cluster_count: 1,
+            ..config()
+        },
+        params(),
+    )
+    .unwrap();
+    trainer
+        .ingest_batch(&[vec![1.0, 0.0], vec![-1.0, 0.0]])
+        .unwrap();
+
     assert!(matches!(
         trainer.finish_pass(),
         Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
