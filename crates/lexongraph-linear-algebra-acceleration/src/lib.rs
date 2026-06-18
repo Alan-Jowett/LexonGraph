@@ -316,6 +316,13 @@ fn validate_dense_inputs(
     {
         return Err("dense distance matrix requires matching vector dimensions".into());
     }
+    if left
+        .iter()
+        .chain(right.iter())
+        .any(|vector| vector.iter().any(|value| !value.is_finite()))
+    {
+        return Err("dense distance matrix requires finite vector values".into());
+    }
     if matches!(metric, DenseDistanceMetric::Cosine)
         && left
             .iter()
@@ -815,6 +822,19 @@ mod tests {
         for (left, right) in actual.iter().zip(expected.iter()) {
             assert!((left - right).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn dense_distance_matrix_rejects_non_finite_values() {
+        let error = with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
+            dense_distance_matrix(
+                &[&[f32::NAN, 0.0]],
+                &[&[1.0, 0.0]],
+                DenseDistanceMetric::Cosine,
+            )
+            .unwrap_err()
+        });
+        assert_eq!(error, "dense distance matrix requires finite vector values");
     }
 
     #[cfg(feature = "wgpu-accel")]

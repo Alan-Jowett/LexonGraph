@@ -524,25 +524,24 @@ fn best_cluster_from_distances(
     distances: &[f32],
     previous_assignment: Option<usize>,
 ) -> Result<usize, StreamingClusteringError> {
-    let mut best_clusters = Vec::new();
     let mut best_distance = f32::INFINITY;
+    let mut best_cluster_id: Option<usize> = None;
+    let mut previous_assignment_is_best = false;
     for (cluster_index, &candidate) in distances.iter().enumerate() {
         if candidate + DISTANCE_EPSILON < best_distance {
             best_distance = candidate;
-            best_clusters.clear();
-            best_clusters.push(cluster_index);
+            best_cluster_id = Some(cluster_index);
+            previous_assignment_is_best = previous_assignment == Some(cluster_index);
         } else if (candidate - best_distance).abs() <= DISTANCE_EPSILON {
-            best_clusters.push(cluster_index);
+            best_cluster_id =
+                Some(best_cluster_id.map_or(cluster_index, |current| current.min(cluster_index)));
+            previous_assignment_is_best |= previous_assignment == Some(cluster_index);
         }
     }
-    if let Some(previous_assignment) = previous_assignment
-        && best_clusters.contains(&previous_assignment)
-    {
+    if previous_assignment_is_best && let Some(previous_assignment) = previous_assignment {
         return Ok(previous_assignment);
     }
-    best_clusters
-        .into_iter()
-        .min()
+    best_cluster_id
         .ok_or_else(|| unsatisfiable_constraint("spherical k-means requires at least one centroid"))
 }
 
@@ -717,5 +716,22 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
 fn unsatisfiable_constraint(message: impl Into<String>) -> StreamingClusteringError {
     StreamingClusteringError::UnsatisfiableConstraint {
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::best_cluster_from_distances;
+
+    #[test]
+    fn best_cluster_from_distances_prefers_previous_assignment_on_tie() {
+        let cluster = best_cluster_from_distances(&[0.25, 0.25, 0.5], Some(1)).unwrap();
+        assert_eq!(cluster, 1);
+    }
+
+    #[test]
+    fn best_cluster_from_distances_picks_lowest_cluster_without_previous_tie() {
+        let cluster = best_cluster_from_distances(&[0.25, 0.25, 0.5], None).unwrap();
+        assert_eq!(cluster, 0);
     }
 }
