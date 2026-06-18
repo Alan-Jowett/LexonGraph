@@ -476,14 +476,15 @@ fn should_use_accelerated_assignments(
     if normalized_embeddings.is_empty() || normalized_centroids.is_empty() {
         return false;
     }
-    if detected_execution_backend_selection().resolution != ExecutionBackendResolution::Wgpu {
-        return false;
-    }
-    normalized_embeddings
+    let large_enough = normalized_embeddings
         .len()
         .checked_mul(normalized_centroids.len())
         .and_then(|value| value.checked_mul(normalized_embeddings[0].len()))
-        .is_some_and(|operation_count| operation_count >= ACCELERATED_ASSIGNMENT_MIN_OPERATIONS)
+        .is_some_and(|operation_count| operation_count >= ACCELERATED_ASSIGNMENT_MIN_OPERATIONS);
+    if !large_enough {
+        return false;
+    }
+    detected_execution_backend_selection().resolution == ExecutionBackendResolution::Wgpu
 }
 
 fn assignment_chunk_row_count(observed_count: usize, cluster_count: usize) -> usize {
