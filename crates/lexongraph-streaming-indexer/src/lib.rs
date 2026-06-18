@@ -3326,18 +3326,22 @@ fn greedy_pack_node_groups(
         .into_iter()
         .map(|group| group.len())
         .collect::<Vec<_>>();
-    let mut remaining = current_layer.to_vec();
-    remaining.sort_by(|left, right| compare_profile_node_order(*left, *right, nodes));
+    let mut remaining = current_layer.iter().copied().map(Some).collect::<Vec<_>>();
+    remaining.sort_by(|left, right| match (left, right) {
+        (Some(left), Some(right)) => compare_profile_node_order(*left, *right, nodes),
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    });
 
     let mut groups = Vec::with_capacity(sizes.len());
     for target_size in sizes {
-        let Some(seed) = remaining.first().copied() else {
+        let Some(seed) = take_first_active_profile_node(&mut remaining) else {
             return Err(
                 "published profile hierarchy packing exhausted its remaining nodes prematurely"
                     .into(),
             );
         };
-        remaining.remove(0);
         let seed_embedding = nodes[seed]
             .representative_embedding
             .as_ref()
@@ -3347,41 +3351,60 @@ fn greedy_pack_node_groups(
             })?;
         let mut group = vec![seed];
         while group.len() < target_size {
-            let Some((next_offset, _, _)) = remaining
-                .iter()
-                .enumerate()
-                .map(|(offset, &candidate)| {
-                    let candidate_embedding = nodes[candidate]
-                        .representative_embedding
-                        .as_ref()
-                        .ok_or_else(|| {
-                            "published profile hierarchy node is missing its representative embedding"
-                                .to_string()
-                        })?;
-                    let distance =
-                        representative_distance(seed_embedding, candidate_embedding, metric)?;
-                    Ok::<(usize, f64, usize), String>((offset, distance, candidate))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .min_by(|left, right| {
-                    left.1
-                        .partial_cmp(&right.1)
-                        .unwrap_or(Ordering::Equal)
-                        .then_with(|| compare_profile_node_order(left.2, right.2, nodes))
-                })
+            let Some((next_offset, candidate)) =
+                best_profile_group_extension(&remaining, nodes, seed_embedding, metric)?
             else {
                 return Err(
                     "published profile hierarchy packing could not satisfy its target group sizes"
                         .into(),
                 );
             };
-            group.push(remaining.remove(next_offset));
+            remaining[next_offset] = None;
+            group.push(candidate);
         }
         groups.push(group);
     }
 
     Ok(groups)
+}
+
+fn take_first_active_profile_node(remaining: &mut [Option<usize>]) -> Option<usize> {
+    let seed_slot = remaining.iter_mut().find(|slot| slot.is_some())?;
+    seed_slot.take()
+}
+
+fn best_profile_group_extension(
+    remaining: &[Option<usize>],
+    nodes: &[AgglomerativeHierarchyNode],
+    seed_embedding: &[f32],
+    metric: PublishedHierarchyMetric,
+) -> Result<Option<(usize, usize)>, String> {
+    let mut best = None::<(usize, f64, usize)>;
+    for (offset, candidate) in remaining.iter().enumerate() {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let candidate_embedding = nodes[*candidate]
+            .representative_embedding
+            .as_ref()
+            .ok_or_else(|| {
+                "published profile hierarchy node is missing its representative embedding"
+                    .to_string()
+            })?;
+        let distance = representative_distance(seed_embedding, candidate_embedding, metric)?;
+        match best {
+            Some((_, best_distance, best_candidate))
+                if distance
+                    .partial_cmp(&best_distance)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| {
+                        compare_profile_node_order(*candidate, best_candidate, nodes)
+                    })
+                    != Ordering::Less => {}
+            _ => best = Some((offset, distance, *candidate)),
+        }
+    }
+    Ok(best.map(|(offset, _, candidate)| (offset, candidate)))
 }
 
 fn compare_profile_node_order(
@@ -3428,7 +3451,8 @@ fn representative_distance(
                 let delta = f64::from(*left_value) - f64::from(*right_value);
                 delta * delta
             })
-            .sum()),
+            .sum::<f64>()
+            .sqrt()),
     }
 }
 
