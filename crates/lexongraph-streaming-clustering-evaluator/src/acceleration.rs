@@ -3,7 +3,7 @@
 
 pub use lexongraph_linear_algebra_acceleration::{
     ExecutionBackendRequest, ExecutionBackendResolution, ExecutionBackendSelection,
-    execution_backend_request, set_execution_backend_request, with_execution_backend_request,
+    execution_backend_request, with_execution_backend_request,
 };
 
 pub(crate) use lexongraph_linear_algebra_acceleration::{

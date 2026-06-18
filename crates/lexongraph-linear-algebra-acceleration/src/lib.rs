@@ -102,6 +102,20 @@ pub fn backend_resolution_label(selection: &ExecutionBackendSelection) -> &'stat
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DenseDistanceErrorKind {
+    InvalidInput,
+    BackendFailure,
+}
+
+pub fn classify_dense_distance_error(message: &str) -> DenseDistanceErrorKind {
+    if is_dense_input_validation_error(message) {
+        DenseDistanceErrorKind::InvalidInput
+    } else {
+        DenseDistanceErrorKind::BackendFailure
+    }
+}
+
 pub fn dense_distance_matrix(
     left: &[&[f32]],
     right: &[&[f32]],
@@ -342,6 +356,18 @@ fn validate_dense_inputs(
         return Err("cosine distance requires non-zero embeddings".into());
     }
     Ok(())
+}
+
+fn is_dense_input_validation_error(message: &str) -> bool {
+    matches!(
+        message,
+        "dense distance matrix requires at least one left-hand vector"
+            | "dense distance matrix requires at least one right-hand vector"
+            | "dense distance matrix requires non-empty vectors"
+            | "dense distance matrix requires matching vector dimensions"
+            | "dense distance matrix requires finite vector values"
+            | "cosine distance requires non-zero embeddings"
+    )
 }
 
 fn cpu_dense_distance_matrix(
@@ -847,6 +873,10 @@ mod tests {
             .unwrap_err()
         });
         assert_eq!(error, "dense distance matrix requires finite vector values");
+        assert_eq!(
+            classify_dense_distance_error(error.as_str()),
+            DenseDistanceErrorKind::InvalidInput
+        );
     }
 
     #[test]

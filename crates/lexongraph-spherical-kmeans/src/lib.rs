@@ -4,8 +4,9 @@
 //! Streaming spherical k-means clustering for LexonGraph.
 
 use lexongraph_linear_algebra_acceleration::{
-    DenseDistanceMetric, ExecutionBackendRequest, ExecutionBackendResolution,
-    dense_distance_matrix, detected_execution_backend_selection, execution_backend_request,
+    DenseDistanceErrorKind, DenseDistanceMetric, ExecutionBackendRequest,
+    ExecutionBackendResolution, classify_dense_distance_error, dense_distance_matrix,
+    detected_execution_backend_selection, execution_backend_request,
 };
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
@@ -753,29 +754,14 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
 }
 
 fn map_accelerated_assignment_error(error: String) -> StreamingClusteringError {
-    let is_validation_error = is_dense_input_validation_error(error.as_str());
-    let prefix = if is_validation_error {
-        "accelerated spherical k-means assignment received invalid inputs"
-    } else {
-        "accelerated spherical k-means assignment failed"
-    };
-    if is_validation_error {
-        malformed_input(format!("{prefix}: {error}"))
-    } else {
-        unsatisfiable_constraint(format!("{prefix}: {error}"))
+    match classify_dense_distance_error(error.as_str()) {
+        DenseDistanceErrorKind::InvalidInput => malformed_input(format!(
+            "accelerated spherical k-means assignment received invalid inputs: {error}"
+        )),
+        DenseDistanceErrorKind::BackendFailure => unsatisfiable_constraint(format!(
+            "accelerated spherical k-means assignment failed: {error}"
+        )),
     }
-}
-
-fn is_dense_input_validation_error(message: &str) -> bool {
-    matches!(
-        message,
-        "dense distance matrix requires at least one left-hand vector"
-            | "dense distance matrix requires at least one right-hand vector"
-            | "dense distance matrix requires non-empty vectors"
-            | "dense distance matrix requires matching vector dimensions"
-            | "dense distance matrix requires finite vector values"
-            | "cosine distance requires non-zero embeddings"
-    )
 }
 
 fn unsatisfiable_constraint(message: impl Into<String>) -> StreamingClusteringError {
