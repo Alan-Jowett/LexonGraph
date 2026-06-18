@@ -141,8 +141,28 @@ pub fn chunked_dense_distance_matrix(
             .checked_mul(right.len())
             .ok_or_else(|| "chunked dense distance output size overflowed usize".to_string())?,
     );
-    for left_chunk in left.chunks(rows_per_chunk) {
-        output.extend(dense_distance_matrix(left_chunk, right, metric)?);
+    match detected_execution_backend_selection().resolution {
+        ExecutionBackendResolution::Wgpu => {
+            #[cfg(feature = "wgpu-accel")]
+            {
+                let context = wgpu_context().map_err(|error| error.to_string())?;
+                for left_chunk in left.chunks(rows_per_chunk) {
+                    output.extend(context.compute_distance_matrix(left_chunk, right, metric)?);
+                }
+            }
+            #[cfg(not(feature = "wgpu-accel"))]
+            {
+                unreachable!("wgpu resolution is impossible without the wgpu-accel feature");
+            }
+        }
+        ExecutionBackendResolution::Cpu
+        | ExecutionBackendResolution::WgpuAvailableButDeclined
+        | ExecutionBackendResolution::WgpuUnsupportedFallback
+        | ExecutionBackendResolution::WgpuProbeFailed => {
+            for left_chunk in left.chunks(rows_per_chunk) {
+                output.extend(cpu_dense_distance_matrix(left_chunk, right, metric)?);
+            }
+        }
     }
     Ok(output)
 }
@@ -375,7 +395,7 @@ enum WgpuProbe {
 #[cfg(feature = "wgpu-accel")]
 fn wgpu_probe() -> &'static WgpuProbe {
     static PROBE: OnceLock<WgpuProbe> = OnceLock::new();
-    PROBE.get_or_init(|| match create_wgpu_context() {
+    PROBE.get_or_init(|| match wgpu_context() {
         Ok(context) => WgpuProbe::Supported(context.adapter_info.clone()),
         Err(error) => match error {
             WgpuContextError::Unsupported(message) => WgpuProbe::Unsupported(message),

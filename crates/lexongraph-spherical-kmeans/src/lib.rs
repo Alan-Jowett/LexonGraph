@@ -497,11 +497,27 @@ fn best_cluster(
     normalized_centroids: &[Vec<f32>],
     previous_assignment: Option<usize>,
 ) -> Result<usize, StreamingClusteringError> {
-    let distances = normalized_centroids
-        .iter()
-        .map(|centroid| cosine_distance(normalized_embedding, centroid.as_slice()))
-        .collect::<Result<Vec<_>, _>>()?;
-    best_cluster_from_distances(distances.as_slice(), previous_assignment)
+    let mut best_clusters = Vec::new();
+    let mut best_distance = f32::INFINITY;
+    for (cluster_index, centroid) in normalized_centroids.iter().enumerate() {
+        let candidate = cosine_distance(normalized_embedding, centroid.as_slice())?;
+        if candidate + DISTANCE_EPSILON < best_distance {
+            best_distance = candidate;
+            best_clusters.clear();
+            best_clusters.push(cluster_index);
+        } else if (candidate - best_distance).abs() <= DISTANCE_EPSILON {
+            best_clusters.push(cluster_index);
+        }
+    }
+    if let Some(previous_assignment) = previous_assignment
+        && best_clusters.contains(&previous_assignment)
+    {
+        return Ok(previous_assignment);
+    }
+    best_clusters
+        .into_iter()
+        .min()
+        .ok_or_else(|| unsatisfiable_constraint("spherical k-means requires at least one centroid"))
 }
 
 fn best_cluster_from_distances(
