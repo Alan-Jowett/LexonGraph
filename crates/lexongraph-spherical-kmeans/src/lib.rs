@@ -696,7 +696,7 @@ fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f32, StreamingClusteri
         ));
     }
     let similarity = left.iter().zip(right).map(|(l, r)| l * r).sum::<f32>();
-    Ok(1.0 - similarity)
+    Ok((1.0 - similarity).max(0.0))
 }
 
 fn deterministic_embedding_hash(embedding: &[f32], seed: u64) -> u64 {

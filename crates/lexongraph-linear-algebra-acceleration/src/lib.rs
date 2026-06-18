@@ -332,7 +332,11 @@ fn cpu_dense_distance_matrix(
     right: &[&[f32]],
     metric: DenseDistanceMetric,
 ) -> Result<Vec<f32>, String> {
-    let mut distances = Vec::with_capacity(left.len() * right.len());
+    let output_len = left
+        .len()
+        .checked_mul(right.len())
+        .ok_or_else(|| "dense distance output size overflowed usize".to_string())?;
+    let mut distances = Vec::with_capacity(output_len);
     for source in left {
         for target in right {
             let value = match metric {
