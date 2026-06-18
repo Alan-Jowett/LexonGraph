@@ -2443,3 +2443,41 @@ async fn val_stream_indexer_051_published_profile_materializes_deterministically
 
     assert_eq!(first_result, second_result);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_published_profile_terminal_short_circuit_does_not_claim_fine_stage() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_1_0,
+        embedding_spec(),
+        256,
+    )
+    .unwrap()
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo")])
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+
+    let hierarchy = run.finalized_partition_hierarchy().unwrap();
+    assert_eq!(hierarchy.partitions.len(), 1);
+    assert_eq!(
+        hierarchy.partitions[0].planning_stage,
+        PlanningStage::Single
+    );
+
+    let statuses = statuses.lock().unwrap().clone();
+    assert!(!statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning { .. }
+        )
+    }));
+}

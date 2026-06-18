@@ -2359,14 +2359,14 @@ fn derive_hierarchy_from_published_profile(
                     child_ids: Vec::new(),
                     item_indices: (0..embeddings.len()).collect(),
                     terminal: true,
-                    planning_stage: PlanningStage::Fine,
+                    planning_stage: PlanningStage::Single,
                 }],
             },
             planning_quality_metric: 0.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
             planning_balance_direction: MetricDirection::SmallerIsBetter,
-            stages_used: BTreeSet::from([PlanningStage::Fine]),
+            stages_used: BTreeSet::new(),
         });
     }
 
