@@ -209,6 +209,32 @@ pub struct SearchResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SearchTerminationKind {
+    Success,
+    Exhausted,
+    InvalidTraversalWidth,
+    MissingRootBlock,
+    RootLoadFailure,
+    MissingChildBlock,
+    ChildLoadFailure,
+    MalformedBlock,
+    IncompatibleEmbedding,
+    ScoringFailure,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchTelemetrySummary {
+    pub beam_width: usize,
+    pub distinct_blocks_visited: usize,
+    pub max_routing_depth: usize,
+    pub termination: SearchTerminationKind,
+}
+
+pub trait SearchTelemetryObserver {
+    fn record_summary(&self, summary: &SearchTelemetrySummary);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SearchError {
     InvalidTraversalWidth {
         w: usize,
@@ -334,11 +360,74 @@ impl<EC, CS> Searcher<EC, CS> {
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
     {
+        self.search_internal(root_id, target, w, n, store, None)
+            .map(|(result, _)| result)
+    }
+
+    pub fn search_with_telemetry<Target>(
+        &self,
+        root_id: &BlockHash,
+        target: &Target,
+        w: usize,
+        n: usize,
+        store: &dyn BlockStore,
+    ) -> Result<(SearchResult, SearchTelemetrySummary), SearchError>
+    where
+        EC: EmbeddingCompatibility<Target>,
+        CS: CandidateScorer<Target>,
+    {
+        self.search_internal(root_id, target, w, n, store, None)
+    }
+
+    pub fn search_with_observer<Target, TO>(
+        &self,
+        root_id: &BlockHash,
+        target: &Target,
+        w: usize,
+        n: usize,
+        store: &dyn BlockStore,
+        observer: &TO,
+    ) -> Result<SearchResult, SearchError>
+    where
+        EC: EmbeddingCompatibility<Target>,
+        CS: CandidateScorer<Target>,
+        TO: SearchTelemetryObserver,
+    {
+        self.search_internal(root_id, target, w, n, store, Some(observer))
+            .map(|(result, _)| result)
+    }
+
+    fn search_internal<Target>(
+        &self,
+        root_id: &BlockHash,
+        target: &Target,
+        w: usize,
+        n: usize,
+        store: &dyn BlockStore,
+        observer: Option<&dyn SearchTelemetryObserver>,
+    ) -> Result<(SearchResult, SearchTelemetrySummary), SearchError>
+    where
+        EC: EmbeddingCompatibility<Target>,
+        CS: CandidateScorer<Target>,
+    {
+        let mut telemetry = SearchTelemetryCollector::new(w);
+
         if w == 0 {
-            return Err(SearchError::InvalidTraversalWidth { w });
+            let error = SearchError::InvalidTraversalWidth { w };
+            telemetry.finish_with_error(&error);
+            emit_search_telemetry(observer, &telemetry.summary);
+            return Err(error);
         }
 
-        let mut frontier = self.load_block_candidates(root_id, target, store, true)?;
+        let mut frontier =
+            match self.load_block_candidates(root_id, target, store, true, 0, &mut telemetry) {
+                Ok(frontier) => frontier,
+                Err(error) => {
+                    telemetry.finish_with_error(&error);
+                    emit_search_telemetry(observer, &telemetry.summary);
+                    return Err(error);
+                }
+            };
         let mut expanded_children = HashSet::new();
 
         loop {
@@ -368,24 +457,52 @@ impl<EC, CS> Searcher<EC, CS> {
                         }
                     })
                     .collect();
-                return Ok(SearchResult { leaves });
+                telemetry.finish_success();
+                emit_search_telemetry(observer, &telemetry.summary);
+                return Ok((SearchResult { leaves }, telemetry.summary));
             }
 
             let current_round = select_children_to_expand(&frontier, &expanded_children, w);
             if current_round.is_empty() {
-                return Err(SearchError::Exhausted {
+                let error = SearchError::Exhausted {
                     requested: n,
                     reachable_leaves: frontier
                         .iter()
                         .filter(|candidate| candidate.is_terminal())
                         .count(),
-                });
+                };
+                telemetry.finish_with_error(&error);
+                emit_search_telemetry(observer, &telemetry.summary);
+                return Err(error);
             }
 
             let current_round_set: HashSet<_> = current_round.iter().copied().collect();
             let mut next_candidates = Vec::new();
             for child_id in &current_round {
-                next_candidates.extend(self.load_block_candidates(child_id, target, store, false)?);
+                let child_depth = frontier
+                    .iter()
+                    .find_map(|candidate| match candidate {
+                        SearchCandidate::Branch { child, depth, .. } if child == child_id => {
+                            Some(*depth)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(1);
+                match self.load_block_candidates(
+                    child_id,
+                    target,
+                    store,
+                    false,
+                    child_depth,
+                    &mut telemetry,
+                ) {
+                    Ok(candidates) => next_candidates.extend(candidates),
+                    Err(error) => {
+                        telemetry.finish_with_error(&error);
+                        emit_search_telemetry(observer, &telemetry.summary);
+                        return Err(error);
+                    }
+                }
                 expanded_children.insert(*child_id);
             }
 
@@ -405,6 +522,8 @@ impl<EC, CS> Searcher<EC, CS> {
         target: &Target,
         store: &dyn BlockStore,
         is_root: bool,
+        depth: usize,
+        telemetry: &mut SearchTelemetryCollector,
     ) -> Result<Vec<SearchCandidate<CS::Score>>, SearchError>
     where
         EC: EmbeddingCompatibility<Target>,
@@ -428,6 +547,7 @@ impl<EC, CS> Searcher<EC, CS> {
             TypedEntries::Branch(metadata, entries) => (metadata, LoadedEntries::Branch(entries)),
             TypedEntries::Leaf(metadata, entries) => (metadata, LoadedEntries::Leaf(entries)),
         };
+        telemetry.record_visited_block(*block_id, depth);
 
         self.compatibility
             .ensure_compatible(target, &metadata.embedding_spec)
@@ -444,6 +564,7 @@ impl<EC, CS> Searcher<EC, CS> {
                         .score(target, &entry.embedding, &metadata.embedding_spec)
                         .map(|score| SearchCandidate::Branch {
                             child: entry.child,
+                            depth: depth + 1,
                             level: metadata.level,
                             score,
                         })
@@ -482,6 +603,7 @@ enum LoadedEntries {
 enum SearchCandidate<Score> {
     Branch {
         child: BlockHash,
+        depth: usize,
         level: u64,
         score: Score,
     },
@@ -539,6 +661,62 @@ fn candidate_identity(candidate: &SearchCandidate<impl Ord>) -> &[u8; 32] {
     match candidate {
         SearchCandidate::Branch { child, .. } => child.as_bytes(),
         SearchCandidate::Leaf { block_id, .. } => block_id.as_bytes(),
+    }
+}
+
+struct SearchTelemetryCollector {
+    visited_blocks: HashSet<BlockHash>,
+    summary: SearchTelemetrySummary,
+}
+
+impl SearchTelemetryCollector {
+    fn new(beam_width: usize) -> Self {
+        Self {
+            visited_blocks: HashSet::new(),
+            summary: SearchTelemetrySummary {
+                beam_width,
+                distinct_blocks_visited: 0,
+                max_routing_depth: 0,
+                termination: SearchTerminationKind::Success,
+            },
+        }
+    }
+
+    fn record_visited_block(&mut self, block_id: BlockHash, depth: usize) {
+        self.visited_blocks.insert(block_id);
+        self.summary.distinct_blocks_visited = self.visited_blocks.len();
+        self.summary.max_routing_depth = self.summary.max_routing_depth.max(depth);
+    }
+
+    fn finish_success(&mut self) {
+        self.summary.termination = SearchTerminationKind::Success;
+    }
+
+    fn finish_with_error(&mut self, error: &SearchError) {
+        self.summary.termination = match error {
+            SearchError::InvalidTraversalWidth { .. } => {
+                SearchTerminationKind::InvalidTraversalWidth
+            }
+            SearchError::MissingRootBlock { .. } => SearchTerminationKind::MissingRootBlock,
+            SearchError::RootLoad(_) => SearchTerminationKind::RootLoadFailure,
+            SearchError::MissingChildBlock { .. } => SearchTerminationKind::MissingChildBlock,
+            SearchError::ChildLoad { .. } => SearchTerminationKind::ChildLoadFailure,
+            SearchError::MalformedBlock { .. } => SearchTerminationKind::MalformedBlock,
+            SearchError::IncompatibleEmbedding { .. } => {
+                SearchTerminationKind::IncompatibleEmbedding
+            }
+            SearchError::ScoringFailure { .. } => SearchTerminationKind::ScoringFailure,
+            SearchError::Exhausted { .. } => SearchTerminationKind::Exhausted,
+        };
+    }
+}
+
+fn emit_search_telemetry(
+    observer: Option<&dyn SearchTelemetryObserver>,
+    summary: &SearchTelemetrySummary,
+) {
+    if let Some(observer) = observer {
+        observer.record_summary(summary);
     }
 }
 

@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use lexongraph_streaming_clustering_evaluator::{
     BenchmarkProfile, EvaluatorError, ExecutionBackendRequest, Section4SuiteManifest,
-    Section4SuiteSpec, Section5CampaignReport, Section5HierarchyContract, Section6SummaryContract,
-    emit_campaign_artifacts, emit_section5_campaign_artifacts, emit_section6_campaign_artifacts,
+    Section4SuiteSpec, Section5CampaignReport, Section5HierarchyContract, Section6CampaignReport,
+    Section6SummaryContract, emit_campaign_artifacts, emit_section5_campaign_artifacts,
+    emit_section6_campaign_artifacts, emit_section7_campaign_artifacts,
     generate_section4_suite_assets, materialize_section4_archive_from_json,
     registered_candidate_names, registered_hierarchy_strategy_names,
     registered_packing_strategy_names, registered_section6_summary_candidate_names,
@@ -15,8 +16,9 @@ use lexongraph_streaming_clustering_evaluator::{
     resolve_registered_hierarchy_strategies, resolve_registered_section6_summary_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
     run_evaluation_campaign, run_section4_suite, run_section5_campaign, run_section6_campaign,
-    with_execution_backend_request, write_campaign_artifacts, write_section4_suite_artifacts,
-    write_section5_campaign_artifacts, write_section6_campaign_artifacts,
+    run_section7_campaign, with_execution_backend_request, write_campaign_artifacts,
+    write_section4_suite_artifacts, write_section5_campaign_artifacts,
+    write_section6_campaign_artifacts, write_section7_campaign_artifacts,
 };
 
 #[derive(Parser, Debug)]
@@ -121,6 +123,19 @@ enum Command {
         contract: PathBuf,
         #[arg(long = "summary-candidate", value_name = "NAME", required = true)]
         summary_candidates: Vec<String>,
+        #[arg(long, value_name = "PATH")]
+        output_dir: PathBuf,
+        #[arg(long, value_enum, default_value = "auto")]
+        execution_backend: CliExecutionBackend,
+    },
+    /// Run section-7 routing benchmarks over carried-forward section-5/6 designs.
+    RunSection7 {
+        #[arg(long, value_name = "PATH")]
+        profile: PathBuf,
+        #[arg(long = "section5-report", value_name = "PATH")]
+        section5_report: PathBuf,
+        #[arg(long = "section6-report", value_name = "PATH")]
+        section6_report: PathBuf,
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
         #[arg(long, value_enum, default_value = "auto")]
@@ -400,6 +415,71 @@ fn run() -> Result<(), EvaluatorError> {
             )?;
             let artifacts = emit_section6_campaign_artifacts(&report)?;
             let paths = write_section6_campaign_artifacts(&output_dir, &artifacts)?;
+            for path in paths {
+                println!("{}", path.display());
+            }
+            Ok(())
+        }),
+        Command::RunSection7 {
+            profile,
+            section5_report,
+            section6_report,
+            output_dir,
+            execution_backend,
+        } => with_execution_backend_request(execution_backend.into_request(), || {
+            let profile_path = profile;
+            let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
+                EvaluatorError::Io(format!(
+                    "failed to read benchmark profile {}: {error}",
+                    profile_path.display()
+                ))
+            })?;
+            let profile: BenchmarkProfile = serde_json::from_str(&profile).map_err(|error| {
+                EvaluatorError::Json(format!(
+                    "failed to parse benchmark profile {}: {error}",
+                    profile_path.display()
+                ))
+            })?;
+            let mut profile = profile;
+            if let Some(profile_dir) = profile_path.parent() {
+                resolve_profile_block_store_paths(&mut profile, profile_dir);
+            }
+
+            let section5_report_path = section5_report;
+            let section5_report =
+                std::fs::read_to_string(&section5_report_path).map_err(|error| {
+                    EvaluatorError::Io(format!(
+                        "failed to read section-5 campaign report {}: {error}",
+                        section5_report_path.display()
+                    ))
+                })?;
+            let section5_report: Section5CampaignReport = serde_json::from_str(&section5_report)
+                .map_err(|error| {
+                    EvaluatorError::Json(format!(
+                        "failed to parse section-5 campaign report {}: {error}",
+                        section5_report_path.display()
+                    ))
+                })?;
+
+            let section6_report_path = section6_report;
+            let section6_report =
+                std::fs::read_to_string(&section6_report_path).map_err(|error| {
+                    EvaluatorError::Io(format!(
+                        "failed to read section-6 campaign report {}: {error}",
+                        section6_report_path.display()
+                    ))
+                })?;
+            let section6_report: Section6CampaignReport = serde_json::from_str(&section6_report)
+                .map_err(|error| {
+                    EvaluatorError::Json(format!(
+                        "failed to parse section-6 campaign report {}: {error}",
+                        section6_report_path.display()
+                    ))
+                })?;
+
+            let report = run_section7_campaign(&profile, &section5_report, &section6_report)?;
+            let artifacts = emit_section7_campaign_artifacts(&report)?;
+            let paths = write_section7_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }

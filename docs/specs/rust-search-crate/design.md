@@ -318,6 +318,21 @@ root-block load, compatibility checks, root candidate loading, and root
 candidate scoring before terminating successfully with an empty
 `SearchResult`.
 
+### DSG-SEARCH-020 `Optional search telemetry`
+
+The reusable `Searcher` surface adds an optional telemetry path alongside the
+existing result-only entry point.
+
+One reusable entry point returns a search result together with a crate-owned
+telemetry summary value, and another allows a caller-provided observer to
+receive that same summary once the invocation terminates, including explicit
+failure outcomes.
+
+The telemetry summary records the invocation beam width, distinct blocks
+visited, maximum routing depth, and a termination classification. Telemetry is
+collected inside the existing search loop and does not change ranking,
+frontier-management, or error-propagation behavior.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -339,3 +354,4 @@ candidate scoring before terminating successfully with an empty
 | DSG-SEARCH-017 | REQ-SEARCH-020, REQ-SEARCH-021 |
 | DSG-SEARCH-018 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-019, REQ-SEARCH-021 |
 | DSG-SEARCH-019 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021 |
+| DSG-SEARCH-020 | REQ-SEARCH-024 |

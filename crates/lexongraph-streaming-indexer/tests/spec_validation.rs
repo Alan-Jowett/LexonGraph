@@ -27,9 +27,9 @@ use lexongraph_streaming_indexer::{
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
-    DirectionalPcaBuiltInPlanningSettings, FinalizedPartition, FinalizedPartitionHierarchy,
-    HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome, PlanningStage,
-    StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
+    DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
+    FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome,
+    PlanningStage, StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
     StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
     StreamingIndexingStatusState,
 };
@@ -491,6 +491,79 @@ impl HierarchicalPlanningPolicy for LiveStageObserverPlanningPolicy {
         }
         let mut fixed = FixedHierarchyPlanningPolicy;
         fixed.finish_planning_pass(embeddings, &embedding_spec(), 0, 0)
+    }
+}
+
+#[derive(Clone, Default)]
+struct NestedHierarchyPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for NestedHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        if embeddings.len() != 4 {
+            return Err(FixtureError(
+                "nested hierarchy fixture requires four embeddings".into(),
+            ));
+        }
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![
+                    FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: vec!["p0.0".into(), "p0.1".into()],
+                        item_indices: vec![0, 1, 2, 3],
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec!["p0.0.0".into(), "p0.0.1".into()],
+                        item_indices: vec![0, 1, 2],
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0.0".into(),
+                        parent_id: Some("p0.0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![0],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0.1".into(),
+                        parent_id: Some("p0.0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![1, 2],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.1".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![3],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                ],
+            },
+            planning_quality_metric: 1.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: [PlanningStage::Custom].into_iter().collect(),
+        })
     }
 }
 
@@ -1023,6 +1096,116 @@ async fn val_stream_indexer_010_hierarchy_is_exposed_and_schedule_independent() 
             .partitions
             .iter()
             .all(|partition| partition.id.starts_with("p0"))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_045_shared_summary_policy_surface_is_reusable() {
+    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::with_summary_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    assert!(!result.block_ids.is_empty());
+    let source = include_str!("../src/lib.rs");
+    assert!(source.contains("pub trait ChildSummaryPolicy"));
+    assert!(source.contains("pub struct ChildSummaryInput"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_046_exact_centroid_summary_policy_materializes_deterministically() {
+    let items = [item("a"), item("j"), item("p"), item("~")];
+
+    let mut first = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        NestedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    first.ingest_batch(&items).await.unwrap();
+    first.finish_pass().unwrap();
+    first.mark_planning_complete().unwrap();
+    let first_store = MemoryBlockStore::default();
+    let first_result = first
+        .finalize(std::iter::once(items.as_slice()), &first_store)
+        .await
+        .unwrap();
+
+    let mut second = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        NestedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    second.ingest_batch(&items).await.unwrap();
+    second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let second_store = MemoryBlockStore::default();
+    let second_result = second
+        .finalize(std::iter::once(items.as_slice()), &second_store)
+        .await
+        .unwrap();
+
+    assert_eq!(first_result, second_result);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_047_exact_centroid_policy_uses_descendant_counts() {
+    let items = [item("a"), item("j"), item("p"), item("~")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        NestedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    let TypedEntries::Branch(_, entries) = into_entries(root) else {
+        panic!("nested hierarchy should materialize a branch root");
+    };
+    let branch_entry = entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                into_entries(store.get(&entry.child).unwrap().unwrap()),
+                TypedEntries::Branch(_, _)
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        branch_entry
+            .embedding
+            .iter()
+            .map(|byte| i8::from_le_bytes([*byte]))
+            .collect::<Vec<_>>(),
+        vec![105, 1]
     );
 }
 

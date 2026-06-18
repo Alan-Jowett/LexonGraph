@@ -475,6 +475,31 @@ and its post-switch DCBC output into the same finalized partition-hierarchy
 abstraction used by the rest of the indexer design, so final materialization
 and bottom-up assembly remain unchanged.
 
+### DSG-STREAM-INDEXER-038 `Child-summary policy seam`
+
+Final materialization accepts a reusable child-summary policy that consumes the
+carried-forward finalized hierarchy plus one normalized summary input per child.
+
+Each child-summary input carries the child embedding together with the
+descendant-count weight represented by that child so descendant-aware parent
+summary policies can be implemented without widening the rest of the replay or
+planning lifecycle.
+
+### DSG-STREAM-INDEXER-039 `Canonical-policy compatibility adapter`
+
+The existing canonical-embedding policy surface remains valid through a blanket
+adapter into the child-summary seam.
+
+That adapter preserves the previous arithmetic-mean-like behavior for policies
+that only need branch-level child embeddings and do not consume descendant
+weights explicitly.
+
+### DSG-STREAM-INDEXER-040 `Built-in exact-centroid summary policy`
+
+The crate exposes a built-in exact-centroid child-summary policy that computes a
+parent embedding as the descendant-count-weighted mean of the normalized child
+summary embeddings presented at assembly time.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -508,3 +533,6 @@ and bottom-up assembly remain unchanged.
 | DSG-STREAM-INDEXER-035 | REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046 |
 | DSG-STREAM-INDEXER-036 | REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-037 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-045 |
+| DSG-STREAM-INDEXER-038 | REQ-STREAM-INDEXER-048 |
+| DSG-STREAM-INDEXER-039 | REQ-STREAM-INDEXER-050 |
+| DSG-STREAM-INDEXER-040 | REQ-STREAM-INDEXER-049 |

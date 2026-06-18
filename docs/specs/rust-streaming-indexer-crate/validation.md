@@ -542,3 +542,34 @@ separate targeted cases rather than being omitted.
 
 **Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033,
 REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-045
+
+Materialize one carried-forward finalized hierarchy through the child-summary
+policy surface and through an adapted canonical-embedding policy.
+
+**Pass condition:** both paths remain valid public materialization routes, and
+the canonical-policy path does not require callers to adopt descendant-aware
+policy logic when they do not need it.
+
+**Traces to:** REQ-STREAM-INDEXER-048, REQ-STREAM-INDEXER-050
+
+### VAL-STREAM-INDEXER-046
+
+Materialize a hierarchy whose children represent different descendant counts
+through the built-in exact-centroid child-summary policy.
+
+**Pass condition:** each parent summary equals the descendant-count-weighted
+centroid of the carried-forward child summaries rather than an unweighted mean.
+
+**Traces to:** REQ-STREAM-INDEXER-048, REQ-STREAM-INDEXER-049
+
+### VAL-STREAM-INDEXER-047
+
+Repeat exact-centroid materialization on the same finalized hierarchy and child
+summary inputs.
+
+**Pass condition:** the built-in exact-centroid summary policy produces the same
+parent summary embeddings deterministically across repeated runs.
+
+**Traces to:** REQ-STREAM-INDEXER-049

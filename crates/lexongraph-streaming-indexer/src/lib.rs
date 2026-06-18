@@ -137,6 +137,53 @@ pub trait CanonicalEmbeddingPolicy {
     fn canonical_embedding(&self, block: &BranchBlock) -> Result<Vec<u8>, Self::Error>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChildSummaryInput {
+    pub embedding: Vec<u8>,
+    pub child: BlockHash,
+    pub level: u64,
+    pub descendant_count: usize,
+}
+
+pub trait ChildSummaryPolicy {
+    type Error: std::error::Error;
+
+    fn summarize_children(
+        &self,
+        embedding_spec: &EmbeddingSpec,
+        children: &[ChildSummaryInput],
+    ) -> Result<Vec<u8>, Self::Error>;
+}
+
+impl<T> ChildSummaryPolicy for T
+where
+    T: CanonicalEmbeddingPolicy,
+{
+    type Error = T::Error;
+
+    fn summarize_children(
+        &self,
+        embedding_spec: &EmbeddingSpec,
+        children: &[ChildSummaryInput],
+    ) -> Result<Vec<u8>, Self::Error> {
+        let branch = build_branch_block(
+            VERSION_1,
+            children.iter().map(|child| child.level).max().unwrap_or(0) + 1,
+            embedding_spec.clone(),
+            children
+                .iter()
+                .map(|child| BranchEntry {
+                    embedding: child.embedding.clone(),
+                    child: child.child,
+                })
+                .collect(),
+            None,
+        )
+        .expect("child summary policy adapter requires a conforming child summary set");
+        self.canonical_embedding(&branch)
+    }
+}
+
 /// Lower-level shared clustering seam used by the built-in and adapter-based
 /// planning paths.
 pub trait StreamingClusteringFactory {
@@ -343,6 +390,33 @@ impl CanonicalEmbeddingPolicy for ArithmeticMeanCanonicalEmbeddingPolicy {
 
     fn canonical_embedding(&self, block: &BranchBlock) -> Result<Vec<u8>, Self::Error> {
         arithmetic_mean_canonical_embedding(block).map_err(ArithmeticMeanCanonicalEmbeddingError)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExactCentroidChildSummaryPolicy;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExactCentroidChildSummaryError(String);
+
+impl fmt::Display for ExactCentroidChildSummaryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for ExactCentroidChildSummaryError {}
+
+impl ChildSummaryPolicy for ExactCentroidChildSummaryPolicy {
+    type Error = ExactCentroidChildSummaryError;
+
+    fn summarize_children(
+        &self,
+        embedding_spec: &EmbeddingSpec,
+        children: &[ChildSummaryInput],
+    ) -> Result<Vec<u8>, Self::Error> {
+        exact_centroid_child_summary(children, embedding_spec)
+            .map_err(ExactCentroidChildSummaryError)
     }
 }
 
@@ -678,6 +752,7 @@ struct IndexedChild {
     embedding: Vec<u8>,
     child: BlockHash,
     level: u64,
+    descendant_count: usize,
 }
 
 struct LayerBuildStatus<'a> {
@@ -744,6 +819,24 @@ impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, BuiltInPlanningPolicy>
             resolver,
             embedding_provider,
             canonical_embedding_policy,
+            BuiltInPlanningPolicy::new(planning),
+            embedding_spec,
+            block_size_target,
+        )
+    }
+
+    pub fn with_summary_policy(
+        resolver: CR,
+        embedding_provider: EP,
+        summary_policy: CEP,
+        planning: BuiltInPlanning,
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Self {
+        Self::new(
+            resolver,
+            embedding_provider,
+            summary_policy,
             BuiltInPlanningPolicy::new(planning),
             embedding_spec,
             block_size_target,
@@ -824,7 +917,7 @@ impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP>
 where
     CR: ContentResolver<R>,
     EP: EmbeddingProvider,
-    CEP: CanonicalEmbeddingPolicy,
+    CEP: ChildSummaryPolicy,
     HPP: HierarchicalPlanningPolicy,
     HPP::Error: 'static,
 {
@@ -1302,6 +1395,7 @@ where
                         embedding: embedding.clone(),
                         child: block_id,
                         level: 0,
+                        descendant_count: 1,
                     });
                     replay_progress.fetch_add(1, AtomicOrdering::Relaxed);
                 }
@@ -1595,10 +1689,25 @@ where
                     child: children[index].child,
                 })
                 .collect::<Vec<_>>();
+            let raw_child_summaries = group
+                .iter()
+                .map(|&index| ChildSummaryInput {
+                    embedding: children[index].embedding.clone(),
+                    child: children[index].child,
+                    level: children[index].level,
+                    descendant_count: children[index].descendant_count,
+                })
+                .collect::<Vec<_>>();
             let entries = normalize_branch_entries(raw_entries);
+            let child_summaries = normalize_child_summary_inputs(raw_child_summaries);
             if entries.len() < 2 {
                 return Err(StreamingIndexerError::TerminalPartitionMaterialization(
                     "normalized child-bearing entry set has fewer than two unique children".into(),
+                ));
+            }
+            if child_summaries.len() < 2 {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "normalized child summary set has fewer than two unique children".into(),
                 ));
             }
 
@@ -1638,7 +1747,7 @@ where
 
             let canonical = self
                 .canonical_embedding_policy
-                .canonical_embedding(&branch)
+                .summarize_children(&self.embedding_spec, &child_summaries)
                 .map_err(|e| StreamingIndexerError::CanonicalEmbeddingFailure(e.to_string()))?;
             validate_embedding_bytes(&canonical, &self.embedding_spec, "canonical")
                 .map_err(StreamingIndexerError::CanonicalEmbeddingFailure)?;
@@ -1647,6 +1756,10 @@ where
                 embedding: canonical,
                 child: block_id,
                 level: parent_level,
+                descendant_count: child_summaries
+                    .iter()
+                    .map(|child| child.descendant_count)
+                    .sum(),
             });
             status.progress.fetch_add(1, AtomicOrdering::Relaxed);
         }
@@ -2817,6 +2930,31 @@ fn normalize_branch_entries(mut entries: Vec<BranchEntry>) -> Vec<BranchEntry> {
     deduped
 }
 
+fn normalize_child_summary_inputs(mut children: Vec<ChildSummaryInput>) -> Vec<ChildSummaryInput> {
+    children.sort_by(|left, right| {
+        left.child
+            .as_bytes()
+            .cmp(right.child.as_bytes())
+            .then_with(|| left.embedding.cmp(&right.embedding))
+    });
+    let mut deduped = Vec::with_capacity(children.len());
+    for child in children {
+        if deduped
+            .last()
+            .is_some_and(|prev: &ChildSummaryInput| prev.child == child.child)
+        {
+            continue;
+        }
+        deduped.push(child);
+    }
+    deduped.sort_by(|left, right| {
+        left.embedding
+            .cmp(&right.embedding)
+            .then_with(|| left.child.as_bytes().cmp(right.child.as_bytes()))
+    });
+    deduped
+}
+
 fn validate_embedding_bytes(
     embedding: &[u8],
     spec: &EmbeddingSpec,
@@ -2917,6 +3055,52 @@ fn arithmetic_mean_canonical_embedding(block: &BranchBlock) -> Result<Vec<u8>, S
         }
     }
     encode_embedding_from_f64(&sums, &block.embedding_spec)
+}
+
+fn exact_centroid_child_summary(
+    children: &[ChildSummaryInput],
+    embedding_spec: &EmbeddingSpec,
+) -> Result<Vec<u8>, String> {
+    if children.is_empty() {
+        return Err("exact-centroid child summary requires at least one child".into());
+    }
+    let dims = usize::try_from(embedding_spec.dims)
+        .map_err(|_| format!("embedding dims {} do not fit in usize", embedding_spec.dims))?;
+    let mut sums = vec![0.0f64; dims];
+    let mut total_weight = 0usize;
+    for (index, child) in children.iter().enumerate() {
+        if child.descendant_count == 0 {
+            return Err(format!(
+                "child summary {index} has zero descendant count and cannot contribute to an exact centroid"
+            ));
+        }
+        let decoded =
+            decode_embedding_as_f64(&child.embedding, embedding_spec, "exact-centroid")
+                .map_err(|error| format!("failed to decode child summary {index}: {error}"))?;
+        for (dimension, (sum, value)) in sums.iter_mut().zip(decoded).enumerate() {
+            if !value.is_finite() {
+                return Err(format!(
+                    "child summary {index} contains non-finite value at dimension {dimension}"
+                ));
+            }
+            *sum += value * child.descendant_count as f64;
+            if !sum.is_finite() {
+                return Err(format!(
+                    "exact-centroid sum overflowed at dimension {dimension}"
+                ));
+            }
+        }
+        total_weight += child.descendant_count;
+    }
+    for (dimension, sum) in sums.iter_mut().enumerate() {
+        *sum /= total_weight as f64;
+        if !sum.is_finite() {
+            return Err(format!(
+                "exact-centroid result became non-finite at dimension {dimension}"
+            ));
+        }
+    }
+    encode_embedding_from_f64(&sums, embedding_spec)
 }
 
 fn weighted_mean_f32_embeddings<'a>(

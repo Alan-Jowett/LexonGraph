@@ -883,3 +883,39 @@ repository exposes the checked-in section-6 summary families through a stable
 registration surface.
 
 **Traces to:** REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-076
+
+### VAL-STREAM-EVAL-063
+
+Run section-7 with at least two surviving section-5 pairs and centroid-
+compatible section-6 summary families.
+
+**Pass condition:** the evaluator materializes and queries a real-only search
+tree, executes the beam-width panel `{1,2,4,8,16}`, and emits per-design
+routing reports containing `TNN@1`, `TNN@5`, `TNN@10`, nodes visited, routing
+depth, and termination summaries derived from actual search execution.
+
+**Traces to:** REQ-STREAM-EVAL-077, REQ-STREAM-EVAL-078
+
+### VAL-STREAM-EVAL-064
+
+Run section-7 once with an unsupported section-6 summary family that is not
+centroid-compatible with the current single-embedding branch-entry model.
+
+**Pass condition:** the evaluator reports an explicit deferred unsupported-
+summary outcome, preserves the originating section-6 contract and held-out
+query-set identities, removes the prior routing-only deferred goal, and retains
+explicit latency/QPS plus persistence or robustness deferred goals.
+
+**Traces to:** REQ-STREAM-EVAL-078, REQ-STREAM-EVAL-079
+
+### VAL-STREAM-EVAL-065
+
+Inspect the section-7 artifact-emission surface after one successful routing
+run.
+
+**Pass condition:** the crate emits per-design reports, a campaign report, a
+human-readable scorecard, and a deterministic carry-forward summary that expose
+section-7 ranking and remaining deferred goals through both reusable library
+and executable-facing surfaces.
+
+**Traces to:** REQ-STREAM-EVAL-079, REQ-STREAM-EVAL-080

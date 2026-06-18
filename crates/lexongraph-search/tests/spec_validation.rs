@@ -11,7 +11,8 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
     CandidateScorer, DefaultCandidateScorer, DefaultEmbeddingCompatibility, DefaultPolicyError,
-    EmbeddingCompatibility, EncodedTargetEmbedding, SearchError, SearchResult, Searcher,
+    EmbeddingCompatibility, EncodedTargetEmbedding, SearchError, SearchResult,
+    SearchTelemetryObserver, SearchTerminationKind, Searcher,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +155,23 @@ impl EmbeddingCompatibility<()> for AcceptAllCompatibility {
 
 struct CountingScorer {
     seen: RefCell<Vec<Vec<u8>>>,
+}
+
+#[derive(Default)]
+struct SummaryRecorder {
+    summaries: RefCell<Vec<lexongraph_search::SearchTelemetrySummary>>,
+}
+
+impl SummaryRecorder {
+    fn summaries(&self) -> Vec<lexongraph_search::SearchTelemetrySummary> {
+        self.summaries.borrow().clone()
+    }
+}
+
+impl SearchTelemetryObserver for SummaryRecorder {
+    fn record_summary(&self, summary: &lexongraph_search::SearchTelemetrySummary) {
+        self.summaries.borrow_mut().push(summary.clone());
+    }
 }
 
 impl CountingScorer {
@@ -1195,6 +1213,98 @@ fn val_search_027_expanded_child_branches_are_removed_from_later_frontiers() {
     assert_eq!(store.get_count(&duplicated), 1);
     assert_eq!(store.get_count(&intermediate), 1);
     assert_eq!(store.get_count(&trailing), 1);
+}
+
+#[test]
+fn val_search_028_telemetry_surface_is_optional_and_trait_based() {
+    let store = MemoryBlockStore::default();
+    let root_id = store
+        .put(&leaf_block(i8_embedding([7, 0]), "telemetry"))
+        .unwrap();
+    let searcher = Searcher::new(AcceptAllCompatibility, FirstByteScorer);
+    let recorder = SummaryRecorder::default();
+
+    let without_observer = searcher.search(&root_id, &(), 1, 1, &store).unwrap();
+    let with_observer = searcher
+        .search_with_observer(&root_id, &(), 1, 1, &store, &recorder)
+        .unwrap();
+
+    assert_eq!(without_observer, with_observer);
+    let summaries = recorder.summaries();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].beam_width, 1);
+    assert_eq!(summaries[0].termination, SearchTerminationKind::Success);
+}
+
+#[test]
+fn val_search_029_telemetry_reporting_is_deterministic() {
+    let store = MemoryBlockStore::default();
+    let left = store
+        .put(&leaf_block(i8_embedding([9, 0]), "left"))
+        .unwrap();
+    let right = store
+        .put(&leaf_block(i8_embedding([8, 0]), "right"))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([9, 0], left), branch_entry([8, 0], right)],
+        ))
+        .unwrap();
+    let searcher = Searcher::new(AcceptAllCompatibility, FirstByteScorer);
+
+    let (first_result, first_summary) = searcher
+        .search_with_telemetry(&root_id, &(), 2, 2, &store)
+        .unwrap();
+    let (second_result, second_summary) = searcher
+        .search_with_telemetry(&root_id, &(), 2, 2, &store)
+        .unwrap();
+
+    assert_eq!(first_result, second_result);
+    assert_eq!(first_summary, second_summary);
+    assert_eq!(first_summary.distinct_blocks_visited, 3);
+    assert_eq!(first_summary.max_routing_depth, 1);
+    assert_eq!(first_summary.termination, SearchTerminationKind::Success);
+}
+
+#[test]
+fn val_search_030_telemetry_does_not_change_results_or_failures() {
+    let store = MemoryBlockStore::default();
+    let child = store
+        .put(&leaf_block(i8_embedding([9, 0]), "child"))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([9, 0], child)],
+        ))
+        .unwrap();
+    let searcher = Searcher::new(AcceptAllCompatibility, FirstByteScorer);
+    let recorder = SummaryRecorder::default();
+
+    let baseline = searcher.search(&root_id, &(), 1, 1, &store).unwrap();
+    let observed = searcher
+        .search_with_observer(&root_id, &(), 1, 1, &store, &recorder)
+        .unwrap();
+    assert_eq!(baseline, observed);
+
+    let failing_searcher = Searcher::new(AcceptAllCompatibility, FailingScorer);
+    let plain_error = failing_searcher
+        .search(&root_id, &(), 1, 1, &store)
+        .unwrap_err();
+    let observed_error = failing_searcher
+        .search_with_observer(&root_id, &(), 1, 1, &store, &recorder)
+        .unwrap_err();
+    assert_eq!(plain_error, observed_error);
+    assert!(matches!(observed_error, SearchError::ScoringFailure { .. }));
+
+    let summaries = recorder.summaries();
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0].termination, SearchTerminationKind::Success);
+    assert_eq!(
+        summaries[1].termination,
+        SearchTerminationKind::ScoringFailure
+    );
 }
 
 #[test]

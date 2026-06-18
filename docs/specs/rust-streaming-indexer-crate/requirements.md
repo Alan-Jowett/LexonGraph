@@ -464,6 +464,34 @@ Within one adaptive planning flow, once the built-in realization switches from
 directional PCA to DCBC, it shall not switch back to directional PCA later in
 that same flow.
 
+### REQ-STREAM-INDEXER-048
+
+The indexer shall expose a reusable parent-summary policy surface that can
+derive one branch-entry embedding from carried-forward child summaries during
+final materialization without requiring a caller to reimplement the rest of the
+indexer lifecycle.
+
+That surface shall make available, for each child summary input, both the
+normalized child embedding and the descendant-count weight represented by that
+child.
+
+### REQ-STREAM-INDEXER-049
+
+The crate shall provide a conforming built-in exact-centroid child-summary
+policy that computes each parent branch-entry embedding as the descendant-count-
+weighted centroid of its carried-forward child summaries.
+
+Given the same finalized hierarchy and child summaries, that exact-centroid
+policy shall produce the same parent summary embeddings deterministically.
+
+### REQ-STREAM-INDEXER-050
+
+Existing canonical-embedding policies remain supported after the child-summary
+policy surface is added.
+
+The crate may adapt a canonical-embedding policy into the new child-summary
+surface when the caller does not need descendant-count-aware summary semantics.
+
 ### REQ-STREAM-INDEXER-037
 
 Independent subpartitions may be processed concurrently only if partition

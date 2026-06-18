@@ -1369,6 +1369,54 @@ At minimum, this revision shall verify:
 - cross-stage provenance and carry-forward reporting
 - narrowed deferred-goal reporting after section-6 execution
 
+### REQ-STREAM-EVAL-077
+
+The evaluator shall add a first executable section-7 routing runner that
+consumes one benchmark profile, one completed section-5 hierarchy-stage report,
+and one completed section-6 summary-stage report.
+
+For this first executable section-7 slice, the runner shall materialize and
+query only real evaluation entities, excluding synthetic padding entities from
+the indexed search space and pruning any empty terminal partitions created by
+that real-only filtering.
+
+### REQ-STREAM-EVAL-078
+
+For each surviving section-5 pair plus section-6 summary-family design that is
+compatible with the current single-embedding branch-entry model, the section-7
+runner shall:
+
+- resolve the declared held-out query sets
+- compute exact top-10 neighbors as ground truth
+- execute actual search with beam widths `{1,2,4,8,16}`
+- report `TNN@1`, `TNN@5`, `TNN@10`, nodes visited, routing depth, and
+  termination counts
+
+Summary families that are not centroid-compatible with the current executable
+branch-entry model shall remain explicit deferred outcomes rather than being
+silently treated as passing routed designs.
+
+### REQ-STREAM-EVAL-079
+
+Section-7 reports and artifacts shall preserve cross-stage provenance,
+including:
+
+- the originating section-4 profile ID
+- the originating section-5 contract ID
+- the originating section-6 contract ID
+- the carried held-out query-set identities
+
+After section 7 executes, routing-specific deferred goals from section 6 are no
+longer reported as deferred, but latency/QPS service-level evaluation plus
+serialization, persistence, and broader robustness obligations remain explicit
+deferred goals.
+
+### REQ-STREAM-EVAL-080
+
+The crate shall expose reusable library and executable surfaces for running
+section 7, listing its artifacts, and validating the checked-in section-7
+routing slice.
+
 ## Out of Scope
 
 This crate does not define or own:
