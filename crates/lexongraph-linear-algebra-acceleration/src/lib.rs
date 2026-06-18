@@ -193,33 +193,28 @@ thread_local! {
 fn resolve_execution_backend_selection(
     request: ExecutionBackendRequest,
 ) -> ExecutionBackendSelection {
+    if matches!(request, ExecutionBackendRequest::Cpu) {
+        return ExecutionBackendSelection {
+            request,
+            resolution: ExecutionBackendResolution::Cpu,
+            detail: "execution was pinned to cpu; wgpu capability probe was skipped".into(),
+        };
+    }
     #[cfg(feature = "wgpu-accel")]
     {
         match wgpu_probe() {
-            WgpuProbe::Supported(info) => match request {
-                ExecutionBackendRequest::Auto | ExecutionBackendRequest::Wgpu => {
-                    ExecutionBackendSelection {
-                        request,
-                        resolution: ExecutionBackendResolution::Wgpu,
-                        detail: format!(
-                            "using wgpu backend on {} (target profile match: {})",
-                            info.summary,
-                            if info.matches_declared_target {
-                                "yes"
-                            } else {
-                                "no"
-                            }
-                        ),
+            WgpuProbe::Supported(info) => ExecutionBackendSelection {
+                request,
+                resolution: ExecutionBackendResolution::Wgpu,
+                detail: format!(
+                    "using wgpu backend on {} (target profile match: {})",
+                    info.summary,
+                    if info.matches_declared_target {
+                        "yes"
+                    } else {
+                        "no"
                     }
-                }
-                ExecutionBackendRequest::Cpu => ExecutionBackendSelection {
-                    request,
-                    resolution: ExecutionBackendResolution::WgpuAvailableButDeclined,
-                    detail: format!(
-                        "wgpu capability probe succeeded on {}; execution was pinned to cpu",
-                        info.summary
-                    ),
-                },
+                ),
             },
             WgpuProbe::Unsupported(message) => ExecutionBackendSelection {
                 request,
@@ -236,13 +231,6 @@ fn resolve_execution_backend_selection(
     #[cfg(not(feature = "wgpu-accel"))]
     {
         match request {
-            ExecutionBackendRequest::Cpu => ExecutionBackendSelection {
-                request,
-                resolution: ExecutionBackendResolution::Cpu,
-                detail:
-                    "execution was pinned to cpu; binary was built without the wgpu-accel feature"
-                        .into(),
-            },
             ExecutionBackendRequest::Auto | ExecutionBackendRequest::Wgpu => {
                 ExecutionBackendSelection {
                     request,
@@ -822,6 +810,17 @@ mod tests {
         for (left, right) in actual.iter().zip(expected.iter()) {
             assert!((left - right).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn cpu_request_resolves_without_wgpu_probe() {
+        let selection =
+            with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
+                detected_execution_backend_selection()
+            });
+        assert_eq!(selection.request, ExecutionBackendRequest::Cpu);
+        assert_eq!(selection.resolution, ExecutionBackendResolution::Cpu);
+        assert_eq!(backend_resolution_label(&selection), "cpu");
     }
 
     #[test]

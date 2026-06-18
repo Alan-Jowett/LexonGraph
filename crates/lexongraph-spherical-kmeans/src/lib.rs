@@ -478,11 +478,11 @@ fn should_use_accelerated_assignments(
     if normalized_embeddings.is_empty() || normalized_centroids.is_empty() {
         return false;
     }
-    let large_enough = normalized_embeddings
+    let operation_count = normalized_embeddings
         .len()
-        .checked_mul(normalized_centroids.len())
-        .and_then(|value| value.checked_mul(normalized_embeddings[0].len()))
-        .is_some_and(|operation_count| operation_count >= ACCELERATED_ASSIGNMENT_MIN_OPERATIONS);
+        .saturating_mul(normalized_centroids.len())
+        .saturating_mul(normalized_embeddings[0].len());
+    let large_enough = operation_count >= ACCELERATED_ASSIGNMENT_MIN_OPERATIONS;
     if !large_enough {
         return false;
     }
