@@ -231,6 +231,13 @@ fn resolve_execution_backend_selection(
     #[cfg(not(feature = "wgpu-accel"))]
     {
         match request {
+            ExecutionBackendRequest::Cpu => ExecutionBackendSelection {
+                request,
+                resolution: ExecutionBackendResolution::Cpu,
+                detail:
+                    "execution was pinned to cpu; binary was built without the wgpu-accel feature"
+                        .into(),
+            },
             ExecutionBackendRequest::Auto | ExecutionBackendRequest::Wgpu => {
                 ExecutionBackendSelection {
                     request,
