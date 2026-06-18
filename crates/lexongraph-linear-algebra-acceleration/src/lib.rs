@@ -63,7 +63,7 @@ impl Default for ExecutionBackendSelection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DenseDistanceMetric {
+pub enum DenseDistanceMetric {
     Euclidean,
     Cosine,
 }
@@ -85,17 +85,14 @@ pub fn with_execution_backend_request<T>(
     run: impl FnOnce() -> T,
 ) -> T {
     let _scope = ExecutionBackendRequestScope::new(request);
-    lexongraph_linear_algebra_acceleration::with_execution_backend_request(
-        shared_backend_request(request),
-        run,
-    )
+    run()
 }
 
-pub(crate) fn detected_execution_backend_selection() -> ExecutionBackendSelection {
+pub fn detected_execution_backend_selection() -> ExecutionBackendSelection {
     resolve_execution_backend_selection(execution_backend_request())
 }
 
-pub(crate) fn backend_resolution_label(selection: &ExecutionBackendSelection) -> &'static str {
+pub fn backend_resolution_label(selection: &ExecutionBackendSelection) -> &'static str {
     match selection.resolution {
         ExecutionBackendResolution::Cpu => "cpu",
         ExecutionBackendResolution::Wgpu => "wgpu",
@@ -105,7 +102,7 @@ pub(crate) fn backend_resolution_label(selection: &ExecutionBackendSelection) ->
     }
 }
 
-pub(crate) fn dense_distance_matrix(
+pub fn dense_distance_matrix(
     left: &[&[f32]],
     right: &[&[f32]],
     metric: DenseDistanceMetric,
@@ -131,17 +128,27 @@ pub(crate) fn dense_distance_matrix(
     cpu_dense_distance_matrix(left, right, metric)
 }
 
-#[cfg(test)]
-pub(crate) fn fixture_cpu_execution_backend_selection() -> ExecutionBackendSelection {
-    ExecutionBackendSelection {
-        request: ExecutionBackendRequest::Cpu,
-        resolution: ExecutionBackendResolution::Cpu,
-        detail: "fixture execution pinned to the cpu backend".into(),
+pub fn chunked_dense_distance_matrix(
+    left: &[&[f32]],
+    right: &[&[f32]],
+    metric: DenseDistanceMetric,
+    max_left_rows_per_chunk: usize,
+) -> Result<Vec<f32>, String> {
+    validate_dense_inputs(left, right, metric)?;
+    let rows_per_chunk = max_left_rows_per_chunk.max(1);
+    let mut output = Vec::with_capacity(
+        left.len()
+            .checked_mul(right.len())
+            .ok_or_else(|| "chunked dense distance output size overflowed usize".to_string())?,
+    );
+    for left_chunk in left.chunks(rows_per_chunk) {
+        output.extend(dense_distance_matrix(left_chunk, right, metric)?);
     }
+    Ok(output)
 }
 
 #[cfg(test)]
-pub(crate) fn with_execution_backend_request_for_test<T>(
+pub fn with_execution_backend_request_for_test<T>(
     request: ExecutionBackendRequest,
     run: impl FnOnce() -> T,
 ) -> T {
@@ -151,22 +158,6 @@ pub(crate) fn with_execution_backend_request_for_test<T>(
 fn backend_request_lock() -> &'static RwLock<ExecutionBackendRequest> {
     static REQUEST: OnceLock<RwLock<ExecutionBackendRequest>> = OnceLock::new();
     REQUEST.get_or_init(|| RwLock::new(ExecutionBackendRequest::Auto))
-}
-
-fn shared_backend_request(
-    request: ExecutionBackendRequest,
-) -> lexongraph_linear_algebra_acceleration::ExecutionBackendRequest {
-    match request {
-        ExecutionBackendRequest::Auto => {
-            lexongraph_linear_algebra_acceleration::ExecutionBackendRequest::Auto
-        }
-        ExecutionBackendRequest::Cpu => {
-            lexongraph_linear_algebra_acceleration::ExecutionBackendRequest::Cpu
-        }
-        ExecutionBackendRequest::Wgpu => {
-            lexongraph_linear_algebra_acceleration::ExecutionBackendRequest::Wgpu
-        }
-    }
 }
 
 fn backend_request_scope_lock() -> &'static Mutex<()> {
@@ -476,25 +467,25 @@ impl WgpuContext {
         let left_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("evaluator-left-vectors"),
+                label: Some("linear-accel-left-vectors"),
                 contents: cast_slice(left_values.as_slice()),
                 usage: wgpu::BufferUsages::STORAGE,
             });
         let right_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("evaluator-right-vectors"),
+                label: Some("linear-accel-right-vectors"),
                 contents: cast_slice(right_values.as_slice()),
                 usage: wgpu::BufferUsages::STORAGE,
             });
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("evaluator-distance-output"),
+            label: Some("linear-accel-distance-output"),
             size: output_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("evaluator-distance-readback"),
+            label: Some("linear-accel-distance-readback"),
             size: output_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -502,12 +493,12 @@ impl WgpuContext {
         let params_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("evaluator-distance-params"),
+                label: Some("linear-accel-distance-params"),
                 contents: cast_slice(&[params]),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("evaluator-distance-bind-group"),
+            label: Some("linear-accel-distance-bind-group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -532,11 +523,11 @@ impl WgpuContext {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("evaluator-distance-encoder"),
+                label: Some("linear-accel-distance-encoder"),
             });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("evaluator-distance-pass"),
+                label: Some("linear-accel-distance-pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -579,7 +570,7 @@ fn create_wgpu_context() -> Result<WgpuContext, WgpuContextError> {
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
         .map_err(|error| {
             WgpuContextError::Unsupported(format!(
-                "no supported wgpu adapter was available for the evaluator: {error:?}"
+                "no supported wgpu adapter was available for the linear acceleration crate: {error:?}"
             ))
         })?;
     let adapter_info = adapter.get_info();
@@ -597,7 +588,7 @@ fn create_wgpu_context() -> Result<WgpuContext, WgpuContextError> {
             .to_ascii_lowercase()
             .contains("radeon 780m");
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("lexongraph-evaluator-wgpu-device"),
+        label: Some("lexongraph-linear-accel-wgpu-device"),
         required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::downlevel_defaults(),
         memory_hints: wgpu::MemoryHints::Performance,
@@ -611,7 +602,7 @@ fn create_wgpu_context() -> Result<WgpuContext, WgpuContextError> {
     })?;
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("evaluator-dense-distance-shader"),
+        label: Some("linear-accel-dense-distance-shader"),
         source: wgpu::ShaderSource::Wgsl(
             r#"
 struct Params {
@@ -669,7 +660,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         ),
     });
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("evaluator-dense-distance-bind-group-layout"),
+        label: Some("linear-accel-dense-distance-bind-group-layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -714,12 +705,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("evaluator-dense-distance-pipeline-layout"),
+        label: Some("linear-accel-dense-distance-pipeline-layout"),
         bind_group_layouts: &[Some(&bind_group_layout)],
         immediate_size: 0,
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("evaluator-dense-distance-pipeline"),
+        label: Some("linear-accel-dense-distance-pipeline"),
         layout: Some(&pipeline_layout),
         module: &shader,
         entry_point: Some("main"),
@@ -772,17 +763,6 @@ mod tests {
     }
 
     #[test]
-    fn execution_backend_selection_default_is_stable_for_deserialization() {
-        let selection = ExecutionBackendSelection::default();
-        assert_eq!(selection.request, ExecutionBackendRequest::Auto);
-        assert_eq!(selection.resolution, ExecutionBackendResolution::Cpu);
-        assert_eq!(
-            selection.detail,
-            "execution backend selection was not recorded in this artifact"
-        );
-    }
-
-    #[test]
     fn dense_distance_matrix_cpu_matches_expected_euclidean_values() {
         let distances =
             with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
@@ -794,6 +774,23 @@ mod tests {
                 .unwrap()
             });
         assert_eq!(distances, vec![0.0, 10.0, 5.0, 5.0]);
+    }
+
+    #[test]
+    fn chunked_dense_distance_matrix_matches_unchunked_cpu_values() {
+        let actual = with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
+            chunked_dense_distance_matrix(
+                &[&[1.0, 0.0], &[0.0, 1.0], &[1.0, 1.0]],
+                &[&[1.0, 0.0], &[0.0, 1.0]],
+                DenseDistanceMetric::Cosine,
+                1,
+            )
+            .unwrap()
+        });
+        let expected = [0.0, 1.0, 1.0, 0.0, 0.29289323, 0.29289323];
+        for (left, right) in actual.iter().zip(expected.iter()) {
+            assert!((left - right).abs() < 1e-5);
+        }
     }
 
     #[cfg(feature = "wgpu-accel")]
@@ -828,26 +825,5 @@ mod tests {
         for (left, right) in expected.iter().zip(actual.iter()) {
             assert!((left - right).abs() < 1e-4);
         }
-    }
-
-    #[cfg(not(feature = "wgpu-accel"))]
-    #[test]
-    fn cpu_request_reports_cpu_when_wgpu_feature_is_disabled() {
-        let selection = resolve_execution_backend_selection(ExecutionBackendRequest::Cpu);
-        assert_eq!(selection.resolution, ExecutionBackendResolution::Cpu);
-        assert!(selection.detail.contains("pinned to cpu"));
-    }
-
-    #[test]
-    fn backend_request_is_restored_after_panicking_test_helper() {
-        with_execution_backend_request_for_test(ExecutionBackendRequest::Auto, || {
-            let panic_result = std::panic::catch_unwind(|| {
-                with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
-                    panic!("intentional panic to verify reset guard");
-                });
-            });
-            assert!(panic_result.is_err());
-            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
-        });
     }
 }

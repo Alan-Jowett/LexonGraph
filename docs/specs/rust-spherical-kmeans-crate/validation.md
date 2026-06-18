@@ -126,3 +126,67 @@ Run the shared streaming clustering conformance helpers against the crate.
 determinism, and cluster-ID continuity checks.
 
 **Traces to:** REQ-SPHKM-014
+
+### VAL-SPHKM-012
+
+Inspect the crate's optional acceleration surface and backend-selection path.
+
+**Pass condition:** the crate exposes optional CPU/WGPU execution only through
+the shared acceleration boundary, preserves a correct CPU path, and records
+explicit fallback when acceleration is unavailable or declined.
+
+**Traces to:** REQ-SPHKM-015, REQ-SPHKM-020
+
+### VAL-SPHKM-013
+
+Run one conformant spherical-kmeans workload on CPU and on the accelerated path
+when supported.
+
+**Pass condition:** the observable cluster IDs, classifier behavior, and pass-
+level semantics remain equivalent within the documented floating-point
+tolerance.
+
+**Traces to:** REQ-SPHKM-019
+
+### VAL-SPHKM-014
+
+Run one accelerated workload large enough to require bounded-memory dense
+point-to-centroid work.
+
+**Pass condition:** the crate exercises chunked or tiled accelerated execution
+through the shared acceleration boundary rather than requiring whole logical
+matrix materialization in device memory.
+
+**Traces to:** REQ-SPHKM-018
+
+### VAL-SPHKM-015
+
+Run the targeted spherical-kmeans microbenchmark on CPU and on the accelerated
+path under repeated identical conditions.
+
+**Pass condition:** the accelerated path demonstrates a statistically repeatable
+wall-clock win over CPU, where the proof rule is 5 identical CPU runs and 5
+identical WGPU runs with WGPU's median wall-clock time strictly lower than the
+CPU median.
+
+**Traces to:** REQ-SPHKM-016
+
+### VAL-SPHKM-016
+
+Run the canonical realistic section-4 qualification workflow with spherical
+k-means on CPU and on the accelerated path under repeated identical conditions.
+
+**Pass condition:** the accelerated path demonstrates a statistically repeatable
+wall-clock win over CPU on the realistic qualification surface rather than only
+on a microbenchmark, using the same 5-run-per-backend median rule.
+
+**Traces to:** REQ-SPHKM-016, REQ-SPHKM-017
+
+### VAL-SPHKM-017
+
+Inspect the artifacts emitted for the accelerated proof runs.
+
+**Pass condition:** the artifacts record the actual backend resolution and
+whether fallback occurred, so the reported speedup claims are auditable.
+
+**Traces to:** REQ-SPHKM-020

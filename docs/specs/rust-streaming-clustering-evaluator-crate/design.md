@@ -942,7 +942,7 @@ used for gate failures and candidate shared-contract failures.
 
 ### DSG-STREAM-EVAL-046 `Optional accelerator backend selection`
 
-The evaluator adds an internal execution-backend selection layer that chooses
+The evaluator reuses the shared repository-owned acceleration boundary to select
 between CPU and optional WGPU acceleration for supported evaluator-owned dense
 kernels. Selection is capability-gated and does not alter benchmark-profile
 shape or candidate registration semantics.
@@ -958,6 +958,9 @@ distinguish hardware-targeted accelerated runs from CPU fallback runs.
 The first accelerated revision covers evaluator-owned dense kernels and shared
 DCBC dense kernels only. Directional-PCA and PCA eigendecomposition remain on
 CPU in this revision and are not required for accelerated conformance.
+
+The evaluator does not own the generic GPU runtime boundary itself; it consumes
+the shared acceleration boundary defined elsewhere in the repository.
 
 ### DSG-STREAM-EVAL-049 `Cross-backend verdict preservation`
 

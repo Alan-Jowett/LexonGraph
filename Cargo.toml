@@ -14,6 +14,7 @@ members = [
     "crates/lexongraph-directional-pca",
     "crates/lexongraph-embeddings-openai",
     "crates/lexongraph-embeddings-trait",
+    "crates/lexongraph-linear-algebra-acceleration",
     "crates/lexongraph-pca",
     "crates/lexongraph-pca-chunking",
     "crates/lexongraph-search",

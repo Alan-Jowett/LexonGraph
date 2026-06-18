@@ -104,6 +104,8 @@ The new crate shall remain subordinate to:
   trainer/classifier contract
 - `docs/specs/rust-block-storage-trait/` for the backend-neutral storage
   contract used by scalable corpus references
+- `docs/specs/rust-linear-algebra-acceleration-crate/` for any shared optional
+  acceleration boundary reused by evaluator-owned kernels
 
 If those sources appear to conflict, `docs/research/clustering.md` remains
 authoritative for the end-state black-box requirements, and
@@ -1188,8 +1190,9 @@ At minimum:
 
 ### REQ-STREAM-EVAL-062
 
-The evaluator may provide an optional WGPU-backed acceleration path for
-evaluator-owned dense kernels, including:
+The evaluator may reuse the shared repository-owned linear-algebra acceleration
+boundary to provide an optional WGPU-backed path for evaluator-owned dense
+kernels, including:
 
 - exact-neighbor ground-truth generation
 - section-4 evaluator replay or dense distance work
@@ -1218,8 +1221,8 @@ provenance or reporting sufficient to distinguish:
 
 ### REQ-STREAM-EVAL-065
 
-The first accelerated revision may scope GPU support to evaluator-owned dense
-kernels and shared DCBC dense kernels only. It shall not require
+The first accelerated evaluator revision may scope GPU support to evaluator-
+owned dense kernels and shared DCBC dense kernels only. It shall not require
 directional-PCA or PCA eigendecomposition acceleration in order to claim
 conformance for this revision.
 

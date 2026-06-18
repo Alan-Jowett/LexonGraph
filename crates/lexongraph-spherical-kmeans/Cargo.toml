@@ -6,7 +6,11 @@ name = "lexongraph-spherical-kmeans"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+wgpu-accel = ["lexongraph-linear-algebra-acceleration/wgpu-accel"]
+
 [dependencies]
+lexongraph-linear-algebra-acceleration = { path = "../lexongraph-linear-algebra-acceleration" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
 
 [dev-dependencies]

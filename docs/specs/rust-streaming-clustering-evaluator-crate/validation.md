@@ -790,8 +790,8 @@ Run evaluator backend selection on:
 - a host, build, or configuration where it is unavailable
 
 **Pass condition:** the evaluator reports explicit backend selection or fallback
-status in provenance or campaign artifacts and does not silently claim
-acceleration.
+status in provenance or campaign artifacts through the shared acceleration
+boundary and does not silently claim acceleration.
 
 **Traces to:** REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064
 

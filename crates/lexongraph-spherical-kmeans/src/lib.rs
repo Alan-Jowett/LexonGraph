@@ -3,6 +3,10 @@
 
 //! Streaming spherical k-means clustering for LexonGraph.
 
+use lexongraph_linear_algebra_acceleration::{
+    DenseDistanceMetric, ExecutionBackendResolution, chunked_dense_distance_matrix,
+    detected_execution_backend_selection,
+};
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
@@ -13,6 +17,8 @@ pub const SPHERICAL_KMEANS_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-spherical-kmeans-v", env!("CARGO_PKG_VERSION"));
 
 const DISTANCE_EPSILON: f32 = 1e-6;
+const ACCELERATED_ASSIGNMENT_MIN_OPERATIONS: usize = 1_000_000;
+const ACCELERATED_ASSIGNMENT_TARGET_DISTANCES_PER_CHUNK: usize = 1_048_576;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SphericalInitializationPolicy {
@@ -392,6 +398,25 @@ fn assign_points(
     normalized_centroids: &[Vec<f32>],
     previous_assignments: Option<&[usize]>,
 ) -> Result<Vec<usize>, StreamingClusteringError> {
+    if should_use_accelerated_assignments(normalized_embeddings, normalized_centroids) {
+        return assign_points_accelerated(
+            normalized_embeddings,
+            normalized_centroids,
+            previous_assignments,
+        );
+    }
+    assign_points_cpu(
+        normalized_embeddings,
+        normalized_centroids,
+        previous_assignments,
+    )
+}
+
+fn assign_points_cpu(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+    previous_assignments: Option<&[usize]>,
+) -> Result<Vec<usize>, StreamingClusteringError> {
     normalized_embeddings
         .iter()
         .enumerate()
@@ -405,15 +430,87 @@ fn assign_points(
         .collect()
 }
 
+fn assign_points_accelerated(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+    previous_assignments: Option<&[usize]>,
+) -> Result<Vec<usize>, StreamingClusteringError> {
+    let centroid_refs: Vec<&[f32]> = normalized_centroids
+        .iter()
+        .map(std::vec::Vec::as_slice)
+        .collect();
+    let rows_per_chunk =
+        assignment_chunk_row_count(normalized_embeddings.len(), centroid_refs.len());
+    let mut assignments = Vec::with_capacity(normalized_embeddings.len());
+    for (chunk_index, embedding_chunk) in normalized_embeddings.chunks(rows_per_chunk).enumerate() {
+        let left_refs: Vec<&[f32]> = embedding_chunk
+            .iter()
+            .map(std::vec::Vec::as_slice)
+            .collect();
+        let distances = chunked_dense_distance_matrix(
+            left_refs.as_slice(),
+            centroid_refs.as_slice(),
+            DenseDistanceMetric::Cosine,
+            rows_per_chunk,
+        )
+        .map_err(|error| StreamingClusteringError::InvalidConfiguration {
+            message: format!("accelerated spherical k-means assignment failed: {error}"),
+        })?;
+        for row_index in 0..embedding_chunk.len() {
+            let global_row_index = chunk_index * rows_per_chunk + row_index;
+            let row_offset = row_index * centroid_refs.len();
+            let row = &distances[row_offset..row_offset + centroid_refs.len()];
+            assignments.push(best_cluster_from_distances(
+                row,
+                previous_assignments.and_then(|values| values.get(global_row_index).copied()),
+            )?);
+        }
+    }
+    Ok(assignments)
+}
+
+fn should_use_accelerated_assignments(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+) -> bool {
+    if normalized_embeddings.is_empty() || normalized_centroids.is_empty() {
+        return false;
+    }
+    if detected_execution_backend_selection().resolution != ExecutionBackendResolution::Wgpu {
+        return false;
+    }
+    normalized_embeddings
+        .len()
+        .checked_mul(normalized_centroids.len())
+        .and_then(|value| value.checked_mul(normalized_embeddings[0].len()))
+        .is_some_and(|operation_count| operation_count >= ACCELERATED_ASSIGNMENT_MIN_OPERATIONS)
+}
+
+fn assignment_chunk_row_count(observed_count: usize, cluster_count: usize) -> usize {
+    let cluster_count = cluster_count.max(1);
+    let rows = ACCELERATED_ASSIGNMENT_TARGET_DISTANCES_PER_CHUNK / cluster_count;
+    rows.clamp(1, observed_count.max(1))
+}
+
 fn best_cluster(
     normalized_embedding: &[f32],
     normalized_centroids: &[Vec<f32>],
     previous_assignment: Option<usize>,
 ) -> Result<usize, StreamingClusteringError> {
+    let distances = normalized_centroids
+        .iter()
+        .map(|centroid| cosine_distance(normalized_embedding, centroid.as_slice()))
+        .collect::<Result<Vec<_>, _>>()?;
+    best_cluster_from_distances(distances.as_slice(), previous_assignment)
+}
+
+fn best_cluster_from_distances(
+    distances: &[f32],
+    previous_assignment: Option<usize>,
+) -> Result<usize, StreamingClusteringError> {
     let mut best_clusters = Vec::new();
     let mut best_distance = f32::INFINITY;
-    for (cluster_index, centroid) in normalized_centroids.iter().enumerate() {
-        let candidate = cosine_distance(normalized_embedding, centroid.as_slice())?;
+    for (cluster_index, &candidate) in distances.iter().enumerate() {
         if candidate + DISTANCE_EPSILON < best_distance {
             best_distance = candidate;
             best_clusters.clear();
