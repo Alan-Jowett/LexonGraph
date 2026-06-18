@@ -926,24 +926,47 @@ mod tests {
 
     #[test]
     fn persistent_backend_request_can_be_set_and_reset() {
-        reset_execution_backend_request();
-        set_execution_backend_request(ExecutionBackendRequest::Cpu);
-        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
-        reset_execution_backend_request();
-        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+        with_execution_backend_request_for_test(ExecutionBackendRequest::Auto, || {
+            reset_execution_backend_request();
+            set_execution_backend_request(ExecutionBackendRequest::Cpu);
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+            reset_execution_backend_request();
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+        });
     }
 
     #[test]
     fn scoped_backend_request_restores_persistent_request() {
-        reset_execution_backend_request();
-        set_execution_backend_request(ExecutionBackendRequest::Cpu);
+        with_execution_backend_request_for_test(ExecutionBackendRequest::Auto, || {
+            reset_execution_backend_request();
+            set_execution_backend_request(ExecutionBackendRequest::Cpu);
 
-        with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
-            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Wgpu);
+            with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+                assert_eq!(execution_backend_request(), ExecutionBackendRequest::Wgpu);
+            });
+
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+            reset_execution_backend_request();
         });
+    }
 
-        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
-        reset_execution_backend_request();
+    #[test]
+    fn scoped_backend_request_restores_persistent_request_after_panic() {
+        with_execution_backend_request_for_test(ExecutionBackendRequest::Auto, || {
+            reset_execution_backend_request();
+            set_execution_backend_request(ExecutionBackendRequest::Cpu);
+
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+                    assert_eq!(execution_backend_request(), ExecutionBackendRequest::Wgpu);
+                    panic!("boom");
+                });
+            }));
+
+            assert!(result.is_err());
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+            reset_execution_backend_request();
+        });
     }
 
     #[cfg(feature = "wgpu-accel")]

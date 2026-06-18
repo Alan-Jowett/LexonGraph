@@ -222,7 +222,7 @@ fn val_sphkm_011_classifier_assigns_deterministically() {
 }
 
 #[test]
-fn val_sphkm_011_classifier_batch_assignment_matches_pointwise_assignment() {
+fn val_sphkm_020_classifier_batch_assignment_matches_pointwise_assignment() {
     let mut trainer = conforming_trainer();
     for pass in sample_passes() {
         for batch in pass {
