@@ -34,6 +34,16 @@ fn val_sphkm_001_and_002_repository_and_public_surface_exist() {
             .join("requirements.md")
             .exists()
     );
+    assert!(
+        manifest_dir
+            .join("..")
+            .join("..")
+            .join("docs")
+            .join("specs")
+            .join("rust-linear-algebra-acceleration-crate")
+            .join("requirements.md")
+            .exists()
+    );
 
     let trainer = conforming_trainer();
     assert_eq!(trainer.state(), TrainerState::Idle);
@@ -172,6 +182,8 @@ fn val_sphkm_005_and_006_normalized_space_behavior_is_present_in_source() {
     assert!(source.contains("normalize_embedding("));
     assert!(source.contains("cosine_distance("));
     assert!(source.contains("SeededDeterministicFarthestPoint"));
+    assert!(source.contains("dense_distance_matrix("));
+    assert!(source.contains("detected_execution_backend_selection("));
 }
 
 #[test]
@@ -210,4 +222,23 @@ fn val_sphkm_011_classifier_assigns_deterministically() {
 fn val_sphkm_014_shared_conformance_helpers_pass() {
     let harness = support::Harness;
     lexongraph_streaming_clustering::conformance::run_streaming_clustering_suite(&harness).unwrap();
+}
+
+#[test]
+fn val_sphkm_012_014_015_016_and_017_acceleration_artifacts_exist() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        manifest_dir
+            .join("tests/acceleration_validation.rs")
+            .exists()
+    );
+    assert!(
+        manifest_dir
+            .join("src/bin/acceleration_benchmark.rs")
+            .exists()
+    );
+
+    let manifest = fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
+    assert!(manifest.contains("wgpu-accel"));
+    assert!(manifest.contains("lexongraph-linear-algebra-acceleration"));
 }

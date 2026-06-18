@@ -45,6 +45,8 @@ The crate shall remain subordinate to:
 - `docs/research/clustering_plan.md` for the motivating control-candidate role
 - `docs/specs/rust-streaming-clustering-crate/` for the shared streaming
   trainer/classifier contract
+- `docs/specs/rust-linear-algebra-acceleration-crate/` for any shared optional
+  acceleration boundary reused by this crate
 
 If those sources appear to conflict, the shared streaming clustering
 specification is authoritative for the trainer/classifier contract, this
@@ -152,3 +154,50 @@ The repository shall include executable verification artifacts covering both:
 - this crate's observable spherical-k-means behavior
 - this crate's conformance to the shared streaming clustering contract,
   including the opt-in conformance-helper surface
+
+### REQ-SPHKM-015
+
+This revision shall add optional backend-selectable acceleration through the
+shared repository-owned linear-algebra acceleration boundary while preserving a
+correct CPU realization.
+
+### REQ-SPHKM-016
+
+This revision shall not treat GPU offload as sufficient by itself. Any WGPU path
+claimed by this crate shall be justified by a statistically repeatable wall-
+clock win over the CPU path on both:
+
+- a targeted spherical-kmeans microbenchmark
+- the canonical realistic section-4 qualification benchmark on this machine
+
+For each proof surface above, the benchmark rule is:
+
+- run 5 identical executions on CPU
+- run 5 identical executions on WGPU
+- compare median wall-clock time per backend
+- accept acceleration only if the WGPU median is strictly lower than the CPU
+  median
+
+### REQ-SPHKM-017
+
+The accelerated realization may target only the computational hot path or hot
+paths whose offload yields the measured win. It need not offload every step of
+the algorithm.
+
+### REQ-SPHKM-018
+
+If the accelerated realization performs dense point-to-centroid or equivalent
+large linear-algebra work, it shall support chunked or tiled execution through
+the shared acceleration boundary rather than requiring whole logical matrix
+materialization in device memory.
+
+### REQ-SPHKM-019
+
+CPU and WGPU executions of the same conformant workload shall preserve the same
+observable spherical-kmeans semantics, stable cluster IDs, and classifier
+behavior, allowing only explicitly documented floating-point tolerance.
+
+### REQ-SPHKM-020
+
+Artifacts used to prove accelerated conformance shall record which backend
+executed and whether fallback occurred, so net-speedup claims are auditable.

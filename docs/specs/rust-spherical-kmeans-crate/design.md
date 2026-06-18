@@ -42,6 +42,11 @@ The crate depends on `docs/research/clustering_plan.md` for the motivating
 control-candidate role and on `docs/specs/rust-streaming-clustering-crate/` for
 the shared trainer/classifier contract.
 
+If this crate adopts optional acceleration, it also depends on
+`docs/specs/rust-linear-algebra-acceleration-crate/` for the shared backend and
+kernel boundary rather than owning evaluator-specific or algorithm-specific GPU
+runtime policy.
+
 ### DSG-SPHKM-002 `Concrete trainer/classifier realization`
 
 The crate exposes one trainer type implementing `StreamingClusterTrainer` and
@@ -113,6 +118,50 @@ The repository includes automated tests that exercise both the crate's
 algorithm-specific observable behavior and the shared streaming clustering
 conformance helpers.
 
+### DSG-SPHKM-011 `Optional shared acceleration backend`
+
+The crate may select between CPU and optional WGPU-backed hot-path execution
+through the shared repository-owned acceleration boundary while preserving the
+existing streaming trainer/classifier contract and a correct CPU path.
+
+### DSG-SPHKM-012 `Hot-path scoped acceleration`
+
+The accelerated revision is allowed to accelerate only the dominant
+matrix-oriented or reduction-heavy steps that yield a measured end-to-end win.
+Algorithmically branchy or low-intensity steps may remain on CPU.
+
+### DSG-SPHKM-013 `Chunked assignment-scale execution`
+
+When accelerated execution covers point-to-centroid or equivalent dense work,
+the crate uses the shared acceleration boundary's chunked or tiled execution
+surface so realistic workloads do not require whole logical matrix
+materialization in device memory.
+
+### DSG-SPHKM-014 `Cross-backend semantic parity`
+
+Backend choice does not alter the crate's observable cluster-ID continuity,
+classifier semantics, or documented normalized-space behavior beyond explicitly
+admitted floating-point tolerance.
+
+### DSG-SPHKM-015 `Benchmark-proven acceleration`
+
+The crate's accelerated conformance is owned by consumer-visible benchmark
+surfaces rather than kernel-local timing claims. The required proof surface is:
+
+1. a targeted spherical-kmeans microbenchmark
+2. the canonical realistic section-4 qualification path
+
+The crate does not treat mere offload as success. For each proof surface, the
+benchmark rule is 5 identical CPU runs versus 5 identical WGPU runs, with WGPU
+accepted only when its median wall-clock time is strictly lower than the CPU
+median.
+
+### DSG-SPHKM-016 `Auditable backend attribution`
+
+The artifacts used to justify acceleration record the actual backend resolution
+and whether CPU fallback occurred so a reported speedup can be traced to the
+execution mode that produced it.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -127,3 +176,9 @@ conformance helpers.
 | DSG-SPHKM-008 | REQ-SPHKM-010 |
 | DSG-SPHKM-009 | REQ-SPHKM-013 |
 | DSG-SPHKM-010 | REQ-SPHKM-014 |
+| DSG-SPHKM-011 | REQ-SPHKM-015, REQ-SPHKM-019 |
+| DSG-SPHKM-012 | REQ-SPHKM-017 |
+| DSG-SPHKM-013 | REQ-SPHKM-018 |
+| DSG-SPHKM-014 | REQ-SPHKM-019 |
+| DSG-SPHKM-015 | REQ-SPHKM-016, REQ-SPHKM-017 |
+| DSG-SPHKM-016 | REQ-SPHKM-020 |

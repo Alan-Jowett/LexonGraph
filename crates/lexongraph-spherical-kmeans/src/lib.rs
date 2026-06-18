@@ -3,6 +3,11 @@
 
 //! Streaming spherical k-means clustering for LexonGraph.
 
+use lexongraph_linear_algebra_acceleration::{
+    DenseDistanceErrorKind, DenseDistanceMetric, ExecutionBackendRequest,
+    ExecutionBackendResolution, classify_dense_distance_error, dense_distance_matrix,
+    detected_execution_backend_selection, execution_backend_request,
+};
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
@@ -13,6 +18,8 @@ pub const SPHERICAL_KMEANS_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-spherical-kmeans-v", env!("CARGO_PKG_VERSION"));
 
 const DISTANCE_EPSILON: f32 = 1e-6;
+const ACCELERATED_ASSIGNMENT_MIN_OPERATIONS: usize = 1_000_000;
+const ACCELERATED_ASSIGNMENT_TARGET_DISTANCES_PER_CHUNK: usize = 1_048_576;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SphericalInitializationPolicy {
@@ -381,13 +388,32 @@ fn nearest_centroid_distance(
     selected
         .iter()
         .map(|&index| {
-            cosine_distance(embedding, normalized_embeddings[index].as_slice())
+            cosine_distance_normalized(embedding, normalized_embeddings[index].as_slice())
                 .unwrap_or(f32::INFINITY)
         })
         .fold(f32::INFINITY, f32::min)
 }
 
 fn assign_points(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+    previous_assignments: Option<&[usize]>,
+) -> Result<Vec<usize>, StreamingClusteringError> {
+    if should_use_accelerated_assignments(normalized_embeddings, normalized_centroids) {
+        return assign_points_accelerated(
+            normalized_embeddings,
+            normalized_centroids,
+            previous_assignments,
+        );
+    }
+    assign_points_cpu(
+        normalized_embeddings,
+        normalized_centroids,
+        previous_assignments,
+    )
+}
+
+fn assign_points_cpu(
     normalized_embeddings: &[Vec<f32>],
     normalized_centroids: &[Vec<f32>],
     previous_assignments: Option<&[usize]>,
@@ -405,31 +431,122 @@ fn assign_points(
         .collect()
 }
 
+fn assign_points_accelerated(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+    previous_assignments: Option<&[usize]>,
+) -> Result<Vec<usize>, StreamingClusteringError> {
+    let centroid_refs: Vec<&[f32]> = normalized_centroids
+        .iter()
+        .map(std::vec::Vec::as_slice)
+        .collect();
+    let rows_per_chunk =
+        assignment_chunk_row_count(normalized_embeddings.len(), centroid_refs.len());
+    let mut assignments = Vec::with_capacity(normalized_embeddings.len());
+    let mut left_refs = Vec::with_capacity(rows_per_chunk);
+    for (chunk_index, embedding_chunk) in normalized_embeddings.chunks(rows_per_chunk).enumerate() {
+        left_refs.clear();
+        left_refs.extend(embedding_chunk.iter().map(std::vec::Vec::as_slice));
+        let distances = dense_distance_matrix(
+            left_refs.as_slice(),
+            centroid_refs.as_slice(),
+            DenseDistanceMetric::Cosine,
+        )
+        .map_err(map_accelerated_assignment_error)?;
+        for row_index in 0..embedding_chunk.len() {
+            let global_row_index = chunk_index * rows_per_chunk + row_index;
+            let row_offset = row_index * centroid_refs.len();
+            let row = &distances[row_offset..row_offset + centroid_refs.len()];
+            assignments.push(best_cluster_from_distances(
+                row,
+                previous_assignments.and_then(|values| values.get(global_row_index).copied()),
+            )?);
+        }
+    }
+    Ok(assignments)
+}
+
+fn should_use_accelerated_assignments(
+    normalized_embeddings: &[Vec<f32>],
+    normalized_centroids: &[Vec<f32>],
+) -> bool {
+    if normalized_embeddings.is_empty() || normalized_centroids.is_empty() {
+        return false;
+    }
+    match execution_backend_request() {
+        ExecutionBackendRequest::Cpu => return false,
+        ExecutionBackendRequest::Wgpu => {
+            return detected_execution_backend_selection().resolution
+                == ExecutionBackendResolution::Wgpu;
+        }
+        ExecutionBackendRequest::Auto => {}
+    }
+    let operation_count = normalized_embeddings
+        .len()
+        .saturating_mul(normalized_centroids.len())
+        .saturating_mul(normalized_embeddings[0].len());
+    let large_enough = operation_count >= ACCELERATED_ASSIGNMENT_MIN_OPERATIONS;
+    if !large_enough {
+        return false;
+    }
+    detected_execution_backend_selection().resolution == ExecutionBackendResolution::Wgpu
+}
+
+fn assignment_chunk_row_count(observed_count: usize, cluster_count: usize) -> usize {
+    let cluster_count = cluster_count.max(1);
+    let rows = ACCELERATED_ASSIGNMENT_TARGET_DISTANCES_PER_CHUNK / cluster_count;
+    rows.clamp(1, observed_count.max(1))
+}
+
 fn best_cluster(
     normalized_embedding: &[f32],
     normalized_centroids: &[Vec<f32>],
     previous_assignment: Option<usize>,
 ) -> Result<usize, StreamingClusteringError> {
-    let mut best_clusters = Vec::new();
     let mut best_distance = f32::INFINITY;
+    let mut best_cluster_id: Option<usize> = None;
+    let mut previous_assignment_is_best = false;
     for (cluster_index, centroid) in normalized_centroids.iter().enumerate() {
-        let candidate = cosine_distance(normalized_embedding, centroid.as_slice())?;
+        let candidate = cosine_distance_normalized(normalized_embedding, centroid.as_slice())?;
         if candidate + DISTANCE_EPSILON < best_distance {
             best_distance = candidate;
-            best_clusters.clear();
-            best_clusters.push(cluster_index);
+            best_cluster_id = Some(cluster_index);
+            previous_assignment_is_best = previous_assignment == Some(cluster_index);
         } else if (candidate - best_distance).abs() <= DISTANCE_EPSILON {
-            best_clusters.push(cluster_index);
+            best_cluster_id =
+                Some(best_cluster_id.map_or(cluster_index, |current| current.min(cluster_index)));
+            previous_assignment_is_best |= previous_assignment == Some(cluster_index);
         }
     }
-    if let Some(previous_assignment) = previous_assignment
-        && best_clusters.contains(&previous_assignment)
-    {
+    if previous_assignment_is_best && let Some(previous_assignment) = previous_assignment {
         return Ok(previous_assignment);
     }
-    best_clusters
-        .into_iter()
-        .min()
+    best_cluster_id
+        .ok_or_else(|| unsatisfiable_constraint("spherical k-means requires at least one centroid"))
+}
+
+fn best_cluster_from_distances(
+    distances: &[f32],
+    previous_assignment: Option<usize>,
+) -> Result<usize, StreamingClusteringError> {
+    let mut best_distance = f32::INFINITY;
+    let mut best_cluster_id: Option<usize> = None;
+    let mut previous_assignment_is_best = false;
+    for (cluster_index, &candidate) in distances.iter().enumerate() {
+        if candidate + DISTANCE_EPSILON < best_distance {
+            best_distance = candidate;
+            best_cluster_id = Some(cluster_index);
+            previous_assignment_is_best = previous_assignment == Some(cluster_index);
+        } else if (candidate - best_distance).abs() <= DISTANCE_EPSILON {
+            best_cluster_id =
+                Some(best_cluster_id.map_or(cluster_index, |current| current.min(cluster_index)));
+            previous_assignment_is_best |= previous_assignment == Some(cluster_index);
+        }
+    }
+    if previous_assignment_is_best && let Some(previous_assignment) = previous_assignment {
+        return Ok(previous_assignment);
+    }
+    best_cluster_id
         .ok_or_else(|| unsatisfiable_constraint("spherical k-means requires at least one centroid"))
 }
 
@@ -487,13 +604,13 @@ fn repair_empty_clusters(
             .enumerate()
             .filter(|(_, cluster_index)| **cluster_index == donor_cluster)
             .max_by(|left, right| {
-                cosine_distance(
+                cosine_distance_normalized(
                     normalized_embeddings[left.0].as_slice(),
                     normalized_centroids[donor_cluster].as_slice(),
                 )
                 .unwrap_or(f32::NEG_INFINITY)
                 .partial_cmp(
-                    &cosine_distance(
+                    &cosine_distance_normalized(
                         normalized_embeddings[right.0].as_slice(),
                         normalized_centroids[donor_cluster].as_slice(),
                     )
@@ -520,7 +637,7 @@ fn average_objective(
 ) -> Result<f64, StreamingClusteringError> {
     let mut total = 0.0f64;
     for (embedding, &cluster_index) in normalized_embeddings.iter().zip(assignments) {
-        total += f64::from(cosine_distance(
+        total += f64::from(cosine_distance_normalized(
             embedding.as_slice(),
             normalized_centroids[cluster_index].as_slice(),
         )?);
@@ -535,7 +652,7 @@ fn maximum_centroid_shift(
     previous
         .iter()
         .zip(updated)
-        .map(|(left, right)| cosine_distance(left.as_slice(), right.as_slice()))
+        .map(|(left, right)| cosine_distance_normalized(left.as_slice(), right.as_slice()))
         .try_fold(0.0f32, |current_max, candidate| {
             candidate.map(|v| current_max.max(v))
         })
@@ -576,14 +693,49 @@ fn ensure_non_zero_norm(embedding: &[f32]) -> Result<(), StreamingClusteringErro
     Ok(())
 }
 
+#[cfg(test)]
 fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f32, StreamingClusteringError> {
     if left.len() != right.len() {
         return Err(malformed_input(
             "cosine distance requires equal embedding dimensionality",
         ));
     }
-    let similarity = left.iter().zip(right).map(|(l, r)| l * r).sum::<f32>();
-    Ok(1.0 - similarity)
+    let (dot_product, left_norm_sq, right_norm_sq) = left.iter().zip(right).fold(
+        (0.0f64, 0.0f64, 0.0f64),
+        |(dot, left_sq, right_sq), (l, r)| {
+            let left_value = f64::from(*l);
+            let right_value = f64::from(*r);
+            (
+                dot + left_value * right_value,
+                left_sq + left_value * left_value,
+                right_sq + right_value * right_value,
+            )
+        },
+    );
+    if left_norm_sq == 0.0 || right_norm_sq == 0.0 {
+        return Err(malformed_input(
+            "cosine distance requires non-zero embeddings",
+        ));
+    }
+    let similarity = dot_product / (left_norm_sq.sqrt() * right_norm_sq.sqrt());
+    Ok((1.0 - similarity).max(0.0) as f32)
+}
+
+fn cosine_distance_normalized(
+    left: &[f32],
+    right: &[f32],
+) -> Result<f32, StreamingClusteringError> {
+    if left.len() != right.len() {
+        return Err(malformed_input(
+            "cosine distance requires equal embedding dimensionality",
+        ));
+    }
+    let similarity = left
+        .iter()
+        .zip(right)
+        .map(|(l, r)| f64::from(*l) * f64::from(*r))
+        .sum::<f64>();
+    Ok((1.0 - similarity).max(0.0) as f32)
 }
 
 fn deterministic_embedding_hash(embedding: &[f32], seed: u64) -> u64 {
@@ -601,8 +753,212 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
     }
 }
 
+fn map_accelerated_assignment_error(error: String) -> StreamingClusteringError {
+    match classify_dense_distance_error(error.as_str()) {
+        DenseDistanceErrorKind::InvalidInput => malformed_input(format!(
+            "accelerated spherical k-means assignment received invalid inputs: {error}"
+        )),
+        DenseDistanceErrorKind::BackendFailure => unsatisfiable_constraint(format!(
+            "accelerated spherical k-means assignment failed: {error}"
+        )),
+    }
+}
+
 fn unsatisfiable_constraint(message: impl Into<String>) -> StreamingClusteringError {
     StreamingClusteringError::UnsatisfiableConstraint {
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lexongraph_linear_algebra_acceleration::{
+        DenseDistanceMetric, ExecutionBackendRequest, ExecutionBackendResolution,
+        dense_distance_matrix, detected_execution_backend_selection,
+        with_execution_backend_request,
+    };
+    use lexongraph_streaming_clustering::StreamingClusteringError;
+
+    use super::{
+        assign_points_accelerated, assign_points_cpu, best_cluster, best_cluster_from_distances,
+    };
+
+    #[test]
+    fn best_cluster_from_distances_prefers_previous_assignment_on_tie() {
+        let cluster = best_cluster_from_distances(&[0.25, 0.25, 0.5], Some(1)).unwrap();
+        assert_eq!(cluster, 1);
+    }
+
+    #[test]
+    fn best_cluster_from_distances_picks_lowest_cluster_without_previous_tie() {
+        let cluster = best_cluster_from_distances(&[0.25, 0.25, 0.5], None).unwrap();
+        assert_eq!(cluster, 0);
+    }
+
+    #[test]
+    fn best_cluster_matches_shared_cosine_metric_for_approximate_unit_vectors() {
+        let embedding = vec![0.8, 0.59, 0.1];
+        let centroids = vec![
+            vec![0.79, 0.6, 0.1],
+            vec![0.77, 0.62, 0.1],
+            vec![0.1, 0.1, 0.99],
+        ];
+        let centroid_refs = centroids
+            .iter()
+            .map(std::vec::Vec::as_slice)
+            .collect::<Vec<_>>();
+        let distances = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+            dense_distance_matrix(
+                &[embedding.as_slice()],
+                centroid_refs.as_slice(),
+                DenseDistanceMetric::Cosine,
+            )
+            .unwrap()
+        });
+
+        let direct = best_cluster(&embedding, &centroids, Some(1)).unwrap();
+        let shared = best_cluster_from_distances(&distances, Some(1)).unwrap();
+
+        assert_eq!(direct, shared);
+    }
+
+    #[test]
+    fn accelerated_assignment_matches_cpu_assignment_when_forced_to_cpu_backend() {
+        let embeddings = (0..513)
+            .map(|index| normalized_test_pattern(index, 8))
+            .collect::<Vec<_>>();
+        let centroids = (0..2048)
+            .map(|index| normalized_test_pattern(index + 10_000, 8))
+            .collect::<Vec<_>>();
+        let previous_assignments = embeddings
+            .iter()
+            .enumerate()
+            .map(|(index, _)| index % centroids.len())
+            .collect::<Vec<_>>();
+
+        let accelerated = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+            assign_points_accelerated(
+                &embeddings,
+                &centroids,
+                Some(previous_assignments.as_slice()),
+            )
+            .unwrap()
+        });
+        let cpu = assign_points_cpu(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+
+        assert_eq!(accelerated, cpu);
+    }
+
+    #[test]
+    fn accelerated_assignment_classifies_invalid_inputs_as_malformed() {
+        let error = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+            assign_points_accelerated(
+                &[vec![1.0, 0.0], vec![f32::NAN, 0.0]],
+                &[vec![1.0, 0.0]],
+                None,
+            )
+            .unwrap_err()
+        });
+
+        assert!(matches!(
+            error,
+            StreamingClusteringError::MalformedInput { message }
+                if message.contains("dense distance matrix requires finite vector values")
+        ));
+    }
+
+    #[test]
+    fn forced_wgpu_request_bypasses_assignment_size_threshold_when_supported() {
+        let selection = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+            detected_execution_backend_selection()
+        });
+        if selection.resolution != ExecutionBackendResolution::Wgpu {
+            return;
+        }
+
+        let embeddings = vec![normalized_test_pattern(1, 8)];
+        let centroids = vec![normalized_test_pattern(2, 8), normalized_test_pattern(3, 8)];
+
+        let should_accelerate =
+            with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+                super::should_use_accelerated_assignments(&embeddings, &centroids)
+            });
+
+        assert!(should_accelerate);
+    }
+
+    #[test]
+    fn accelerated_assignment_matches_cpu_assignment_when_wgpu_is_supported() {
+        let selection = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+            detected_execution_backend_selection()
+        });
+        if selection.resolution != ExecutionBackendResolution::Wgpu {
+            return;
+        }
+
+        let embeddings = (0..257)
+            .map(|index| normalized_test_pattern(index, 96))
+            .collect::<Vec<_>>();
+        let centroids = (0..32)
+            .map(|index| normalized_test_pattern(index + 10_000, 96))
+            .collect::<Vec<_>>();
+        let previous_assignments = embeddings
+            .iter()
+            .enumerate()
+            .map(|(index, _)| index % centroids.len())
+            .collect::<Vec<_>>();
+        for embedding in &embeddings {
+            assert!(
+                nearest_assignment_margin(embedding, &centroids) > 1e-5,
+                "test fixture should avoid near-ties across CPU/WGPU precision boundaries"
+            );
+        }
+
+        let accelerated = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+            assign_points_accelerated(
+                &embeddings,
+                &centroids,
+                Some(previous_assignments.as_slice()),
+            )
+            .unwrap()
+        });
+        let cpu = assign_points_cpu(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+
+        assert_eq!(accelerated, cpu);
+    }
+
+    fn nearest_assignment_margin(embedding: &[f32], centroids: &[Vec<f32>]) -> f32 {
+        let mut best = f32::INFINITY;
+        let mut second_best = f32::INFINITY;
+        for centroid in centroids {
+            let candidate = super::cosine_distance(embedding, centroid.as_slice()).unwrap();
+            if candidate < best {
+                second_best = best;
+                best = candidate;
+            } else if candidate < second_best {
+                second_best = candidate;
+            }
+        }
+        second_best - best
+    }
+
+    fn normalized_test_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
+        let mut values = Vec::with_capacity(dimensions);
+        for dimension in 0..dimensions {
+            let angle = ((seed * 37 + dimension * 17 + 1) % 997) as f32;
+            values.push((angle * 0.013).sin() + (angle * 0.007).cos() * 0.5);
+        }
+        let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+        values.into_iter().map(|value| value / norm).collect()
     }
 }

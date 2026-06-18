@@ -6,7 +6,12 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-wgpu-accel = ["dep:bytemuck", "dep:wgpu"]
+wgpu-accel = [
+    "dep:bytemuck",
+    "dep:wgpu",
+    "lexongraph-linear-algebra-acceleration/wgpu-accel",
+    "lexongraph-spherical-kmeans/wgpu-accel",
+]
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"], optional = true }
@@ -20,6 +25,7 @@ lexongraph-block-store-overlay = { path = "../lexongraph-block-store-overlay" }
 lexongraph-block-store-zip = { path = "../lexongraph-block-store-zip" }
 lexongraph-dcbc-streaming = { path = "../lexongraph-dcbc-streaming" }
 lexongraph-directional-pca = { path = "../lexongraph-directional-pca" }
+lexongraph-linear-algebra-acceleration = { path = "../lexongraph-linear-algebra-acceleration" }
 lexongraph-pca-chunking = { path = "../lexongraph-pca-chunking" }
 lexongraph-search = { path = "../lexongraph-search" }
 lexongraph-spherical-kmeans = { path = "../lexongraph-spherical-kmeans" }
