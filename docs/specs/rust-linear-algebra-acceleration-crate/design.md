@@ -47,6 +47,10 @@ authoritative for the semantics of any higher-level operation.
 The crate exposes explicit backend request and resolution types that support at
 least automatic selection, forced CPU execution, and forced WGPU execution.
 
+The same boundary also exposes persistent process-wide set/get/reset control for
+the requested backend so deterministic callers can pin CPU execution until
+changed.
+
 ### DSG-ACCEL-003 `Capability-gated fallback`
 
 Every WGPU-backed kernel remains subordinate to an explicit capability result.
@@ -82,6 +86,13 @@ The crate is designed for partial adoption. A consumer may accelerate only the
 hot kernels that produce a measured end-to-end win while continuing to execute
 other steps on CPU.
 
+### DSG-ACCEL-009 `Persistent default with scoped override`
+
+The process-wide backend request acts as the default selection state until a
+caller changes it. Scoped override helpers temporarily supersede that default
+for one operation and restore the previous persistent request on exit, including
+unwind paths.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -94,3 +105,4 @@ other steps on CPU.
 | DSG-ACCEL-006 | REQ-ACCEL-008, REQ-ACCEL-009 |
 | DSG-ACCEL-007 | REQ-ACCEL-005, REQ-ACCEL-009 |
 | DSG-ACCEL-008 | REQ-ACCEL-004, REQ-ACCEL-010 |
+| DSG-ACCEL-009 | REQ-ACCEL-003, REQ-ACCEL-005, REQ-ACCEL-011 |

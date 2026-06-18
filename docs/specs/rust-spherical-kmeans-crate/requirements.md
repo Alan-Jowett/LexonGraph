@@ -81,6 +81,9 @@ For each completed pass, the crate shall realize vanilla spherical k-means by:
 4. producing exactly `K` stable, non-empty clusters or failing explicitly if the
    documented algorithm cannot realize that outcome
 
+This revision may parallelize CPU point-to-centroid assignment work only when it
+preserves the same observable outputs as the serial CPU realization.
+
 ### REQ-SPHKM-006
 
 The classifier assignment and training-time assignment semantics shall both be
@@ -116,6 +119,9 @@ Each completed pass shall return a deterministic `PassReport` containing:
 The balance metric shall be zero when no explicit balance constraints are
 configured.
 
+This revision shall preserve the current deterministic CPU observable outputs,
+not merely run-to-run repeatability, when CPU parallelism is enabled.
+
 ### REQ-SPHKM-010
 
 This revision shall not define or claim a spherical-k-means-specific balance
@@ -135,6 +141,10 @@ deterministic classifier that:
 - rejects malformed embeddings through the shared malformed-input error category
 - does not require replay of the original training dataset after classifier
   production
+
+Batch classifier assignment may use CPU parallelism only when it preserves the
+same observable outputs as repeated elementwise assignment through the serial
+contract.
 
 ### REQ-SPHKM-012
 
@@ -160,6 +170,9 @@ The repository shall include executable verification artifacts covering both:
 This revision shall add optional backend-selectable acceleration through the
 shared repository-owned linear-algebra acceleration boundary while preserving a
 correct CPU realization.
+
+Callers shall be able to persistently pin that backend selection to CPU or WGPU
+through the shared acceleration boundary until changed.
 
 ### REQ-SPHKM-016
 
@@ -197,7 +210,23 @@ CPU and WGPU executions of the same conformant workload shall preserve the same
 observable spherical-kmeans semantics, stable cluster IDs, and classifier
 behavior, allowing only explicitly documented floating-point tolerance.
 
+CPU parallel execution shall not widen that tolerance relative to the serial CPU
+baseline.
+
 ### REQ-SPHKM-020
 
 Artifacts used to prove accelerated conformance shall record which backend
 executed and whether fallback occurred, so net-speedup claims are auditable.
+
+When callers persistently pin CPU execution for determinism, the resulting
+artifacts shall continue to record that backend choice explicitly.
+
+### REQ-SPHKM-021
+
+This revision may parallelize only the assignment-classification hot path on
+CPU. Any such realization shall preserve:
+
+- input-order-to-output-order correspondence
+- the existing `previous_assignment` tie preference
+- the existing lowest-cluster-id fallback on ties
+- the current serial CPU observable outputs for repeated identical workloads

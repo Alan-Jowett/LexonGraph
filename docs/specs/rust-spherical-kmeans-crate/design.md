@@ -77,6 +77,11 @@ Each successful completed pass:
 
 The crate does not perform hidden caller-invisible passes.
 
+This revision limits CPU parallelism to assignment work whose observable
+results remain exactly aligned with the serial CPU realization. Centroid
+recomputation and empty-cluster repair remain serial in this revision so the
+existing numeric contract is preserved.
+
 ### DSG-SPHKM-005 `Cross-pass continuity`
 
 The first completed pass establishes the logical dataset for one training run.
@@ -96,6 +101,10 @@ reports or classifier assignments.
 After `complete_training()`, `into_classifier()` consumes the trainer and yields
 a classifier that normalizes each valid query embedding and assigns it to the
 best learned centroid under the documented spherical similarity ordering.
+
+Batch assignment may reuse the same exact-safe CPU parallel assignment strategy
+used by training-time assignment while preserving the pointwise observable
+classifier contract.
 
 ### DSG-SPHKM-008 `Unsupported balance constraints`
 
@@ -123,6 +132,9 @@ conformance helpers.
 The crate may select between CPU and optional WGPU-backed hot-path execution
 through the shared repository-owned acceleration boundary while preserving the
 existing streaming trainer/classifier contract and a correct CPU path.
+
+The caller may also persistently pin the shared backend request to CPU or WGPU
+until changed through the shared acceleration boundary.
 
 ### DSG-SPHKM-012 `Hot-path scoped acceleration`
 
@@ -162,6 +174,26 @@ The artifacts used to justify acceleration record the actual backend resolution
 and whether CPU fallback occurred so a reported speedup can be traced to the
 execution mode that produced it.
 
+### DSG-SPHKM-017 `Indexed exact-safe CPU assignment parallelism`
+
+The CPU assignment path may partition points across indexed workers. Each
+worker computes point-local best-cluster decisions independently, and collection
+preserves input order exactly so the observable assignment vector matches the
+serial CPU baseline.
+
+### DSG-SPHKM-018 `Serial deterministic centroid update preservation`
+
+This revision does not parallelize centroid recomputation or empty-cluster
+repair. Those steps remain serial so `f32` accumulation order and downstream
+centroid normalization behavior stay aligned with the current deterministic CPU
+realization.
+
+### DSG-SPHKM-019 `Classifier batch parity`
+
+If the classifier overrides batch assignment, it applies the same normalized-
+space point-local assignment logic as repeated `assign()` calls and preserves
+the same observable cluster IDs for each input position.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -182,3 +214,6 @@ execution mode that produced it.
 | DSG-SPHKM-014 | REQ-SPHKM-019 |
 | DSG-SPHKM-015 | REQ-SPHKM-016, REQ-SPHKM-017 |
 | DSG-SPHKM-016 | REQ-SPHKM-020 |
+| DSG-SPHKM-017 | REQ-SPHKM-009, REQ-SPHKM-021 |
+| DSG-SPHKM-018 | REQ-SPHKM-005, REQ-SPHKM-019, REQ-SPHKM-021 |
+| DSG-SPHKM-019 | REQ-SPHKM-011, REQ-SPHKM-021 |

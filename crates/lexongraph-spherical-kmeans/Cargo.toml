@@ -12,6 +12,7 @@ wgpu-accel = ["lexongraph-linear-algebra-acceleration/wgpu-accel"]
 [dependencies]
 lexongraph-linear-algebra-acceleration = { path = "../lexongraph-linear-algebra-acceleration" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
+rayon = "1"
 
 [dev-dependencies]
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering", features = ["conformance"] }

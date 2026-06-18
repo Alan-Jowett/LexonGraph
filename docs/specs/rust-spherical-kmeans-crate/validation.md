@@ -190,3 +190,42 @@ Inspect the artifacts emitted for the accelerated proof runs.
 whether fallback occurred, so the reported speedup claims are auditable.
 
 **Traces to:** REQ-SPHKM-020
+
+### VAL-SPHKM-018
+
+Run one medium-size conformant workload twice with CPU execution pinned.
+
+**Pass condition:** repeated runs produce the same pass report and the same
+batch classifier assignments, demonstrating that assignment parallelism
+preserves the current deterministic CPU observable outputs.
+
+**Traces to:** REQ-SPHKM-009, REQ-SPHKM-011, REQ-SPHKM-021
+
+### VAL-SPHKM-019
+
+Exercise a tie-heavy CPU assignment fixture with explicit previous assignments.
+
+**Pass condition:** the CPU parallel assignment path preserves the
+`previous_assignment` tie preference and lowest-cluster-id fallback exactly.
+
+**Traces to:** REQ-SPHKM-021
+
+### VAL-SPHKM-020
+
+Exercise classifier batch assignment over a representative conformant fixture.
+
+**Pass condition:** batch assignment yields the same cluster IDs as repeated
+elementwise `assign()` calls.
+
+**Traces to:** REQ-SPHKM-011, REQ-SPHKM-021
+
+### VAL-SPHKM-021
+
+Exercise one workload after callers persistently pin CPU execution through the
+shared acceleration boundary.
+
+**Pass condition:** the crate uses the CPU path, preserves the documented
+observable semantics, and exposes auditable backend attribution for the pinned
+execution mode.
+
+**Traces to:** REQ-SPHKM-015, REQ-SPHKM-020
