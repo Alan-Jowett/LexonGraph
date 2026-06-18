@@ -182,7 +182,7 @@ fn val_sphkm_005_and_006_normalized_space_behavior_is_present_in_source() {
     assert!(source.contains("normalize_embedding("));
     assert!(source.contains("cosine_distance("));
     assert!(source.contains("SeededDeterministicFarthestPoint"));
-    assert!(source.contains("chunked_dense_distance_matrix("));
+    assert!(source.contains("dense_distance_matrix("));
     assert!(source.contains("detected_execution_backend_selection("));
 }
 

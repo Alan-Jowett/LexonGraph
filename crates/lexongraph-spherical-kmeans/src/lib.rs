@@ -5,7 +5,7 @@
 
 use lexongraph_linear_algebra_acceleration::{
     DenseDistanceMetric, ExecutionBackendRequest, ExecutionBackendResolution,
-    chunked_dense_distance_matrix, detected_execution_backend_selection, execution_backend_request,
+    dense_distance_matrix, detected_execution_backend_selection, execution_backend_request,
 };
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
@@ -387,7 +387,7 @@ fn nearest_centroid_distance(
     selected
         .iter()
         .map(|&index| {
-            cosine_distance(embedding, normalized_embeddings[index].as_slice())
+            cosine_distance_normalized(embedding, normalized_embeddings[index].as_slice())
                 .unwrap_or(f32::INFINITY)
         })
         .fold(f32::INFINITY, f32::min)
@@ -442,16 +442,14 @@ fn assign_points_accelerated(
     let rows_per_chunk =
         assignment_chunk_row_count(normalized_embeddings.len(), centroid_refs.len());
     let mut assignments = Vec::with_capacity(normalized_embeddings.len());
+    let mut left_refs = Vec::with_capacity(rows_per_chunk);
     for (chunk_index, embedding_chunk) in normalized_embeddings.chunks(rows_per_chunk).enumerate() {
-        let left_refs: Vec<&[f32]> = embedding_chunk
-            .iter()
-            .map(std::vec::Vec::as_slice)
-            .collect();
-        let distances = chunked_dense_distance_matrix(
+        left_refs.clear();
+        left_refs.extend(embedding_chunk.iter().map(std::vec::Vec::as_slice));
+        let distances = dense_distance_matrix(
             left_refs.as_slice(),
             centroid_refs.as_slice(),
             DenseDistanceMetric::Cosine,
-            rows_per_chunk,
         )
         .map_err(|error| {
             unsatisfiable_constraint(format!(
@@ -512,7 +510,7 @@ fn best_cluster(
     let mut best_cluster_id: Option<usize> = None;
     let mut previous_assignment_is_best = false;
     for (cluster_index, centroid) in normalized_centroids.iter().enumerate() {
-        let candidate = cosine_distance(normalized_embedding, centroid.as_slice())?;
+        let candidate = cosine_distance_normalized(normalized_embedding, centroid.as_slice())?;
         if candidate + DISTANCE_EPSILON < best_distance {
             best_distance = candidate;
             best_cluster_id = Some(cluster_index);
@@ -609,13 +607,13 @@ fn repair_empty_clusters(
             .enumerate()
             .filter(|(_, cluster_index)| **cluster_index == donor_cluster)
             .max_by(|left, right| {
-                cosine_distance(
+                cosine_distance_normalized(
                     normalized_embeddings[left.0].as_slice(),
                     normalized_centroids[donor_cluster].as_slice(),
                 )
                 .unwrap_or(f32::NEG_INFINITY)
                 .partial_cmp(
-                    &cosine_distance(
+                    &cosine_distance_normalized(
                         normalized_embeddings[right.0].as_slice(),
                         normalized_centroids[donor_cluster].as_slice(),
                     )
@@ -642,7 +640,7 @@ fn average_objective(
 ) -> Result<f64, StreamingClusteringError> {
     let mut total = 0.0f64;
     for (embedding, &cluster_index) in normalized_embeddings.iter().zip(assignments) {
-        total += f64::from(cosine_distance(
+        total += f64::from(cosine_distance_normalized(
             embedding.as_slice(),
             normalized_centroids[cluster_index].as_slice(),
         )?);
@@ -657,7 +655,7 @@ fn maximum_centroid_shift(
     previous
         .iter()
         .zip(updated)
-        .map(|(left, right)| cosine_distance(left.as_slice(), right.as_slice()))
+        .map(|(left, right)| cosine_distance_normalized(left.as_slice(), right.as_slice()))
         .try_fold(0.0f32, |current_max, candidate| {
             candidate.map(|v| current_max.max(v))
         })
@@ -698,6 +696,7 @@ fn ensure_non_zero_norm(embedding: &[f32]) -> Result<(), StreamingClusteringErro
     Ok(())
 }
 
+#[cfg(test)]
 fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f32, StreamingClusteringError> {
     if left.len() != right.len() {
         return Err(malformed_input(
@@ -722,6 +721,23 @@ fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f32, StreamingClusteri
         ));
     }
     let similarity = dot_product / (left_norm_sq.sqrt() * right_norm_sq.sqrt());
+    Ok((1.0 - similarity).max(0.0) as f32)
+}
+
+fn cosine_distance_normalized(
+    left: &[f32],
+    right: &[f32],
+) -> Result<f32, StreamingClusteringError> {
+    if left.len() != right.len() {
+        return Err(malformed_input(
+            "cosine distance requires equal embedding dimensionality",
+        ));
+    }
+    let similarity = left
+        .iter()
+        .zip(right)
+        .map(|(l, r)| f64::from(*l) * f64::from(*r))
+        .sum::<f64>();
     Ok((1.0 - similarity).max(0.0) as f32)
 }
 
