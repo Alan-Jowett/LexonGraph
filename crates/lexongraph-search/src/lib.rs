@@ -125,12 +125,10 @@ impl PublishedSearchProfile {
         bytes: Vec<u8>,
         embedding_spec: EmbeddingSpec,
     ) -> EncodedTargetEmbedding {
-        let _ = self;
         EncodedTargetEmbedding::new(bytes, embedding_spec)
     }
 
     pub fn searcher(&self) -> Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer> {
-        let _ = self;
         Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer)
     }
 }
