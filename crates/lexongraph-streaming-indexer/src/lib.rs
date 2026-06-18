@@ -3174,7 +3174,9 @@ fn exact_centroid_child_summary(
                 ));
             }
         }
-        total_weight += child.descendant_count;
+        total_weight = total_weight
+            .checked_add(child.descendant_count)
+            .ok_or_else(|| "exact-centroid total descendant count overflowed usize".to_string())?;
     }
     for (dimension, sum) in sums.iter_mut().enumerate() {
         *sum /= total_weight as f64;
@@ -3939,12 +3941,46 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
-    use super::weighted_mean_f32_embeddings;
+    use super::{ChildSummaryInput, exact_centroid_child_summary, weighted_mean_f32_embeddings};
+    use crate::{BlockHash, EmbeddingSpec};
 
     #[test]
     fn weighted_representative_embedding_uses_item_counts() {
         let mean = weighted_mean_f32_embeddings([(&[0.0f32, 2.0][..], 1), (&[6.0f32, 8.0][..], 3)])
             .expect("weighted mean should succeed");
         assert_eq!(mean, vec![4.5, 6.5]);
+    }
+
+    #[test]
+    fn exact_centroid_child_summary_rejects_descendant_count_overflow() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 1,
+            encoding: "f32le".into(),
+        };
+        let make_hash = |byte: u8| {
+            let mut bytes = [0u8; BlockHash::LEN];
+            bytes[0] = byte;
+            BlockHash::from_bytes(bytes)
+        };
+        let children = vec![
+            ChildSummaryInput {
+                embedding: 1.0f32.to_le_bytes().to_vec(),
+                child: make_hash(1),
+                level: 0,
+                descendant_count: usize::MAX,
+            },
+            ChildSummaryInput {
+                embedding: 1.0f32.to_le_bytes().to_vec(),
+                child: make_hash(2),
+                level: 0,
+                descendant_count: 1,
+            },
+        ];
+
+        let error = exact_centroid_child_summary(&children, &embedding_spec).unwrap_err();
+        assert_eq!(
+            error,
+            "exact-centroid total descendant count overflowed usize"
+        );
     }
 }

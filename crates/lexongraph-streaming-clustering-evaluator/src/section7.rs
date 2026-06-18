@@ -582,15 +582,21 @@ fn run_section7_design(
         summary_policy,
         block_size_target,
     )?;
-
-    let mut query_reports = Vec::new();
-    for &beam_width in &SECTION7_BEAM_WIDTHS {
-        for query in held_out_queries {
-            let exact_neighbor_ids = exact_top_neighbors(
+    let exact_neighbor_ids_by_query = held_out_queries
+        .iter()
+        .map(|query| {
+            exact_top_neighbors(
                 query,
                 real_entities,
                 &summary_report.metric_semantics_profile,
-            )?;
+            )
+        })
+        .collect::<Result<Vec<_>, EvaluatorError>>()?;
+
+    let mut query_reports = Vec::new();
+    for &beam_width in &SECTION7_BEAM_WIDTHS {
+        for (query, exact_neighbor_ids) in held_out_queries.iter().zip(&exact_neighbor_ids_by_query)
+        {
             let predicted_neighbor_ids = search_neighbors(
                 &design_tree.store,
                 design_tree.root_id,
@@ -603,7 +609,7 @@ fn run_section7_design(
             query_reports.push(build_query_report(
                 query,
                 beam_width,
-                exact_neighbor_ids,
+                exact_neighbor_ids.clone(),
                 predicted_neighbor_ids.0,
                 &predicted_neighbor_ids.1,
             ));

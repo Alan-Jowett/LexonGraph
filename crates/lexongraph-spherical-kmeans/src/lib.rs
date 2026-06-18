@@ -296,6 +296,11 @@ fn run_spherical_kmeans(
         normalized_centroids.as_slice(),
         assignments.as_mut_slice(),
     )?;
+    normalized_centroids = recompute_centroids(
+        normalized_embeddings,
+        assignments.as_slice(),
+        normalized_centroids.len(),
+    )?;
     let objective_value = average_objective(
         normalized_embeddings,
         assignments.as_slice(),
