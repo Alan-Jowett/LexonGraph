@@ -7,7 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use lexongraph_linear_algebra_acceleration::{
-    ExecutionBackendRequest, with_execution_backend_request,
+    ExecutionBackendRequest, ExecutionBackendResolution, detected_execution_backend_selection,
+    execution_backend_request, reset_execution_backend_request, set_execution_backend_request,
+    with_execution_backend_request,
 };
 use lexongraph_spherical_kmeans::{
     SPHERICAL_KMEANS_SOFTWARE_IDENTITY, SphericalKmeansStreamingTrainer,
@@ -248,25 +250,37 @@ fn val_sphkm_018_large_cpu_runs_preserve_reports_and_batch_assignments() {
     let embeddings = large_normalized_pass();
 
     let first = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
-        let mut trainer = SphericalKmeansStreamingTrainer::new(large_config(), params()).unwrap();
-        trainer.ingest_batch(embeddings.as_slice()).unwrap();
-        let report = trainer.finish_pass().unwrap();
-        trainer.complete_training().unwrap();
-        let classifier = trainer.into_classifier().unwrap();
-        let assignments = classifier.assign_batch(embeddings.as_slice()).unwrap();
-        (report, assignments)
+        run_large_training_with_assignments(embeddings.as_slice())
     });
     let second = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
-        let mut trainer = SphericalKmeansStreamingTrainer::new(large_config(), params()).unwrap();
-        trainer.ingest_batch(embeddings.as_slice()).unwrap();
-        let report = trainer.finish_pass().unwrap();
-        trainer.complete_training().unwrap();
-        let classifier = trainer.into_classifier().unwrap();
-        let assignments = classifier.assign_batch(embeddings.as_slice()).unwrap();
-        (report, assignments)
+        run_large_training_with_assignments(embeddings.as_slice())
     });
 
     assert_eq!(first, second);
+}
+
+#[test]
+fn val_sphkm_021_persistent_backend_request_pins_cpu_for_consuming_crate() {
+    let embeddings = large_normalized_pass();
+    let scoped_cpu = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+        run_large_training_with_assignments(embeddings.as_slice())
+    });
+
+    let persistent_cpu = with_execution_backend_request(ExecutionBackendRequest::Auto, || {
+        reset_execution_backend_request();
+        set_execution_backend_request(ExecutionBackendRequest::Cpu);
+
+        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+        let selection = detected_execution_backend_selection();
+        assert_eq!(selection.request, ExecutionBackendRequest::Cpu);
+        assert_ne!(selection.resolution, ExecutionBackendResolution::Wgpu);
+
+        let result = run_large_training_with_assignments(embeddings.as_slice());
+        reset_execution_backend_request();
+        result
+    });
+
+    assert_eq!(persistent_cpu, scoped_cpu);
 }
 
 #[test]
@@ -307,6 +321,18 @@ fn large_normalized_pass() -> Vec<Vec<f32>> {
     (0..512)
         .map(|index| normalized_pattern(index, 32))
         .collect()
+}
+
+fn run_large_training_with_assignments(
+    embeddings: &[Vec<f32>],
+) -> (lexongraph_streaming_clustering::PassReport, Vec<u32>) {
+    let mut trainer = SphericalKmeansStreamingTrainer::new(large_config(), params()).unwrap();
+    trainer.ingest_batch(embeddings).unwrap();
+    let report = trainer.finish_pass().unwrap();
+    trainer.complete_training().unwrap();
+    let classifier = trainer.into_classifier().unwrap();
+    let assignments = classifier.assign_batch(embeddings).unwrap();
+    (report, assignments)
 }
 
 fn normalized_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
