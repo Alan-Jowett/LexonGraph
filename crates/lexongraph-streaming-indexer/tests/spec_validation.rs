@@ -16,6 +16,7 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::DirectionalPcaParams;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
+use lexongraph_spherical_kmeans::{SphericalInitializationPolicy, SphericalKmeansParams};
 use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusteringConfig, StreamingClusteringError,
 };
@@ -29,9 +30,9 @@ use lexongraph_streaming_indexer::{
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
     FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome,
-    PlanningStage, StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
-    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState,
+    PlanningStage, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
 };
 use sha2::{Digest, Sha256};
 
@@ -598,6 +599,19 @@ fn directional_pca_planning(direction: BuiltInPlanningDirection) -> BuiltInPlann
     })
 }
 
+fn spherical_kmeans_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
+    BuiltInPlanning::SphericalKmeans(SphericalKmeansBuiltInPlanningSettings {
+        direction,
+        cluster_count: 2,
+        random_seed: Some(23),
+        params: SphericalKmeansParams {
+            initialization_policy: SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+            max_iteration_count: 8,
+            convergence_tolerance: 0.0,
+        },
+    })
+}
+
 fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
     BuiltInPlanning::Hybrid(
         lexongraph_streaming_indexer::HybridBuiltInPlanningSettings {
@@ -738,7 +752,7 @@ fn mixed_direction_hybrid_planning() -> BuiltInPlanning {
     )
 }
 
-fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
+fn built_in_cases() -> [BuiltInAlgorithmCase; 6] {
     [
         BuiltInAlgorithmCase {
             name: "dcbc-divisive",
@@ -755,6 +769,14 @@ fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
         BuiltInAlgorithmCase {
             name: "directional-pca-agglomerative",
             planning: directional_pca_planning(BuiltInPlanningDirection::Agglomerative),
+        },
+        BuiltInAlgorithmCase {
+            name: "spherical-kmeans-divisive",
+            planning: spherical_kmeans_planning(BuiltInPlanningDirection::Divisive),
+        },
+        BuiltInAlgorithmCase {
+            name: "spherical-kmeans-agglomerative",
+            planning: spherical_kmeans_planning(BuiltInPlanningDirection::Agglomerative),
         },
     ]
 }
@@ -859,9 +881,11 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
     assert!(src.contains("AdaptivePlanningSettings"));
     assert!(src.contains("InvalidAdaptivePlanningConfiguration"));
     assert!(src.contains("BuiltInPlanning::Adaptive"));
+    assert!(src.contains("BuiltInPlanning::SphericalKmeans"));
     assert!(manifest.contains("lexongraph-adaptive-planning-policy"));
     assert!(manifest.contains("lexongraph-dcbc-streaming"));
     assert!(manifest.contains("lexongraph-directional-pca"));
+    assert!(manifest.contains("lexongraph-spherical-kmeans"));
     assert!(manifest.contains("lexongraph-streaming-clustering"));
 }
 
@@ -1204,6 +1228,27 @@ async fn val_stream_indexer_046_exact_centroid_policy_uses_descendant_counts() {
             .collect::<Vec<_>>(),
         vec![105, 1]
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_048_spherical_kmeans_built_in_path_supports_both_directions() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+
+    for planning in [
+        spherical_kmeans_planning(BuiltInPlanningDirection::Divisive),
+        spherical_kmeans_planning(BuiltInPlanningDirection::Agglomerative),
+    ] {
+        let (store, result) = one_shot(planning, &items, 256).await.unwrap();
+        assert!(!result.block_ids.is_empty());
+        assert!(store.get(&result.root_id).unwrap().is_some());
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

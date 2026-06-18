@@ -156,10 +156,11 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 ### REQ-STREAM-INDEXER-011
 
 The crate shall provide built-in planning realizations for hierarchical planning
-that depend on both `lexongraph-dcbc-streaming` and
-`lexongraph-directional-pca`, whether consumed directly or through a dedicated
-adaptive aggregate planning-policy crate, rather than reimplementing either
-clustering algorithm locally.
+that depend on `lexongraph-dcbc-streaming`,
+`lexongraph-directional-pca`, and `lexongraph-spherical-kmeans`,
+whether consumed directly or through a dedicated adaptive aggregate
+planning-policy crate where applicable, rather than reimplementing those
+clustering algorithms locally.
 
 Across those built-in realizations, the caller-visible built-in planning path
 shall support at least one conforming `Divisive` option and at least one
@@ -357,9 +358,9 @@ validation surface defined in
 The crate shall provide a caller-visible built-in planning-selection surface
 that requires callers to choose a supported built-in planning
 realization-and-direction combination backed by either the built-in streaming
-directional-PCA realization, the built-in streaming DCBC realization, or the
-built-in adaptive aggregate realization without implementing a custom planning
-factory.
+directional-PCA realization, the built-in streaming spherical-k-means
+realization, the built-in streaming DCBC realization, or the built-in adaptive
+aggregate realization without implementing a custom planning factory.
 
 ### REQ-STREAM-INDEXER-032
 
@@ -547,9 +548,9 @@ This crate does not define or own:
 - the shared embedding-provider trait contract
 - the shared streaming clustering trait definitions
 - legacy batch-oriented implementation lines or their repository lifecycle
-- any concrete clustering algorithm beyond the built-in directional-PCA and
-  DCBC planning options exposed by this crate or the adaptive aggregate option
-  that composes them
+- any concrete clustering algorithm beyond the built-in directional-PCA,
+  spherical-k-means, and DCBC planning options exposed by this crate or the
+  adaptive aggregate option that composes directional PCA with DCBC
 
 ## Relationship to Other Specifications
 
@@ -557,5 +558,6 @@ This document is subordinate to `docs/protocol/indexing.md` and
 `docs/protocol/blocks.md`.
 
 This document is also subordinate to the block crate, block-storage trait,
-embeddings-trait, streaming clustering, streaming DCBC, directional-PCA, and
-adaptive planning-policy specification packages for their owned concerns.
+embeddings-trait, streaming clustering, streaming DCBC, directional-PCA,
+spherical-k-means, and adaptive planning-policy specification packages for
+their owned concerns.

@@ -48,6 +48,7 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
+use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
 use lexongraph_streaming_clustering::{
     ClusterId, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
@@ -479,9 +480,18 @@ pub struct DirectionalPcaBuiltInPlanningSettings {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct SphericalKmeansBuiltInPlanningSettings {
+    pub direction: BuiltInPlanningDirection,
+    pub cluster_count: u32,
+    pub random_seed: Option<u64>,
+    pub params: SphericalKmeansParams,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum BuiltInPlanningPhase {
     Dcbc(DcbcBuiltInPlanningSettings),
     DirectionalPca(DirectionalPcaBuiltInPlanningSettings),
+    SphericalKmeans(SphericalKmeansBuiltInPlanningSettings),
 }
 
 impl BuiltInPlanningPhase {
@@ -489,6 +499,7 @@ impl BuiltInPlanningPhase {
         match self {
             Self::Dcbc(settings) => settings.direction,
             Self::DirectionalPca(settings) => settings.direction,
+            Self::SphericalKmeans(settings) => settings.direction,
         }
     }
 }
@@ -504,6 +515,7 @@ pub struct HybridBuiltInPlanningSettings {
 pub enum BuiltInPlanning {
     Dcbc(DcbcBuiltInPlanningSettings),
     DirectionalPca(DirectionalPcaBuiltInPlanningSettings),
+    SphericalKmeans(SphericalKmeansBuiltInPlanningSettings),
     Hybrid(HybridBuiltInPlanningSettings),
     Adaptive(AdaptivePlanningSettings),
 }
@@ -570,11 +582,13 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
 enum BuiltInStreamingClusterTrainer {
     Dcbc(DcbcStreamingTrainer),
     DirectionalPca(DirectionalPcaStreamingTrainer),
+    SphericalKmeans(SphericalKmeansStreamingTrainer),
 }
 
 enum BuiltInStreamingClusterClassifier {
     Dcbc(<DcbcStreamingTrainer as StreamingClusterTrainer>::Classifier),
     DirectionalPca(<DirectionalPcaStreamingTrainer as StreamingClusterTrainer>::Classifier),
+    SphericalKmeans(<SphericalKmeansStreamingTrainer as StreamingClusterTrainer>::Classifier),
 }
 
 impl StreamingClusterClassifier for BuiltInStreamingClusterClassifier {
@@ -582,6 +596,7 @@ impl StreamingClusterClassifier for BuiltInStreamingClusterClassifier {
         match self {
             Self::Dcbc(classifier) => classifier.config(),
             Self::DirectionalPca(classifier) => classifier.config(),
+            Self::SphericalKmeans(classifier) => classifier.config(),
         }
     }
 
@@ -589,6 +604,7 @@ impl StreamingClusterClassifier for BuiltInStreamingClusterClassifier {
         match self {
             Self::Dcbc(classifier) => classifier.assign(embedding),
             Self::DirectionalPca(classifier) => classifier.assign(embedding),
+            Self::SphericalKmeans(classifier) => classifier.assign(embedding),
         }
     }
 }
@@ -600,6 +616,7 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
         match self {
             Self::Dcbc(trainer) => trainer.config(),
             Self::DirectionalPca(trainer) => trainer.config(),
+            Self::SphericalKmeans(trainer) => trainer.config(),
         }
     }
 
@@ -607,6 +624,7 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
         match self {
             Self::Dcbc(trainer) => trainer.state(),
             Self::DirectionalPca(trainer) => trainer.state(),
+            Self::SphericalKmeans(trainer) => trainer.state(),
         }
     }
 
@@ -614,6 +632,7 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
         match self {
             Self::Dcbc(trainer) => trainer.ingest_batch(embeddings),
             Self::DirectionalPca(trainer) => trainer.ingest_batch(embeddings),
+            Self::SphericalKmeans(trainer) => trainer.ingest_batch(embeddings),
         }
     }
 
@@ -621,6 +640,7 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
         match self {
             Self::Dcbc(trainer) => trainer.finish_pass(),
             Self::DirectionalPca(trainer) => trainer.finish_pass(),
+            Self::SphericalKmeans(trainer) => trainer.finish_pass(),
         }
     }
 
@@ -628,6 +648,7 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
         match self {
             Self::Dcbc(trainer) => trainer.complete_training(),
             Self::DirectionalPca(trainer) => trainer.complete_training(),
+            Self::SphericalKmeans(trainer) => trainer.complete_training(),
         }
     }
 
@@ -639,6 +660,9 @@ impl StreamingClusterTrainer for BuiltInStreamingClusterTrainer {
             Self::DirectionalPca(trainer) => trainer
                 .into_classifier()
                 .map(BuiltInStreamingClusterClassifier::DirectionalPca),
+            Self::SphericalKmeans(trainer) => trainer
+                .into_classifier()
+                .map(BuiltInStreamingClusterClassifier::SphericalKmeans),
         }
     }
 }
@@ -709,6 +733,7 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         match &self.planning {
             BuiltInPlanning::Dcbc(_)
             | BuiltInPlanning::DirectionalPca(_)
+            | BuiltInPlanning::SphericalKmeans(_)
             | BuiltInPlanning::Adaptive(_) => BTreeSet::from([PlanningStage::Single]),
             BuiltInPlanning::Hybrid(_) => {
                 BTreeSet::from([PlanningStage::Coarse, PlanningStage::Fine])
@@ -1844,6 +1869,14 @@ fn derive_hierarchy_from_built_in(
             stage_observer,
         )
         .map(|outcome| (outcome, Vec::new())),
+        BuiltInPlanning::SphericalKmeans(settings) => derive_hierarchy_for_single_built_in_phase(
+            BuiltInPlanningPhase::SphericalKmeans(settings.clone()),
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            stage_observer,
+        )
+        .map(|outcome| (outcome, Vec::new())),
         BuiltInPlanning::Hybrid(settings) => {
             if settings.fine_partition_max_items < 2 {
                 return Err(StreamingIndexerError::InvalidHybridPlanningConfiguration(
@@ -2012,6 +2045,25 @@ fn create_built_in_trainer(
                 settings.params.clone(),
             )
             .map(BuiltInStreamingClusterTrainer::DirectionalPca)
+            .map_err(map_clustering_error)
+        }
+        BuiltInPlanningPhase::SphericalKmeans(settings) => {
+            let cluster_count = effective_cluster_count(
+                settings.cluster_count,
+                partition_len,
+                materializability_bound,
+            )
+            .map_err(map_clustering_configuration_error)?;
+            SphericalKmeansStreamingTrainer::new(
+                StreamingClusteringConfig {
+                    cluster_count,
+                    dimensions,
+                    balance_constraints: None,
+                    random_seed: settings.random_seed,
+                },
+                settings.params.clone(),
+            )
+            .map(BuiltInStreamingClusterTrainer::SphericalKmeans)
             .map_err(map_clustering_error)
         }
     }

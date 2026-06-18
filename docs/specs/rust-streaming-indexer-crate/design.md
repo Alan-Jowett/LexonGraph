@@ -44,9 +44,10 @@ The crate does not own:
 
 The crate depends on the indexing and block protocol documents plus the block
 crate, block-storage trait crate, embeddings-trait crate, streaming clustering
-trait crate, streaming DCBC crate specification package, and directional-PCA
-crate specification package, and adaptive planning-policy crate specification
-package for their owned concerns. The crate does not redefine those sources.
+trait crate, streaming DCBC crate specification package, directional-PCA crate
+specification package, spherical-k-means crate specification package, and
+adaptive planning-policy crate specification package for their owned concerns.
+The crate does not redefine those sources.
 
 ### DSG-STREAM-INDEXER-002 `Direct protocol-anchored line`
 
@@ -101,8 +102,9 @@ The crate exposes:
 
 - a built-in arithmetic-mean canonical-embedding policy
 - built-in hierarchical planning choices backed by
-  `lexongraph-directional-pca`, `lexongraph-dcbc-streaming`, and the adaptive
-  planning-policy crate that composes them for one built-in aggregate option
+  `lexongraph-directional-pca`, `lexongraph-spherical-kmeans`,
+  `lexongraph-dcbc-streaming`, and the adaptive planning-policy crate that
+  composes directional PCA with DCBC for one built-in aggregate option
 - a caller-visible built-in planning-selection surface that requires explicit
   selection of one supported realization-and-direction combination or hybrid
   coarse/fine combination without requiring a caller-implemented factory

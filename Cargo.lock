@@ -1822,6 +1822,7 @@ dependencies = [
  "lexongraph-dcbc-streaming",
  "lexongraph-directional-pca",
  "lexongraph-embeddings-trait",
+ "lexongraph-spherical-kmeans",
  "lexongraph-streaming-clustering",
  "pollster",
  "sha2",
