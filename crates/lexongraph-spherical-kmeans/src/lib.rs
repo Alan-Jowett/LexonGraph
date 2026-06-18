@@ -849,6 +849,66 @@ mod tests {
         assert!(should_accelerate);
     }
 
+    #[test]
+    fn accelerated_assignment_matches_cpu_assignment_when_wgpu_is_supported() {
+        let selection = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+            detected_execution_backend_selection()
+        });
+        if selection.resolution != ExecutionBackendResolution::Wgpu {
+            return;
+        }
+
+        let embeddings = (0..257)
+            .map(|index| normalized_test_pattern(index, 96))
+            .collect::<Vec<_>>();
+        let centroids = (0..32)
+            .map(|index| normalized_test_pattern(index + 10_000, 96))
+            .collect::<Vec<_>>();
+        let previous_assignments = embeddings
+            .iter()
+            .enumerate()
+            .map(|(index, _)| index % centroids.len())
+            .collect::<Vec<_>>();
+        for embedding in &embeddings {
+            assert!(
+                nearest_assignment_margin(embedding, &centroids) > 1e-5,
+                "test fixture should avoid near-ties across CPU/WGPU precision boundaries"
+            );
+        }
+
+        let accelerated = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+            assign_points_accelerated(
+                &embeddings,
+                &centroids,
+                Some(previous_assignments.as_slice()),
+            )
+            .unwrap()
+        });
+        let cpu = assign_points_cpu(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+
+        assert_eq!(accelerated, cpu);
+    }
+
+    fn nearest_assignment_margin(embedding: &[f32], centroids: &[Vec<f32>]) -> f32 {
+        let mut best = f32::INFINITY;
+        let mut second_best = f32::INFINITY;
+        for centroid in centroids {
+            let candidate = super::cosine_distance(embedding, centroid.as_slice()).unwrap();
+            if candidate < best {
+                second_best = best;
+                best = candidate;
+            } else if candidate < second_best {
+                second_best = candidate;
+            }
+        }
+        second_best - best
+    }
+
     fn normalized_test_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
         let mut values = Vec::with_capacity(dimensions);
         for dimension in 0..dimensions {

@@ -270,7 +270,7 @@ struct ExecutionBackendRequestScope {
 
 impl ExecutionBackendRequestScope {
     fn new(request: ExecutionBackendRequest) -> Self {
-        let previous = execution_backend_request();
+        let mut previous = ExecutionBackendRequest::Auto;
         BACKEND_REQUEST_SCOPE_DEPTH.with(|depth| {
             if depth.get() == 0 {
                 let lock = backend_request_scope_lock()
@@ -281,6 +281,7 @@ impl ExecutionBackendRequestScope {
                 });
             }
             depth.set(depth.get() + 1);
+            previous = execution_backend_request();
         });
         set_execution_backend_request(request);
         Self { previous }
