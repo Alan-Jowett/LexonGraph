@@ -569,7 +569,8 @@ contract.
 In this revision, the runnable section-4 comparison set includes:
 
 - reusable repository crates `crates/lexongraph-pca-chunking`,
-  `crates/lexongraph-directional-pca`, and `crates/lexongraph-dcbc-streaming`
+  `crates/lexongraph-directional-pca`, `crates/lexongraph-dcbc-streaming`, and
+  `crates/lexongraph-spherical-kmeans`
 - evaluator-owned deterministic representatives for recursive balanced
   partitioning, space-filling-curve chunking, graph-neighborhood balancing,
   hybrid coarse rebalance, and random-shuffle exact chunking
@@ -588,7 +589,8 @@ deterministic registration defaults inside its ordinary registered-candidate
 surface rather than widening the shared candidate contract.
 
 In this revision, the evaluator provides deterministic default
-`DirectionalPcaParams` for `lexongraph-directional-pca`, while
+`DirectionalPcaParams` for `lexongraph-directional-pca`, deterministic
+spherical-k-means parameters for `lexongraph-spherical-kmeans`, while
 `lexongraph-dcbc-streaming` is registered directly from the shared clustering
 configuration.
 
@@ -617,6 +619,10 @@ goalposts.
 That contract records:
 
 - the metric family and any transformed-metric policy
+- for any mixed-geometry comparison, whether the candidate's internal
+  optimization metric is declared as order-preserving with the external track
+  metric or is explicitly being compared as a transfer experiment without a
+  metric-equivalence claim
 - the exact role of the metric family in build-time comparison, compression
   scoring, deferred summary obligations, and any later routing obligations
 - the primary `leaf_size` and any declared sensitivity sizes
@@ -1053,6 +1059,52 @@ The repository extends evaluator verification artifacts to cover section-6
 contract validation, summary-candidate execution, metric-semantics rejection,
 error-bound gate failure, cross-stage provenance, and deferred-goal narrowing.
 
+### DSG-STREAM-EVAL-057 `Section-7 routing-stage runner`
+
+The evaluator adds a direct section-7 runner that consumes the benchmark
+profile, one completed section-5 campaign report, and one completed section-6
+campaign report.
+
+The runner reuses the carried-forward section-5 hierarchy plus the carried-
+forward section-6 summary-family decision and materializes a search tree over
+real evaluation entities only. If removing synthetic entities leaves an empty
+terminal partition, the runner prunes that partition before final
+materialization instead of failing the entire routed design.
+
+### DSG-STREAM-EVAL-058 `Executable section-7 scope and routing metrics`
+
+The first checked-in section-7 slice is summary-first and centroid-compatible.
+
+Exact-centroid and composed-centroid summary families are executable through the
+shared streaming-indexer materialization path, while richer summary families
+remain explicit deferred outcomes until the branch-entry model widens beyond one
+embedding per child.
+
+For each executable design, the runner resolves held-out queries, computes exact
+top-10 neighbors, executes actual search across beam widths `{1,2,4,8,16}`, and
+aggregates `TNN@1`, `TNN@5`, `TNN@10`, nodes visited, routing depth, and
+termination counts from the reusable search telemetry surface.
+
+### DSG-STREAM-EVAL-059 `Section-7 artifacts and deferred-goal narrowing`
+
+Section-7 emits machine-readable per-design reports plus a campaign report,
+human-readable scorecard, and deterministic carry-forward summary.
+
+Each design report preserves the originating section-4 profile ID, section-5
+contract ID, section-6 contract ID, and the held-out query-set identities used
+for routing evaluation. After section-7 execution, the deferred-goal ledger
+removes section-6 routing obligations while retaining explicit latency/QPS and
+persistence or robustness follow-up obligations.
+
+### DSG-STREAM-EVAL-060 `Section-7 library, CLI, and verification surface`
+
+The crate exposes reusable library and CLI surfaces for running section 7,
+writing section-7 artifacts, and validating the checked-in routing slice.
+
+The repository verification surface covers executable centroid-compatible
+routing, unsupported-summary deferral, cross-stage provenance, and artifact
+rendering for the section-7 reports.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1090,9 +1142,9 @@ error-bound gate failure, cross-stage provenance, and deferred-goal narrowing.
 | DSG-STREAM-EVAL-026 | REQ-STREAM-EVAL-037 |
 | DSG-STREAM-EVAL-027 | REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
 | DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
-| DSG-STREAM-EVAL-029 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040 |
+| DSG-STREAM-EVAL-029 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040, REQ-STREAM-EVAL-054A |
 | DSG-STREAM-EVAL-030 | REQ-STREAM-EVAL-041, REQ-STREAM-EVAL-042 |
-| DSG-STREAM-EVAL-031 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043 |
+| DSG-STREAM-EVAL-031 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-054A |
 | DSG-STREAM-EVAL-032 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-044 |
 | DSG-STREAM-EVAL-033 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045 |
 | DSG-STREAM-EVAL-034 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046 |
@@ -1118,3 +1170,7 @@ error-bound gate failure, cross-stage provenance, and deferred-goal narrowing.
 | DSG-STREAM-EVAL-054 | REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-059, REQ-STREAM-EVAL-075 |
 | DSG-STREAM-EVAL-055 | REQ-STREAM-EVAL-003, REQ-STREAM-EVAL-071, REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-075 |
 | DSG-STREAM-EVAL-056 | REQ-STREAM-EVAL-016, REQ-STREAM-EVAL-076 |
+| DSG-STREAM-EVAL-057 | REQ-STREAM-EVAL-077 |
+| DSG-STREAM-EVAL-058 | REQ-STREAM-EVAL-078 |
+| DSG-STREAM-EVAL-059 | REQ-STREAM-EVAL-079 |
+| DSG-STREAM-EVAL-060 | REQ-STREAM-EVAL-080 |

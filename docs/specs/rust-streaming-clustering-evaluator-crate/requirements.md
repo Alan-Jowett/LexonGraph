@@ -716,6 +716,8 @@ This revision's checked-in repository-owned candidate set shall include:
   `crates/lexongraph-directional-pca`
 - the streaming DCBC clustering implementation provided by
   `crates/lexongraph-dcbc-streaming`
+- the vanilla spherical k-means clustering implementation provided by
+  `crates/lexongraph-spherical-kmeans`
 
 The checked-in runnable section-4 candidate set for repeated comparison shall
 also include concrete representatives for the remaining research-plan families:
@@ -946,8 +948,13 @@ contract needed to interpret comparable results.
 At minimum, this revision shall declare:
 
 - the exact build, locality, compression, and deferred-routing metric roles
-- any transformed-metric policy together with the ordering-preservation
-  obligation needed for later routing interpretation
+- any transformed-metric policy together with either:
+  - the ordering-preservation obligation needed for later routing
+    interpretation, or
+  - an explicit mixed-geometry declaration that the candidate's internal
+    optimization metric differs from the suite's external comparison metric and
+    is being compared as a transfer experiment rather than as an
+    order-preserving metric-equivalent realization
 - the metric-contract consistency checks and reported audit results needed to
   show that build, compression, deferred summary obligations, and any carried-
   forward routing obligations interpret the declared metric consistently
@@ -1006,6 +1013,19 @@ At minimum, the rule shall:
 The checked-in section-4 workflow in this revision shall publish the resulting
 carry-forward decision as a checked-in survivor-decision artifact produced from
 the canonical section-4 suite run.
+
+### REQ-STREAM-EVAL-054A
+
+For the repository-owned `lexongraph-spherical-kmeans` candidate, the evaluator
+shall own deterministic default spherical-k-means parameters sufficient to
+register and execute that candidate through the shared streaming
+trainer/classifier contract without introducing an evaluator-private candidate
+API.
+
+When a section-4 experiment track compares `lexongraph-spherical-kmeans`
+against a non-cosine external metric surface, the evaluator-owned frozen track
+contract shall declare that mixed-geometry comparison explicitly rather than
+implying metric equivalence.
 
 ### REQ-STREAM-EVAL-054
 
@@ -1368,6 +1388,54 @@ At minimum, this revision shall verify:
   error-bound violations
 - cross-stage provenance and carry-forward reporting
 - narrowed deferred-goal reporting after section-6 execution
+
+### REQ-STREAM-EVAL-077
+
+The evaluator shall add a first executable section-7 routing runner that
+consumes one benchmark profile, one completed section-5 hierarchy-stage report,
+and one completed section-6 summary-stage report.
+
+For this first executable section-7 slice, the runner shall materialize and
+query only real evaluation entities, excluding synthetic padding entities from
+the indexed search space and pruning any empty terminal partitions created by
+that real-only filtering.
+
+### REQ-STREAM-EVAL-078
+
+For each surviving section-5 pair plus section-6 summary-family design that is
+compatible with the current single-embedding branch-entry model, the section-7
+runner shall:
+
+- resolve the declared held-out query sets
+- compute exact top-10 neighbors as ground truth
+- execute actual search with beam widths `{1,2,4,8,16}`
+- report `TNN@1`, `TNN@5`, `TNN@10`, nodes visited, routing depth, and
+  termination counts
+
+Summary families that are not centroid-compatible with the current executable
+branch-entry model shall remain explicit deferred outcomes rather than being
+silently treated as passing routed designs.
+
+### REQ-STREAM-EVAL-079
+
+Section-7 reports and artifacts shall preserve cross-stage provenance,
+including:
+
+- the originating section-4 profile ID
+- the originating section-5 contract ID
+- the originating section-6 contract ID
+- the carried held-out query-set identities
+
+After section 7 executes, routing-specific deferred goals from section 6 are no
+longer reported as deferred, but latency/QPS service-level evaluation plus
+serialization, persistence, and broader robustness obligations remain explicit
+deferred goals.
+
+### REQ-STREAM-EVAL-080
+
+The crate shall expose reusable library and executable surfaces for running
+section 7, listing its artifacts, and validating the checked-in section-7
+routing slice.
 
 ## Out of Scope
 

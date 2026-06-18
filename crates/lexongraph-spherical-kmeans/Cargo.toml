@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+
+[package]
+name = "lexongraph-spherical-kmeans"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
+
+[dev-dependencies]
+lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering", features = ["conformance"] }

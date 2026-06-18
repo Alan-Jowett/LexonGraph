@@ -16,6 +16,7 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::DirectionalPcaParams;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
+use lexongraph_spherical_kmeans::{SphericalInitializationPolicy, SphericalKmeansParams};
 use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusteringConfig, StreamingClusteringError,
 };
@@ -27,11 +28,11 @@ use lexongraph_streaming_indexer::{
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
-    DirectionalPcaBuiltInPlanningSettings, FinalizedPartition, FinalizedPartitionHierarchy,
-    HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome, PlanningStage,
-    StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
-    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState,
+    DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
+    FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome,
+    PlanningStage, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
 };
 use sha2::{Digest, Sha256};
 
@@ -494,6 +495,79 @@ impl HierarchicalPlanningPolicy for LiveStageObserverPlanningPolicy {
     }
 }
 
+#[derive(Clone, Default)]
+struct NestedHierarchyPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for NestedHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        if embeddings.len() != 4 {
+            return Err(FixtureError(
+                "nested hierarchy fixture requires four embeddings".into(),
+            ));
+        }
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![
+                    FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: vec!["p0.0".into(), "p0.1".into()],
+                        item_indices: vec![0, 1, 2, 3],
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec!["p0.0.0".into(), "p0.0.1".into()],
+                        item_indices: vec![0, 1, 2],
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0.0".into(),
+                        parent_id: Some("p0.0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![0],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0.1".into(),
+                        parent_id: Some("p0.0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![1, 2],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.1".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![3],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                ],
+            },
+            planning_quality_metric: 1.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: [PlanningStage::Custom].into_iter().collect(),
+        })
+    }
+}
+
 #[derive(Clone)]
 struct BuiltInAlgorithmCase {
     name: &'static str,
@@ -521,6 +595,19 @@ fn directional_pca_planning(direction: BuiltInPlanningDirection) -> BuiltInPlann
             min_input_count: 2,
             min_effective_rank: 1,
             min_cumulative_variance: 0.0,
+        },
+    })
+}
+
+fn spherical_kmeans_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
+    BuiltInPlanning::SphericalKmeans(SphericalKmeansBuiltInPlanningSettings {
+        direction,
+        cluster_count: 2,
+        random_seed: Some(23),
+        params: SphericalKmeansParams {
+            initialization_policy: SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+            max_iteration_count: 8,
+            convergence_tolerance: 0.0,
         },
     })
 }
@@ -665,7 +752,7 @@ fn mixed_direction_hybrid_planning() -> BuiltInPlanning {
     )
 }
 
-fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
+fn built_in_cases() -> [BuiltInAlgorithmCase; 6] {
     [
         BuiltInAlgorithmCase {
             name: "dcbc-divisive",
@@ -682,6 +769,14 @@ fn built_in_cases() -> [BuiltInAlgorithmCase; 4] {
         BuiltInAlgorithmCase {
             name: "directional-pca-agglomerative",
             planning: directional_pca_planning(BuiltInPlanningDirection::Agglomerative),
+        },
+        BuiltInAlgorithmCase {
+            name: "spherical-kmeans-divisive",
+            planning: spherical_kmeans_planning(BuiltInPlanningDirection::Divisive),
+        },
+        BuiltInAlgorithmCase {
+            name: "spherical-kmeans-agglomerative",
+            planning: spherical_kmeans_planning(BuiltInPlanningDirection::Agglomerative),
         },
     ]
 }
@@ -786,9 +881,11 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
     assert!(src.contains("AdaptivePlanningSettings"));
     assert!(src.contains("InvalidAdaptivePlanningConfiguration"));
     assert!(src.contains("BuiltInPlanning::Adaptive"));
+    assert!(src.contains("BuiltInPlanning::SphericalKmeans"));
     assert!(manifest.contains("lexongraph-adaptive-planning-policy"));
     assert!(manifest.contains("lexongraph-dcbc-streaming"));
     assert!(manifest.contains("lexongraph-directional-pca"));
+    assert!(manifest.contains("lexongraph-spherical-kmeans"));
     assert!(manifest.contains("lexongraph-streaming-clustering"));
 }
 
@@ -1024,6 +1121,134 @@ async fn val_stream_indexer_010_hierarchy_is_exposed_and_schedule_independent() 
             .iter()
             .all(|partition| partition.id.starts_with("p0"))
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_045_shared_summary_policy_surface_is_reusable() {
+    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::with_summary_policy(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        dcbc_planning(BuiltInPlanningDirection::Divisive),
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    assert!(!result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_047_exact_centroid_summary_policy_materializes_deterministically() {
+    let items = [item("a"), item("j"), item("p"), item("~")];
+
+    let mut first = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        NestedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    first.ingest_batch(&items).await.unwrap();
+    first.finish_pass().unwrap();
+    first.mark_planning_complete().unwrap();
+    let first_store = MemoryBlockStore::default();
+    let first_result = first
+        .finalize(std::iter::once(items.as_slice()), &first_store)
+        .await
+        .unwrap();
+
+    let mut second = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        NestedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    second.ingest_batch(&items).await.unwrap();
+    second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let second_store = MemoryBlockStore::default();
+    let second_result = second
+        .finalize(std::iter::once(items.as_slice()), &second_store)
+        .await
+        .unwrap();
+
+    assert_eq!(first_result, second_result);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_046_exact_centroid_policy_uses_descendant_counts() {
+    let items = [item("a"), item("j"), item("p"), item("~")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ExactCentroidChildSummaryPolicy,
+        NestedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    let TypedEntries::Branch(_, entries) = into_entries(root) else {
+        panic!("nested hierarchy should materialize a branch root");
+    };
+    let branch_entry = entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                into_entries(store.get(&entry.child).unwrap().unwrap()),
+                TypedEntries::Branch(_, _)
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        branch_entry
+            .embedding
+            .iter()
+            .map(|byte| i8::from_le_bytes([*byte]))
+            .collect::<Vec<_>>(),
+        vec![105, 1]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_048_spherical_kmeans_built_in_path_supports_both_directions() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+    ];
+
+    for planning in [
+        spherical_kmeans_planning(BuiltInPlanningDirection::Divisive),
+        spherical_kmeans_planning(BuiltInPlanningDirection::Agglomerative),
+    ] {
+        let (store, result) = one_shot(planning, &items, 256).await.unwrap();
+        assert!(!result.block_ids.is_empty());
+        assert!(store.get(&result.root_id).unwrap().is_some());
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

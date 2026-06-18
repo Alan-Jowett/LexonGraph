@@ -34,11 +34,11 @@ Inspect the new crate's public surface and specification references.
 
 **Pass condition:** the crate exposes a caller-visible streaming replay
 lifecycle, remains subordinate to the indexing and block protocols, and
-consumes the shared streaming clustering contract, references the built-in DCBC
-and directional-PCA specification packages for their owned clustering
-algorithms, and does not define a new clustering contract locally or depend on
-a retired legacy batch-oriented indexing crate/specification package as part of
-its normative boundary.
+consumes the shared streaming clustering contract, references the built-in DCBC,
+directional-PCA, and spherical-k-means specification packages for their owned
+clustering algorithms, and does not define a new clustering contract locally or
+depend on a retired legacy batch-oriented indexing crate/specification package
+as part of its normative boundary.
 
 **Traces to:** REQ-STREAM-INDEXER-002, REQ-STREAM-INDEXER-004,
 REQ-STREAM-INDEXER-010
@@ -542,3 +542,48 @@ separate targeted cases rather than being omitted.
 
 **Traces to:** REQ-STREAM-INDEXER-030, REQ-STREAM-INDEXER-033,
 REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-046
+
+### VAL-STREAM-INDEXER-045
+
+Materialize one carried-forward finalized hierarchy through the child-summary
+policy surface and through an adapted canonical-embedding policy.
+
+**Pass condition:** both paths remain valid public materialization routes, and
+the canonical-policy path does not require callers to adopt descendant-aware
+policy logic when they do not need it.
+
+**Traces to:** REQ-STREAM-INDEXER-048, REQ-STREAM-INDEXER-050
+
+### VAL-STREAM-INDEXER-046
+
+Materialize a hierarchy whose children represent different descendant counts
+through the built-in exact-centroid child-summary policy.
+
+**Pass condition:** each parent summary equals the descendant-count-weighted
+centroid of the carried-forward child summaries rather than an unweighted mean.
+
+**Traces to:** REQ-STREAM-INDEXER-048, REQ-STREAM-INDEXER-049
+
+### VAL-STREAM-INDEXER-047
+
+Repeat exact-centroid materialization on the same finalized hierarchy and child
+summary inputs.
+
+**Pass condition:** the built-in exact-centroid summary policy produces the same
+parent summary embeddings deterministically across repeated runs.
+
+**Traces to:** REQ-STREAM-INDEXER-049
+
+### VAL-STREAM-INDEXER-048
+
+Construct the built-in planning path using the spherical-k-means realization,
+once in a supported `Divisive` configuration and once in a supported
+`Agglomerative` configuration.
+
+**Pass condition:** both constructions succeed without a caller-implemented
+planning factory, both require explicit spherical-k-means settings, and both
+produce finalized hierarchies that can drive the existing final-materialization
+contract.
+
+**Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-031,
+REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-041

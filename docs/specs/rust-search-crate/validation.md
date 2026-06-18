@@ -330,3 +330,35 @@ expanded in the invocation are removed before the next ranking round so stale
 branch entries do not affect termination or later expansion choices.
 
 **Traces to:** REQ-SEARCH-009, REQ-SEARCH-023
+
+### VAL-SEARCH-028
+
+Run search through the optional telemetry-returning surface on a deterministic
+multi-round fixture.
+
+**Pass condition:** the crate reports the invocation beam width, distinct blocks
+visited, maximum routing depth, and successful termination classification in a
+deterministic telemetry summary without changing the ordered search result.
+
+**Traces to:** REQ-SEARCH-024
+
+### VAL-SEARCH-029
+
+Run the same deterministic search fixture through both the result-only surface
+and the optional telemetry surface.
+
+**Pass condition:** both invocations return the same ordered search result and
+observable failure behavior; telemetry only adds the declared summary surface.
+
+**Traces to:** REQ-SEARCH-024
+
+### VAL-SEARCH-030
+
+Run search through the observer-based telemetry surface on a fixture that fails
+explicitly after the invocation starts.
+
+**Pass condition:** the observer receives the same terminal outcome
+classification and routing summary the returned telemetry surface would report,
+including explicit failure termination rather than silent omission.
+
+**Traces to:** REQ-SEARCH-024

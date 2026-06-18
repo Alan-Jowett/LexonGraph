@@ -447,8 +447,8 @@ the full checked-in section-4 family candidate set, including
 `pca-sort-exact-chunking`, `recursive-balanced-kmeans`,
 `space-filling-curve-exact-chunking`, `graph-neighborhood-balance`,
 `hybrid-coarse-rebalance`, `random-shuffle-exact-chunking`,
-`directional-pca`, and `dcbc-streaming`, so each can be selected through the
-same discovery path used for fixture candidates.
+`directional-pca`, `dcbc-streaming`, and `spherical-kmeans`, so each can be
+selected through the same discovery path used for fixture candidates.
 
 **Traces to:** REQ-STREAM-EVAL-042
 
@@ -543,14 +543,29 @@ campaign report produced from that track.
 
 **Pass condition:** the experiment track declares the exact build, locality,
 compression, and deferred-routing metric roles, any transformed-metric
-ordering-preservation obligation, the metric-contract consistency checks and
-reported audit results, the compatible dispersion functional for any deferred
-summary or refinement obligation, the threading model and deterministic
-reduction-order strategy, whether realistic qualification permits host-scaled
-CPU execution for candidates that support it, and whether 1-thread versus
-N-thread bitwise observable identity is measured directly or deferred.
+ordering-preservation obligation or explicit mixed-geometry transfer
+declaration, the metric-contract consistency checks and reported audit results,
+the compatible dispersion functional for any deferred summary or refinement
+obligation, the threading model and deterministic reduction-order strategy,
+whether realistic qualification permits host-scaled CPU execution for
+candidates that support it, and whether 1-thread versus N-thread bitwise
+observable identity is measured directly or deferred.
 
 **Traces to:** REQ-STREAM-EVAL-051
+
+### VAL-STREAM-EVAL-040A
+
+Inspect the evaluator-owned registered-candidate defaults together with one
+section-4 experiment track that compares a mixed-geometry repository-owned
+candidate under a non-matching external metric line.
+
+**Pass condition:** the evaluator owns deterministic registration defaults for
+`lexongraph-spherical-kmeans`, and the frozen track contract explicitly
+declares the candidate as a mixed-geometry comparison whenever its internal
+spherical/cosine optimization metric is compared under a non-cosine external
+track metric.
+
+**Traces to:** REQ-STREAM-EVAL-054A
 
 ### VAL-STREAM-EVAL-041
 
@@ -883,3 +898,39 @@ repository exposes the checked-in section-6 summary families through a stable
 registration surface.
 
 **Traces to:** REQ-STREAM-EVAL-072, REQ-STREAM-EVAL-076
+
+### VAL-STREAM-EVAL-063
+
+Run section-7 with at least two surviving section-5 pairs and centroid-
+compatible section-6 summary families.
+
+**Pass condition:** the evaluator materializes and queries a real-only search
+tree, executes the beam-width panel `{1,2,4,8,16}`, and emits per-design
+routing reports containing `TNN@1`, `TNN@5`, `TNN@10`, nodes visited, routing
+depth, and termination summaries derived from actual search execution.
+
+**Traces to:** REQ-STREAM-EVAL-077, REQ-STREAM-EVAL-078
+
+### VAL-STREAM-EVAL-064
+
+Run section-7 once with an unsupported section-6 summary family that is not
+centroid-compatible with the current single-embedding branch-entry model.
+
+**Pass condition:** the evaluator reports an explicit deferred unsupported-
+summary outcome, preserves the originating section-6 contract and held-out
+query-set identities, removes the prior routing-only deferred goal, and retains
+explicit latency/QPS plus persistence or robustness deferred goals.
+
+**Traces to:** REQ-STREAM-EVAL-078, REQ-STREAM-EVAL-079
+
+### VAL-STREAM-EVAL-065
+
+Inspect the section-7 artifact-emission surface after one successful routing
+run.
+
+**Pass condition:** the crate emits per-design reports, a campaign report, a
+human-readable scorecard, and a deterministic carry-forward summary that expose
+section-7 ranking and remaining deferred goals through both reusable library
+and executable-facing surfaces.
+
+**Traces to:** REQ-STREAM-EVAL-079, REQ-STREAM-EVAL-080

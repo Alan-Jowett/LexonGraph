@@ -33,15 +33,16 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
     Section4QualificationSurface, Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
     Section5HierarchyContract, Section5MetricSemanticsConsistencyResult, Section5PairRunStatus,
-    Section6SummaryRunStatus, SharedBalanceConstraints, StructuredFailure, TrainingPassSource,
-    built_in_fixture_candidate_names, candidate_adapter, emit_campaign_artifacts,
-    emit_section5_campaign_artifacts, emit_section6_campaign_artifacts,
-    generate_section4_suite_assets, registered_candidate_names,
+    Section6SummaryRunStatus, Section7RunStatus, SharedBalanceConstraints, StructuredFailure,
+    TrainingPassSource, built_in_fixture_candidate_names, candidate_adapter,
+    emit_campaign_artifacts, emit_section5_campaign_artifacts, emit_section6_campaign_artifacts,
+    emit_section7_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
     registered_hierarchy_strategy_names, registered_section6_summary_candidate_names,
     resolve_registered_candidates, resolve_registered_hierarchy_strategies,
     resolve_registered_section6_summary_candidates, run_evaluation_campaign, run_section4_suite,
-    run_section5_campaign, run_section6_campaign, section4_family_candidate_names,
-    with_execution_backend_request, write_section4_suite_artifacts,
+    run_section5_campaign, run_section6_campaign, run_section7_campaign,
+    section4_family_candidate_names, with_execution_backend_request,
+    write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -2424,6 +2425,7 @@ fn val_stream_eval_042_section4_suite_orders_survivors_by_the_deterministic_rank
             "pca-sort-exact-chunking".to_string(),
             "directional-pca".to_string(),
             "dcbc-streaming".to_string(),
+            "spherical-kmeans".to_string(),
         ])
         .unwrap(),
         report_dir.path(),
@@ -2465,7 +2467,11 @@ fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_candi
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    candidate_ids.extend(["directional-pca".to_string(), "dcbc-streaming".to_string()]);
+    candidate_ids.extend([
+        "directional-pca".to_string(),
+        "dcbc-streaming".to_string(),
+        "spherical-kmeans".to_string(),
+    ]);
     let candidates = resolve_registered_candidates(&candidate_ids).unwrap();
 
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
@@ -2488,6 +2494,7 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
         "pca-sort-exact-chunking".to_string(),
         "directional-pca".to_string(),
         "dcbc-streaming".to_string(),
+        "spherical-kmeans".to_string(),
     ])
     .unwrap();
     let report =
@@ -2502,6 +2509,7 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
         ("pca-sort-exact-chunking", "lexongraph-pca-chunking-v"),
         ("directional-pca", "lexongraph-directional-pca-v"),
         ("dcbc-streaming", "lexongraph-dcbc-streaming-v"),
+        ("spherical-kmeans", "lexongraph-spherical-kmeans-v"),
     ];
     for (candidate_id, software_prefix) in expected_identities {
         let concrete = report
@@ -2528,7 +2536,7 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
 fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_candidates() {
     let names = registered_candidate_names();
     let mut expected = section4_family_candidate_names();
-    expected.extend(["directional-pca", "dcbc-streaming"]);
+    expected.extend(["directional-pca", "dcbc-streaming", "spherical-kmeans"]);
     for candidate in &expected {
         assert!(names.contains(candidate));
     }
@@ -2636,6 +2644,22 @@ fn val_stream_eval_035_candidate_incompatibilities_are_reported_explicitly() {
         Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
             if candidate_id == "dcbc-streaming"
                 && message.contains("soft_balance_penalty")
+    ));
+
+    let spherical_candidates =
+        resolve_registered_candidates(&["spherical-kmeans".to_string()]).unwrap();
+    let spherical_report =
+        run_evaluation_campaign(&directional_profile, &spherical_candidates).unwrap();
+    let spherical_run = &spherical_report.run_reports[0];
+    assert_eq!(
+        spherical_run.run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(matches!(
+        spherical_run.terminal_failure.as_ref(),
+        Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
+            if candidate_id == "spherical-kmeans"
+                && message.contains("balance constraints")
     ));
 }
 
@@ -4183,4 +4207,205 @@ fn val_stream_eval_055_accelerated_target_runs_report_target_match_when_availabl
     }
 
     assert!(selection.detail.contains("target profile match:"));
+}
+
+fn write_section7_query_asset(
+    profile: &mut BenchmarkProfile,
+    temp_dir: &tempfile::TempDir,
+    query_entity_ids: &[&str],
+) {
+    let query_path = temp_dir.path().join("heldout-queries.json");
+    let document = serde_json::json!({
+        "corpus_id": "fixture-corpus-a",
+        "query_entity_ids": query_entity_ids,
+    });
+    fs::write(
+        &query_path,
+        serde_json::to_vec_pretty(&document).expect("section-7 query asset should serialize"),
+    )
+    .expect("section-7 query asset should write");
+    profile.later_phase_identities[0].asset_path = Some(query_path);
+}
+
+#[test]
+fn val_stream_eval_063_section7_campaign_reports_routing_metrics_for_supported_summary_candidates()
+{
+    let output_dir = tempdir().unwrap();
+    let mut profile = strict_alignment_profile();
+    write_section7_query_asset(&mut profile, &output_dir, &["a", "c"]);
+
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_report = run_section5_campaign(
+        &profile,
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let summary_candidates = resolve_registered_section6_summary_candidates(&[
+        "exact-centroid".to_string(),
+        "composed-centroid".to_string(),
+    ])
+    .unwrap();
+    let section6_report = run_section6_campaign(
+        &profile,
+        &section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+
+    let report = run_section7_campaign(&profile, &section5_report, &section6_report).unwrap();
+
+    assert_eq!(report.section4_profile_id, profile.profile_id);
+    assert_eq!(report.section5_contract_id, "section5-fixture-contract");
+    assert_eq!(report.section6_contract_id, "section6-fixture-contract");
+    assert_eq!(report.design_reports.len(), 4);
+    assert_eq!(report.ranking.len(), 4);
+    assert!(
+        report
+            .design_reports
+            .iter()
+            .all(|design| design.run_status == Section7RunStatus::Succeeded)
+    );
+    assert!(report.design_reports.iter().all(|design| {
+        design.held_out_query_set_ids == vec!["fixture-heldout-query-set".to_string()]
+            && design.query_count == 2
+            && design.query_reports.len() == 10
+            && design.beam_reports.len() == 5
+            && design.originating_section6_contract_id == "section6-fixture-contract"
+            && design
+                .beam_reports
+                .iter()
+                .map(|beam| beam.beam_width)
+                .eq([1, 2, 4, 8, 16].into_iter())
+            && design
+                .query_reports
+                .iter()
+                .all(|query| matches!(query.termination.as_str(), "success" | "exhausted"))
+    }));
+}
+
+#[test]
+fn val_stream_eval_064_section7_defers_unsupported_summary_families_and_preserves_remaining_obligations()
+ {
+    let output_dir = tempdir().unwrap();
+    let mut profile = strict_alignment_profile();
+    write_section7_query_asset(&mut profile, &output_dir, &["a", "c"]);
+
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_report = run_section5_campaign(
+        &profile,
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let summary_candidates = resolve_registered_section6_summary_candidates(&[
+        "exact-centroid".to_string(),
+        "low-rank-centroid-direction".to_string(),
+    ])
+    .unwrap();
+    let section6_report = run_section6_campaign(
+        &profile,
+        &section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+
+    let report = run_section7_campaign(&profile, &section5_report, &section6_report).unwrap();
+
+    assert!(report.remaining_deferred_goals.iter().any(|goal| {
+        goal.deferred_id == "section7-deferred-latency-qps"
+            && goal.reason.contains("latency and QPS")
+    }));
+    assert!(
+        report
+            .remaining_deferred_goals
+            .iter()
+            .any(|goal| goal.deferred_id == "section7-deferred-persistence")
+    );
+    assert!(
+        !report
+            .remaining_deferred_goals
+            .iter()
+            .any(|goal| goal.deferred_id == "section6-deferred-routing")
+    );
+
+    let deferred = report
+        .design_reports
+        .iter()
+        .find(|design| {
+            design.summary_candidate_identity.summary_candidate_id == "low-rank-centroid-direction"
+        })
+        .expect("unsupported summary candidate should be present");
+    assert_eq!(
+        deferred.run_status,
+        Section7RunStatus::DeferredUnsupportedSummary
+    );
+    assert_eq!(
+        deferred.originating_section6_contract_id,
+        "section6-fixture-contract"
+    );
+    assert_eq!(
+        deferred.held_out_query_set_ids,
+        vec!["fixture-heldout-query-set".to_string()]
+    );
+    assert!(
+        deferred
+            .detail
+            .contains("single-embedding branch-entry model")
+    );
+}
+
+#[test]
+fn val_stream_eval_065_section7_artifacts_render_ranking_and_deferred_goals() {
+    let output_dir = tempdir().unwrap();
+    let mut profile = strict_alignment_profile();
+    write_section7_query_asset(&mut profile, &output_dir, &["a", "c"]);
+
+    let strategies =
+        resolve_registered_hierarchy_strategies(&["bottom-up-agglomeration".to_string()]).unwrap();
+    let section5_report = run_section5_campaign(
+        &profile,
+        &balanced_and_skewed_candidates(),
+        &section5_hierarchy_contract(),
+        &strategies,
+    )
+    .unwrap();
+    let summary_candidates =
+        resolve_registered_section6_summary_candidates(&["exact-centroid".to_string()]).unwrap();
+    let section6_report = run_section6_campaign(
+        &profile,
+        &section5_report,
+        &section6_summary_contract(),
+        &summary_candidates,
+    )
+    .unwrap();
+    let report = run_section7_campaign(&profile, &section5_report, &section6_report).unwrap();
+    let artifacts = emit_section7_campaign_artifacts(&report).unwrap();
+
+    assert_eq!(artifacts.per_design_reports.len(), 2);
+    assert!(artifacts.scorecard.contents.contains("beam  1: TNN@1"));
+    assert!(
+        artifacts
+            .carry_forward_summary
+            .contents
+            .contains("Remaining deferred goals:")
+    );
+    assert!(
+        artifacts
+            .carry_forward_summary
+            .contents
+            .contains("section7-deferred-latency-qps")
+    );
+    assert!(
+        artifacts
+            .campaign_report
+            .contents
+            .contains("\"section6_contract_id\": \"section6-fixture-contract\"")
+    );
 }

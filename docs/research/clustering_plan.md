@@ -203,6 +203,7 @@ work.
 | D | Graph-based neighborhood partitioning with exact-size balancing | May preserve local topology better |
 | E | Hybrid: coarse partitioning then exact-size local rebalance | Likely practical compromise |
 | F | Random shuffle + exact chunking | Null baseline for measuring algorithmic value |
+| G | Vanilla spherical k-means | Boring control for real-data locality and centroid-routing purity |
 
 The abstract family list above defines the search space. The checked-in
 repository-owned section-4 screening workflow should also name the concrete
@@ -211,6 +212,7 @@ initial candidate set used for repeated comparisons, including at least:
 - `lexongraph-pca-chunking`
 - `lexongraph-directional-pca`
 - `lexongraph-dcbc-streaming`
+- `lexongraph-spherical-kmeans`
 
 Additional fixture or null-baseline candidates may be included as long as they
 use the same evaluator-owned registration and reporting surface.
@@ -363,20 +365,28 @@ This is the main decision phase.
 
 For each surviving full design:
 
-1. Use the held-out query set.
-2. Compute exact top-10 neighbors as ground truth.
-3. Run greedy routing with beam width `1`.
-4. If recall is below target, rerun with fixed fallback beam widths.
+1. Materialize the first executable routing slice over real entities only; if
+   removing synthetic padding leaves empty terminal partitions, prune those
+   partitions deterministically before routing.
+2. Use the held-out query set declared by the benchmark profile.
+3. Compute exact top-10 neighbors as ground truth.
+4. Run actual search with beam widths `{1,2,4,8,16}`.
 5. Measure:
-   - recall@10
-   - p50/p95 latency
-   - QPS
+   - `TNN@1`
+   - `TNN@5`
+   - `TNN@10`
    - average routing depth
    - nodes visited per query
+6. Keep latency and QPS as explicit deferred service-level obligations for this
+   first executable slice rather than pretending the evaluator already proves
+   production query performance.
 
 ### Elimination rule
 
-Reject any design that cannot reach `TNN Recall@10 >= 90%` with a beam width small enough to preserve acceptable latency on the reference hardware.
+Reject any design that cannot reach `TNN@10 >= 90%` with the smallest beam in
+the fixed panel that meets the routing target. Summary families that are not
+yet executable under the current single-embedding branch-entry model remain
+explicit deferred outcomes rather than silent survivors.
 
 ---
 

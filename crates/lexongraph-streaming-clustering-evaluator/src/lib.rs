@@ -14,6 +14,7 @@ mod acceleration;
 mod section4;
 mod section5;
 mod section6;
+mod section7;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -38,6 +39,10 @@ use lexongraph_directional_pca::{
 };
 use lexongraph_pca_chunking::{
     PCA_CHUNKING_SOFTWARE_IDENTITY, PcaChunkingParams, PcaChunkingStreamingTrainer,
+};
+use lexongraph_spherical_kmeans::{
+    SPHERICAL_KMEANS_SOFTWARE_IDENTITY, SphericalInitializationPolicy, SphericalKmeansParams,
+    SphericalKmeansStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
@@ -85,6 +90,13 @@ pub use section6::{
     registered_section6_summary_candidate_names, render_section6_carry_forward_summary,
     render_section6_scorecard, resolve_registered_section6_summary_candidates,
     run_section6_campaign, write_section6_campaign_artifacts,
+};
+pub use section7::{
+    Section7BeamReport, Section7CampaignArtifacts, Section7CampaignReport,
+    Section7DeferredGoalRecord, Section7DesignReport, Section7HeldOutQuery, Section7QueryReport,
+    Section7RankedDesign, Section7RunStatus, emit_section7_campaign_artifacts,
+    render_section7_carry_forward_summary, render_section7_scorecard, run_section7_campaign,
+    write_section7_campaign_artifacts,
 };
 
 pub type PassPlan = Vec<Vec<Embedding>>;
@@ -4461,6 +4473,7 @@ pub fn registered_candidate_names() -> Vec<&'static str> {
     names.extend(section4_family_candidate_names());
     names.push("directional-pca");
     names.push("dcbc-streaming");
+    names.push("spherical-kmeans");
     names
 }
 
@@ -4472,6 +4485,14 @@ fn default_directional_pca_params() -> DirectionalPcaParams {
         min_input_count: 2,
         min_effective_rank: 1,
         min_cumulative_variance: 0.0,
+    }
+}
+
+fn default_spherical_kmeans_params() -> SphericalKmeansParams {
+    SphericalKmeansParams {
+        initialization_policy: SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+        max_iteration_count: 32,
+        convergence_tolerance: 1e-4,
     }
 }
 
@@ -5113,6 +5134,19 @@ pub fn registered_candidate(name: &str) -> Option<RegisteredCandidate> {
                 software_identity: DCBC_STREAMING_SOFTWARE_IDENTITY.into(),
             },
             |config| DcbcStreamingTrainer::new(config.clone()),
+        )),
+        "spherical-kmeans" => Some(candidate_adapter(
+            CandidateIdentity {
+                candidate_id: "spherical-kmeans".into(),
+                implementation_label: "Repository-owned spherical k-means clustering".into(),
+                software_identity: SPHERICAL_KMEANS_SOFTWARE_IDENTITY.into(),
+            },
+            |config| {
+                SphericalKmeansStreamingTrainer::new(
+                    config.clone(),
+                    default_spherical_kmeans_params(),
+                )
+            },
         )),
         "random-shuffle-exact-chunking" => Some(candidate_adapter(
             CandidateIdentity {

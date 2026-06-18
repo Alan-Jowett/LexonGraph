@@ -240,6 +240,18 @@ After a round expands one or more child block IDs, the crate shall remove from
 the frontier all expandable candidates that target child block IDs already expanded
 in the invocation before the next ranking round.
 
+### REQ-SEARCH-024
+
+The crate shall expose an optional per-invocation telemetry surface for search.
+
+That surface shall allow callers to observe, without changing search ranking or
+failure semantics:
+
+- the beam width used for the invocation
+- the count of distinct blocks visited during the invocation
+- the maximum routing depth reached during the invocation
+- the terminal outcome classification for the invocation
+
 ## Out of Scope
 
 This crate does not define or own:
