@@ -4283,7 +4283,7 @@ fn val_stream_eval_063_section7_campaign_reports_routing_metrics_for_supported_s
             && design
                 .query_reports
                 .iter()
-                .all(|query| query.termination == "success")
+                .all(|query| matches!(query.termination.as_str(), "success" | "exhausted"))
     }));
 }
 

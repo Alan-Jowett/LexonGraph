@@ -1308,6 +1308,39 @@ fn val_search_030_telemetry_does_not_change_results_or_failures() {
 }
 
 #[test]
+fn regression_exhausted_telemetry_reports_exhausted_termination() {
+    let store = MemoryBlockStore::default();
+    let only_leaf = store
+        .put(&leaf_block(i8_embedding([5, 0]), "only"))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![
+                branch_entry([9, 0], only_leaf),
+                branch_entry([8, 0], only_leaf),
+            ],
+        ))
+        .unwrap();
+    let searcher = Searcher::new(AcceptAllCompatibility, FirstByteScorer);
+    let recorder = SummaryRecorder::default();
+
+    let telemetry_error = searcher
+        .search_with_telemetry(&root_id, &(), 1, 2, &store)
+        .unwrap_err();
+    let observed_error = searcher
+        .search_with_observer(&root_id, &(), 1, 2, &store, &recorder)
+        .unwrap_err();
+
+    assert_eq!(telemetry_error, observed_error);
+    assert_eq!(recorder.summaries().len(), 1);
+    assert_eq!(
+        recorder.summaries()[0].termination,
+        SearchTerminationKind::Exhausted
+    );
+}
+
+#[test]
 fn val_search_017_workspace_contains_the_search_crate() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let crate_manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();

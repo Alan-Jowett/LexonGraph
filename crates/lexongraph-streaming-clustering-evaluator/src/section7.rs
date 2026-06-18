@@ -1177,7 +1177,6 @@ where
         }
 
         if branch_candidates.is_empty() {
-            telemetry.termination = SearchTerminationKind::Success;
             terminal_candidates.sort_by(compare_greedy_leaf_candidates::<CS::Score>);
             let mut neighbor_ids = Vec::new();
             for candidate in terminal_candidates {
@@ -1196,6 +1195,11 @@ where
                     break;
                 }
             }
+            telemetry.termination = if neighbor_ids.len() == neighbor_count {
+                SearchTerminationKind::Success
+            } else {
+                SearchTerminationKind::Exhausted
+            };
             return Ok((neighbor_ids, telemetry));
         }
 

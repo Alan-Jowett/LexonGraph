@@ -360,7 +360,7 @@ impl<EC, CS> Searcher<EC, CS> {
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
     {
-        self.search_internal(root_id, target, w, n, store, None)
+        self.search_internal(root_id, target, w, n, store, TelemetryMode::Disabled)
             .map(|(result, _)| result)
     }
 
@@ -376,7 +376,7 @@ impl<EC, CS> Searcher<EC, CS> {
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
     {
-        self.search_internal(root_id, target, w, n, store, None)
+        self.search_internal(root_id, target, w, n, store, TelemetryMode::Enabled(None))
     }
 
     pub fn search_with_observer<Target, TO>(
@@ -393,8 +393,15 @@ impl<EC, CS> Searcher<EC, CS> {
         CS: CandidateScorer<Target>,
         TO: SearchTelemetryObserver,
     {
-        self.search_internal(root_id, target, w, n, store, Some(observer))
-            .map(|(result, _)| result)
+        self.search_internal(
+            root_id,
+            target,
+            w,
+            n,
+            store,
+            TelemetryMode::Enabled(Some(observer)),
+        )
+        .map(|(result, _)| result)
     }
 
     fn search_internal<Target>(
@@ -404,18 +411,18 @@ impl<EC, CS> Searcher<EC, CS> {
         w: usize,
         n: usize,
         store: &dyn BlockStore,
-        observer: Option<&dyn SearchTelemetryObserver>,
+        telemetry_mode: TelemetryMode<'_>,
     ) -> Result<(SearchResult, SearchTelemetrySummary), SearchError>
     where
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
     {
-        let mut telemetry = SearchTelemetryCollector::new(w);
+        let mut telemetry = SearchTelemetryCollector::new(w, telemetry_mode.enabled());
 
         if w == 0 {
             let error = SearchError::InvalidTraversalWidth { w };
             telemetry.finish_with_error(&error);
-            emit_search_telemetry(observer, &telemetry.summary);
+            emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
             return Err(error);
         }
 
@@ -424,7 +431,7 @@ impl<EC, CS> Searcher<EC, CS> {
                 Ok(frontier) => frontier,
                 Err(error) => {
                     telemetry.finish_with_error(&error);
-                    emit_search_telemetry(observer, &telemetry.summary);
+                    emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
                     return Err(error);
                 }
             };
@@ -458,8 +465,8 @@ impl<EC, CS> Searcher<EC, CS> {
                     })
                     .collect();
                 telemetry.finish_success();
-                emit_search_telemetry(observer, &telemetry.summary);
-                return Ok((SearchResult { leaves }, telemetry.summary));
+                emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                return Ok((SearchResult { leaves }, telemetry.into_summary()));
             }
 
             let current_round = select_children_to_expand(&frontier, &expanded_children, w);
@@ -472,7 +479,7 @@ impl<EC, CS> Searcher<EC, CS> {
                         .count(),
                 };
                 telemetry.finish_with_error(&error);
-                emit_search_telemetry(observer, &telemetry.summary);
+                emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
                 return Err(error);
             }
 
@@ -499,7 +506,7 @@ impl<EC, CS> Searcher<EC, CS> {
                     Ok(candidates) => next_candidates.extend(candidates),
                     Err(error) => {
                         telemetry.finish_with_error(&error);
-                        emit_search_telemetry(observer, &telemetry.summary);
+                        emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
                         return Err(error);
                     }
                 }
@@ -600,6 +607,25 @@ enum LoadedEntries {
     Leaf(Vec<LeafEntry>),
 }
 
+#[derive(Clone, Copy)]
+enum TelemetryMode<'a> {
+    Disabled,
+    Enabled(Option<&'a dyn SearchTelemetryObserver>),
+}
+
+impl<'a> TelemetryMode<'a> {
+    fn enabled(self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+
+    fn observer(self) -> Option<&'a dyn SearchTelemetryObserver> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled(observer) => observer,
+        }
+    }
+}
+
 enum SearchCandidate<Score> {
     Branch {
         child: BlockHash,
@@ -665,14 +691,16 @@ fn candidate_identity(candidate: &SearchCandidate<impl Ord>) -> &[u8; 32] {
 }
 
 struct SearchTelemetryCollector {
-    visited_blocks: HashSet<BlockHash>,
+    visited_blocks: Option<HashSet<BlockHash>>,
+    enabled: bool,
     summary: SearchTelemetrySummary,
 }
 
 impl SearchTelemetryCollector {
-    fn new(beam_width: usize) -> Self {
+    fn new(beam_width: usize, enabled: bool) -> Self {
         Self {
-            visited_blocks: HashSet::new(),
+            visited_blocks: enabled.then(HashSet::new),
+            enabled,
             summary: SearchTelemetrySummary {
                 beam_width,
                 distinct_blocks_visited: 0,
@@ -683,39 +711,53 @@ impl SearchTelemetryCollector {
     }
 
     fn record_visited_block(&mut self, block_id: BlockHash, depth: usize) {
-        self.visited_blocks.insert(block_id);
-        self.summary.distinct_blocks_visited = self.visited_blocks.len();
-        self.summary.max_routing_depth = self.summary.max_routing_depth.max(depth);
+        if let Some(visited_blocks) = &mut self.visited_blocks {
+            visited_blocks.insert(block_id);
+            self.summary.distinct_blocks_visited = visited_blocks.len();
+            self.summary.max_routing_depth = self.summary.max_routing_depth.max(depth);
+        }
     }
 
     fn finish_success(&mut self) {
-        self.summary.termination = SearchTerminationKind::Success;
+        if self.enabled {
+            self.summary.termination = SearchTerminationKind::Success;
+        }
     }
 
     fn finish_with_error(&mut self, error: &SearchError) {
-        self.summary.termination = match error {
-            SearchError::InvalidTraversalWidth { .. } => {
-                SearchTerminationKind::InvalidTraversalWidth
-            }
-            SearchError::MissingRootBlock { .. } => SearchTerminationKind::MissingRootBlock,
-            SearchError::RootLoad(_) => SearchTerminationKind::RootLoadFailure,
-            SearchError::MissingChildBlock { .. } => SearchTerminationKind::MissingChildBlock,
-            SearchError::ChildLoad { .. } => SearchTerminationKind::ChildLoadFailure,
-            SearchError::MalformedBlock { .. } => SearchTerminationKind::MalformedBlock,
-            SearchError::IncompatibleEmbedding { .. } => {
-                SearchTerminationKind::IncompatibleEmbedding
-            }
-            SearchError::ScoringFailure { .. } => SearchTerminationKind::ScoringFailure,
-            SearchError::Exhausted { .. } => SearchTerminationKind::Exhausted,
-        };
+        if self.enabled {
+            self.summary.termination = match error {
+                SearchError::InvalidTraversalWidth { .. } => {
+                    SearchTerminationKind::InvalidTraversalWidth
+                }
+                SearchError::MissingRootBlock { .. } => SearchTerminationKind::MissingRootBlock,
+                SearchError::RootLoad(_) => SearchTerminationKind::RootLoadFailure,
+                SearchError::MissingChildBlock { .. } => SearchTerminationKind::MissingChildBlock,
+                SearchError::ChildLoad { .. } => SearchTerminationKind::ChildLoadFailure,
+                SearchError::MalformedBlock { .. } => SearchTerminationKind::MalformedBlock,
+                SearchError::IncompatibleEmbedding { .. } => {
+                    SearchTerminationKind::IncompatibleEmbedding
+                }
+                SearchError::ScoringFailure { .. } => SearchTerminationKind::ScoringFailure,
+                SearchError::Exhausted { .. } => SearchTerminationKind::Exhausted,
+            };
+        }
+    }
+
+    fn summary(&self) -> Option<&SearchTelemetrySummary> {
+        self.enabled.then_some(&self.summary)
+    }
+
+    fn into_summary(self) -> SearchTelemetrySummary {
+        self.summary
     }
 }
 
 fn emit_search_telemetry(
     observer: Option<&dyn SearchTelemetryObserver>,
-    summary: &SearchTelemetrySummary,
+    summary: Option<&SearchTelemetrySummary>,
 ) {
-    if let Some(observer) = observer {
+    if let (Some(observer), Some(summary)) = (observer, summary) {
         observer.record_summary(summary);
     }
 }
