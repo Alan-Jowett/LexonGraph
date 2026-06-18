@@ -453,8 +453,10 @@ fn assign_points_accelerated(
             DenseDistanceMetric::Cosine,
             rows_per_chunk,
         )
-        .map_err(|error| StreamingClusteringError::InvalidConfiguration {
-            message: format!("accelerated spherical k-means assignment failed: {error}"),
+        .map_err(|error| {
+            unsatisfiable_constraint(format!(
+                "accelerated spherical k-means assignment failed: {error}"
+            ))
         })?;
         for row_index in 0..embedding_chunk.len() {
             let global_row_index = chunk_index * rows_per_chunk + row_index;
@@ -694,25 +696,24 @@ fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f32, StreamingClusteri
             "cosine distance requires equal embedding dimensionality",
         ));
     }
-    let left_norm_sq = left
-        .iter()
-        .map(|value| f64::from(*value) * f64::from(*value))
-        .sum::<f64>();
-    let right_norm_sq = right
-        .iter()
-        .map(|value| f64::from(*value) * f64::from(*value))
-        .sum::<f64>();
+    let (dot_product, left_norm_sq, right_norm_sq) = left.iter().zip(right).fold(
+        (0.0f64, 0.0f64, 0.0f64),
+        |(dot, left_sq, right_sq), (l, r)| {
+            let left_value = f64::from(*l);
+            let right_value = f64::from(*r);
+            (
+                dot + left_value * right_value,
+                left_sq + left_value * left_value,
+                right_sq + right_value * right_value,
+            )
+        },
+    );
     if left_norm_sq == 0.0 || right_norm_sq == 0.0 {
         return Err(malformed_input(
             "cosine distance requires non-zero embeddings",
         ));
     }
-    let similarity = left
-        .iter()
-        .zip(right)
-        .map(|(l, r)| f64::from(*l) * f64::from(*r))
-        .sum::<f64>()
-        / (left_norm_sq.sqrt() * right_norm_sq.sqrt());
+    let similarity = dot_product / (left_norm_sq.sqrt() * right_norm_sq.sqrt());
     Ok((1.0 - similarity).max(0.0) as f32)
 }
 
@@ -744,7 +745,9 @@ mod tests {
         with_execution_backend_request,
     };
 
-    use super::{best_cluster, best_cluster_from_distances};
+    use super::{
+        assign_points_accelerated, assign_points_cpu, best_cluster, best_cluster_from_distances,
+    };
 
     #[test]
     fn best_cluster_from_distances_prefers_previous_assignment_on_tie() {
@@ -783,5 +786,47 @@ mod tests {
         let shared = best_cluster_from_distances(&distances, Some(1)).unwrap();
 
         assert_eq!(direct, shared);
+    }
+
+    #[test]
+    fn accelerated_assignment_matches_cpu_assignment_when_forced_to_cpu_backend() {
+        let embeddings = (0..513)
+            .map(|index| normalized_test_pattern(index, 8))
+            .collect::<Vec<_>>();
+        let centroids = (0..2048)
+            .map(|index| normalized_test_pattern(index + 10_000, 8))
+            .collect::<Vec<_>>();
+        let previous_assignments = embeddings
+            .iter()
+            .enumerate()
+            .map(|(index, _)| index % centroids.len())
+            .collect::<Vec<_>>();
+
+        let accelerated = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+            assign_points_accelerated(
+                &embeddings,
+                &centroids,
+                Some(previous_assignments.as_slice()),
+            )
+            .unwrap()
+        });
+        let cpu = assign_points_cpu(
+            &embeddings,
+            &centroids,
+            Some(previous_assignments.as_slice()),
+        )
+        .unwrap();
+
+        assert_eq!(accelerated, cpu);
+    }
+
+    fn normalized_test_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
+        let mut values = Vec::with_capacity(dimensions);
+        for dimension in 0..dimensions {
+            let angle = ((seed * 37 + dimension * 17 + 1) % 997) as f32;
+            values.push((angle * 0.013).sin() + (angle * 0.007).cos() * 0.5);
+        }
+        let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+        values.into_iter().map(|value| value / norm).collect()
     }
 }
