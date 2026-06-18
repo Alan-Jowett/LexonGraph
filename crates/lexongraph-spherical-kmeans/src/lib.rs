@@ -4,8 +4,8 @@
 //! Streaming spherical k-means clustering for LexonGraph.
 
 use lexongraph_linear_algebra_acceleration::{
-    DenseDistanceMetric, ExecutionBackendResolution, chunked_dense_distance_matrix,
-    detected_execution_backend_selection,
+    DenseDistanceMetric, ExecutionBackendRequest, ExecutionBackendResolution,
+    chunked_dense_distance_matrix, detected_execution_backend_selection, execution_backend_request,
 };
 use lexongraph_streaming_clustering::{
     ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
@@ -478,6 +478,14 @@ fn should_use_accelerated_assignments(
     if normalized_embeddings.is_empty() || normalized_centroids.is_empty() {
         return false;
     }
+    match execution_backend_request() {
+        ExecutionBackendRequest::Cpu => return false,
+        ExecutionBackendRequest::Wgpu => {
+            return detected_execution_backend_selection().resolution
+                == ExecutionBackendResolution::Wgpu;
+        }
+        ExecutionBackendRequest::Auto => {}
+    }
     let operation_count = normalized_embeddings
         .len()
         .saturating_mul(normalized_centroids.len())
@@ -741,7 +749,8 @@ fn unsatisfiable_constraint(message: impl Into<String>) -> StreamingClusteringEr
 #[cfg(test)]
 mod tests {
     use lexongraph_linear_algebra_acceleration::{
-        DenseDistanceMetric, ExecutionBackendRequest, dense_distance_matrix,
+        DenseDistanceMetric, ExecutionBackendRequest, ExecutionBackendResolution,
+        dense_distance_matrix, detected_execution_backend_selection,
         with_execution_backend_request,
     };
 
@@ -818,6 +827,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(accelerated, cpu);
+    }
+
+    #[test]
+    fn forced_wgpu_request_bypasses_assignment_size_threshold_when_supported() {
+        let selection = with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+            detected_execution_backend_selection()
+        });
+        if selection.resolution != ExecutionBackendResolution::Wgpu {
+            return;
+        }
+
+        let embeddings = vec![normalized_test_pattern(1, 8)];
+        let centroids = vec![normalized_test_pattern(2, 8), normalized_test_pattern(3, 8)];
+
+        let should_accelerate =
+            with_execution_backend_request(ExecutionBackendRequest::Wgpu, || {
+                super::should_use_accelerated_assignments(&embeddings, &centroids)
+            });
+
+        assert!(should_accelerate);
     }
 
     fn normalized_test_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
