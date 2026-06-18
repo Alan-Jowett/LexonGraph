@@ -19,6 +19,9 @@ fn main() -> Result<(), String> {
     let dimensions = parse_arg("--dimensions").unwrap_or(384);
     let cluster_count = parse_arg("--cluster-count").unwrap_or(256);
     let repeats = parse_arg("--repeats").unwrap_or(5);
+    if repeats == 0 {
+        return Err("--repeats must be at least 1".into());
+    }
 
     let dataset = build_dataset(observed_count, dimensions);
     let config = StreamingClusteringConfig {
@@ -77,6 +80,9 @@ fn benchmark_backend(
     config: &StreamingClusteringConfig,
     params: &SphericalKmeansParams,
 ) -> Result<BenchmarkRuns, String> {
+    if repeats == 0 {
+        return Err("--repeats must be at least 1".into());
+    }
     with_execution_backend_request(request, || {
         let selection = detected_execution_backend_selection();
         let backend_label = backend_resolution_label(&selection).to_string();
@@ -86,7 +92,7 @@ fn benchmark_backend(
             run_training(dataset, config, params).map_err(|error| error.to_string())?;
             run_millis.push(started.elapsed().as_secs_f64() * 1000.0);
         }
-        let median_ms = median(run_millis.as_slice());
+        let median_ms = median(run_millis.as_slice())?;
         Ok(BenchmarkRuns {
             backend_label,
             run_millis,
@@ -124,10 +130,18 @@ fn normalized_pattern(seed: usize, dimensions: usize) -> Vec<f32> {
     values.into_iter().map(|value| value / norm).collect()
 }
 
-fn median(values: &[f64]) -> f64 {
+fn median(values: &[f64]) -> Result<f64, String> {
+    if values.is_empty() {
+        return Err("median requires at least one value".into());
+    }
     let mut sorted = values.to_vec();
     sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-    sorted[sorted.len() / 2]
+    let middle = sorted.len() / 2;
+    if sorted.len() % 2 == 1 {
+        Ok(sorted[middle])
+    } else {
+        Ok((sorted[middle - 1] + sorted[middle]) / 2.0)
+    }
 }
 
 fn parse_arg(flag: &str) -> Option<usize> {
@@ -138,4 +152,45 @@ fn parse_arg(flag: &str) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{benchmark_backend, median};
+    use lexongraph_linear_algebra_acceleration::ExecutionBackendRequest;
+    use lexongraph_spherical_kmeans::{SphericalInitializationPolicy, SphericalKmeansParams};
+    use lexongraph_streaming_clustering::StreamingClusteringConfig;
+
+    #[test]
+    fn median_returns_middle_value_for_odd_sample_count() {
+        assert_eq!(median(&[5.0, 1.0, 3.0]).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn median_returns_average_for_even_sample_count() {
+        assert_eq!(median(&[5.0, 1.0, 3.0, 7.0]).unwrap(), 4.0);
+    }
+
+    #[test]
+    fn benchmark_backend_rejects_zero_repeats() {
+        let config = StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 3,
+            balance_constraints: None,
+            random_seed: Some(7),
+        };
+        let params = SphericalKmeansParams {
+            initialization_policy: SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+            max_iteration_count: 1,
+            convergence_tolerance: 0.0,
+        };
+
+        let error = match benchmark_backend(ExecutionBackendRequest::Cpu, 0, &[], &config, &params)
+        {
+            Ok(_) => panic!("zero repeats should be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "--repeats must be at least 1");
+    }
 }

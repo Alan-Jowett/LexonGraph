@@ -497,26 +497,25 @@ fn best_cluster(
     normalized_centroids: &[Vec<f32>],
     previous_assignment: Option<usize>,
 ) -> Result<usize, StreamingClusteringError> {
-    let mut best_clusters = Vec::new();
     let mut best_distance = f32::INFINITY;
+    let mut best_cluster_id: Option<usize> = None;
+    let mut previous_assignment_is_best = false;
     for (cluster_index, centroid) in normalized_centroids.iter().enumerate() {
         let candidate = cosine_distance(normalized_embedding, centroid.as_slice())?;
         if candidate + DISTANCE_EPSILON < best_distance {
             best_distance = candidate;
-            best_clusters.clear();
-            best_clusters.push(cluster_index);
+            best_cluster_id = Some(cluster_index);
+            previous_assignment_is_best = previous_assignment == Some(cluster_index);
         } else if (candidate - best_distance).abs() <= DISTANCE_EPSILON {
-            best_clusters.push(cluster_index);
+            best_cluster_id =
+                Some(best_cluster_id.map_or(cluster_index, |current| current.min(cluster_index)));
+            previous_assignment_is_best |= previous_assignment == Some(cluster_index);
         }
     }
-    if let Some(previous_assignment) = previous_assignment
-        && best_clusters.contains(&previous_assignment)
-    {
+    if previous_assignment_is_best && let Some(previous_assignment) = previous_assignment {
         return Ok(previous_assignment);
     }
-    best_clusters
-        .into_iter()
-        .min()
+    best_cluster_id
         .ok_or_else(|| unsatisfiable_constraint("spherical k-means requires at least one centroid"))
 }
 
@@ -694,8 +693,26 @@ fn cosine_distance(left: &[f32], right: &[f32]) -> Result<f32, StreamingClusteri
             "cosine distance requires equal embedding dimensionality",
         ));
     }
-    let similarity = left.iter().zip(right).map(|(l, r)| l * r).sum::<f32>();
-    Ok((1.0 - similarity).max(0.0))
+    let left_norm_sq = left
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>();
+    let right_norm_sq = right
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>();
+    if left_norm_sq == 0.0 || right_norm_sq == 0.0 {
+        return Err(malformed_input(
+            "cosine distance requires non-zero embeddings",
+        ));
+    }
+    let similarity = left
+        .iter()
+        .zip(right)
+        .map(|(l, r)| f64::from(*l) * f64::from(*r))
+        .sum::<f64>()
+        / (left_norm_sq.sqrt() * right_norm_sq.sqrt());
+    Ok((1.0 - similarity).max(0.0) as f32)
 }
 
 fn deterministic_embedding_hash(embedding: &[f32], seed: u64) -> u64 {
@@ -721,7 +738,12 @@ fn unsatisfiable_constraint(message: impl Into<String>) -> StreamingClusteringEr
 
 #[cfg(test)]
 mod tests {
-    use super::best_cluster_from_distances;
+    use lexongraph_linear_algebra_acceleration::{
+        DenseDistanceMetric, ExecutionBackendRequest, dense_distance_matrix,
+        with_execution_backend_request,
+    };
+
+    use super::{best_cluster, best_cluster_from_distances};
 
     #[test]
     fn best_cluster_from_distances_prefers_previous_assignment_on_tie() {
@@ -733,5 +755,32 @@ mod tests {
     fn best_cluster_from_distances_picks_lowest_cluster_without_previous_tie() {
         let cluster = best_cluster_from_distances(&[0.25, 0.25, 0.5], None).unwrap();
         assert_eq!(cluster, 0);
+    }
+
+    #[test]
+    fn best_cluster_matches_shared_cosine_metric_for_approximate_unit_vectors() {
+        let embedding = vec![0.8, 0.59, 0.1];
+        let centroids = vec![
+            vec![0.79, 0.6, 0.1],
+            vec![0.77, 0.62, 0.1],
+            vec![0.1, 0.1, 0.99],
+        ];
+        let centroid_refs = centroids
+            .iter()
+            .map(std::vec::Vec::as_slice)
+            .collect::<Vec<_>>();
+        let distances = with_execution_backend_request(ExecutionBackendRequest::Cpu, || {
+            dense_distance_matrix(
+                &[embedding.as_slice()],
+                centroid_refs.as_slice(),
+                DenseDistanceMetric::Cosine,
+            )
+            .unwrap()
+        });
+
+        let direct = best_cluster(&embedding, &centroids, Some(1)).unwrap();
+        let shared = best_cluster_from_distances(&distances, Some(1)).unwrap();
+
+        assert_eq!(direct, shared);
     }
 }
