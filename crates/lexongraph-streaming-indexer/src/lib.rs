@@ -288,6 +288,7 @@ pub trait HierarchicalPlanningPolicy {
 pub enum StreamingIndexerError {
     EmptyInput,
     EmptyPass(String),
+    UnsupportedPublishedProfileVersion(PublishedProfileVersion),
     ReplayMismatch(String),
     InvalidMetadata(String),
     ContentResolution(String),
@@ -313,6 +314,12 @@ impl fmt::Display for StreamingIndexerError {
         match self {
             Self::EmptyInput => write!(f, "streaming indexing requires at least one item"),
             Self::EmptyPass(m) => write!(f, "pass is empty: {m}"),
+            Self::UnsupportedPublishedProfileVersion(version) => {
+                write!(
+                    f,
+                    "unsupported published indexing profile version {version}"
+                )
+            }
             Self::ReplayMismatch(m) => write!(f, "replay mismatch: {m}"),
             Self::InvalidMetadata(m) => write!(f, "metadata is invalid: {m}"),
             Self::ContentResolution(m) => write!(f, "content resolution failed: {m}"),
@@ -450,6 +457,88 @@ impl ChildSummaryPolicy for ExactCentroidChildSummaryPolicy {
     ) -> Result<Vec<u8>, Self::Error> {
         exact_centroid_child_summary(children, embedding_spec)
             .map_err(ExactCentroidChildSummaryError)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PublishedProfileVersion {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+impl PublishedProfileVersion {
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+impl fmt::Display for PublishedProfileVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublishedHierarchyMetric {
+    Euclidean,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublishedIndexingProfile {
+    pub version: PublishedProfileVersion,
+    pub leaf_algorithm_id: &'static str,
+    pub packing_strategy_id: &'static str,
+    pub hierarchy_strategy_id: &'static str,
+    pub summary_policy_id: &'static str,
+    pub leaf_cluster_count: u32,
+    pub leaf_random_seed: Option<u64>,
+    pub leaf_params: SphericalKmeansParams,
+    pub hierarchy_metric: PublishedHierarchyMetric,
+}
+
+pub fn published_indexing_profile(
+    version: PublishedProfileVersion,
+) -> Result<PublishedIndexingProfile, StreamingIndexerError> {
+    match version {
+        PUBLISHED_PROFILE_V0_1_0 => Ok(PublishedIndexingProfile {
+            version,
+            leaf_algorithm_id: "spherical-kmeans",
+            packing_strategy_id: "cluster-order-balanced-range-packer-v1",
+            hierarchy_strategy_id: "greedy-pack",
+            summary_policy_id: "exact-centroid",
+            leaf_cluster_count: 157,
+            leaf_random_seed: Some(11),
+            leaf_params: SphericalKmeansParams {
+                initialization_policy:
+                    lexongraph_spherical_kmeans::SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+                max_iteration_count: 32,
+                convergence_tolerance: 1.0e-4,
+            },
+            hierarchy_metric: PublishedHierarchyMetric::Euclidean,
+        }),
+        _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublishedProfilePlanningPolicy {
+    profile: PublishedIndexingProfile,
+}
+
+impl PublishedProfilePlanningPolicy {
+    pub fn new(profile: PublishedIndexingProfile) -> Self {
+        Self { profile }
+    }
+
+    pub fn profile(&self) -> &PublishedIndexingProfile {
+        &self.profile
     }
 }
 
@@ -785,6 +874,51 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
     }
 }
 
+impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
+    type Error = StreamingIndexerError;
+
+    fn declared_stages(&self) -> BTreeSet<PlanningStage> {
+        BTreeSet::from([PlanningStage::Fine, PlanningStage::Coarse])
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        _block_size_target: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut noop = |_, _, _| {};
+        derive_hierarchy_from_published_profile(
+            &self.profile,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            &mut noop,
+        )
+    }
+
+    fn finish_planning_pass_with_stage_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        _block_size_target: usize,
+        mut observe_stage: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    {
+        derive_hierarchy_from_published_profile(
+            &self.profile,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            &mut observe_stage,
+        )
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Internal state helpers
 // ─────────────────────────────────────────────────────────────
@@ -902,6 +1036,28 @@ impl<R, CR, EP, CEP> StreamingIndexingRun<R, CR, EP, CEP, BuiltInPlanningPolicy>
 
     pub fn adaptive_decision_records(&self) -> &[AdaptiveSwitchDecisionRecord] {
         self.planning_policy.adaptive_decision_records()
+    }
+}
+
+impl<R, CR, EP>
+    StreamingIndexingRun<R, CR, EP, ExactCentroidChildSummaryPolicy, PublishedProfilePlanningPolicy>
+{
+    pub fn with_published_profile(
+        resolver: CR,
+        embedding_provider: EP,
+        profile_version: PublishedProfileVersion,
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Result<Self, StreamingIndexerError> {
+        let profile = published_indexing_profile(profile_version)?;
+        Ok(Self::new(
+            resolver,
+            embedding_provider,
+            ExactCentroidChildSummaryPolicy,
+            PublishedProfilePlanningPolicy::new(profile),
+            embedding_spec,
+            block_size_target,
+        ))
     }
 }
 
@@ -2172,6 +2328,187 @@ fn map_adaptive_planning_error(error: AdaptivePlanningError) -> StreamingIndexer
     }
 }
 
+fn derive_hierarchy_from_published_profile(
+    profile: &PublishedIndexingProfile,
+    embeddings: &[Vec<f32>],
+    _embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    if embeddings.is_empty() {
+        return Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: Vec::new(),
+            },
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        });
+    }
+
+    if embeddings.len() <= materializability_bound {
+        return Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![FinalizedPartition {
+                    id: "p0".into(),
+                    parent_id: None,
+                    child_ids: Vec::new(),
+                    item_indices: (0..embeddings.len()).collect(),
+                    terminal: true,
+                    planning_stage: PlanningStage::Single,
+                }],
+            },
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        });
+    }
+
+    stage_observer(
+        PlanningStage::Fine,
+        embeddings.len(),
+        StreamingIndexingStatusState::Started,
+    );
+    stage_observer(
+        PlanningStage::Fine,
+        embeddings.len(),
+        StreamingIndexingStatusState::InProgress,
+    );
+
+    let requested_cluster_count = effective_cluster_count(
+        profile.leaf_cluster_count,
+        embeddings.len(),
+        materializability_bound,
+    )
+    .map_err(map_clustering_configuration_error)?;
+    let mut trainer = SphericalKmeansStreamingTrainer::new(
+        StreamingClusteringConfig {
+            cluster_count: requested_cluster_count,
+            dimensions: embeddings.first().map_or(0, std::vec::Vec::len),
+            balance_constraints: None,
+            random_seed: profile.leaf_random_seed,
+        },
+        profile.leaf_params.clone(),
+    )
+    .map_err(map_clustering_error)?;
+    trainer
+        .ingest_batch(embeddings)
+        .map_err(map_clustering_error)?;
+    let pass_report = trainer.finish_pass().map_err(map_clustering_error)?;
+    trainer.complete_training().map_err(map_clustering_error)?;
+    let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
+    let assignments = classifier
+        .assign_batch(embeddings)
+        .map_err(map_clustering_error)?;
+
+    let terminal_groups = build_profile_terminal_groups(&assignments, materializability_bound)
+        .map_err(StreamingIndexerError::HierarchyValidation)?;
+
+    let mut nodes = terminal_groups
+        .into_iter()
+        .map(|item_indices| {
+            profile_terminal_node(&item_indices, embeddings).map(|representative_embedding| {
+                AgglomerativeHierarchyNode {
+                    child_node_indices: Vec::new(),
+                    item_indices,
+                    representative_embedding: Some(representative_embedding),
+                    planning_stage: PlanningStage::Fine,
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StreamingIndexerError::HierarchyValidation)?;
+
+    let mut accumulator = PlanningMetricAccumulator::default();
+    accumulator.observe(PlanningStage::Fine, &pass_report);
+    let mut current_layer = (0..nodes.len()).collect::<Vec<_>>();
+
+    if current_layer.len() > 1 {
+        stage_observer(
+            PlanningStage::Coarse,
+            current_layer.len(),
+            StreamingIndexingStatusState::Started,
+        );
+        stage_observer(
+            PlanningStage::Coarse,
+            current_layer.len(),
+            StreamingIndexingStatusState::InProgress,
+        );
+    }
+
+    while current_layer.len() > 1 {
+        let groups = greedy_pack_node_groups(
+            &current_layer,
+            &nodes,
+            materializability_bound,
+            profile.hierarchy_metric,
+        )
+        .map_err(StreamingIndexerError::HierarchyValidation)?;
+        let mut next_layer = Vec::with_capacity(groups.len());
+        for group in groups {
+            let mut item_indices = group
+                .iter()
+                .flat_map(|&node_index| nodes[node_index].item_indices.iter().copied())
+                .collect::<Vec<_>>();
+            item_indices.sort_unstable();
+            let weighted_embeddings = group
+                .iter()
+                .map(|&node_index| {
+                    let embedding = nodes[node_index]
+                        .representative_embedding
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "published profile hierarchy node is missing its representative embedding"
+                                .to_string()
+                        })?;
+                    Ok::<(&[f32], usize), String>((
+                        embedding.as_slice(),
+                        nodes[node_index].item_indices.len(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(StreamingIndexerError::HierarchyValidation)?;
+            let representative_embedding = weighted_mean_f32_embeddings(weighted_embeddings)
+                .map_err(|error| StreamingIndexerError::HierarchyValidation(error.to_string()))?;
+            let next_index = nodes.len();
+            nodes.push(AgglomerativeHierarchyNode {
+                child_node_indices: group,
+                item_indices,
+                representative_embedding: Some(representative_embedding),
+                planning_stage: PlanningStage::Coarse,
+            });
+            next_layer.push(next_index);
+        }
+        current_layer = next_layer;
+    }
+
+    let mut partitions = Vec::new();
+    build_agglomerative_partitions(&nodes, current_layer[0], "p0".into(), None, &mut partitions);
+    partitions.sort_by(|left, right| left.id.cmp(&right.id));
+    accumulator.stages_used.insert(PlanningStage::Fine);
+    if nodes.len() > 1 {
+        accumulator.stages_used.insert(PlanningStage::Coarse);
+    }
+
+    Ok(PlanningPassOutcome {
+        hierarchy: FinalizedPartitionHierarchy {
+            root_partition_id: "p0".into(),
+            partitions,
+        },
+        planning_quality_metric: accumulator.average_quality(),
+        planning_balance_metric: accumulator.average_balance(),
+        planning_quality_direction: accumulator.quality_direction,
+        planning_balance_direction: accumulator.balance_direction,
+        stages_used: accumulator.stages_used,
+    })
+}
+
 fn derive_hierarchy_from_factory<F>(
     factory: &F,
     embeddings: &[Vec<f32>],
@@ -2931,6 +3268,192 @@ fn ensure_min_two_per_group(mut groups: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
         target.extend(singleton);
     }
     ok
+}
+
+fn build_profile_terminal_groups(
+    assignments: &[ClusterId],
+    materializability_bound: usize,
+) -> Result<Vec<Vec<usize>>, String> {
+    let mut groups = assignments_to_groups(assignments);
+    groups = ensure_min_two_per_group(groups);
+    for group in &mut groups {
+        group.sort_unstable();
+    }
+    groups.sort_by_key(|group| group[0]);
+    let ordered_indices = groups.into_iter().flatten().collect::<Vec<_>>();
+    if ordered_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+    let packed_ranges = balanced_groups(ordered_indices.len(), materializability_bound)?;
+    Ok(packed_ranges
+        .into_iter()
+        .map(|range| {
+            let mut packed = range
+                .into_iter()
+                .map(|ordered_index| ordered_indices[ordered_index])
+                .collect::<Vec<_>>();
+            packed.sort_unstable();
+            packed
+        })
+        .collect())
+}
+
+fn profile_terminal_node(
+    item_indices: &[usize],
+    embeddings: &[Vec<f32>],
+) -> Result<Vec<f32>, String> {
+    weighted_mean_f32_embeddings(
+        item_indices
+            .iter()
+            .map(|&item_index| {
+                let embedding = embeddings.get(item_index).ok_or_else(|| {
+                    format!("terminal partition references missing embedding index {item_index}")
+                })?;
+                Ok::<(&[f32], usize), String>((embedding.as_slice(), 1))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn greedy_pack_node_groups(
+    current_layer: &[usize],
+    nodes: &[AgglomerativeHierarchyNode],
+    materializability_bound: usize,
+    metric: PublishedHierarchyMetric,
+) -> Result<Vec<Vec<usize>>, String> {
+    let sizes = balanced_groups(current_layer.len(), materializability_bound)?
+        .into_iter()
+        .map(|group| group.len())
+        .collect::<Vec<_>>();
+    let mut remaining = current_layer.iter().copied().map(Some).collect::<Vec<_>>();
+    remaining.sort_by(|left, right| match (left, right) {
+        (Some(left), Some(right)) => compare_profile_node_order(*left, *right, nodes),
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    });
+
+    let mut groups = Vec::with_capacity(sizes.len());
+    for target_size in sizes {
+        let Some(seed) = take_first_active_profile_node(&mut remaining) else {
+            return Err(
+                "published profile hierarchy packing exhausted its remaining nodes prematurely"
+                    .into(),
+            );
+        };
+        let seed_embedding = nodes[seed]
+            .representative_embedding
+            .as_ref()
+            .ok_or_else(|| {
+                "published profile hierarchy node is missing its representative embedding"
+                    .to_string()
+            })?;
+        let mut group = vec![seed];
+        while group.len() < target_size {
+            let Some((next_offset, candidate)) =
+                best_profile_group_extension(&remaining, nodes, seed_embedding, metric)?
+            else {
+                return Err(
+                    "published profile hierarchy packing could not satisfy its target group sizes"
+                        .into(),
+                );
+            };
+            remaining[next_offset] = None;
+            group.push(candidate);
+        }
+        groups.push(group);
+    }
+
+    Ok(groups)
+}
+
+fn take_first_active_profile_node(remaining: &mut [Option<usize>]) -> Option<usize> {
+    let seed_slot = remaining.iter_mut().find(|slot| slot.is_some())?;
+    seed_slot.take()
+}
+
+fn best_profile_group_extension(
+    remaining: &[Option<usize>],
+    nodes: &[AgglomerativeHierarchyNode],
+    seed_embedding: &[f32],
+    metric: PublishedHierarchyMetric,
+) -> Result<Option<(usize, usize)>, String> {
+    let mut best = None::<(usize, f64, usize)>;
+    for (offset, candidate) in remaining.iter().enumerate() {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let candidate_embedding = nodes[*candidate]
+            .representative_embedding
+            .as_ref()
+            .ok_or_else(|| {
+                "published profile hierarchy node is missing its representative embedding"
+                    .to_string()
+            })?;
+        let distance = representative_distance(seed_embedding, candidate_embedding, metric)?;
+        match best {
+            Some((_, best_distance, best_candidate))
+                if distance
+                    .partial_cmp(&best_distance)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| {
+                        compare_profile_node_order(*candidate, best_candidate, nodes)
+                    })
+                    != Ordering::Less => {}
+            _ => best = Some((offset, distance, *candidate)),
+        }
+    }
+    Ok(best.map(|(offset, _, candidate)| (offset, candidate)))
+}
+
+fn compare_profile_node_order(
+    left_node_index: usize,
+    right_node_index: usize,
+    nodes: &[AgglomerativeHierarchyNode],
+) -> Ordering {
+    let left = &nodes[left_node_index];
+    let right = &nodes[right_node_index];
+    compare_f32_embeddings_lexicographically(
+        left.representative_embedding.as_deref().unwrap_or(&[]),
+        right.representative_embedding.as_deref().unwrap_or(&[]),
+    )
+    .then_with(|| left.item_indices.cmp(&right.item_indices))
+}
+
+fn compare_f32_embeddings_lexicographically(left: &[f32], right: &[f32]) -> Ordering {
+    left.iter()
+        .zip(right.iter())
+        .find_map(|(left_value, right_value)| {
+            let ordering = left_value.total_cmp(right_value);
+            (ordering != Ordering::Equal).then_some(ordering)
+        })
+        .unwrap_or_else(|| left.len().cmp(&right.len()))
+}
+
+fn representative_distance(
+    left: &[f32],
+    right: &[f32],
+    metric: PublishedHierarchyMetric,
+) -> Result<f64, String> {
+    if left.len() != right.len() {
+        return Err(format!(
+            "representative embedding dimension {} does not match expected {}",
+            right.len(),
+            left.len()
+        ));
+    }
+    match metric {
+        PublishedHierarchyMetric::Euclidean => Ok(left
+            .iter()
+            .zip(right.iter())
+            .map(|(left_value, right_value)| {
+                let delta = f64::from(*left_value) - f64::from(*right_value);
+                delta * delta
+            })
+            .sum::<f64>()
+            .sqrt()),
+    }
 }
 
 fn decode_embedding_as_f32(

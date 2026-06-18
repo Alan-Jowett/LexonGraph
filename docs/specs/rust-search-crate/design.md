@@ -333,6 +333,44 @@ visited, maximum routing depth, and a termination classification. Telemetry is
 collected inside the existing search loop and does not change ranking,
 frontier-management, or error-propagation behavior.
 
+### DSG-SEARCH-021 `Published search profile identifier`
+
+The crate defines a public published-profile identifier value carrying a
+semantic version tuple.
+
+The convenience search surface accepts that identifier directly rather than
+using an ambient "current best" default.
+
+### DSG-SEARCH-022 `Convenience search façade`
+
+The crate exposes a stable-shape convenience constructor or equivalent façade
+that:
+
+- accepts a published profile version
+- resolves it deterministically to the crate-owned default target
+  representation plus the crate-owned default compatibility and scoring
+  policies
+- preserves the existing explicit searcher constructors for callers that want
+  direct policy wiring
+
+### DSG-SEARCH-023 `Published search profile catalog`
+
+Published search profile resolution is deterministic and exact-match only.
+
+Unknown or unsupported versions fail explicitly rather than aliasing to another
+published profile.
+
+### DSG-SEARCH-024 `Search profile 0.1.0 mapping`
+
+Published search profile `0.1.0` resolves to the crate-owned
+`EncodedTargetEmbedding`, `DefaultEmbeddingCompatibility`, and
+`DefaultCandidateScorer` bundle.
+
+### DSG-SEARCH-025 `Explicit traversal controls on convenience search`
+
+The convenience search façade still requires callers to supply traversal width
+`w` and final result count `n` explicitly.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -355,3 +393,4 @@ frontier-management, or error-propagation behavior.
 | DSG-SEARCH-018 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-019, REQ-SEARCH-021 |
 | DSG-SEARCH-019 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021 |
 | DSG-SEARCH-020 | REQ-SEARCH-024 |
+| DSG-SEARCH-021..025 | REQ-SEARCH-027, REQ-SEARCH-028, REQ-SEARCH-029, REQ-SEARCH-030, REQ-SEARCH-031, REQ-SEARCH-032 |

@@ -188,6 +188,10 @@ The caller-facing built-in planning path for the streaming indexing runtime
 API shall require the caller to select one supported built-in planning
 realization-and-direction combination explicitly.
 
+This requirement applies to the crate's low-level explicit built-in planning
+surface. A separate higher-level convenience surface may resolve an explicitly
+selected published profile version into repository-owned defaults.
+
 ### REQ-STREAM-INDEXER-015
 
 The crate shall continue to provide explicit API paths that accept
@@ -537,6 +541,75 @@ assembly operations.
 
 Independent subtree or sibling assemblies that materialize the same semantic
 parent layer shall therefore report the same `layer_index`.
+
+### REQ-STREAM-INDEXER-051
+
+The crate shall expose a higher-level convenience indexing surface whose shape
+remains stable across published profile revisions.
+
+That surface shall accept an explicit published semantic-version profile
+selector rather than requiring callers to choose planning, packing, and summary
+knobs individually.
+
+### REQ-STREAM-INDEXER-052
+
+The convenience indexing surface shall fail explicitly for unknown or
+unsupported published profile versions.
+
+It shall not silently substitute the latest, nearest, or repository-current
+profile.
+
+### REQ-STREAM-INDEXER-053
+
+A published indexing profile version shall map to one deterministic bundle of
+crate-owned indexing behavior for its lifetime.
+
+Repeated use of the same published profile version under the same logical item
+set, replay order, and deterministic dependency behavior shall preserve the
+same effective planning, packing, and summary behavior.
+
+### REQ-STREAM-INDEXER-054
+
+Later patch versions in the same published pre-1.0 profile line may refine
+constants or thresholds while preserving the same algorithm family choices as
+the earlier patch versions in that line.
+
+### REQ-STREAM-INDEXER-055
+
+Later minor versions in the published pre-1.0 profile line may adopt different
+algorithm families when the repository publishes a new recommended profile.
+
+### REQ-STREAM-INDEXER-056
+
+The repository shall publish indexing profile `0.1.0`.
+
+For the crate-owned runtime knobs currently owned by this crate, that published
+profile shall resolve to:
+
+- leaf formation via `spherical-kmeans`
+- packing via `cluster-order-balanced-range-packer-v1`
+- hierarchy construction via `greedy-pack` using Euclidean centroid distance
+- child summary via `exact-centroid`
+
+The published `0.1.0` profile shall also pin the crate-owned spherical-k-means
+configuration values needed by that bundle, including its initialization policy,
+iteration limit, convergence tolerance, requested cluster count, and random
+seed.
+
+In this revision, those pinned spherical-k-means values for published profile
+`0.1.0` are:
+
+- initialization policy = `SeededDeterministicFarthestPoint`
+- max iterations = `32`
+- convergence tolerance = `1e-4`
+- requested cluster count = `157`
+- random seed = `11`
+
+### REQ-STREAM-INDEXER-057
+
+The existing low-level explicit indexing surface shall remain available for
+callers that want direct control over planning realization, direction, settings,
+or summary policy instead of selecting a published profile.
 
 ## Out of Scope
 

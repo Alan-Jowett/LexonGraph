@@ -29,10 +29,11 @@ use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
-    FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PlanningPassOutcome,
-    PlanningStage, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
-    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
-    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PUBLISHED_PROFILE_V0_1_0,
+    PlanningPassOutcome, PlanningStage, PublishedHierarchyMetric, PublishedProfileVersion,
+    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
+    StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -2364,4 +2365,119 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
         selector.select_algorithm(line.len(), &line).unwrap(),
         ActivePlanningAlgorithm::Dcbc
     );
+}
+
+#[test]
+fn val_stream_indexer_049_published_profile_v0_1_0_is_declared_explicitly() {
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_1_0).unwrap();
+
+    assert_eq!(profile.version, PublishedProfileVersion::new(0, 1, 0));
+    assert_eq!(profile.leaf_algorithm_id, "spherical-kmeans");
+    assert_eq!(
+        profile.packing_strategy_id,
+        "cluster-order-balanced-range-packer-v1"
+    );
+    assert_eq!(profile.hierarchy_strategy_id, "greedy-pack");
+    assert_eq!(profile.summary_policy_id, "exact-centroid");
+    assert_eq!(profile.leaf_cluster_count, 157);
+    assert_eq!(profile.leaf_random_seed, Some(11));
+    assert_eq!(
+        profile.leaf_params.initialization_policy,
+        SphericalInitializationPolicy::SeededDeterministicFarthestPoint
+    );
+    assert_eq!(profile.leaf_params.max_iteration_count, 32);
+    assert_eq!(profile.leaf_params.convergence_tolerance, 1.0e-4);
+    assert_eq!(
+        profile.hierarchy_metric,
+        PublishedHierarchyMetric::Euclidean
+    );
+}
+
+#[test]
+fn val_stream_indexer_050_unknown_published_profile_is_rejected() {
+    let error = published_indexing_profile(PublishedProfileVersion::new(9, 9, 9)).unwrap_err();
+    assert!(matches!(
+        error,
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(version)
+            if version == PublishedProfileVersion::new(9, 9, 9)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_051_published_profile_materializes_deterministically() {
+    let items = [item("a"), item("j"), item("p"), item("~")];
+
+    let mut first = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_1_0,
+        embedding_spec(),
+        256,
+    )
+    .unwrap();
+    first.ingest_batch(&items).await.unwrap();
+    first.finish_pass().unwrap();
+    first.mark_planning_complete().unwrap();
+    let first_store = MemoryBlockStore::default();
+    let first_result = first
+        .finalize(std::iter::once(items.as_slice()), &first_store)
+        .await
+        .unwrap();
+
+    let mut second = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_1_0,
+        embedding_spec(),
+        256,
+    )
+    .unwrap();
+    second.ingest_batch(&items).await.unwrap();
+    second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let second_store = MemoryBlockStore::default();
+    let second_result = second
+        .finalize(std::iter::once(items.as_slice()), &second_store)
+        .await
+        .unwrap();
+
+    assert_eq!(first_result, second_result);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_published_profile_terminal_short_circuit_does_not_claim_fine_stage() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_1_0,
+        embedding_spec(),
+        256,
+    )
+    .unwrap()
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo")])
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+
+    let hierarchy = run.finalized_partition_hierarchy().unwrap();
+    assert_eq!(hierarchy.partitions.len(), 1);
+    assert_eq!(
+        hierarchy.partitions[0].planning_stage,
+        PlanningStage::Single
+    );
+
+    let statuses = statuses.lock().unwrap().clone();
+    assert!(!statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::HierarchyPlanning { .. }
+        )
+    }));
 }

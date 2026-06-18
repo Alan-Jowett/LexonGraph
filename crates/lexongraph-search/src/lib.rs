@@ -85,6 +85,146 @@ pub trait CandidateScorer<Target> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DefaultCandidateScorer;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PublishedProfileVersion {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+impl PublishedProfileVersion {
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+impl fmt::Display for PublishedProfileVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublishedSearchProfile {
+    version: PublishedProfileVersion,
+}
+
+impl PublishedSearchProfile {
+    pub fn version(&self) -> PublishedProfileVersion {
+        self.version
+    }
+
+    pub fn encode_target(
+        &self,
+        bytes: Vec<u8>,
+        embedding_spec: EmbeddingSpec,
+    ) -> EncodedTargetEmbedding {
+        EncodedTargetEmbedding::new(bytes, embedding_spec)
+    }
+
+    pub fn searcher(&self) -> Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer> {
+        Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer)
+    }
+}
+
+pub fn published_search_profile(
+    version: PublishedProfileVersion,
+) -> Result<PublishedSearchProfile, SearchProfileError> {
+    match version {
+        PUBLISHED_PROFILE_V0_1_0 => Ok(PublishedSearchProfile { version }),
+        _ => Err(SearchProfileError::UnsupportedPublishedProfileVersion(
+            version,
+        )),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SearchProfileError {
+    UnsupportedPublishedProfileVersion(PublishedProfileVersion),
+}
+
+impl fmt::Display for SearchProfileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedPublishedProfileVersion(version) => {
+                write!(f, "unsupported published search profile version {version}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SearchProfileError {}
+
+#[derive(Clone, Debug)]
+pub struct ProfiledSearcher {
+    profile: PublishedSearchProfile,
+    inner: Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
+}
+
+impl ProfiledSearcher {
+    pub fn new(profile_version: PublishedProfileVersion) -> Result<Self, SearchProfileError> {
+        let profile = published_search_profile(profile_version)?;
+        let inner = profile.searcher();
+        Ok(Self { profile, inner })
+    }
+
+    pub fn profile(&self) -> PublishedSearchProfile {
+        self.profile
+    }
+
+    pub fn search(
+        &self,
+        root_id: &BlockHash,
+        target_bytes: Vec<u8>,
+        embedding_spec: EmbeddingSpec,
+        w: usize,
+        n: usize,
+        store: &dyn BlockStore,
+    ) -> Result<SearchResult, SearchError> {
+        let target = self.profile.encode_target(target_bytes, embedding_spec);
+        self.inner.search(root_id, &target, w, n, store)
+    }
+
+    pub fn search_with_telemetry(
+        &self,
+        root_id: &BlockHash,
+        target_bytes: Vec<u8>,
+        embedding_spec: EmbeddingSpec,
+        w: usize,
+        n: usize,
+        store: &dyn BlockStore,
+    ) -> Result<(SearchResult, SearchTelemetrySummary), SearchError> {
+        let target = self.profile.encode_target(target_bytes, embedding_spec);
+        self.inner
+            .search_with_telemetry(root_id, &target, w, n, store)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_with_observer<TO>(
+        &self,
+        root_id: &BlockHash,
+        target_bytes: Vec<u8>,
+        embedding_spec: EmbeddingSpec,
+        w: usize,
+        n: usize,
+        store: &dyn BlockStore,
+        observer: &TO,
+    ) -> Result<SearchResult, SearchError>
+    where
+        TO: SearchTelemetryObserver,
+    {
+        let target = self.profile.encode_target(target_bytes, embedding_spec);
+        self.inner
+            .search_with_observer(root_id, &target, w, n, store, observer)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CosineScore(u64);
 
