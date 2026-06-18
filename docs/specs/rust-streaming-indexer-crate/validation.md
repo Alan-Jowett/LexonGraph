@@ -587,3 +587,37 @@ contract.
 
 **Traces to:** REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-031,
 REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-041
+
+### VAL-STREAM-INDEXER-049
+
+Resolve published indexing profile `0.1.0` through the crate's convenience
+surface.
+
+**Pass condition:** the crate exposes a published profile version selector, the
+selected `0.1.0` profile resolves successfully, and its declared crate-owned
+runtime knobs match the published spherical-k-means, balanced-range packing,
+greedy-pack hierarchy, and exact-centroid summary bundle, including the pinned
+Euclidean hierarchy metric plus the published spherical-k-means initialization
+policy, iteration limit, convergence tolerance, requested cluster count, and
+random seed values.
+
+**Traces to:** REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-056
+
+### VAL-STREAM-INDEXER-050
+
+Attempt to resolve an unknown published indexing profile version.
+
+**Pass condition:** the crate fails explicitly and does not silently substitute
+another published profile.
+
+**Traces to:** REQ-STREAM-INDEXER-052
+
+### VAL-STREAM-INDEXER-051
+
+Run the same deterministic indexing fixture twice through published indexing
+profile `0.1.0`.
+
+**Pass condition:** both runs realize the same effective crate-owned planning,
+packing, and summary behavior and produce the same deterministic final result.
+
+**Traces to:** REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-056

@@ -362,3 +362,34 @@ classification and routing summary the returned telemetry surface would report,
 including explicit failure termination rather than silent omission.
 
 **Traces to:** REQ-SEARCH-024
+
+### VAL-SEARCH-031
+
+Resolve published search profile `0.1.0` through the crate's convenience
+surface.
+
+**Pass condition:** the crate exposes a published profile version selector, the
+selected `0.1.0` profile resolves successfully, and the convenience surface
+binds the crate-owned encoded target representation plus the default
+compatibility and scoring policies.
+
+**Traces to:** REQ-SEARCH-027, REQ-SEARCH-030
+
+### VAL-SEARCH-032
+
+Attempt to resolve an unknown published search profile version.
+
+**Pass condition:** the crate fails explicitly and does not silently substitute
+another published profile.
+
+**Traces to:** REQ-SEARCH-028
+
+### VAL-SEARCH-033
+
+Run the same deterministic search fixture once through the low-level default
+policy bundle and once through published search profile `0.1.0`.
+
+**Pass condition:** both paths produce the same deterministic search behavior,
+and the convenience path still requires explicit `w` and `n`.
+
+**Traces to:** REQ-SEARCH-029, REQ-SEARCH-030, REQ-SEARCH-031, REQ-SEARCH-032

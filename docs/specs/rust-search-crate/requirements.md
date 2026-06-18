@@ -252,6 +252,47 @@ failure semantics:
 - the maximum routing depth reached during the invocation
 - the terminal outcome classification for the invocation
 
+### REQ-SEARCH-027
+
+The crate shall expose a higher-level convenience search surface whose shape
+remains stable across published profile revisions.
+
+That surface shall accept an explicit published semantic-version profile
+selector rather than requiring callers to wire the crate-owned default search
+policies manually.
+
+### REQ-SEARCH-028
+
+The convenience search surface shall fail explicitly for unknown or unsupported
+published profile versions.
+
+It shall not silently substitute the latest, nearest, or repository-current
+profile.
+
+### REQ-SEARCH-029
+
+A published search profile version shall map to one deterministic bundle of
+crate-owned search defaults for its lifetime.
+
+### REQ-SEARCH-030
+
+The repository shall publish search profile `0.1.0`.
+
+For the crate-owned runtime knobs in this revision, that published profile
+shall resolve to the crate-owned encoded target representation together with the
+crate-provided default embedding-compatibility and candidate-scoring policies.
+
+### REQ-SEARCH-031
+
+Even on the convenience search surface, callers shall continue to supply `w`
+and `n` explicitly.
+
+### REQ-SEARCH-032
+
+The existing low-level explicit search surface shall remain available for
+callers that want direct policy substitution instead of selecting a published
+profile.
+
 ## Out of Scope
 
 This crate does not define or own:

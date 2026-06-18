@@ -11,8 +11,9 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
     CandidateScorer, DefaultCandidateScorer, DefaultEmbeddingCompatibility, DefaultPolicyError,
-    EmbeddingCompatibility, EncodedTargetEmbedding, SearchError, SearchResult,
-    SearchTelemetryObserver, SearchTerminationKind, Searcher,
+    EmbeddingCompatibility, EncodedTargetEmbedding, PUBLISHED_PROFILE_V0_1_0, ProfiledSearcher,
+    PublishedProfileVersion, SearchError, SearchProfileError, SearchResult,
+    SearchTelemetryObserver, SearchTerminationKind, Searcher, published_search_profile,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1367,6 +1368,56 @@ fn val_search_018_repository_includes_search_verification_artifacts() {
             .join("conformance_feature.rs")
             .is_file()
     );
+}
+
+#[test]
+fn val_search_031_published_search_profile_v0_1_0_is_declared_explicitly() {
+    let profile = published_search_profile(PUBLISHED_PROFILE_V0_1_0).unwrap();
+    assert_eq!(profile.version(), PublishedProfileVersion::new(0, 1, 0));
+}
+
+#[test]
+fn val_search_032_unknown_published_search_profile_is_rejected() {
+    let error = published_search_profile(PublishedProfileVersion::new(9, 9, 9)).unwrap_err();
+    assert!(matches!(
+        error,
+        SearchProfileError::UnsupportedPublishedProfileVersion(version)
+            if version == PublishedProfileVersion::new(9, 9, 9)
+    ));
+}
+
+#[test]
+fn val_search_033_profiled_searcher_matches_the_default_policy_bundle() {
+    let store = MemoryBlockStore::default();
+    let root_id = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "default",
+        ))
+        .unwrap();
+
+    let target_bytes = f32_embedding([1.0, 0.0]);
+    let target_spec = embedding_spec_f32();
+    let profiled = ProfiledSearcher::new(PUBLISHED_PROFILE_V0_1_0).unwrap();
+    let profiled_result = profiled
+        .search(
+            &root_id,
+            target_bytes.clone(),
+            target_spec.clone(),
+            1,
+            1,
+            &store,
+        )
+        .unwrap();
+
+    let default_target = EncodedTargetEmbedding::new(target_bytes, target_spec);
+    let default_searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+    let default_result = default_searcher
+        .search(&root_id, &default_target, 1, 1, &store)
+        .unwrap();
+
+    assert_eq!(profiled_result, default_result);
 }
 
 fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {

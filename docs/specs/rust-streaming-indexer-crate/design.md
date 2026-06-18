@@ -502,6 +502,65 @@ The crate exposes a built-in exact-centroid child-summary policy that computes a
 parent embedding as the descendant-count-weighted mean of the normalized child
 summary embeddings presented at assembly time.
 
+### DSG-STREAM-INDEXER-041 `Published profile identifier`
+
+The crate defines a public published-profile identifier value carrying a
+semantic version tuple.
+
+The convenience indexing surface accepts that identifier directly rather than
+using an ambient "current best" default.
+
+### DSG-STREAM-INDEXER-042 `Convenience indexing façade`
+
+The crate exposes a stable-shape convenience constructor or equivalent façade
+that:
+
+- accepts a published profile version
+- resolves it deterministically to repository-owned indexing behavior
+- constructs the runtime without requiring callers to wire the low-level policy
+  seams manually
+
+### DSG-STREAM-INDEXER-043 `Published profile catalog`
+
+Published profile resolution is deterministic and exact-match only.
+
+Unknown or unsupported versions fail explicitly rather than aliasing to another
+published profile.
+
+### DSG-STREAM-INDEXER-044 `Indexing profile 0.1.0 mapping`
+
+Published indexing profile `0.1.0` resolves, for the crate-owned runtime knobs
+in this revision, to:
+
+- spherical-k-means leaf formation
+- cluster-order balanced-range packing
+- greedy-pack hierarchy construction using Euclidean centroid distance
+- exact-centroid child summaries
+
+The same mapping also pins the published spherical-k-means settings for that
+profile version:
+
+- initialization policy = `SeededDeterministicFarthestPoint`
+- max iterations = `32`
+- convergence tolerance = `1e-4`
+- requested cluster count = `157`
+- random seed = `11`
+
+### DSG-STREAM-INDEXER-045 `Published profile evolution contract`
+
+The repository treats published profile versions as durable behavioral
+contracts.
+
+Within the pre-1.0 line, later patch versions preserve algorithm-family
+selection while later minor versions may publish a different recommended
+algorithm family bundle.
+
+### DSG-STREAM-INDEXER-046 `Convenience profile escape hatch`
+
+The convenience indexing façade delegates into the existing runtime
+orchestration surface without removing the lower-level explicit constructors and
+policy seams.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -538,3 +597,4 @@ summary embeddings presented at assembly time.
 | DSG-STREAM-INDEXER-038 | REQ-STREAM-INDEXER-048 |
 | DSG-STREAM-INDEXER-039 | REQ-STREAM-INDEXER-050 |
 | DSG-STREAM-INDEXER-040 | REQ-STREAM-INDEXER-049 |
+| DSG-STREAM-INDEXER-041..046 | REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-052, REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-055, REQ-STREAM-INDEXER-056, REQ-STREAM-INDEXER-057 |
