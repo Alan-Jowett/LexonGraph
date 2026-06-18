@@ -716,6 +716,8 @@ This revision's checked-in repository-owned candidate set shall include:
   `crates/lexongraph-directional-pca`
 - the streaming DCBC clustering implementation provided by
   `crates/lexongraph-dcbc-streaming`
+- the vanilla spherical k-means clustering implementation provided by
+  `crates/lexongraph-spherical-kmeans`
 
 The checked-in runnable section-4 candidate set for repeated comparison shall
 also include concrete representatives for the remaining research-plan families:
@@ -946,8 +948,13 @@ contract needed to interpret comparable results.
 At minimum, this revision shall declare:
 
 - the exact build, locality, compression, and deferred-routing metric roles
-- any transformed-metric policy together with the ordering-preservation
-  obligation needed for later routing interpretation
+- any transformed-metric policy together with either:
+  - the ordering-preservation obligation needed for later routing
+    interpretation, or
+  - an explicit mixed-geometry declaration that the candidate's internal
+    optimization metric differs from the suite's external comparison metric and
+    is being compared as a transfer experiment rather than as an
+    order-preserving metric-equivalent realization
 - the metric-contract consistency checks and reported audit results needed to
   show that build, compression, deferred summary obligations, and any carried-
   forward routing obligations interpret the declared metric consistently
@@ -1006,6 +1013,19 @@ At minimum, the rule shall:
 The checked-in section-4 workflow in this revision shall publish the resulting
 carry-forward decision as a checked-in survivor-decision artifact produced from
 the canonical section-4 suite run.
+
+### REQ-STREAM-EVAL-054A
+
+For the repository-owned `lexongraph-spherical-kmeans` candidate, the evaluator
+shall own deterministic default spherical-k-means parameters sufficient to
+register and execute that candidate through the shared streaming
+trainer/classifier contract without introducing an evaluator-private candidate
+API.
+
+When a section-4 experiment track compares `lexongraph-spherical-kmeans`
+against a non-cosine external metric surface, the evaluator-owned frozen track
+contract shall declare that mixed-geometry comparison explicitly rather than
+implying metric equivalence.
 
 ### REQ-STREAM-EVAL-054
 

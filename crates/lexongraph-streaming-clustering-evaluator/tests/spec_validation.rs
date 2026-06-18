@@ -2425,6 +2425,7 @@ fn val_stream_eval_042_section4_suite_orders_survivors_by_the_deterministic_rank
             "pca-sort-exact-chunking".to_string(),
             "directional-pca".to_string(),
             "dcbc-streaming".to_string(),
+            "spherical-kmeans".to_string(),
         ])
         .unwrap(),
         report_dir.path(),
@@ -2466,7 +2467,11 @@ fn val_stream_eval_032_checked_in_section4_suite_supports_repository_owned_candi
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    candidate_ids.extend(["directional-pca".to_string(), "dcbc-streaming".to_string()]);
+    candidate_ids.extend([
+        "directional-pca".to_string(),
+        "dcbc-streaming".to_string(),
+        "spherical-kmeans".to_string(),
+    ]);
     let candidates = resolve_registered_candidates(&candidate_ids).unwrap();
 
     let report = run_section4_suite(&manifest, &candidates, report_dir.path()).unwrap();
@@ -2489,6 +2494,7 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
         "pca-sort-exact-chunking".to_string(),
         "directional-pca".to_string(),
         "dcbc-streaming".to_string(),
+        "spherical-kmeans".to_string(),
     ])
     .unwrap();
     let report =
@@ -2503,6 +2509,7 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
         ("pca-sort-exact-chunking", "lexongraph-pca-chunking-v"),
         ("directional-pca", "lexongraph-directional-pca-v"),
         ("dcbc-streaming", "lexongraph-dcbc-streaming-v"),
+        ("spherical-kmeans", "lexongraph-spherical-kmeans-v"),
     ];
     for (candidate_id, software_prefix) in expected_identities {
         let concrete = report
@@ -2529,7 +2536,7 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
 fn val_stream_eval_034_registered_candidate_listing_includes_repository_owned_candidates() {
     let names = registered_candidate_names();
     let mut expected = section4_family_candidate_names();
-    expected.extend(["directional-pca", "dcbc-streaming"]);
+    expected.extend(["directional-pca", "dcbc-streaming", "spherical-kmeans"]);
     for candidate in &expected {
         assert!(names.contains(candidate));
     }
@@ -2637,6 +2644,22 @@ fn val_stream_eval_035_candidate_incompatibilities_are_reported_explicitly() {
         Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
             if candidate_id == "dcbc-streaming"
                 && message.contains("soft_balance_penalty")
+    ));
+
+    let spherical_candidates =
+        resolve_registered_candidates(&["spherical-kmeans".to_string()]).unwrap();
+    let spherical_report =
+        run_evaluation_campaign(&directional_profile, &spherical_candidates).unwrap();
+    let spherical_run = &spherical_report.run_reports[0];
+    assert_eq!(
+        spherical_run.run_status,
+        CandidateRunStatus::CandidateSharedContractFailure
+    );
+    assert!(matches!(
+        spherical_run.terminal_failure.as_ref(),
+        Some(StructuredFailure::CandidateSharedContractFailure { candidate_id, message })
+            if candidate_id == "spherical-kmeans"
+                && message.contains("balance constraints")
     ));
 }
 

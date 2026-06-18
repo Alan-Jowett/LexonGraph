@@ -22,6 +22,7 @@ lexongraph-dcbc-streaming = { path = "../lexongraph-dcbc-streaming" }
 lexongraph-directional-pca = { path = "../lexongraph-directional-pca" }
 lexongraph-pca-chunking = { path = "../lexongraph-pca-chunking" }
 lexongraph-search = { path = "../lexongraph-search" }
+lexongraph-spherical-kmeans = { path = "../lexongraph-spherical-kmeans" }
 lexongraph-streaming-indexer = { path = "../lexongraph-streaming-indexer" }
 lexongraph-embeddings-trait = { path = "../lexongraph-embeddings-trait" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }

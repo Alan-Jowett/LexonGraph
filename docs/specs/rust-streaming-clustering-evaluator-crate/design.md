@@ -569,7 +569,8 @@ contract.
 In this revision, the runnable section-4 comparison set includes:
 
 - reusable repository crates `crates/lexongraph-pca-chunking`,
-  `crates/lexongraph-directional-pca`, and `crates/lexongraph-dcbc-streaming`
+  `crates/lexongraph-directional-pca`, `crates/lexongraph-dcbc-streaming`, and
+  `crates/lexongraph-spherical-kmeans`
 - evaluator-owned deterministic representatives for recursive balanced
   partitioning, space-filling-curve chunking, graph-neighborhood balancing,
   hybrid coarse rebalance, and random-shuffle exact chunking
@@ -588,7 +589,8 @@ deterministic registration defaults inside its ordinary registered-candidate
 surface rather than widening the shared candidate contract.
 
 In this revision, the evaluator provides deterministic default
-`DirectionalPcaParams` for `lexongraph-directional-pca`, while
+`DirectionalPcaParams` for `lexongraph-directional-pca`, deterministic
+spherical-k-means parameters for `lexongraph-spherical-kmeans`, while
 `lexongraph-dcbc-streaming` is registered directly from the shared clustering
 configuration.
 
@@ -617,6 +619,10 @@ goalposts.
 That contract records:
 
 - the metric family and any transformed-metric policy
+- for any mixed-geometry comparison, whether the candidate's internal
+  optimization metric is declared as order-preserving with the external track
+  metric or is explicitly being compared as a transfer experiment without a
+  metric-equivalence claim
 - the exact role of the metric family in build-time comparison, compression
   scoring, deferred summary obligations, and any later routing obligations
 - the primary `leaf_size` and any declared sensitivity sizes
@@ -1136,9 +1142,9 @@ rendering for the section-7 reports.
 | DSG-STREAM-EVAL-026 | REQ-STREAM-EVAL-037 |
 | DSG-STREAM-EVAL-027 | REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
 | DSG-STREAM-EVAL-028 | REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-038, REQ-STREAM-EVAL-042 |
-| DSG-STREAM-EVAL-029 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040 |
+| DSG-STREAM-EVAL-029 | REQ-STREAM-EVAL-004, REQ-STREAM-EVAL-039, REQ-STREAM-EVAL-040, REQ-STREAM-EVAL-054A |
 | DSG-STREAM-EVAL-030 | REQ-STREAM-EVAL-041, REQ-STREAM-EVAL-042 |
-| DSG-STREAM-EVAL-031 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043 |
+| DSG-STREAM-EVAL-031 | REQ-STREAM-EVAL-006, REQ-STREAM-EVAL-031, REQ-STREAM-EVAL-043, REQ-STREAM-EVAL-051, REQ-STREAM-EVAL-054A |
 | DSG-STREAM-EVAL-032 | REQ-STREAM-EVAL-013, REQ-STREAM-EVAL-021, REQ-STREAM-EVAL-044 |
 | DSG-STREAM-EVAL-033 | REQ-STREAM-EVAL-032, REQ-STREAM-EVAL-033, REQ-STREAM-EVAL-034, REQ-STREAM-EVAL-045 |
 | DSG-STREAM-EVAL-034 | REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-036, REQ-STREAM-EVAL-046 |

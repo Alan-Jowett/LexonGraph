@@ -447,8 +447,8 @@ the full checked-in section-4 family candidate set, including
 `pca-sort-exact-chunking`, `recursive-balanced-kmeans`,
 `space-filling-curve-exact-chunking`, `graph-neighborhood-balance`,
 `hybrid-coarse-rebalance`, `random-shuffle-exact-chunking`,
-`directional-pca`, and `dcbc-streaming`, so each can be selected through the
-same discovery path used for fixture candidates.
+`directional-pca`, `dcbc-streaming`, and `spherical-kmeans`, so each can be
+selected through the same discovery path used for fixture candidates.
 
 **Traces to:** REQ-STREAM-EVAL-042
 
@@ -543,14 +543,29 @@ campaign report produced from that track.
 
 **Pass condition:** the experiment track declares the exact build, locality,
 compression, and deferred-routing metric roles, any transformed-metric
-ordering-preservation obligation, the metric-contract consistency checks and
-reported audit results, the compatible dispersion functional for any deferred
-summary or refinement obligation, the threading model and deterministic
-reduction-order strategy, whether realistic qualification permits host-scaled
-CPU execution for candidates that support it, and whether 1-thread versus
-N-thread bitwise observable identity is measured directly or deferred.
+ordering-preservation obligation or explicit mixed-geometry transfer
+declaration, the metric-contract consistency checks and reported audit results,
+the compatible dispersion functional for any deferred summary or refinement
+obligation, the threading model and deterministic reduction-order strategy,
+whether realistic qualification permits host-scaled CPU execution for
+candidates that support it, and whether 1-thread versus N-thread bitwise
+observable identity is measured directly or deferred.
 
 **Traces to:** REQ-STREAM-EVAL-051
+
+### VAL-STREAM-EVAL-040A
+
+Inspect the evaluator-owned registered-candidate defaults together with one
+section-4 experiment track that compares a mixed-geometry repository-owned
+candidate under a non-matching external metric line.
+
+**Pass condition:** the evaluator owns deterministic registration defaults for
+`lexongraph-spherical-kmeans`, and the frozen track contract explicitly
+declares the candidate as a mixed-geometry comparison whenever its internal
+spherical/cosine optimization metric is compared under a non-cosine external
+track metric.
+
+**Traces to:** REQ-STREAM-EVAL-054A
 
 ### VAL-STREAM-EVAL-041
 

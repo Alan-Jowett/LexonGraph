@@ -1,0 +1,128 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonGraph contributors -->
+
+# Rust Spherical K-Means Crate Validation
+
+## Status
+
+Draft validation specification for a Rust crate that realizes vanilla spherical
+k-means through the shared LexonGraph streaming clustering contract.
+
+## Validation Scope
+
+These validation entries define the conformance surface for the spherical
+k-means crate. They cover both the crate's observable clustering mechanics and
+its conformance to the shared streaming trainer/classifier contract.
+
+## Validation Entries
+
+### VAL-SPHKM-001
+
+Inspect the repository artifacts for the crate.
+
+**Pass condition:** the repository includes a crate at
+`crates/lexongraph-spherical-kmeans` and this spec package.
+
+**Traces to:** REQ-SPHKM-001
+
+### VAL-SPHKM-002
+
+Inspect the crate's public surface and specification references.
+
+**Pass condition:** the crate exposes concrete shared-contract
+implementations, remains subordinate to the research plan and the shared
+streaming contract, and does not widen into an unrelated candidate API.
+
+**Traces to:** REQ-SPHKM-002, REQ-SPHKM-003
+
+### VAL-SPHKM-003
+
+Construct a trainer with valid shared configuration and valid spherical-k-means
+parameters.
+
+**Pass condition:** construction succeeds deterministically and preserves hard
+`K`, dimensionality, and the supplied algorithm parameters.
+
+**Traces to:** REQ-SPHKM-004
+
+### VAL-SPHKM-004
+
+Exercise one completed pass with multiple input batches whose concatenated order
+is known.
+
+**Pass condition:** `finish_pass()` realizes exactly one caller-visible
+spherical-k-means pass over the concatenated pass dataset order.
+
+**Traces to:** REQ-SPHKM-005, REQ-SPHKM-008
+
+### VAL-SPHKM-005
+
+Exercise malformed streamed input, including wrong dimensionality, non-finite
+values, zero-norm embeddings, and an empty completed pass.
+
+**Pass condition:** each case fails explicitly through the shared
+malformed-input surface.
+
+**Traces to:** REQ-SPHKM-007, REQ-SPHKM-013
+
+### VAL-SPHKM-006
+
+Complete a later pass whose observed count or ordered embedding content differs
+from the first completed pass.
+
+**Pass condition:** continuation fails explicitly before claiming conformant
+refinement of the same logical dataset.
+
+**Traces to:** REQ-SPHKM-008, REQ-SPHKM-013
+
+### VAL-SPHKM-007
+
+Inspect the execution path over a representative conformant fixture.
+
+**Pass condition:** the pass realization normalizes embeddings, applies the
+documented deterministic initialization rule, and performs deterministic
+assignment and centroid-update steps in normalized embedding space.
+
+**Traces to:** REQ-SPHKM-005, REQ-SPHKM-006
+
+### VAL-SPHKM-008
+
+Exercise a conformant fixture across repeated identical runs.
+
+**Pass condition:** pass reports expose deterministic `observed_count`,
+`quality_metric`, `balance_metric`, fixed metric directions, and stable cluster
+IDs. When no explicit balance constraints are configured, `balance_metric` is
+zero.
+
+**Traces to:** REQ-SPHKM-009, REQ-SPHKM-012
+
+### VAL-SPHKM-009
+
+Complete training and exercise classifier assignment on valid and malformed
+embeddings.
+
+**Pass condition:** the classifier normalizes each valid query embedding,
+assigns it deterministically to exactly one cluster ID in `[0, K)`, rejects
+malformed embeddings through the shared malformed-input category, and does not
+require replay of the original training dataset.
+
+**Traces to:** REQ-SPHKM-006, REQ-SPHKM-011, REQ-SPHKM-013
+
+### VAL-SPHKM-010
+
+Exercise invalid configuration, unsupported balance constraints, and illegal
+lifecycle transitions.
+
+**Pass condition:** failures are surfaced deterministically through the shared
+streaming error categories.
+
+**Traces to:** REQ-SPHKM-010, REQ-SPHKM-013
+
+### VAL-SPHKM-011
+
+Run the shared streaming clustering conformance helpers against the crate.
+
+**Pass condition:** the crate passes the shared lifecycle, malformed-input,
+determinism, and cluster-ID continuity checks.
+
+**Traces to:** REQ-SPHKM-014

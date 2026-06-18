@@ -17,6 +17,7 @@ members = [
     "crates/lexongraph-pca",
     "crates/lexongraph-pca-chunking",
     "crates/lexongraph-search",
+    "crates/lexongraph-spherical-kmeans",
     "crates/lexongraph-streaming-clustering",
     "crates/lexongraph-streaming-clustering-evaluator",
     "crates/lexongraph-streaming-indexer",

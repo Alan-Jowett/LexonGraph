@@ -6,13 +6,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use ciborium::value::Value as CborValue;
-use lexongraph_block::{BlockHash, Content, EmbeddingSpec, Metadata};
+use lexongraph_block::{
+    BlockHash, Content, EmbeddingSpec, LeafEntry, Metadata, TypedEntries, into_entries,
+};
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_search::{
-    CandidateScorer, DefaultEmbeddingCompatibility, EncodedTargetEmbedding, SearchTelemetrySummary,
-    SearchTerminationKind, Searcher,
+    CandidateScorer, DefaultEmbeddingCompatibility, EmbeddingCompatibility, EncodedTargetEmbedding,
+    SearchTelemetrySummary, SearchTerminationKind,
 };
 use lexongraph_streaming_indexer::{
     ChildSummaryPolicy, ExactCentroidChildSummaryPolicy, FinalizedPartition,
@@ -689,6 +691,9 @@ fn build_real_only_hierarchy(
                 .push(index);
         }
     }
+    for (leaf_id, item_indices) in &mut leaf_items {
+        normalize_item_indices(leaf_id, item_indices)?;
+    }
 
     let node_kinds = pair_report
         .hierarchy_nodes
@@ -798,6 +803,8 @@ fn prune_and_collect_partitions(
         .filter(|partition| child_ids.iter().any(|child_id| child_id == &partition.id))
         .flat_map(|partition| partition.item_indices.iter().copied())
         .collect::<Vec<_>>();
+    let mut item_indices = item_indices;
+    normalize_item_indices(node_id, &mut item_indices)?;
     partitions.push(FinalizedPartition {
         id: node_id.into(),
         parent_id: parent_id.map(str::to_owned),
@@ -807,6 +814,19 @@ fn prune_and_collect_partitions(
         planning_stage: PlanningStage::Custom,
     });
     Ok(Some(node_id.into()))
+}
+
+fn normalize_item_indices(node_id: &str, item_indices: &mut [usize]) -> Result<(), EvaluatorError> {
+    item_indices.sort_unstable();
+    for pair in item_indices.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(EvaluatorError::InvalidConfiguration(format!(
+                "section-7 real-only hierarchy contains duplicate item index {} in partition {}",
+                pair[0], node_id
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn materialize_design_tree(
@@ -1023,40 +1043,284 @@ fn search_neighbors(
     } else {
         neighbor_count + 1
     };
-    let (result, telemetry) = match metric_semantics_profile {
-        "cosine" => Searcher::new(
+    let (neighbor_ids, telemetry) = match metric_semantics_profile {
+        "cosine" => greedy_route_with_telemetry(
+            &root_id,
+            &target,
+            beam_width,
+            requested,
+            store,
             DefaultEmbeddingCompatibility,
             lexongraph_search::DefaultCandidateScorer,
-        )
-        .search_with_telemetry(&root_id, &target, beam_width, requested, store)
-        .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?,
-        "euclidean" => Searcher::new(DefaultEmbeddingCompatibility, EuclideanCandidateScorer)
-            .search_with_telemetry(&root_id, &target, beam_width, requested, store)
-            .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?,
+        )?,
+        "euclidean" => greedy_route_with_telemetry(
+            &root_id,
+            &target,
+            beam_width,
+            requested,
+            store,
+            DefaultEmbeddingCompatibility,
+            EuclideanCandidateScorer,
+        )?,
         other => {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "section-7 metric semantics profile {other} is unsupported; supported profiles: euclidean, cosine"
             )));
         }
     };
-    let mut neighbor_ids = Vec::new();
-    for leaf in result.leaves {
-        let Some(CborValue::Text(entity_id)) =
-            metadata_value(&leaf.entry.metadata, SECTION7_ENTITY_ID_METADATA_KEY)
-        else {
-            return Err(EvaluatorError::InvalidConfiguration(
-                "section-7 search result leaf was missing entity_id metadata".into(),
-            ));
-        };
-        if entity_id == &query.query_id {
-            continue;
+    Ok((
+        neighbor_ids
+            .into_iter()
+            .filter(|entity_id| entity_id != &query.query_id)
+            .take(neighbor_count)
+            .collect(),
+        telemetry,
+    ))
+}
+
+enum GreedyCandidate<Score> {
+    Branch {
+        child: BlockHash,
+        depth: usize,
+        score: Score,
+    },
+    Leaf {
+        block_id: BlockHash,
+        entry: LeafEntry,
+        score: Score,
+    },
+}
+
+struct GreedyRoutingContext<'a, Target, EC, CS> {
+    target: &'a Target,
+    store: &'a dyn BlockStore,
+    compatibility: &'a EC,
+    scorer: &'a CS,
+    telemetry: &'a mut SearchTelemetrySummary,
+    visited_blocks: &'a mut HashSet<BlockHash>,
+}
+
+fn greedy_route_with_telemetry<Target, EC, CS>(
+    root_id: &BlockHash,
+    target: &Target,
+    beam_width: usize,
+    neighbor_count: usize,
+    store: &dyn BlockStore,
+    compatibility: EC,
+    scorer: CS,
+) -> Result<(Vec<String>, SearchTelemetrySummary), EvaluatorError>
+where
+    EC: EmbeddingCompatibility<Target>,
+    CS: CandidateScorer<Target>,
+{
+    if beam_width == 0 {
+        return Err(EvaluatorError::InvalidConfiguration(
+            "section-7 greedy routing requires beam_width >= 1".into(),
+        ));
+    }
+
+    let mut telemetry = SearchTelemetrySummary {
+        beam_width,
+        distinct_blocks_visited: 0,
+        max_routing_depth: 0,
+        termination: SearchTerminationKind::Success,
+    };
+    let mut visited_blocks = HashSet::new();
+    let mut active_blocks = vec![(*root_id, 0usize)];
+    let mut terminal_candidates = Vec::<GreedyCandidate<CS::Score>>::new();
+
+    while !active_blocks.is_empty() {
+        let mut branch_candidates = Vec::<GreedyCandidate<CS::Score>>::new();
+        for (block_id, depth) in active_blocks.drain(..) {
+            let scored = load_greedy_candidates(
+                block_id,
+                depth,
+                &mut GreedyRoutingContext {
+                    target,
+                    store,
+                    compatibility: &compatibility,
+                    scorer: &scorer,
+                    telemetry: &mut telemetry,
+                    visited_blocks: &mut visited_blocks,
+                },
+            )?;
+            for candidate in scored {
+                match candidate {
+                    GreedyCandidate::Branch { .. } => branch_candidates.push(candidate),
+                    GreedyCandidate::Leaf { .. } => terminal_candidates.push(candidate),
+                }
+            }
         }
-        neighbor_ids.push(entity_id.clone());
-        if neighbor_ids.len() == neighbor_count {
-            break;
+
+        if branch_candidates.is_empty() {
+            telemetry.termination = SearchTerminationKind::Success;
+            terminal_candidates.sort_by(compare_greedy_leaf_candidates::<CS::Score>);
+            let mut neighbor_ids = Vec::new();
+            for candidate in terminal_candidates {
+                let GreedyCandidate::Leaf { entry, .. } = candidate else {
+                    continue;
+                };
+                let Some(CborValue::Text(entity_id)) =
+                    metadata_value(&entry.metadata, SECTION7_ENTITY_ID_METADATA_KEY)
+                else {
+                    return Err(EvaluatorError::InvalidConfiguration(
+                        "section-7 greedy routing leaf entry was missing entity_id metadata".into(),
+                    ));
+                };
+                neighbor_ids.push(entity_id.clone());
+                if neighbor_ids.len() == neighbor_count {
+                    break;
+                }
+            }
+            return Ok((neighbor_ids, telemetry));
+        }
+
+        branch_candidates.sort_by(compare_greedy_branch_candidates::<CS::Score>);
+        let mut seen_children = HashSet::new();
+        active_blocks = branch_candidates
+            .into_iter()
+            .filter_map(|candidate| match candidate {
+                GreedyCandidate::Branch { child, depth, .. } if seen_children.insert(child) => {
+                    Some((child, depth))
+                }
+                _ => None,
+            })
+            .take(beam_width)
+            .collect();
+    }
+
+    telemetry.termination = SearchTerminationKind::Exhausted;
+    Ok((Vec::new(), telemetry))
+}
+
+fn load_greedy_candidates<Target, EC, CS>(
+    block_id: BlockHash,
+    depth: usize,
+    context: &mut GreedyRoutingContext<'_, Target, EC, CS>,
+) -> Result<Vec<GreedyCandidate<CS::Score>>, EvaluatorError>
+where
+    EC: EmbeddingCompatibility<Target>,
+    CS: CandidateScorer<Target>,
+{
+    let Some(validated) = context.store.get(&block_id).map_err(|error| {
+        EvaluatorError::InvalidConfiguration(format!(
+            "section-7 greedy routing failed to load block {block_id}: {error}"
+        ))
+    })?
+    else {
+        return Err(EvaluatorError::InvalidConfiguration(format!(
+            "section-7 greedy routing missing block {block_id}"
+        )));
+    };
+
+    context.visited_blocks.insert(block_id);
+    context.telemetry.distinct_blocks_visited = context.visited_blocks.len();
+    context.telemetry.max_routing_depth = context.telemetry.max_routing_depth.max(depth);
+
+    match into_entries(validated) {
+        TypedEntries::Branch(metadata, entries) => {
+            context
+                .compatibility
+                .ensure_compatible(context.target, &metadata.embedding_spec)
+                .map_err(|error| {
+                    EvaluatorError::InvalidConfiguration(format!(
+                        "section-7 greedy routing incompatible embedding in block {block_id}: {error}"
+                    ))
+                })?;
+            entries
+                .into_iter()
+                .map(|entry| {
+                    context
+                        .scorer
+                        .score(context.target, &entry.embedding, &metadata.embedding_spec)
+                        .map(|score| GreedyCandidate::Branch {
+                            child: entry.child,
+                            depth: depth + 1,
+                            score,
+                        })
+                        .map_err(|error| {
+                            EvaluatorError::InvalidConfiguration(format!(
+                                "section-7 greedy routing failed to score branch block {block_id}: {error}"
+                            ))
+                        })
+                })
+                .collect()
+        }
+        TypedEntries::Leaf(metadata, entries) => {
+            context
+                .compatibility
+                .ensure_compatible(context.target, &metadata.embedding_spec)
+                .map_err(|error| {
+                    EvaluatorError::InvalidConfiguration(format!(
+                        "section-7 greedy routing incompatible embedding in block {block_id}: {error}"
+                    ))
+                })?;
+            entries
+                .into_iter()
+                .map(|entry| {
+                    context
+                        .scorer
+                        .score(context.target, &entry.embedding, &metadata.embedding_spec)
+                        .map(|score| GreedyCandidate::Leaf {
+                            block_id,
+                            entry,
+                            score,
+                        })
+                        .map_err(|error| {
+                            EvaluatorError::InvalidConfiguration(format!(
+                                "section-7 greedy routing failed to score leaf block {block_id}: {error}"
+                            ))
+                        })
+                })
+                .collect()
         }
     }
-    Ok((neighbor_ids, telemetry))
+}
+
+fn compare_greedy_branch_candidates<Score: Ord>(
+    left: &GreedyCandidate<Score>,
+    right: &GreedyCandidate<Score>,
+) -> Ordering {
+    match (left, right) {
+        (
+            GreedyCandidate::Branch {
+                child: left_child,
+                score: left_score,
+                ..
+            },
+            GreedyCandidate::Branch {
+                child: right_child,
+                score: right_score,
+                ..
+            },
+        ) => right_score
+            .cmp(left_score)
+            .then_with(|| left_child.as_bytes().cmp(right_child.as_bytes())),
+        _ => Ordering::Equal,
+    }
+}
+
+fn compare_greedy_leaf_candidates<Score: Ord>(
+    left: &GreedyCandidate<Score>,
+    right: &GreedyCandidate<Score>,
+) -> Ordering {
+    match (left, right) {
+        (
+            GreedyCandidate::Leaf {
+                block_id: left_block,
+                score: left_score,
+                ..
+            },
+            GreedyCandidate::Leaf {
+                block_id: right_block,
+                score: right_score,
+                ..
+            },
+        ) => right_score
+            .cmp(left_score)
+            .then_with(|| left_block.as_bytes().cmp(right_block.as_bytes())),
+        _ => Ordering::Equal,
+    }
 }
 
 fn exact_top_neighbors(

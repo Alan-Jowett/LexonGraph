@@ -203,6 +203,7 @@ work.
 | D | Graph-based neighborhood partitioning with exact-size balancing | May preserve local topology better |
 | E | Hybrid: coarse partitioning then exact-size local rebalance | Likely practical compromise |
 | F | Random shuffle + exact chunking | Null baseline for measuring algorithmic value |
+| G | Vanilla spherical k-means | Boring control for real-data locality and centroid-routing purity |
 
 The abstract family list above defines the search space. The checked-in
 repository-owned section-4 screening workflow should also name the concrete
@@ -211,6 +212,7 @@ initial candidate set used for repeated comparisons, including at least:
 - `lexongraph-pca-chunking`
 - `lexongraph-directional-pca`
 - `lexongraph-dcbc-streaming`
+- `lexongraph-spherical-kmeans`
 
 Additional fixture or null-baseline candidates may be included as long as they
 use the same evaluator-owned registration and reporting surface.

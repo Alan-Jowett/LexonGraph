@@ -1769,6 +1769,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexongraph-spherical-kmeans"
+version = "0.1.0"
+dependencies = [
+ "lexongraph-streaming-clustering",
+]
+
+[[package]]
 name = "lexongraph-streaming-clustering"
 version = "0.1.0"
 
@@ -1790,6 +1797,7 @@ dependencies = [
  "lexongraph-embeddings-trait",
  "lexongraph-pca-chunking",
  "lexongraph-search",
+ "lexongraph-spherical-kmeans",
  "lexongraph-streaming-clustering",
  "lexongraph-streaming-indexer",
  "pollster",
