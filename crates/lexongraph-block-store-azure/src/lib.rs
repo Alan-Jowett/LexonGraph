@@ -3,6 +3,7 @@
 //! Azure Blob Storage `BlockStore` implementation for LexonGraph blocks.
 
 use std::fmt;
+use std::time::Duration;
 
 use lexongraph_block::{
     Block, BlockError, BlockHash, ValidatedBlock, deserialize_block, serialize_block,
@@ -11,11 +12,13 @@ use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use quick_xml::de::from_str;
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
-use reqwest::header::{CONNECTION, CONTENT_TYPE, IF_NONE_MATCH};
+use reqwest::header::{CONTENT_TYPE, IF_NONE_MATCH};
 use reqwest::{Method, Url};
 use serde::Deserialize;
 
 const AZURE_API_VERSION: &str = "2023-11-03";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
@@ -37,12 +40,16 @@ impl AzureBlobBlockStore {
     pub fn new(container_sas_url: &str) -> Result<Self, BlockStoreError> {
         let (container_url, container_display, container_path) =
             normalize_container_url(container_sas_url)?;
-        let client = Client::builder().build().map_err(|error| {
-            backend_failure(format!(
-                "failed to prepare Azure Blob client for container {}: {error}",
-                container_display
-            ))
-        })?;
+        let client = Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to prepare Azure Blob client for container {}: {error}",
+                    container_display
+                ))
+            })?;
 
         Ok(Self {
             client,
@@ -153,7 +160,6 @@ impl AzureBlobBlockStore {
     fn request(&self, method: Method, url: Url) -> reqwest::blocking::RequestBuilder {
         self.client
             .request(method, url)
-            .header(CONNECTION, "close")
             .header("x-ms-version", AZURE_API_VERSION)
     }
 }
@@ -161,18 +167,19 @@ impl AzureBlobBlockStore {
 impl BlockStore for AzureBlobBlockStore {
     fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
         let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        let blob_name = Self::block_blob_name(&serialized.hash);
+        let block_id = serialized.hash;
+        let blob_name = Self::block_blob_name(&block_id);
         let response = self
             .request(Method::PUT, self.build_blob_url(&blob_name))
             .header("x-ms-blob-type", "BlockBlob")
             .header(IF_NONE_MATCH, "*")
             .header(CONTENT_TYPE, "application/octet-stream")
-            .body(serialized.bytes.clone())
+            .body(serialized.bytes)
             .send()
             .map_err(|error| {
                 backend_failure(format!(
                     "failed to publish block {} to blob {} in container {}: {error}",
-                    serialized.hash, blob_name, self.container_display
+                    block_id, blob_name, self.container_display
                 ))
             })?;
 
@@ -180,24 +187,25 @@ impl BlockStore for AzureBlobBlockStore {
         let _ = response.bytes();
 
         if status.is_success() {
-            return Ok(serialized.hash);
+            return Ok(block_id);
         }
 
         if matches!(
             status,
             StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
         ) {
+            let canonical = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
             return self.read_existing_or_map_publish_error(
                 &blob_name,
-                &serialized.hash,
-                &serialized.bytes,
+                &block_id,
+                &canonical.bytes,
                 status,
             );
         }
 
         Err(backend_failure(format!(
             "failed to publish block {} to blob {} in container {}: {}",
-            serialized.hash,
+            block_id,
             blob_name,
             self.container_display,
             format_http_status(status)
