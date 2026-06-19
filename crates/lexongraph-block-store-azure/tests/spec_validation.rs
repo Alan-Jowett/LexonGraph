@@ -49,6 +49,11 @@ fn val_azure_store_001_002_014_constructor_and_publish_path_are_deterministic() 
     empty_query.set_query(Some(""));
     let error = AzureBlobBlockStore::new(empty_query.as_str()).unwrap_err();
     expect_backend_failure_contains(error, "must include SAS query parameters");
+
+    let mut non_sas_query = Url::parse(&server.sas_url()).unwrap();
+    non_sas_query.set_query(Some("foo=bar"));
+    let error = AzureBlobBlockStore::new(non_sas_query.as_str()).unwrap_err();
+    expect_backend_failure_contains(error, "must include a non-empty SAS signature parameter");
 }
 
 #[test]

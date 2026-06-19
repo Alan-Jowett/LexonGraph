@@ -291,6 +291,11 @@ fn normalize_container_url(
             "Azure Blob container SAS URL must include SAS query parameters".into(),
         ));
     }
+    if !has_non_empty_query_param(&url, "sig") {
+        return Err(backend_failure(
+            "Azure Blob container SAS URL must include a non-empty SAS signature parameter".into(),
+        ));
+    }
 
     let path_segments = url
         .path_segments()
@@ -419,6 +424,11 @@ fn format_azure_error_code(error_code: Option<&str>) -> String {
         Some(error_code) => format!(" (Azure error code {error_code})"),
         None => String::new(),
     }
+}
+
+fn has_non_empty_query_param(url: &Url, name: &str) -> bool {
+    url.query_pairs()
+        .any(|(key, value)| key == name && !value.is_empty())
 }
 
 fn redact_reqwest_error(error: reqwest::Error) -> String {

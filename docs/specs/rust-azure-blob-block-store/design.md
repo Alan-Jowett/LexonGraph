@@ -67,7 +67,8 @@ Construction:
 
 1. parses the supplied URL
 2. verifies that it addresses a container root rather than an individual blob
-3. retains the normalized container endpoint and SAS query material needed for
+3. verifies that the query contains a non-empty SAS signature parameter and
+   retains the normalized container endpoint and SAS query material needed for
    future operations
 
 Construction does not require an eager permission probe for read, list, create,
@@ -170,13 +171,17 @@ re-checks the blob:
 The parent trait contract remains limited to typed block values, block IDs, and
 identifier enumeration.
 
-The Azure backend does not expose:
+The successful trait surface of the Azure backend does not expose:
 
 - container URLs
 - SAS query details
 - blob names or prefixes
 - Azure SDK request or response types
 - backend-native filtering semantics
+
+Diagnostic backend-failure messages may still include redacted container
+endpoints or offending blob names when needed to explain a backend or
+enumeration failure without exposing SAS query values.
 
 ### DSG-AZURE-STORE-010 `Error mapping`
 

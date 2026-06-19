@@ -111,9 +111,11 @@ The top-level Cargo workspace currently contains:
 | `lexongraph-streaming-clustering` | Shared streaming clustering contract plus conformance helpers |
 | `lexongraph-streaming-indexer` | Protocol-conforming streaming indexing orchestration with replay-based ingestion |
 
-The currently implemented storage backends in this repository are the local
-filesystem block store and an Azure Blob Storage block store over container SAS
-URLs.
+The workspace includes multiple `BlockStore` backends. The primary persistence
+backends implemented in this repository are the local filesystem block store
+and an Azure Blob Storage block store over container SAS URLs, alongside
+memory, overlay, and zip variants for in-memory, composed, and read-only
+archive scenarios.
 
 ## Contributor entrypoint
 

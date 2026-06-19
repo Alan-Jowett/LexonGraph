@@ -26,7 +26,8 @@ repository.
 
 In this spec package, `container SAS URL` means a caller-supplied Azure Blob
 Storage URL that addresses a container root and carries one or more
-shared-access-signature query parameters.
+shared-access-signature query parameters, including a non-empty signature
+parameter.
 
 `Recognized block-blob candidate` means a blob whose name matches the
 deterministic sharded block layout shape:
@@ -62,8 +63,8 @@ boundary.
 
 Construction shall either return an initialized store bound to that container
 or fail explicitly as a backend failure when the supplied URL cannot be parsed,
-does not address a container root, omits SAS query parameters, or cannot be
-prepared for Azure Blob operations.
+does not address a container root, omits SAS query parameters, omits a non-empty
+SAS signature parameter, or cannot be prepared for Azure Blob operations.
 
 This revision does not require construction to preflight read, list, create, or
 write permissions embedded in the SAS URL.
