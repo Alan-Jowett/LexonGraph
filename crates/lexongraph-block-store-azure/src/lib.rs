@@ -286,7 +286,7 @@ fn normalize_container_url(
         ))
     })?;
     url.set_fragment(None);
-    if url.query().is_none() {
+    if url.query().is_none_or(str::is_empty) {
         return Err(backend_failure(
             "Azure Blob container SAS URL must include SAS query parameters".into(),
         ));
@@ -352,12 +352,13 @@ fn decode_recognized_block_blob_name(value: &str) -> Result<Option<BlockHash>, S
     let Some(hex) = file_name.strip_suffix(".cbor") else {
         return Ok(None);
     };
-    let bytes = decode_block_hash_hex(hex)
-        .ok_or_else(|| "failed to decode an enumerated block ID candidate".to_string())?;
+    let bytes = decode_block_hash_hex(hex).ok_or_else(|| {
+        format!("failed to decode an enumerated block ID candidate at blob {value}")
+    })?;
     if &hex[..2] != first_level || &hex[2..4] != second_level {
-        return Err(
-            "failed to decode an enumerated block ID candidate: shard prefix mismatch".into(),
-        );
+        return Err(format!(
+            "failed to decode an enumerated block ID candidate at blob {value}: shard prefix mismatch"
+        ));
     }
 
     Ok(Some(BlockHash::from_bytes(bytes)))

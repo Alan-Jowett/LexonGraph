@@ -44,6 +44,11 @@ fn val_azure_store_001_002_014_constructor_and_publish_path_are_deterministic() 
     blob_scoped.set_path("/container/blob.cbor");
     let error = AzureBlobBlockStore::new(blob_scoped.as_str()).unwrap_err();
     expect_backend_failure_contains(error, "container root");
+
+    let mut empty_query = Url::parse(&server.sas_url()).unwrap();
+    empty_query.set_query(Some(""));
+    let error = AzureBlobBlockStore::new(empty_query.as_str()).unwrap_err();
+    expect_backend_failure_contains(error, "must include SAS query parameters");
 }
 
 #[test]
@@ -243,13 +248,13 @@ fn val_azure_store_013_enumeration_surfaces_listing_and_decoding_failures() {
     match decode_error_server.store().iter_block_ids() {
         Err(error) => expect_backend_failure_contains(
             error,
-            "failed to decode an enumerated block ID candidate",
+            "failed to decode an enumerated block ID candidate at blob aa/bb/not-a-block-id.cbor",
         ),
         Ok(iter) => {
             let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
             expect_backend_failure_contains(
                 error,
-                "failed to decode an enumerated block ID candidate",
+                "failed to decode an enumerated block ID candidate at blob aa/bb/not-a-block-id.cbor",
             );
         }
     }

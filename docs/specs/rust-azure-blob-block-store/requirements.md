@@ -25,16 +25,20 @@ repository.
 ## Terminology
 
 In this spec package, `container SAS URL` means a caller-supplied Azure Blob
-Storage URL that addresses a container root and carries shared-access-signature
-query parameters.
+Storage URL that addresses a container root and carries one or more
+shared-access-signature query parameters.
 
-`Recognized block blob` means a blob whose name matches the deterministic
-sharded block layout:
+`Recognized block-blob candidate` means a blob whose name matches the
+deterministic sharded block layout shape:
 
 `<hh>/<hh>/<full-lowercase-block-id>.cbor`
 
 where the first two directory-style path segments are the first two bytes of
 the block ID in lowercase hexadecimal.
+
+A recognized block-blob candidate becomes a recognized block blob only when the
+filename segment is a full valid lowercase block ID whose first two shard
+segments match that block ID.
 
 ## Requirements
 
@@ -58,8 +62,8 @@ boundary.
 
 Construction shall either return an initialized store bound to that container
 or fail explicitly as a backend failure when the supplied URL cannot be parsed,
-does not address a container root, or cannot be prepared for Azure Blob
-operations.
+does not address a container root, omits SAS query parameters, or cannot be
+prepared for Azure Blob operations.
 
 This revision does not require construction to preflight read, list, create, or
 write permissions embedded in the SAS URL.
@@ -151,7 +155,8 @@ container artifacts as stored block IDs.
 ### REQ-AZURE-STORE-013
 
 Azure enumeration shall surface explicit backend failure when container listing,
-blob inspection, or blob-name decoding cannot be completed.
+blob inspection, or decoding of a recognized block-blob candidate into a valid
+block ID cannot be completed.
 
 ## Out of Scope
 
