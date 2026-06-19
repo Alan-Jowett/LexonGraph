@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -14,9 +15,17 @@ use std::time::Duration;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store_azure::AzureBlobBlockStore;
 
-#[derive(Clone)]
 pub struct MockAzureServer {
     inner: Arc<MockAzureServerInner>,
+}
+
+impl Clone for MockAzureServer {
+    fn clone(&self) -> Self {
+        self.inner.external_handles.fetch_add(1, Ordering::AcqRel);
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl fmt::Debug for MockAzureServer {
@@ -31,6 +40,7 @@ struct MockAzureServerInner {
     container_name: String,
     state: Mutex<MockState>,
     shutdown: AtomicBool,
+    external_handles: AtomicUsize,
     thread: Mutex<Option<JoinHandle<()>>>,
     base_url: String,
 }
@@ -63,6 +73,7 @@ impl MockAzureServer {
             container_name: container_name.clone(),
             state: Mutex::new(MockState::default()),
             shutdown: AtomicBool::new(false),
+            external_handles: AtomicUsize::new(1),
             thread: Mutex::new(None),
             base_url,
         });
@@ -143,11 +154,15 @@ impl MockAzureServer {
     }
 }
 
-impl Drop for MockAzureServerInner {
+impl Drop for MockAzureServer {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Release);
-        let _ = TcpStream::connect(self.base_url_host_port());
-        if let Some(handle) = self.thread.lock().unwrap().take() {
+        if self.inner.external_handles.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+
+        self.inner.shutdown.store(true, Ordering::Release);
+        let _ = TcpStream::connect(self.inner.base_url_host_port());
+        if let Some(handle) = self.inner.thread.lock().unwrap().take() {
             let _ = handle.join();
         }
     }
@@ -302,11 +317,26 @@ fn respond_to_list(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
 fn render_listing(names: &[String]) -> String {
     let blobs = names
         .iter()
-        .map(|name| format!("<Blob><Name>{name}</Name></Blob>"))
+        .map(|name| format!("<Blob><Name>{}</Name></Blob>", xml_escape(name)))
         .collect::<String>();
     format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><EnumerationResults><Blobs>{blobs}</Blobs><NextMarker></NextMarker></EnumerationResults>"
     )
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn split_target(target: &str) -> (&str, &str) {

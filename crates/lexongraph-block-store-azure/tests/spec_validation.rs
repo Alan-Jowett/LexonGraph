@@ -230,6 +230,7 @@ fn val_azure_store_011_012_enumeration_yields_only_recognized_block_ids() {
     let expected = HashSet::from([store.put(&first).unwrap(), store.put(&second).unwrap()]);
     server.add_extra_list_name("notes/readme.txt");
     server.add_extra_list_name("aa/bb/temporary.part");
+    server.add_extra_list_name("notes/a&b<c>.txt");
 
     let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
 
