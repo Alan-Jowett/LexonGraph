@@ -264,6 +264,24 @@ fn val_azure_store_013_enumeration_surfaces_listing_and_decoding_failures() {
             );
         }
     }
+
+    let shard_mismatch_server = MockAzureServer::start();
+    shard_mismatch_server.add_extra_list_name(
+        "aa/bb/cc00000000000000000000000000000000000000000000000000000000000000.cbor",
+    );
+    match shard_mismatch_server.store().iter_block_ids() {
+        Err(error) => expect_backend_failure_contains(
+            error,
+            "failed to decode an enumerated block ID candidate at blob aa/bb/cc00000000000000000000000000000000000000000000000000000000000000.cbor: shard prefix mismatch",
+        ),
+        Ok(iter) => {
+            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+            expect_backend_failure_contains(
+                error,
+                "failed to decode an enumerated block ID candidate at blob aa/bb/cc00000000000000000000000000000000000000000000000000000000000000.cbor: shard prefix mismatch",
+            );
+        }
+    }
 }
 
 #[test]

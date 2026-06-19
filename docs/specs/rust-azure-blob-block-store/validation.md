@@ -140,7 +140,8 @@ report unrelated blobs or other container artifacts.
 ### VAL-AZURE-STORE-013
 
 Cause container listing or decoding of a malformed recognized block-blob
-candidate such as `hh/hh/*.cbor` to fail during enumeration.
+candidate such as `hh/hh/*.cbor` or a shard-prefix-mismatched
+`hh/hh/<valid-block-id>.cbor` candidate to fail during enumeration.
 
 **Pass condition:** enumeration fails explicitly as a backend failure rather
 than silently omitting the affected stored state.

@@ -41,6 +41,10 @@ A recognized block-blob candidate becomes a recognized block blob only when the
 filename segment is a full valid lowercase block ID whose first two shard
 segments match that block ID.
 
+A blob whose name has the deterministic `hh/hh/<id>.cbor` shape but whose shard
+segments do not match the decoded block ID remains a malformed recognized
+block-blob candidate rather than unrelated content.
+
 ## Requirements
 
 ### REQ-AZURE-STORE-001
@@ -158,6 +162,9 @@ container artifacts as stored block IDs.
 Azure enumeration shall surface explicit backend failure when container listing,
 blob inspection, or decoding of a recognized block-blob candidate into a valid
 block ID cannot be completed.
+
+This explicit failure rule includes malformed candidate names and shard-prefix
+mismatches within the deterministic candidate layout.
 
 ## Out of Scope
 
