@@ -46,8 +46,9 @@ impl AzureBlobBlockStore {
             .build()
             .map_err(|error| {
                 backend_failure(format!(
-                    "failed to prepare Azure Blob client for container {}: {error}",
-                    container_display
+                    "failed to prepare Azure Blob client for container {}: {}",
+                    container_display,
+                    redact_reqwest_error(error)
                 ))
             })?;
 
@@ -74,18 +75,20 @@ impl AzureBlobBlockStore {
         let response = self
             .request(Method::GET, self.build_blob_url(blob_name))
             .send()
-            .map_err(|error| format!("request failed: {error}"))?;
+            .map_err(|error| format!("request failed: {}", redact_reqwest_error(error)))?;
         let header_error_code = azure_error_code_header(&response);
 
         match response.status() {
             StatusCode::OK => response
                 .bytes()
                 .map(|bytes| Some(bytes.to_vec()))
-                .map_err(|error| format!("response body read failed: {error}")),
+                .map_err(|error| {
+                    format!("response body read failed: {}", redact_reqwest_error(error))
+                }),
             StatusCode::NOT_FOUND => {
-                let body = response
-                    .bytes()
-                    .map_err(|error| format!("response body read failed: {error}"))?;
+                let body = response.bytes().map_err(|error| {
+                    format!("response body read failed: {}", redact_reqwest_error(error))
+                })?;
                 let error_code = header_error_code.or_else(|| parse_azure_error_code_body(&body));
                 if error_code.as_deref() == Some("BlobNotFound") {
                     Ok(None)
@@ -121,8 +124,9 @@ impl AzureBlobBlockStore {
 
         let response = self.request(Method::GET, url).send().map_err(|error| {
             backend_failure(format!(
-                "failed to list Azure container {}: {error}",
-                self.container_display
+                "failed to list Azure container {}: {}",
+                self.container_display,
+                redact_reqwest_error(error)
             ))
         })?;
 
@@ -136,8 +140,9 @@ impl AzureBlobBlockStore {
 
         let body = response.text().map_err(|error| {
             backend_failure(format!(
-                "failed to read Azure listing response from {}: {error}",
-                self.container_display
+                "failed to read Azure listing response from {}: {}",
+                self.container_display,
+                redact_reqwest_error(error)
             ))
         })?;
         let listing: EnumerationResults = from_str(&body).map_err(|error| {
@@ -178,8 +183,11 @@ impl BlockStore for AzureBlobBlockStore {
             .send()
             .map_err(|error| {
                 backend_failure(format!(
-                    "failed to publish block {} to blob {} in container {}: {error}",
-                    block_id, blob_name, self.container_display
+                    "failed to publish block {} to blob {} in container {}: {}",
+                    block_id,
+                    blob_name,
+                    self.container_display,
+                    redact_reqwest_error(error)
                 ))
             })?;
 
@@ -410,6 +418,10 @@ fn format_azure_error_code(error_code: Option<&str>) -> String {
         Some(error_code) => format!(" (Azure error code {error_code})"),
         None => String::new(),
     }
+}
+
+fn redact_reqwest_error(error: reqwest::Error) -> String {
+    error.without_url().to_string()
 }
 
 #[derive(Debug, Deserialize)]
