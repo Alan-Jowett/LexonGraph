@@ -6,6 +6,7 @@ members = [
     "crates/lexongraph-block",
     "crates/lexongraph-block-inspect",
     "crates/lexongraph-block-store",
+    "crates/lexongraph-block-store-azure",
     "crates/lexongraph-block-store-fs",
     "crates/lexongraph-block-store-memory",
     "crates/lexongraph-block-store-overlay",

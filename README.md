@@ -100,6 +100,7 @@ The top-level Cargo workspace currently contains:
 | `lexongraph-block` | Typed block model, validation, canonical CBOR serialization, and block-hash derivation |
 | `lexongraph-block-inspect` | CLI for inspecting canonical block encodings and decoded block structure |
 | `lexongraph-block-store` | Backend-agnostic `BlockStore` trait plus conformance harnesses |
+| `lexongraph-block-store-azure` | Azure Blob Storage implementation of the block-store contract over container SAS URLs |
 | `lexongraph-block-store-fs` | Local filesystem implementation of the block-store contract |
 | `lexongraph-dcbc-streaming` | Deterministic streaming DCBC clustering implementation |
 | `lexongraph-directional-pca` | Deterministic directional PCA utilities for streaming clustering workflows |
@@ -110,9 +111,9 @@ The top-level Cargo workspace currently contains:
 | `lexongraph-streaming-clustering` | Shared streaming clustering contract plus conformance helpers |
 | `lexongraph-streaming-indexer` | Protocol-conforming streaming indexing orchestration with replay-based ingestion |
 
-At the moment, the implemented storage backend in this repository is the local
-filesystem block store. Broader deployment shapes remain part of the overall
-architecture direction rather than the current workspace implementation.
+The currently implemented storage backends in this repository are the local
+filesystem block store and an Azure Blob Storage block store over container SAS
+URLs.
 
 ## Contributor entrypoint
 
@@ -153,6 +154,7 @@ specification and maintenance workflows for this repository.
 |  |- lexongraph-block
 |  |- lexongraph-block-inspect
 |  |- lexongraph-block-store
+|  |- lexongraph-block-store-azure
 |  |- lexongraph-block-store-fs
 |  |- lexongraph-dcbc-streaming
 |  |- lexongraph-directional-pca
