@@ -484,6 +484,7 @@ impl fmt::Display for PublishedProfileVersion {
 }
 
 pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
+pub const PUBLISHED_PROFILE_V0_2_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -491,16 +492,35 @@ pub enum PublishedHierarchyMetric {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct PublishedSphericalKmeansProfileSettings {
+    pub cluster_count: u32,
+    pub random_seed: Option<u64>,
+    pub params: SphericalKmeansParams,
+    pub hierarchy_metric: PublishedHierarchyMetric,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublishedDirectionalPcaProfileSettings {
+    pub cluster_count: u32,
+    pub random_seed: Option<u64>,
+    pub params: DirectionalPcaParams,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PublishedPlanningStrategy {
+    SphericalKmeansGreedyPack(PublishedSphericalKmeansProfileSettings),
+    DirectionalPcaDivisive(PublishedDirectionalPcaProfileSettings),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct PublishedIndexingProfile {
     pub version: PublishedProfileVersion,
-    pub leaf_algorithm_id: &'static str,
-    pub packing_strategy_id: &'static str,
+    pub planning_algorithm_id: &'static str,
+    pub planning_direction: Option<BuiltInPlanningDirection>,
+    pub packing_strategy_id: Option<&'static str>,
     pub hierarchy_strategy_id: &'static str,
     pub summary_policy_id: &'static str,
-    pub leaf_cluster_count: u32,
-    pub leaf_random_seed: Option<u64>,
-    pub leaf_params: SphericalKmeansParams,
-    pub hierarchy_metric: PublishedHierarchyMetric,
+    pub planning_strategy: PublishedPlanningStrategy,
 }
 
 pub fn published_indexing_profile(
@@ -509,19 +529,46 @@ pub fn published_indexing_profile(
     match version {
         PUBLISHED_PROFILE_V0_1_0 => Ok(PublishedIndexingProfile {
             version,
-            leaf_algorithm_id: "spherical-kmeans",
-            packing_strategy_id: "cluster-order-balanced-range-packer-v1",
+            planning_algorithm_id: "spherical-kmeans",
+            planning_direction: None,
+            packing_strategy_id: Some("cluster-order-balanced-range-packer-v1"),
             hierarchy_strategy_id: "greedy-pack",
             summary_policy_id: "exact-centroid",
-            leaf_cluster_count: 157,
-            leaf_random_seed: Some(11),
-            leaf_params: SphericalKmeansParams {
-                initialization_policy:
-                    lexongraph_spherical_kmeans::SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
-                max_iteration_count: 32,
-                convergence_tolerance: 1.0e-4,
-            },
-            hierarchy_metric: PublishedHierarchyMetric::Euclidean,
+            planning_strategy: PublishedPlanningStrategy::SphericalKmeansGreedyPack(
+                PublishedSphericalKmeansProfileSettings {
+                    cluster_count: 157,
+                    random_seed: Some(11),
+                    params: SphericalKmeansParams {
+                        initialization_policy:
+                            lexongraph_spherical_kmeans::SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+                        max_iteration_count: 32,
+                        convergence_tolerance: 1.0e-4,
+                    },
+                    hierarchy_metric: PublishedHierarchyMetric::Euclidean,
+                },
+            ),
+        }),
+        PUBLISHED_PROFILE_V0_2_0 => Ok(PublishedIndexingProfile {
+            version,
+            planning_algorithm_id: "directional-pca",
+            planning_direction: Some(BuiltInPlanningDirection::Divisive),
+            packing_strategy_id: None,
+            hierarchy_strategy_id: "built-in-divisive",
+            summary_policy_id: "exact-centroid",
+            planning_strategy: PublishedPlanningStrategy::DirectionalPcaDivisive(
+                PublishedDirectionalPcaProfileSettings {
+                    cluster_count: 2,
+                    random_seed: Some(7),
+                    params: DirectionalPcaParams {
+                        retained_dimension_count: 1,
+                        variance_exponent: 1.0,
+                        temperature: 1.0,
+                        min_input_count: 2,
+                        min_effective_rank: 1,
+                        min_cumulative_variance: 0.0,
+                    },
+                },
+            ),
         }),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }
@@ -878,7 +925,14 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
     type Error = StreamingIndexerError;
 
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
-        BTreeSet::from([PlanningStage::Fine, PlanningStage::Coarse])
+        match &self.profile.planning_strategy {
+            PublishedPlanningStrategy::SphericalKmeansGreedyPack(_) => {
+                BTreeSet::from([PlanningStage::Fine, PlanningStage::Coarse])
+            }
+            PublishedPlanningStrategy::DirectionalPcaDivisive(_) => {
+                BTreeSet::from([PlanningStage::Single])
+            }
+        }
     }
 
     fn finish_planning_pass(
@@ -2331,7 +2385,39 @@ fn map_adaptive_planning_error(error: AdaptivePlanningError) -> StreamingIndexer
 fn derive_hierarchy_from_published_profile(
     profile: &PublishedIndexingProfile,
     embeddings: &[Vec<f32>],
-    _embedding_spec: &EmbeddingSpec,
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    match &profile.planning_strategy {
+        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
+            derive_hierarchy_from_published_spherical_kmeans_profile(
+                settings,
+                embeddings,
+                materializability_bound,
+                stage_observer,
+            )
+        }
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+            derive_hierarchy_for_single_built_in_phase(
+                BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                    direction: BuiltInPlanningDirection::Divisive,
+                    cluster_count: settings.cluster_count,
+                    random_seed: settings.random_seed,
+                    params: settings.params.clone(),
+                }),
+                embeddings,
+                embedding_spec,
+                materializability_bound,
+                stage_observer,
+            )
+        }
+    }
+}
+
+fn derive_hierarchy_from_published_spherical_kmeans_profile(
+    settings: &PublishedSphericalKmeansProfileSettings,
+    embeddings: &[Vec<f32>],
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
@@ -2382,7 +2468,7 @@ fn derive_hierarchy_from_published_profile(
     );
 
     let requested_cluster_count = effective_cluster_count(
-        profile.leaf_cluster_count,
+        settings.cluster_count,
         embeddings.len(),
         materializability_bound,
     )
@@ -2392,9 +2478,9 @@ fn derive_hierarchy_from_published_profile(
             cluster_count: requested_cluster_count,
             dimensions: embeddings.first().map_or(0, std::vec::Vec::len),
             balance_constraints: None,
-            random_seed: profile.leaf_random_seed,
+            random_seed: settings.random_seed,
         },
-        profile.leaf_params.clone(),
+        settings.params.clone(),
     )
     .map_err(map_clustering_error)?;
     trainer
@@ -2447,7 +2533,7 @@ fn derive_hierarchy_from_published_profile(
             &current_layer,
             &nodes,
             materializability_bound,
-            profile.hierarchy_metric,
+            settings.hierarchy_metric,
         )
         .map_err(StreamingIndexerError::HierarchyValidation)?;
         let mut next_layer = Vec::with_capacity(groups.len());
