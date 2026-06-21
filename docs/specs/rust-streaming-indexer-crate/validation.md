@@ -621,3 +621,39 @@ profile `0.1.0`.
 packing, and summary behavior and produce the same deterministic final result.
 
 **Traces to:** REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-056
+
+### VAL-STREAM-INDEXER-052
+
+Resolve published indexing profile `0.2.0` through the crate's convenience
+surface.
+
+**Pass condition:** the crate exposes a published profile version selector, the
+selected `0.2.0` profile resolves successfully, and its declared crate-owned
+runtime knobs match the published divisive directional-PCA bundle, including
+its preserved exact-centroid summary policy, preserved bottom-up final
+materialization behavior, requested cluster count, random seed, retained
+dimension count, variance exponent, temperature, minimum input count, minimum
+effective rank, and minimum cumulative variance.
+
+**Traces to:** REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-059, REQ-STREAM-INDEXER-060
+
+### VAL-STREAM-INDEXER-053
+
+Run the same deterministic indexing fixture twice through published indexing
+profile `0.2.0`.
+
+**Pass condition:** both runs realize the same effective crate-owned planning
+and summary behavior and produce the same deterministic final result without
+substituting `0.1.0` behavior.
+
+**Traces to:** REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-059, REQ-STREAM-INDEXER-060
+
+### VAL-STREAM-INDEXER-054
+
+Resolve both published indexing profile `0.1.0` and published indexing profile
+`0.2.0` through the convenience surface in the same revision.
+
+**Pass condition:** both profile versions remain explicitly resolvable, and
+selecting `0.2.0` does not mutate the published behavior declared for `0.1.0`.
+
+**Traces to:** REQ-STREAM-INDEXER-056, REQ-STREAM-INDEXER-058

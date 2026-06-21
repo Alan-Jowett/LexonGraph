@@ -117,6 +117,21 @@ and an Azure Blob Storage block store over container SAS URLs, alongside
 memory, overlay, and zip variants for in-memory, composed, and read-only
 archive scenarios.
 
+## Published streaming-indexer profiles
+
+The streaming indexer exposes versioned published profiles so callers can select
+an explicit repository-owned indexing bundle without wiring the low-level
+planning knobs manually.
+
+| Profile | Planning bundle | What it does |
+| --- | --- | --- |
+| `0.1.0` | Spherical k-means + greedy-pack hierarchy + exact-centroid summaries | Forms terminal groups with repository-owned spherical k-means settings, then greedily packs those groups into a finalized partition hierarchy using Euclidean centroid distance before the existing bottom-up block materialization flow persists the tree. |
+| `0.2.0` | Divisive directional-PCA + exact-centroid summaries | Uses the existing built-in directional-PCA planning path with `Divisive` hierarchy construction to derive the finalized partition hierarchy, then reuses the same bottom-up block materialization flow to persist the tree. |
+
+Both profile versions remain explicitly selectable. The low-level streaming
+indexer APIs are still available for callers that want direct control over
+planning realization, direction, and settings.
+
 ## Contributor entrypoint
 
 For Rust changes, use the same workspace commands enforced by CI:

@@ -30,10 +30,11 @@ use lexongraph_streaming_indexer::{
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
     FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PUBLISHED_PROFILE_V0_1_0,
-    PlanningPassOutcome, PlanningStage, PublishedHierarchyMetric, PublishedProfileVersion,
-    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
-    StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
-    StreamingIndexingStatusObserver, StreamingIndexingStatusState, published_indexing_profile,
+    PUBLISHED_PROFILE_V0_2_0, PlanningPassOutcome, PlanningStage, PublishedHierarchyMetric,
+    PublishedPlanningStrategy, PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings,
+    StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
+    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingStatusState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -2372,25 +2373,31 @@ fn val_stream_indexer_049_published_profile_v0_1_0_is_declared_explicitly() {
     let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_1_0).unwrap();
 
     assert_eq!(profile.version, PublishedProfileVersion::new(0, 1, 0));
-    assert_eq!(profile.leaf_algorithm_id, "spherical-kmeans");
+    assert_eq!(profile.planning_algorithm_id, "spherical-kmeans");
+    assert_eq!(profile.planning_direction, None);
     assert_eq!(
         profile.packing_strategy_id,
-        "cluster-order-balanced-range-packer-v1"
+        Some("cluster-order-balanced-range-packer-v1")
     );
     assert_eq!(profile.hierarchy_strategy_id, "greedy-pack");
     assert_eq!(profile.summary_policy_id, "exact-centroid");
-    assert_eq!(profile.leaf_cluster_count, 157);
-    assert_eq!(profile.leaf_random_seed, Some(11));
-    assert_eq!(
-        profile.leaf_params.initialization_policy,
-        SphericalInitializationPolicy::SeededDeterministicFarthestPoint
-    );
-    assert_eq!(profile.leaf_params.max_iteration_count, 32);
-    assert_eq!(profile.leaf_params.convergence_tolerance, 1.0e-4);
-    assert_eq!(
-        profile.hierarchy_metric,
-        PublishedHierarchyMetric::Euclidean
-    );
+    match profile.planning_strategy {
+        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
+            assert_eq!(settings.cluster_count, 157);
+            assert_eq!(settings.random_seed, Some(11));
+            assert_eq!(
+                settings.params.initialization_policy,
+                SphericalInitializationPolicy::SeededDeterministicFarthestPoint
+            );
+            assert_eq!(settings.params.max_iteration_count, 32);
+            assert_eq!(settings.params.convergence_tolerance, 1.0e-4);
+            assert_eq!(
+                settings.hierarchy_metric,
+                PublishedHierarchyMetric::Euclidean
+            );
+        }
+        other => panic!("unexpected published planning strategy: {other:?}"),
+    }
 }
 
 #[test]
@@ -2442,6 +2449,123 @@ async fn val_stream_indexer_051_published_profile_materializes_deterministically
         .unwrap();
 
     assert_eq!(first_result, second_result);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_052_published_profile_v0_2_0_is_declared_explicitly() {
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_2_0).unwrap();
+
+    assert_eq!(profile.version, PublishedProfileVersion::new(0, 2, 0));
+    assert_eq!(profile.planning_algorithm_id, "directional-pca");
+    assert_eq!(
+        profile.planning_direction,
+        Some(BuiltInPlanningDirection::Divisive)
+    );
+    assert_eq!(profile.packing_strategy_id, None);
+    assert_eq!(profile.hierarchy_strategy_id, "built-in-divisive");
+    assert_eq!(profile.summary_policy_id, "exact-centroid");
+    match profile.planning_strategy {
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+            assert_eq!(settings.cluster_count, 2);
+            assert_eq!(settings.random_seed, Some(7));
+            assert_eq!(
+                settings.params,
+                DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                }
+            );
+        }
+        other => panic!("unexpected published planning strategy: {other:?}"),
+    }
+
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = [item("a"), item("j"), item("p"), item("~")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_2_0,
+        embedding_spec(),
+        128,
+    )
+    .unwrap()
+    .with_observer(observer);
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    run.finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    assert!(statuses.iter().any(|status| {
+        matches!(
+            status.phase,
+            StreamingIndexingPhase::BottomUpAssembly { .. }
+        )
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_053_published_profile_v0_2_0_materializes_deterministically() {
+    let items = [item("a"), item("j"), item("p"), item("~")];
+
+    let mut first = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_2_0,
+        embedding_spec(),
+        256,
+    )
+    .unwrap();
+    first.ingest_batch(&items).await.unwrap();
+    first.finish_pass().unwrap();
+    first.mark_planning_complete().unwrap();
+    let first_store = MemoryBlockStore::default();
+    let first_result = first
+        .finalize(std::iter::once(items.as_slice()), &first_store)
+        .await
+        .unwrap();
+
+    let mut second = StreamingIndexingRun::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_2_0,
+        embedding_spec(),
+        256,
+    )
+    .unwrap();
+    second.ingest_batch(&items).await.unwrap();
+    second.finish_pass().unwrap();
+    second.mark_planning_complete().unwrap();
+    let second_store = MemoryBlockStore::default();
+    let second_result = second
+        .finalize(std::iter::once(items.as_slice()), &second_store)
+        .await
+        .unwrap();
+
+    assert_eq!(first_result, second_result);
+}
+
+#[test]
+fn val_stream_indexer_054_both_published_profiles_remain_resolvable() {
+    let v0_1_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_1_0).unwrap();
+    let v0_2_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_2_0).unwrap();
+
+    assert_eq!(v0_1_0.version, PublishedProfileVersion::new(0, 1, 0));
+    assert_eq!(v0_2_0.version, PublishedProfileVersion::new(0, 2, 0));
+    assert_eq!(v0_1_0.planning_algorithm_id, "spherical-kmeans");
+    assert_eq!(v0_2_0.planning_algorithm_id, "directional-pca");
+    assert_ne!(v0_1_0.hierarchy_strategy_id, v0_2_0.hierarchy_strategy_id);
 }
 
 #[tokio::test(flavor = "current_thread")]
