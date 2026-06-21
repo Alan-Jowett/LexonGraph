@@ -2524,7 +2524,7 @@ async fn val_stream_indexer_053_published_profile_v0_2_0_materializes_determinis
         AsciiEmbeddingProvider,
         PUBLISHED_PROFILE_V0_2_0,
         embedding_spec(),
-        256,
+        128,
     )
     .unwrap();
     first.ingest_batch(&items).await.unwrap();
@@ -2541,7 +2541,7 @@ async fn val_stream_indexer_053_published_profile_v0_2_0_materializes_determinis
         AsciiEmbeddingProvider,
         PUBLISHED_PROFILE_V0_2_0,
         embedding_spec(),
-        256,
+        128,
     )
     .unwrap();
     second.ingest_batch(&items).await.unwrap();
