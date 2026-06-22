@@ -1641,6 +1641,49 @@ async fn regression_default_custom_policy_emits_live_stage_progress() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn regression_legacy_hierarchy_statuses_report_explicit_unit_kind() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        FixedHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    let legacy_hierarchy = statuses
+        .iter()
+        .find(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom
+                }
+            ) && matches!(
+                status.state,
+                StreamingIndexingStatusState::Started | StreamingIndexingStatusState::InProgress
+            )
+        })
+        .expect("legacy hierarchy status");
+    assert_eq!(
+        legacy_hierarchy.progress_unit_kind,
+        Some(StreamingIndexingProgressUnitKind::HierarchyPlanningItem)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn regression_started_status_reports_zero_elapsed_for_size_only_unit_descriptor() {
     let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let observer: StreamingIndexingStatusObserver = {

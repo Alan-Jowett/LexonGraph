@@ -454,7 +454,7 @@ impl HierarchyPlanningStatusEvent {
             stage,
             state,
             legacy_item_count,
-            progress_unit_kind: None,
+            progress_unit_kind: Some(StreamingIndexingProgressUnitKind::HierarchyPlanningItem),
             completed_unit_count: None,
             discovered_unit_count: None,
             current_partition_path: None,

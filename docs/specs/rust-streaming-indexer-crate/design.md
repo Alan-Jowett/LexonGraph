@@ -409,14 +409,16 @@ The observer contract defines phase-native work-unit semantics as follows:
   aggregating overlapping recursive planning units into one misleading pass-wide
   partial count.
 - `HierarchyPlanning { stage }`: units are declared by `progress_unit_kind`.
-  For recursive or divisive planning in this revision, that unit kind is one
-  partition-planning invocation, the completed count advances when one such
-  invocation finishes, and `current_partition_path`,
-  `current_partition_size`, `current_recursion_depth`, and
-  `current_unit_elapsed` identify the active planning unit. The eventual total
-  may be unavailable because recursive work is discovered incrementally; when
-  so, `discovered_unit_count` and the aggregate partition counters provide the
-  best current boundary of known work without guessing.
+  Legacy hierarchy stage observers that do not provide recursive partition
+  detail report `HierarchyPlanningItem` units. Recursive or divisive planning
+  in this revision reports one partition-planning invocation per unit, the
+  completed count advances when one such invocation finishes, and
+  `current_partition_path`, `current_partition_size`,
+  `current_recursion_depth`, and `current_unit_elapsed` identify the active
+  planning unit. The eventual total may be unavailable because recursive work
+  is discovered incrementally; when so, `discovered_unit_count` and the
+  aggregate partition counters provide the best current boundary of known work
+  without guessing.
 - `FinalMaterializationReplay`: units are replayed logical items materialized
   into leaf blocks; the total is the baseline logical item count; the completed
   count advances as replay-verified items are persisted as leaf blocks.
