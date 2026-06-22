@@ -740,6 +740,61 @@ impl HierarchicalPlanningPolicy for LiveStageObserverPlanningPolicy {
     }
 }
 
+#[derive(Clone)]
+struct ExplicitStartedSizeOnlyStatusPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for ExplicitStartedSizeOnlyStatusPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut fixed = FixedHierarchyPlanningPolicy;
+        fixed.finish_planning_pass(embeddings, &embedding_spec(), 0, 0)
+    }
+
+    fn finish_planning_pass_with_status_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_status: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(lexongraph_streaming_indexer::HierarchyPlanningStatusEvent),
+    {
+        observe_status(lexongraph_streaming_indexer::HierarchyPlanningStatusEvent {
+            stage: PlanningStage::Custom,
+            state: StreamingIndexingStatusState::Started,
+            legacy_item_count: embeddings.len(),
+            progress_unit_kind: Some(
+                StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+            ),
+            completed_unit_count: Some(0),
+            discovered_unit_count: Some(1),
+            current_partition_path: None,
+            current_partition_size: Some(embeddings.len()),
+            current_recursion_depth: None,
+            visited_partition_count: Some(1),
+            finalized_partition_count: Some(0),
+            terminal_partition_count: Some(0),
+            completed_planner_invocation_count: Some(0),
+            fallback_count: Some(0),
+        });
+        self.finish_planning_pass(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+        )
+    }
+}
+
 #[derive(Clone, Default)]
 struct NestedHierarchyPlanningPolicy;
 
@@ -1625,6 +1680,45 @@ async fn regression_started_status_reports_zero_elapsed_for_size_only_unit_descr
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn regression_explicit_started_status_reports_zero_elapsed() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        ExplicitStartedSizeOnlyStatusPlanningPolicy,
+        embedding_spec(),
+        256,
+    )
+    .with_observer(observer);
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    run.finish_pass().unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    let started = statuses
+        .iter()
+        .find(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom
+                }
+            ) && status.state == StreamingIndexingStatusState::Started
+                && status.current_partition_path.is_none()
+                && status.current_partition_size == Some(4)
+        })
+        .expect("explicit size-only hierarchy started status");
+    assert_eq!(started.current_unit_elapsed, Some(Duration::ZERO));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_012_materializability_bound_is_enforced() {
     let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 1);
     run.ingest_batch(&[item("alpha"), item("bravo")])
@@ -2294,6 +2388,21 @@ async fn val_stream_indexer_024_invalid_hierarchy_emits_failed_status() {
             }
         ) && status.state == StreamingIndexingStatusState::Failed
     }));
+    let hierarchy_failed = statuses
+        .iter()
+        .find(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom
+                }
+            ) && status.state == StreamingIndexingStatusState::Failed
+        })
+        .expect("hierarchy planning failure status");
+    assert_eq!(
+        hierarchy_failed.item_count,
+        hierarchy_failed.completed_unit_count
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3082,6 +3191,10 @@ async fn val_stream_indexer_059_recursive_planning_emits_live_current_unit_updat
     assert!(hierarchy_statuses.iter().any(|status| {
         status.progress_unit_kind
             == Some(StreamingIndexingProgressUnitKind::PartitionPlanningInvocation)
+    }));
+    assert!(hierarchy_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::Completed
+            && status.item_count == status.completed_unit_count
     }));
 
     let root_in_progress: Vec<_> = hierarchy_statuses

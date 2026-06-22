@@ -3415,7 +3415,10 @@ impl<'a> PlanningStageStatusTracker<'a> {
                 legacy_item_count: Some(event.legacy_item_count),
                 progress_unit_kind,
                 discovered_unit_count,
-                current_unit_elapsed: unit_started.map(|started| started.elapsed()),
+                current_unit_elapsed: hierarchy_event_current_unit_elapsed(
+                    event.state,
+                    unit_started,
+                ),
                 current_partition_path: event.current_partition_path.clone(),
                 current_partition_size: event.current_partition_size,
                 current_recursion_depth: event.current_recursion_depth,
@@ -3456,7 +3459,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
                     elapsed,
                     None,
                     HierarchyPlanningDetailFields {
-                        legacy_item_count: Some(state.legacy_item_count),
+                        legacy_item_count: None,
                         progress_unit_kind: state.progress_unit_kind,
                         discovered_unit_count: state.discovered_unit_count,
                         current_unit_elapsed: None,
@@ -3489,7 +3492,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
                     elapsed,
                     Some(error.to_owned()),
                     HierarchyPlanningDetailFields {
-                        legacy_item_count: Some(state.legacy_item_count),
+                        legacy_item_count: None,
                         progress_unit_kind: state.progress_unit_kind,
                         discovered_unit_count: state.discovered_unit_count,
                         current_unit_elapsed: None,
@@ -3547,7 +3550,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
     fn replace_active_snapshot(&self, snapshot: HierarchyPlanningHeartbeatSnapshot) {
         let snapshot_generation = self
             .active_snapshot_generation
-            .fetch_add(1, AtomicOrdering::Relaxed)
+            .fetch_add(1, AtomicOrdering::SeqCst)
             + 1;
         if let Ok(mut active) = self.active_snapshot.lock() {
             *active = Some(HierarchyPlanningHeartbeatSnapshot {
@@ -3559,7 +3562,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
 
     fn clear_active_snapshot(&self) {
         self.active_snapshot_generation
-            .fetch_add(1, AtomicOrdering::Relaxed);
+            .fetch_add(1, AtomicOrdering::SeqCst);
         if let Ok(mut active) = self.active_snapshot.lock() {
             *active = None;
         }
@@ -3590,6 +3593,17 @@ fn hierarchy_event_has_unit_descriptor(event: &HierarchyPlanningStatusEvent) -> 
     event.current_partition_path.is_some()
         || event.current_partition_size.is_some()
         || event.current_recursion_depth.is_some()
+}
+
+fn hierarchy_event_current_unit_elapsed(
+    state: StreamingIndexingStatusState,
+    unit_started: Option<Instant>,
+) -> Option<Duration> {
+    match (state, unit_started) {
+        (StreamingIndexingStatusState::Started, Some(_)) => Some(Duration::ZERO),
+        (_, Some(started)) => Some(started.elapsed()),
+        (_, None) => None,
+    }
 }
 
 #[derive(Clone)]
@@ -3811,7 +3825,7 @@ fn start_hierarchy_status_heartbeat(
                 status.current_unit_elapsed = snapshot
                     .current_unit_started
                     .map(|started| started.elapsed());
-                if active_snapshot_generation.load(AtomicOrdering::Relaxed)
+                if active_snapshot_generation.load(AtomicOrdering::SeqCst)
                     != snapshot.snapshot_generation
                 {
                     return;
