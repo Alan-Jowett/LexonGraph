@@ -264,6 +264,27 @@ Each status update includes:
 - `completed_unit_count: usize`
 - `remaining_unit_count: Option<usize>`
 
+For hierarchy-planning updates that cover recursive or dynamically discovered
+work, `StreamingIndexingStatus` also carries additive structured detail fields
+for:
+
+- `progress_unit_kind`
+- `discovered_unit_count`
+- `current_unit_elapsed`
+- `current_partition_path`
+- `current_partition_size`
+- `current_recursion_depth`
+- `visited_partition_count`
+- `finalized_partition_count`
+- `terminal_partition_count`
+- `completed_planner_invocation_count`
+- `fallback_count`
+
+Each detail field is optional and is represented as unavailable when it is not
+relevant or not yet knowable for the current phase. Existing consumers that
+only inspect phase, lifecycle state, and coarse progress counts therefore
+remain valid.
+
 For `InProgress` updates, the observer receives the latest measured completion
 state for the phase rather than a heartbeat carrying only a fixed total. If a
 quantity is not knowable for a phase at a given moment, the observer represents
@@ -387,10 +408,15 @@ The observer contract defines phase-native work-unit semantics as follows:
   stage-specific `HierarchyPlanning { stage }` updates rather than by
   aggregating overlapping recursive planning units into one misleading pass-wide
   partial count.
-- `HierarchyPlanning { stage }`: units are logical items covered by the
-  caller-visible planning-stage callbacks for that stage; the total may be
-  unavailable because recursive stage work is not known up front; the completed
-  count advances as stage callbacks report work units for that stage.
+- `HierarchyPlanning { stage }`: units are declared by `progress_unit_kind`.
+  For recursive or divisive planning in this revision, that unit kind is one
+  partition-planning invocation, the completed count advances when one such
+  invocation finishes, and `current_partition_path`,
+  `current_partition_size`, `current_recursion_depth`, and
+  `current_unit_elapsed` identify the active planning unit. The eventual total
+  may be unavailable because recursive work is discovered incrementally; when
+  so, `discovered_unit_count` and the aggregate partition counters provide the
+  best current boundary of known work without guessing.
 - `FinalMaterializationReplay`: units are replayed logical items materialized
   into leaf blocks; the total is the baseline logical item count; the completed
   count advances as replay-verified items are persisted as leaf blocks.
@@ -652,6 +678,28 @@ explicit published-profile mapping.
 The lower-level explicit directional-PCA default path and the previously
 published `0.2.0` contract therefore remain unchanged.
 
+### DSG-STREAM-INDEXER-054 `Recursive planning progress telemetry`
+
+For recursive or divisive hierarchy planning, the crate emits observer updates
+at four lifecycle boundaries for each planning unit: `Started` when entering a
+partition-planning invocation, `InProgress` periodically while that invocation
+remains active, `Completed` when the invocation produces a child split or
+terminal decision, and `Failed` if it aborts explicitly.
+
+`current_partition_path` is derived from the deterministic hierarchy path being
+explored (`p0`, `p0.1`, ...) or an equivalent stable pre-finalization path that
+maps one-to-one onto the eventual partition ancestry.
+
+`discovered_unit_count`, `visited_partition_count`, `finalized_partition_count`,
+`terminal_partition_count`, `completed_planner_invocation_count`, and
+`fallback_count` are monotonic non-decreasing within one planning pass whenever
+they are exposed.
+
+If repeated `InProgress` updates retain the same `current_partition_path`,
+`current_recursion_depth`, and `completed_unit_count` while
+`current_unit_elapsed` continues to grow, downstream callers may treat that as
+a suspected stall or hot planning unit without interpreting free-form log text.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -665,7 +713,7 @@ published `0.2.0` contract therefore remain unchanged.
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
-| DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023 |
+| DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064 |
 | DSG-STREAM-INDEXER-018 | REQ-STREAM-INDEXER-024 |
 | DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
@@ -676,7 +724,7 @@ published `0.2.0` contract therefore remain unchanged.
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
-| DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039 |
+| DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |
 | DSG-STREAM-INDEXER-030 | REQ-STREAM-INDEXER-040 |
 | DSG-STREAM-INDEXER-031 | REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-032 | REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-042 |
@@ -696,3 +744,4 @@ published `0.2.0` contract therefore remain unchanged.
 | DSG-STREAM-INDEXER-051 | REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-063 |
 | DSG-STREAM-INDEXER-052 | REQ-STREAM-INDEXER-062 |
 | DSG-STREAM-INDEXER-053 | REQ-STREAM-INDEXER-063 |
+| DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |

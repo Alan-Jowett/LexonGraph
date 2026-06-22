@@ -278,6 +278,27 @@ For each reported phase, the observer contract shall expose:
   completed counts
 - explicit phase-local semantics for those work units
 
+For recursive or otherwise dynamically discovered hierarchy-planning work, the
+observer contract shall additionally expose structured phase-local progress
+detail sufficient for a downstream caller to render meaningful progress
+summaries and suspected-stall diagnostics without inferring state from logs or
+host-resource sampling.
+
+That detail shall include, when relevant and knowable without materially
+per-item instrumentation:
+
+- the kind of work unit represented by the phase-local progress counts
+- the current planning unit's deterministic partition identity or path when
+  available
+- the current planning unit's logical input size
+- the current planning unit's recursion depth when recursive planning is active
+- the elapsed time spent in the current planning unit
+- the number of planning units discovered so far when the eventual total is not
+  yet known
+- aggregate counters such as visited partitions, finalized partitions, terminal
+  partitions produced, completed planner invocations, and deterministic
+  fallback or regrouping events
+
 ### REQ-STREAM-INDEXER-023
 
 When planning, final materialization, or higher-layer assembly work remains
@@ -287,6 +308,11 @@ status updates rather than only terminal state.
 Those periodic updates shall report the latest available phase progress counts
 so a caller can distinguish forward progress within the current phase from mere
 elapsed time.
+
+For long-running recursive planning, those periodic updates shall also report
+the latest available current-unit detail and discovered-unit counters so a
+caller can distinguish active work within one expensive planning unit from a
+run whose observable state is not advancing at all.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -520,6 +546,11 @@ for the progress-count fields exposed to the status observer, including:
 - what event advances the completed count for that phase
 - how the remaining count is derived when the total is known
 - whether any quantity may be unavailable because it is not yet knowable
+- how a recursive phase reports discovered work before an eventual total is
+  fully known
+- what structured fields identify the current planning unit and its elapsed time
+  when counts alone are insufficient to disambiguate active progress from a
+  suspected stall
 
 These semantics shall be phase-specific for at least:
 
@@ -691,6 +722,24 @@ Published indexing profile `0.3.0` shall select the adaptive retained-axis,
 eigenvalue-log-bit allocation, and density-valley directional-PCA policies
 without mutating the lower-level explicit directional-PCA default path or the
 published behavior of `0.2.0`.
+
+### REQ-STREAM-INDEXER-064
+
+For recursive or divisive hierarchy-planning flows, the crate shall emit
+structured planning-unit lifecycle updates at meaningful unit boundaries before
+the enclosing planning pass completes.
+
+In this revision, a planning unit means one deterministic
+partition-planning invocation together with any explicit fallback or regrouping
+work required to produce that partition's child split or terminal decision.
+
+`completed_unit_count` for that planning-unit family advances when one such
+unit completes successfully or fails explicitly, and the reported current-unit
+descriptor changes when work moves to a different partition.
+
+The crate may rate-limit repeated in-progress updates for the same unit, but it
+shall not regress to per-pass heartbeats that leave long-running recursive
+planning indistinguishable from a stuck computation.
 
 ## Out of Scope
 
