@@ -16,9 +16,22 @@ use sha2::{Digest, Sha256};
 pub const DIRECTIONAL_PCA_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-directional-pca-v", env!("CARGO_PKG_VERSION"));
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectionalPcaRetainedAxisPolicy {
+    FixedCount(usize),
+    AdaptiveAllEligible,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectionalPcaBinningPolicy {
+    Quantile,
+    DensityValley,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaParams {
-    pub retained_dimension_count: usize,
+    pub retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
+    pub binning_policy: DirectionalPcaBinningPolicy,
     pub variance_exponent: f32,
     pub temperature: f32,
     pub min_input_count: usize,
@@ -248,13 +261,16 @@ fn fit_pass_model(
         )));
     }
 
+    let retained_axis_count = resolve_retained_axis_count(
+        &transform,
+        config,
+        params,
+        effective_rank,
+        allow_duplicate_refinement,
+    )?;
     let cumulative_variance = transform
         .cumulative_variance()
-        .and_then(|values| {
-            values
-                .get(params.retained_dimension_count.saturating_sub(1))
-                .copied()
-        })
+        .and_then(|values| values.get(retained_axis_count.saturating_sub(1)).copied())
         .unwrap_or(0.0);
     if !allow_duplicate_refinement && cumulative_variance < params.min_cumulative_variance {
         return Err(unsatisfiable_constraint(format!(
@@ -264,7 +280,7 @@ fn fit_pass_model(
     }
 
     let truncated = transform
-        .truncate(params.retained_dimension_count)
+        .truncate(retained_axis_count)
         .map_err(map_pca_error)?;
     let coordinates = embeddings
         .iter()
@@ -276,7 +292,11 @@ fn fit_pass_model(
         config.cluster_count as usize,
         params.temperature,
     )?;
-    let point_bins = assign_quantile_bins(coordinates.as_slice(), axis_bin_counts.as_slice());
+    let point_bins = assign_bins(
+        coordinates.as_slice(),
+        axis_bin_counts.as_slice(),
+        params.binning_policy,
+    );
     let clusters = materialize_clusters(
         embeddings,
         coordinates.as_slice(),
@@ -299,17 +319,37 @@ fn validate_params(
     config: &StreamingClusteringConfig,
     params: &DirectionalPcaParams,
 ) -> Result<(), StreamingClusteringError> {
-    if params.retained_dimension_count == 0 || params.retained_dimension_count > config.dimensions {
-        return Err(invalid_configuration(format!(
-            "retained_dimension_count must be in [1, {}], got {}",
-            config.dimensions, params.retained_dimension_count
-        )));
-    }
-    if params.retained_dimension_count > config.cluster_count as usize {
-        return Err(invalid_configuration(format!(
-            "retained_dimension_count {} cannot exceed cluster_count {}",
-            params.retained_dimension_count, config.cluster_count
-        )));
+    match params.retained_axis_policy {
+        DirectionalPcaRetainedAxisPolicy::FixedCount(retained_dimension_count) => {
+            if retained_dimension_count == 0 || retained_dimension_count > config.dimensions {
+                return Err(invalid_configuration(format!(
+                    "retained_dimension_count must be in [1, {}], got {}",
+                    config.dimensions, retained_dimension_count
+                )));
+            }
+            if retained_dimension_count > config.cluster_count as usize {
+                return Err(invalid_configuration(format!(
+                    "retained_dimension_count {} cannot exceed cluster_count {}",
+                    retained_dimension_count, config.cluster_count
+                )));
+            }
+            if params.min_effective_rank > retained_dimension_count {
+                return Err(invalid_configuration(format!(
+                    "min_effective_rank must be in [1, {}], got {}",
+                    retained_dimension_count, params.min_effective_rank
+                )));
+            }
+        }
+        DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
+            let max_eligible_axes = max_exact_k_eligible_axis_count(config.cluster_count as usize)
+                .min(config.dimensions);
+            if params.min_effective_rank > max_eligible_axes {
+                return Err(invalid_configuration(format!(
+                    "min_effective_rank {} cannot exceed adaptive eligible axis bound {}",
+                    params.min_effective_rank, max_eligible_axes
+                )));
+            }
+        }
     }
     if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
         return Err(invalid_configuration(format!(
@@ -329,11 +369,10 @@ fn validate_params(
             params.min_input_count
         )));
     }
-    if params.min_effective_rank == 0 || params.min_effective_rank > params.retained_dimension_count
-    {
+    if params.min_effective_rank == 0 {
         return Err(invalid_configuration(format!(
-            "min_effective_rank must be in [1, {}], got {}",
-            params.retained_dimension_count, params.min_effective_rank
+            "min_effective_rank must be at least 1, got {}",
+            params.min_effective_rank
         )));
     }
     if !params.min_cumulative_variance.is_finite()
@@ -345,6 +384,50 @@ fn validate_params(
         )));
     }
     Ok(())
+}
+
+fn resolve_retained_axis_count(
+    transform: &PcaTransform,
+    config: &StreamingClusteringConfig,
+    params: &DirectionalPcaParams,
+    effective_rank: usize,
+    allow_duplicate_refinement: bool,
+) -> Result<usize, StreamingClusteringError> {
+    match params.retained_axis_policy {
+        DirectionalPcaRetainedAxisPolicy::FixedCount(retained_dimension_count) => {
+            Ok(retained_dimension_count)
+        }
+        DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
+            let rank_bound = if allow_duplicate_refinement {
+                transform.output_dim
+            } else {
+                effective_rank
+            };
+            let retained_axis_count = rank_bound
+                .min(transform.output_dim)
+                .min(max_exact_k_eligible_axis_count(
+                    config.cluster_count as usize,
+                ))
+                .max(1);
+            if retained_axis_count < params.min_effective_rank {
+                return Err(unsatisfiable_constraint(format!(
+                    "adaptive retained axis count {retained_axis_count} is smaller than the required minimum {}",
+                    params.min_effective_rank
+                )));
+            }
+            Ok(retained_axis_count)
+        }
+    }
+}
+
+fn max_exact_k_eligible_axis_count(cluster_count: usize) -> usize {
+    let mut eligible_axis_count = 1usize;
+    let mut min_cells = 2usize;
+    while min_cells.saturating_mul(2) <= cluster_count {
+        eligible_axis_count += 1;
+        min_cells *= 2;
+    }
+    eligible_axis_count
 }
 
 fn reject_balance_constraints(
@@ -508,6 +591,19 @@ fn allocate_axis_bins(
     Ok(counts)
 }
 
+fn assign_bins(
+    coordinates: &[Embedding],
+    axis_bin_counts: &[usize],
+    binning_policy: DirectionalPcaBinningPolicy,
+) -> Vec<Vec<usize>> {
+    match binning_policy {
+        DirectionalPcaBinningPolicy::Quantile => assign_quantile_bins(coordinates, axis_bin_counts),
+        DirectionalPcaBinningPolicy::DensityValley => {
+            assign_density_valley_bins(coordinates, axis_bin_counts)
+        }
+    }
+}
+
 fn assign_quantile_bins(coordinates: &[Embedding], axis_bin_counts: &[usize]) -> Vec<Vec<usize>> {
     let point_count = coordinates.len();
     let retained_dims = axis_bin_counts.len();
@@ -531,6 +627,73 @@ fn assign_quantile_bins(coordinates: &[Embedding], axis_bin_counts: &[usize]) ->
     }
 
     point_bins
+}
+
+fn assign_density_valley_bins(
+    coordinates: &[Embedding],
+    axis_bin_counts: &[usize],
+) -> Vec<Vec<usize>> {
+    let point_count = coordinates.len();
+    let retained_dims = axis_bin_counts.len();
+    let mut point_bins = vec![vec![0_usize; retained_dims]; point_count];
+
+    for (axis, &bin_count) in axis_bin_counts.iter().enumerate() {
+        if bin_count == 1 {
+            continue;
+        }
+
+        let mut order = (0..point_count).collect::<Vec<_>>();
+        order.sort_by(|left, right| {
+            coordinates[*left][axis]
+                .total_cmp(&coordinates[*right][axis])
+                .then_with(|| left.cmp(right))
+        });
+        let cut_positions =
+            select_density_valley_cut_positions(coordinates, order.as_slice(), axis, bin_count);
+        let mut next_cut_index = 0usize;
+        let mut current_bin = 0usize;
+        for (rank, point_index) in order.into_iter().enumerate() {
+            while next_cut_index < cut_positions.len() && rank >= cut_positions[next_cut_index] {
+                current_bin += 1;
+                next_cut_index += 1;
+            }
+            point_bins[point_index][axis] = current_bin;
+        }
+    }
+
+    point_bins
+}
+
+fn select_density_valley_cut_positions(
+    coordinates: &[Embedding],
+    order: &[usize],
+    axis: usize,
+    bin_count: usize,
+) -> Vec<usize> {
+    let mut candidates = Vec::new();
+    for split_after in 0..order.len().saturating_sub(1) {
+        let left = coordinates[order[split_after]][axis];
+        let right = coordinates[order[split_after + 1]][axis];
+        let gap = f64::from(right) - f64::from(left);
+        if gap > 0.0 {
+            candidates.push((split_after + 1, gap));
+        }
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    let mut cut_positions = candidates
+        .into_iter()
+        .take(bin_count.saturating_sub(1))
+        .map(|(split_position, _)| split_position)
+        .collect::<Vec<_>>();
+    cut_positions.sort_unstable();
+    cut_positions
 }
 
 fn materialize_clusters(
@@ -817,7 +980,8 @@ mod tests {
             &embeddings,
             &transform,
             &DirectionalPcaParams {
-                retained_dimension_count: 2,
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+                binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -838,10 +1002,25 @@ mod tests {
     }
 
     #[test]
-    fn quantile_assignment_is_density_aware() {
+    fn quantile_assignment_uses_even_ranks() {
         let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
         let bins = assign_quantile_bins(&coordinates, &[2]);
         assert_eq!(bins, vec![vec![0], vec![0], vec![1], vec![1]]);
+    }
+
+    #[test]
+    fn density_valley_assignment_splits_on_largest_gap() {
+        let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
+        let bins = assign_density_valley_bins(&coordinates, &[2]);
+        assert_eq!(bins, vec![vec![0], vec![0], vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn adaptive_retained_axis_policy_caps_by_exact_k_feasibility() {
+        assert_eq!(max_exact_k_eligible_axis_count(2), 1);
+        assert_eq!(max_exact_k_eligible_axis_count(3), 1);
+        assert_eq!(max_exact_k_eligible_axis_count(4), 2);
+        assert_eq!(max_exact_k_eligible_axis_count(64), 6);
     }
 
     #[test]
@@ -863,7 +1042,8 @@ mod tests {
             random_seed: None,
         };
         let params = DirectionalPcaParams {
-            retained_dimension_count: 2,
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
             variance_exponent: 1.0,
             temperature: 1.0,
             min_input_count: 2,

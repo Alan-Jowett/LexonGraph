@@ -614,7 +614,7 @@ or summary policy instead of selecting a published profile.
 ### REQ-STREAM-INDEXER-058
 
 The repository shall publish indexing profile `0.2.0` and indexing profile
-`0.2.1` alongside `0.1.0`.
+`0.3.0` alongside `0.1.0`.
 
 All published profile versions shall remain explicitly resolvable through the
 stable convenience profile selector in this revision.
@@ -654,7 +654,7 @@ In this revision, those pinned directional-PCA values for published profile
 ### REQ-STREAM-INDEXER-061
 
 For the crate-owned runtime knobs currently owned by this crate, published
-indexing profile `0.2.1` shall resolve to a deterministic directional-PCA
+indexing profile `0.3.0` shall resolve to a deterministic directional-PCA
 bundle that:
 
 - uses the built-in directional-PCA planning realization
@@ -668,20 +668,27 @@ without mutating the behavior of published profiles `0.1.0` or `0.2.0`.
 
 ### REQ-STREAM-INDEXER-062
 
-Published indexing profile `0.2.1` shall pin the crate-owned
+Published indexing profile `0.3.0` shall pin the crate-owned
 directional-PCA settings used by that bundle.
 
 In this revision, those pinned directional-PCA values for published profile
-`0.2.1` are:
+`0.3.0` are:
 
 - requested cluster count = `64`
 - random seed = `7`
-- retained dimension count = `1`
+- retained-axis policy = `AdaptiveAllEligible`
+- binning policy = `DensityValley`
 - variance exponent = `1.0`
 - temperature = `1.0`
 - minimum input count = `2`
 - minimum effective rank = `1`
 - minimum cumulative variance = `0.0`
+
+### REQ-STREAM-INDEXER-063
+
+Published indexing profile `0.3.0` shall select the adaptive retained-axis and
+density-valley directional-PCA policies without mutating the lower-level
+explicit directional-PCA default path or the published behavior of `0.2.0`.
 
 ## Out of Scope
 

@@ -261,3 +261,32 @@ duplicate-collapse.
 duplicate-refinement fallback.
 
 **Traces to:** REQ-DPCA-STREAM-024
+
+### VAL-DPCA-STREAM-024
+
+Exercise the crate with the explicit adaptive retained-axis policy selected and
+again with the default fixed retained-dimension policy.
+
+**Pass condition:** the adaptive policy deterministically engages the retained
+axis cap implied by exact-`K` feasibility, while the default path remains fixed
+retained-dimension truncation.
+
+**Traces to:** REQ-DPCA-STREAM-025, REQ-DPCA-STREAM-027
+
+### VAL-DPCA-STREAM-025
+
+Use a fixture whose retained PCA coordinates contain a clear deep valley.
+
+**Pass condition:** when density-valley binning is selected, the crate chooses
+deterministic valley cut points rather than quantile cuts.
+
+**Traces to:** REQ-DPCA-STREAM-026
+
+### VAL-DPCA-STREAM-026
+
+Inspect the explicit default path after the opt-in policy additions.
+
+**Pass condition:** absent explicit selection of the new policies, the crate
+still uses fixed retained-dimension truncation and quantile binning.
+
+**Traces to:** REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-027

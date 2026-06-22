@@ -204,16 +204,38 @@ fn validate_directional_pca_params(
     settings: &AdaptiveDirectionalPcaSettings,
 ) -> Result<(), AdaptivePlanningError> {
     let params = &settings.params;
-    if params.retained_dimension_count == 0 {
-        return Err(AdaptivePlanningError::InvalidConfiguration(
-            "retained_dimension_count must be greater than zero".into(),
-        ));
-    }
-    if params.retained_dimension_count > settings.cluster_count as usize {
-        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-            "retained_dimension_count {} cannot exceed directional-PCA cluster_count {}",
-            params.retained_dimension_count, settings.cluster_count
-        )));
+    match params.retained_axis_policy {
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(
+            retained_dimension_count,
+        ) => {
+            if retained_dimension_count == 0 {
+                return Err(AdaptivePlanningError::InvalidConfiguration(
+                    "retained_dimension_count must be greater than zero".into(),
+                ));
+            }
+            if retained_dimension_count > settings.cluster_count as usize {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "retained_dimension_count {} cannot exceed directional-PCA cluster_count {}",
+                    retained_dimension_count, settings.cluster_count
+                )));
+            }
+            if params.min_effective_rank > retained_dimension_count {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "min_effective_rank must be in [1, {}], got {}",
+                    retained_dimension_count, params.min_effective_rank
+                )));
+            }
+        }
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
+            let max_eligible_axes =
+                max_exact_k_eligible_axis_count(settings.cluster_count as usize);
+            if params.min_effective_rank > max_eligible_axes {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "min_effective_rank {} cannot exceed adaptive eligible axis bound {}",
+                    params.min_effective_rank, max_eligible_axes
+                )));
+            }
+        }
     }
     if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
         return Err(AdaptivePlanningError::InvalidConfiguration(format!(
@@ -233,11 +255,10 @@ fn validate_directional_pca_params(
             params.min_input_count
         )));
     }
-    if params.min_effective_rank == 0 || params.min_effective_rank > params.retained_dimension_count
-    {
+    if params.min_effective_rank == 0 {
         return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-            "min_effective_rank must be in [1, {}], got {}",
-            params.retained_dimension_count, params.min_effective_rank
+            "min_effective_rank must be at least 1, got {}",
+            params.min_effective_rank
         )));
     }
     if !params.min_cumulative_variance.is_finite()
@@ -249,6 +270,16 @@ fn validate_directional_pca_params(
         )));
     }
     Ok(())
+}
+
+fn max_exact_k_eligible_axis_count(cluster_count: usize) -> usize {
+    let mut eligible_axis_count = 1usize;
+    let mut min_cells = 2usize;
+    while min_cells.saturating_mul(2) <= cluster_count {
+        eligible_axis_count += 1;
+        min_cells *= 2;
+    }
+    eligible_axis_count
 }
 
 fn evaluate_collapse_diagnostics(

@@ -265,6 +265,33 @@ The duplicate-refinement fallback shall not be used for:
 Those cases shall continue to fail explicitly through the existing shared error
 categories.
 
+### REQ-DPCA-STREAM-025
+
+The crate shall support an explicit opt-in adaptive retained-axis policy as an
+equivalent truncation control.
+
+When that policy is selected, the crate shall retain all eligible PCA axes
+deterministically rather than requiring a fixed retained-dimension count.
+Eligibility shall remain bounded by the realized PCA output, the effective-rank
+guard, and exact-`K` feasibility constraints preserved by this crate boundary.
+
+### REQ-DPCA-STREAM-026
+
+The crate shall support an explicit opt-in density-valley binning policy for
+retained PCA coordinates.
+
+If per-axis resolution assigns `b_i` bins to axis `i`, the density-valley
+policy shall select `b_i - 1` deterministic valley cut points on that axis to
+form `b_i` high-density intervals rather than using quantile cuts.
+
+### REQ-DPCA-STREAM-027
+
+The adaptive retained-axis policy and density-valley binning policy shall be
+opt-in only.
+
+Absent explicit selection of those policies, the default directional-PCA path
+shall continue to use fixed retained-dimension truncation and quantile binning.
+
 ### REQ-DPCA-STREAM-021
 
 The repository shall include executable verification artifacts covering both:

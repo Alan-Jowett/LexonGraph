@@ -600,18 +600,18 @@ for its lifetime in this revision:
 - minimum effective rank = `1`
 - minimum cumulative variance = `0.0`
 
-### DSG-STREAM-INDEXER-050 `Indexing profile 0.2.1 catalog entry`
+### DSG-STREAM-INDEXER-050 `Indexing profile 0.3.0 catalog entry`
 
-Published indexing profile `0.2.1` is added alongside `0.1.0` and `0.2.0`
+Published indexing profile `0.3.0` is added alongside `0.1.0` and `0.2.0`
 rather than replacing either earlier profile.
 
 The published-profile resolver therefore remains an explicit exact-match
 catalog, with all three versions preserved as independently addressable
 behavioral contracts.
 
-### DSG-STREAM-INDEXER-051 `Indexing profile 0.2.1 mapping`
+### DSG-STREAM-INDEXER-051 `Indexing profile 0.3.0 mapping`
 
-Published indexing profile `0.2.1` resolves, for the crate-owned runtime knobs
+Published indexing profile `0.3.0` resolves, for the crate-owned runtime knobs
 in this revision, to:
 
 - the built-in directional-PCA planning realization
@@ -619,25 +619,36 @@ in this revision, to:
 - exact-centroid child summaries
 - the existing finalized partition hierarchy boundary followed by the existing
   bottom-up final block materialization flow
+- explicit adaptive retained-axis participation
+- explicit density-valley binning
 
 The convenience surface may realize that bundle by delegating into the same
 runtime machinery used by the explicit built-in planning path for
 directional-PCA with `Divisive` direction, rather than by inventing a separate
 profile-specific assembly pipeline.
 
-### DSG-STREAM-INDEXER-052 `Published profile 0.2.1 pinned settings`
+### DSG-STREAM-INDEXER-052 `Published profile 0.3.0 pinned settings`
 
-Published indexing profile `0.2.1` pins the following directional-PCA settings
+Published indexing profile `0.3.0` pins the following directional-PCA settings
 for its lifetime in this revision:
 
 - requested cluster count = `64`
 - random seed = `7`
-- retained dimension count = `1`
+- retained-axis policy = `AdaptiveAllEligible`
+- binning policy = `DensityValley`
 - variance exponent = `1.0`
 - temperature = `1.0`
 - minimum input count = `2`
 - minimum effective rank = `1`
 - minimum cumulative variance = `0.0`
+
+### DSG-STREAM-INDEXER-053 `Published profile 0.3.0 policy isolation`
+
+Published indexing profile `0.3.0` realizes the new adaptive retained-axis and
+density-valley policies only through the explicit published-profile mapping.
+
+The lower-level explicit directional-PCA default path and the previously
+published `0.2.0` contract therefore remain unchanged.
 
 ## Traceability
 
@@ -680,5 +691,6 @@ for its lifetime in this revision:
 | DSG-STREAM-INDEXER-048 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-055, REQ-STREAM-INDEXER-057, REQ-STREAM-INDEXER-059 |
 | DSG-STREAM-INDEXER-049 | REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-060 |
 | DSG-STREAM-INDEXER-050 | REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-061 |
-| DSG-STREAM-INDEXER-051 | REQ-STREAM-INDEXER-061 |
+| DSG-STREAM-INDEXER-051 | REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-063 |
 | DSG-STREAM-INDEXER-052 | REQ-STREAM-INDEXER-062 |
+| DSG-STREAM-INDEXER-053 | REQ-STREAM-INDEXER-063 |

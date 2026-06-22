@@ -264,6 +264,34 @@ are derived from the final refined partition state. Replaying the same ordered
 dataset across passes therefore reproduces the same observable cluster-ID
 surface.
 
+### DSG-DPCA-STREAM-023 `Adaptive retained-axis selection`
+
+The crate may realize retained-coordinate truncation through an explicit
+adaptive retained-axis policy instead of a fixed retained-dimension count.
+
+When selected, the policy deterministically retains all eligible PCA axes, where
+eligibility is bounded by realized PCA output rank and the exact-`K` feasibility
+limit preserved by this crate boundary, rather than by a caller-provided fixed
+count.
+
+### DSG-DPCA-STREAM-024 `Density-valley binning`
+
+The crate may realize retained-coordinate partitioning through an explicit
+density-valley binning policy instead of quantile binning.
+
+For each retained axis with assigned resolution `b_i`, the policy sorts the
+retained coordinates, scores candidate cuts by valley depth, chooses the
+strongest `b_i - 1` deterministic valleys with stable tie-breaking, and assigns
+embeddings by the resulting interval boundaries.
+
+### DSG-DPCA-STREAM-025 `Policy isolation`
+
+Adaptive retained-axis selection and density-valley binning are opt-in policy
+choices.
+
+The conformant default path remains fixed retained-dimension truncation plus
+quantile binning unless the caller explicitly selects the alternate policies.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -288,3 +316,6 @@ surface.
 | DSG-DPCA-STREAM-020 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-023 |
 | DSG-DPCA-STREAM-021 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-024 |
 | DSG-DPCA-STREAM-022 | REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018 |
+| DSG-DPCA-STREAM-023 | REQ-DPCA-STREAM-025 |
+| DSG-DPCA-STREAM-024 | REQ-DPCA-STREAM-026 |
+| DSG-DPCA-STREAM-025 | REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-027 |

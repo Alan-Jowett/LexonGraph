@@ -127,7 +127,7 @@ planning knobs manually.
 | --- | --- | --- |
 | `0.1.0` | Spherical k-means + greedy-pack hierarchy + exact-centroid summaries | Forms terminal groups with repository-owned spherical k-means settings, then greedily packs those groups into a finalized partition hierarchy using Euclidean centroid distance before the existing bottom-up block materialization flow persists the tree. |
 | `0.2.0` | Divisive directional-PCA + exact-centroid summaries | Uses the existing built-in directional-PCA planning path with `Divisive` hierarchy construction and pinned `cluster_count = 2` to derive the finalized partition hierarchy, then reuses the same bottom-up block materialization flow to persist the tree. |
-| `0.2.1` | Divisive directional-PCA + exact-centroid summaries | Uses the same built-in directional-PCA planning path, hierarchy construction, and summary policy as `0.2.0`, but pins `cluster_count = 64` before reusing the same bottom-up block materialization flow to persist the tree. |
+| `0.3.0` | Divisive directional-PCA + exact-centroid summaries | Uses the same built-in directional-PCA planning path, hierarchy construction, and summary policy as `0.2.0`, but pins `cluster_count = 64`, selects adaptive retained-axis participation, and uses density-valley axis partitioning before reusing the same bottom-up block materialization flow to persist the tree. |
 
 All published profile versions remain explicitly selectable. The low-level streaming
 indexer APIs are still available for callers that want direct control over

@@ -46,7 +46,10 @@ pub use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
-use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
+use lexongraph_directional_pca::{
+    DirectionalPcaBinningPolicy, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaStreamingTrainer,
+};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
@@ -485,7 +488,7 @@ impl fmt::Display for PublishedProfileVersion {
 
 pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
 pub const PUBLISHED_PROFILE_V0_2_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 0);
-pub const PUBLISHED_PROFILE_V0_2_1: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 1);
+pub const PUBLISHED_PROFILE_V0_3_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -527,6 +530,8 @@ pub struct PublishedIndexingProfile {
 fn directional_pca_published_profile(
     version: PublishedProfileVersion,
     cluster_count: u32,
+    retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
+    binning_policy: DirectionalPcaBinningPolicy,
 ) -> PublishedIndexingProfile {
     PublishedIndexingProfile {
         version,
@@ -540,7 +545,8 @@ fn directional_pca_published_profile(
                 cluster_count,
                 random_seed: Some(7),
                 params: DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy,
+                    binning_policy,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -577,8 +583,18 @@ pub fn published_indexing_profile(
                 },
             ),
         }),
-        PUBLISHED_PROFILE_V0_2_0 => Ok(directional_pca_published_profile(version, 2)),
-        PUBLISHED_PROFILE_V0_2_1 => Ok(directional_pca_published_profile(version, 64)),
+        PUBLISHED_PROFILE_V0_2_0 => Ok(directional_pca_published_profile(
+            version,
+            2,
+            DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            DirectionalPcaBinningPolicy::Quantile,
+        )),
+        PUBLISHED_PROFILE_V0_3_0 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            DirectionalPcaBinningPolicy::DensityValley,
+        )),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }
 }

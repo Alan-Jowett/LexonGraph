@@ -6,7 +6,10 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
+use lexongraph_directional_pca::{
+    DirectionalPcaBinningPolicy, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaStreamingTrainer,
+};
 use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringError,
     TrainerState,
@@ -168,6 +171,42 @@ fn val_dpca_stream_011_quantile_binning_is_the_default_path() {
 }
 
 #[test]
+fn val_dpca_stream_024_adaptive_retained_axes_are_opt_in() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs"),
+    )
+    .unwrap();
+    assert!(source.contains("AdaptiveAllEligible"));
+    assert!(source.contains("max_exact_k_eligible_axis_count"));
+}
+
+#[test]
+fn val_dpca_stream_025_density_valley_binning_is_available() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs"),
+    )
+    .unwrap();
+    assert!(source.contains("DensityValley"));
+    assert!(source.contains("select_density_valley_cut_positions"));
+}
+
+#[test]
+fn val_dpca_stream_026_default_path_remains_quantile_without_opt_in() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs"),
+    )
+    .unwrap();
+    assert!(source.contains("DirectionalPcaBinningPolicy::Quantile"));
+    assert!(source.contains("rank * bin_count / point_count"));
+}
+
+#[test]
 fn val_dpca_stream_012_exact_k_failures_are_explicit() {
     let mut underfull = conforming_trainer();
     for batch in underfull_first_pass() {
@@ -179,7 +218,8 @@ fn val_dpca_stream_012_exact_k_failures_are_explicit() {
     ));
 
     let invalid_params = DirectionalPcaParams {
-        retained_dimension_count: 0,
+        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(0),
+        binning_policy: DirectionalPcaBinningPolicy::Quantile,
         ..params()
     };
     assert!(matches!(

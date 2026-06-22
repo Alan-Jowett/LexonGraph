@@ -15,6 +15,7 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::DirectionalPcaParams;
+use lexongraph_directional_pca::{DirectionalPcaBinningPolicy, DirectionalPcaRetainedAxisPolicy};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalInitializationPolicy, SphericalKmeansParams};
 use lexongraph_streaming_clustering::{
@@ -30,7 +31,7 @@ use lexongraph_streaming_indexer::{
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
     FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PUBLISHED_PROFILE_V0_1_0,
-    PUBLISHED_PROFILE_V0_2_0, PUBLISHED_PROFILE_V0_2_1, PlanningPassOutcome, PlanningStage,
+    PUBLISHED_PROFILE_V0_2_0, PUBLISHED_PROFILE_V0_3_0, PlanningPassOutcome, PlanningStage,
     PublishedHierarchyMetric, PublishedPlanningStrategy, PublishedProfileVersion,
     SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
     StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
@@ -591,7 +592,8 @@ fn directional_pca_planning(direction: BuiltInPlanningDirection) -> BuiltInPlann
         cluster_count: 2,
         random_seed: Some(7),
         params: DirectionalPcaParams {
-            retained_dimension_count: 1,
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
             variance_exponent: 1.0,
             temperature: 1.0,
             min_input_count: 2,
@@ -628,7 +630,8 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
                 cluster_count: 2,
                 random_seed: Some(13),
                 params: DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -655,7 +658,8 @@ fn adaptive_planning(
             cluster_count: 2,
             random_seed: Some(17),
             params: DirectionalPcaParams {
-                retained_dimension_count: 1,
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -681,7 +685,8 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
             cluster_count: 2,
             random_seed: None,
             params: DirectionalPcaParams {
-                retained_dimension_count: 1,
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -714,7 +719,8 @@ fn invalid_hybrid_planning() -> BuiltInPlanning {
                 cluster_count: 2,
                 random_seed: None,
                 params: DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -741,7 +747,8 @@ fn mixed_direction_hybrid_planning() -> BuiltInPlanning {
                 cluster_count: 2,
                 random_seed: Some(13),
                 params: DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -2323,7 +2330,8 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
                 cluster_count: 2,
                 random_seed: Some(17),
                 params: DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -2471,7 +2479,8 @@ async fn val_stream_indexer_052_published_profile_v0_2_0_is_declared_explicitly(
             assert_eq!(
                 settings.params,
                 DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -2568,11 +2577,21 @@ fn val_stream_indexer_054_both_published_profiles_remain_resolvable() {
     assert_ne!(v0_1_0.hierarchy_strategy_id, v0_2_0.hierarchy_strategy_id);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_055_published_profile_v0_2_1_is_declared_explicitly() {
-    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_2_1).unwrap();
+#[test]
+fn val_stream_indexer_055_published_profile_v0_2_1_is_not_published() {
+    let error = published_indexing_profile(PublishedProfileVersion::new(0, 2, 1)).unwrap_err();
+    assert!(matches!(
+        error,
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(version)
+            if version == PublishedProfileVersion::new(0, 2, 1)
+    ));
+}
 
-    assert_eq!(profile.version, PublishedProfileVersion::new(0, 2, 1));
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_056_published_profile_v0_3_0_is_declared_explicitly() {
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_3_0).unwrap();
+
+    assert_eq!(profile.version, PublishedProfileVersion::new(0, 3, 0));
     assert_eq!(profile.planning_algorithm_id, "directional-pca");
     assert_eq!(
         profile.planning_direction,
@@ -2588,7 +2607,8 @@ async fn val_stream_indexer_055_published_profile_v0_2_1_is_declared_explicitly(
             assert_eq!(
                 settings.params,
                 DirectionalPcaParams {
-                    retained_dimension_count: 1,
+                    retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                    binning_policy: DirectionalPcaBinningPolicy::DensityValley,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -2610,7 +2630,7 @@ async fn val_stream_indexer_055_published_profile_v0_2_1_is_declared_explicitly(
     let mut run = StreamingIndexingRun::with_published_profile(
         MapResolver,
         AsciiEmbeddingProvider,
-        PUBLISHED_PROFILE_V0_2_1,
+        PUBLISHED_PROFILE_V0_3_0,
         embedding_spec(),
         128,
     )
@@ -2633,13 +2653,13 @@ async fn val_stream_indexer_055_published_profile_v0_2_1_is_declared_explicitly(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_056_published_profile_v0_2_1_materializes_deterministically() {
+async fn val_stream_indexer_057_published_profile_v0_3_0_materializes_deterministically() {
     let items = [item("a"), item("j"), item("p"), item("~")];
 
     let mut first = StreamingIndexingRun::with_published_profile(
         MapResolver,
         AsciiEmbeddingProvider,
-        PUBLISHED_PROFILE_V0_2_1,
+        PUBLISHED_PROFILE_V0_3_0,
         embedding_spec(),
         128,
     )
@@ -2656,7 +2676,7 @@ async fn val_stream_indexer_056_published_profile_v0_2_1_materializes_determinis
     let mut second = StreamingIndexingRun::with_published_profile(
         MapResolver,
         AsciiEmbeddingProvider,
-        PUBLISHED_PROFILE_V0_2_1,
+        PUBLISHED_PROFILE_V0_3_0,
         embedding_spec(),
         128,
     )
@@ -2674,28 +2694,36 @@ async fn val_stream_indexer_056_published_profile_v0_2_1_materializes_determinis
 }
 
 #[test]
-fn val_stream_indexer_057_all_published_profiles_remain_resolvable() {
+fn val_stream_indexer_058_all_published_profiles_remain_resolvable() {
     let v0_1_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_1_0).unwrap();
     let v0_2_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_2_0).unwrap();
-    let v0_2_1 = published_indexing_profile(PUBLISHED_PROFILE_V0_2_1).unwrap();
+    let v0_3_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_3_0).unwrap();
 
     assert_eq!(v0_1_0.version, PublishedProfileVersion::new(0, 1, 0));
     assert_eq!(v0_2_0.version, PublishedProfileVersion::new(0, 2, 0));
-    assert_eq!(v0_2_1.version, PublishedProfileVersion::new(0, 2, 1));
+    assert_eq!(v0_3_0.version, PublishedProfileVersion::new(0, 3, 0));
     assert_eq!(v0_1_0.planning_algorithm_id, "spherical-kmeans");
     assert_eq!(v0_2_0.planning_algorithm_id, "directional-pca");
-    assert_eq!(v0_2_1.planning_algorithm_id, "directional-pca");
+    assert_eq!(v0_3_0.planning_algorithm_id, "directional-pca");
     assert_ne!(v0_1_0.hierarchy_strategy_id, v0_2_0.hierarchy_strategy_id);
-    assert_eq!(v0_2_0.hierarchy_strategy_id, v0_2_1.hierarchy_strategy_id);
+    assert_eq!(v0_2_0.hierarchy_strategy_id, v0_3_0.hierarchy_strategy_id);
     match v0_2_0.planning_strategy {
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
             assert_eq!(settings.cluster_count, 2);
         }
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
-    match v0_2_1.planning_strategy {
+    match v0_3_0.planning_strategy {
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
             assert_eq!(settings.cluster_count, 64);
+            assert_eq!(
+                settings.params.retained_axis_policy,
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible
+            );
+            assert_eq!(
+                settings.params.binning_policy,
+                DirectionalPcaBinningPolicy::DensityValley
+            );
         }
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
