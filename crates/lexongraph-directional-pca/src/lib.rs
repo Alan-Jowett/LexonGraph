@@ -757,7 +757,6 @@ fn select_deepest_valley_cut_positions(axis_values: &[f32], bin_count: usize) ->
     if axis_values.len() <= 1 || bin_count <= 1 {
         return Vec::new();
     }
-    let densities = estimate_axis_densities(axis_values);
     let mut segments = vec![(0usize, axis_values.len())];
     let mut cut_positions = Vec::with_capacity(bin_count.saturating_sub(1));
 
@@ -768,7 +767,7 @@ fn select_deepest_valley_cut_positions(axis_values: &[f32], bin_count: usize) ->
                 continue;
             }
             if let Some((split_position, valley_density, valley_depth)) =
-                best_valley_in_segment(axis_values, densities.as_slice(), start, end)
+                best_valley_in_segment(axis_values, start, end)
             {
                 match best_split {
                     None => {
@@ -814,14 +813,6 @@ fn select_deepest_valley_cut_positions(axis_values: &[f32], bin_count: usize) ->
     cut_positions
 }
 
-fn estimate_axis_densities(axis_values: &[f32]) -> Vec<f64> {
-    let bandwidth = estimate_density_bandwidth(axis_values);
-    axis_values
-        .iter()
-        .map(|&value| estimate_density(axis_values, value, bandwidth))
-        .collect()
-}
-
 fn estimate_density_bandwidth(axis_values: &[f32]) -> f64 {
     if axis_values.len() <= 1 {
         return 1.0;
@@ -848,24 +839,28 @@ fn estimate_density(axis_values: &[f32], position: f32, bandwidth: f64) -> f64 {
 
 fn best_valley_in_segment(
     axis_values: &[f32],
-    densities: &[f64],
     start: usize,
     end: usize,
 ) -> Option<(usize, f64, f64)> {
     if end.saturating_sub(start) <= 1 {
         return None;
     }
-    let bandwidth = estimate_density_bandwidth(&axis_values[start..end]);
+    let segment_values = &axis_values[start..end];
+    let bandwidth = estimate_density_bandwidth(segment_values);
+    let segment_densities = segment_values
+        .iter()
+        .map(|&value| estimate_density(segment_values, value, bandwidth))
+        .collect::<Vec<_>>();
     let mut best: Option<(usize, f64, f64)> = None;
 
     for split_after in start..end.saturating_sub(1) {
         let midpoint = 0.5 * (axis_values[split_after] + axis_values[split_after + 1]);
-        let valley_density = estimate_density(&axis_values[start..end], midpoint, bandwidth);
-        let left_peak = densities[start..=split_after]
+        let valley_density = estimate_density(segment_values, midpoint, bandwidth);
+        let left_peak = segment_densities[..=split_after - start]
             .iter()
             .copied()
             .fold(f64::NEG_INFINITY, f64::max);
-        let right_peak = densities[split_after + 1..end]
+        let right_peak = segment_densities[split_after + 1 - start..]
             .iter()
             .copied()
             .fold(f64::NEG_INFINITY, f64::max);
