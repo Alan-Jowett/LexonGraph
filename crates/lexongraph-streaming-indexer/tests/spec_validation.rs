@@ -1722,6 +1722,7 @@ async fn regression_started_status_reports_zero_elapsed_for_size_only_unit_descr
         })
         .expect("size-only hierarchy started status");
     assert_eq!(started.current_unit_elapsed, Some(Duration::ZERO));
+    assert_eq!(started.last_progress_at, Some(Duration::ZERO));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1761,6 +1762,7 @@ async fn regression_explicit_started_status_reports_zero_elapsed() {
         })
         .expect("explicit size-only hierarchy started status");
     assert_eq!(started.current_unit_elapsed, Some(Duration::ZERO));
+    assert_eq!(started.last_progress_at, Some(started.elapsed));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3241,6 +3243,24 @@ async fn val_stream_indexer_059_recursive_planning_emits_live_current_unit_updat
         status.state == StreamingIndexingStatusState::Completed
             && status.item_count == status.completed_unit_count
     }));
+    assert!(
+        hierarchy_statuses
+            .iter()
+            .enumerate()
+            .any(|(index, status)| {
+                status.state == StreamingIndexingStatusState::Started
+                    && status.current_partition_path.is_some()
+                    && hierarchy_statuses[index + 1..]
+                        .iter()
+                        .filter(|later| {
+                            later.current_partition_path == status.current_partition_path
+                                && later.state == StreamingIndexingStatusState::Completed
+                        })
+                        .any(|completed| {
+                            completed.completed_unit_count > status.completed_unit_count
+                        })
+            })
+    );
 
     let root_in_progress: Vec<_> = hierarchy_statuses
         .iter()

@@ -3154,7 +3154,6 @@ where
     if terminal {
         telemetry.finalized_partition_count += 1;
         telemetry.terminal_partition_count += 1;
-        telemetry.completed_subproblem_count += 1;
         if let Some(stage) = stage_hint {
             stage_observer(telemetry.unit_event(
                 stage,
@@ -3162,12 +3161,15 @@ where
                 &partition_id,
                 StreamingIndexingStatusState::Started,
             ));
+            telemetry.completed_subproblem_count += 1;
             stage_observer(telemetry.unit_event(
                 stage,
                 indices.len(),
                 &partition_id,
                 StreamingIndexingStatusState::Completed,
             ));
+        } else {
+            telemetry.completed_subproblem_count += 1;
         }
         partitions.push(FinalizedPartition {
             id: partition_id,
@@ -3606,7 +3608,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
                     terminal_partition_count: event.terminal_partition_count,
                     completed_planner_invocation_count: event.completed_planner_invocation_count,
                     fallback_count: event.fallback_count,
-                    last_progress_at: Some(self.pass_started.elapsed()),
+                    last_progress_at: Some(Duration::ZERO),
                 },
             ),
         );
