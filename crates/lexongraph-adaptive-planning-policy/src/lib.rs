@@ -210,18 +210,19 @@ fn validate_directional_pca_params(
         ) => {
             if retained_dimension_count == 0 {
                 return Err(AdaptivePlanningError::InvalidConfiguration(
-                    "retained_dimension_count must be greater than zero".into(),
+                    "retained_axis_policy = FixedCount(n) requires n to be greater than zero"
+                        .into(),
                 ));
             }
             if retained_dimension_count > settings.cluster_count as usize {
                 return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-                    "retained_dimension_count {} cannot exceed directional-PCA cluster_count {}",
+                    "retained_axis_policy = FixedCount({}) cannot exceed directional-PCA cluster_count {}",
                     retained_dimension_count, settings.cluster_count
                 )));
             }
             if params.min_effective_rank > retained_dimension_count {
                 return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-                    "min_effective_rank must be in [1, {}], got {}",
+                    "min_effective_rank must be in [1, FixedCount(n)={}], got {}",
                     retained_dimension_count, params.min_effective_rank
                 )));
             }

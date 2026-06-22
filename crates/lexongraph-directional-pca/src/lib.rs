@@ -329,19 +329,19 @@ fn validate_params(
         DirectionalPcaRetainedAxisPolicy::FixedCount(retained_dimension_count) => {
             if retained_dimension_count == 0 || retained_dimension_count > config.dimensions {
                 return Err(invalid_configuration(format!(
-                    "retained_dimension_count must be in [1, {}], got {}",
+                    "retained_axis_policy = FixedCount(n) requires n to be in [1, {}], got {}",
                     config.dimensions, retained_dimension_count
                 )));
             }
             if retained_dimension_count > config.cluster_count as usize {
                 return Err(invalid_configuration(format!(
-                    "retained_dimension_count {} cannot exceed cluster_count {}",
+                    "retained_axis_policy = FixedCount({}) cannot exceed cluster_count {}",
                     retained_dimension_count, config.cluster_count
                 )));
             }
             if params.min_effective_rank > retained_dimension_count {
                 return Err(invalid_configuration(format!(
-                    "min_effective_rank must be in [1, {}], got {}",
+                    "min_effective_rank must be in [1, FixedCount(n)={}], got {}",
                     retained_dimension_count, params.min_effective_rank
                 )));
             }
@@ -851,9 +851,6 @@ fn best_valley_in_segment(
     let mut best: Option<(usize, f64, f64)> = None;
 
     for split_after in start..end.saturating_sub(1) {
-        if axis_values[split_after] == axis_values[split_after + 1] {
-            continue;
-        }
         let midpoint = 0.5 * (axis_values[split_after] + axis_values[split_after + 1]);
         let valley_density = estimate_density(&axis_values[start..end], midpoint, bandwidth);
         let left_peak = densities[start..=split_after]
@@ -1222,6 +1219,17 @@ mod tests {
         let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
         let bins = assign_density_valley_bins(&coordinates, &[2]);
         assert_eq!(bins, vec![vec![0], vec![0], vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn density_valley_assignment_still_realizes_requested_bins_with_duplicate_coordinates() {
+        let coordinates = vec![vec![0.0], vec![0.0], vec![0.0], vec![1.0]];
+        let bins = assign_density_valley_bins(&coordinates, &[3]);
+        let realized_bins = bins
+            .into_iter()
+            .map(|axis_bins| axis_bins[0])
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(realized_bins, std::collections::BTreeSet::from([0, 1, 2]));
     }
 
     #[test]
