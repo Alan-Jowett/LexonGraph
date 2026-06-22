@@ -827,12 +827,19 @@ fn estimate_density_bandwidth(axis_values: &[f32]) -> f64 {
 }
 
 fn estimate_density(axis_values: &[f32], position: f32, bandwidth: f64) -> f64 {
+    const EXP_UNDERFLOW_TO_ZERO_CUTOFF: f64 =
+        (f64::MIN_EXP as f64 - f64::MANTISSA_DIGITS as f64) * std::f64::consts::LN_2;
     let variance = bandwidth * bandwidth;
     axis_values
         .iter()
         .map(|&value| {
             let delta = f64::from(value) - f64::from(position);
-            (-0.5 * delta * delta / variance).exp()
+            let exponent = -0.5 * delta * delta / variance;
+            if exponent <= EXP_UNDERFLOW_TO_ZERO_CUTOFF {
+                0.0
+            } else {
+                exponent.exp()
+            }
         })
         .sum::<f64>()
 }
@@ -1233,6 +1240,19 @@ mod tests {
             .map(|axis_bins| axis_bins[0])
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(realized_bins, std::collections::BTreeSet::from([0, 1, 2]));
+    }
+
+    #[test]
+    fn density_estimation_short_circuits_far_tail_underflow() {
+        let density = estimate_density(&[0.0], 40.0, 1.0);
+        assert_eq!(density, 0.0);
+    }
+
+    #[test]
+    fn density_valley_assignment_handles_wide_spread_without_nonfinite_work() {
+        let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![1.0e20_f32]];
+        let bins = assign_density_valley_bins(&coordinates, &[2]);
+        assert_eq!(bins, vec![vec![0], vec![0], vec![0], vec![1]]);
     }
 
     #[test]
