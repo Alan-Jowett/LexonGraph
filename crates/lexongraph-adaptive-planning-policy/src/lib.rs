@@ -227,16 +227,37 @@ fn validate_directional_pca_params(
                 )));
             }
         }
-        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
-            let max_eligible_axes =
-                max_exact_k_eligible_axis_count(settings.cluster_count as usize);
-            if params.min_effective_rank > max_eligible_axes {
-                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-                    "min_effective_rank {} cannot exceed adaptive eligible axis bound {}",
-                    params.min_effective_rank, max_eligible_axes
-                )));
-            }
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {}
+    }
+    match (
+        params.retained_axis_policy,
+        params.allocation_policy,
+        params.binning_policy,
+    ) {
+        (
+            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(_),
+            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+            lexongraph_directional_pca::DirectionalPcaBinningPolicy::Quantile,
+        )
+        | (
+            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            lexongraph_directional_pca::DirectionalPcaBinningPolicy::DensityValley,
+        ) => {}
+        _ => {
+            return Err(AdaptivePlanningError::InvalidConfiguration(
+                "unsupported directional-PCA policy combination".into(),
+            ));
         }
+    }
+    if params.allocation_policy
+        == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits
+        && !settings.cluster_count.is_power_of_two()
+    {
+        return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+            "directional-PCA eigenvalue log-bit allocation requires a power-of-two cluster_count, got {}",
+            settings.cluster_count
+        )));
     }
     if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
         return Err(AdaptivePlanningError::InvalidConfiguration(format!(
@@ -273,16 +294,6 @@ fn validate_directional_pca_params(
     Ok(())
 }
 
-fn max_exact_k_eligible_axis_count(cluster_count: usize) -> usize {
-    let mut eligible_axis_count = 1usize;
-    let mut min_cells = 2usize;
-    while min_cells.saturating_mul(2) <= cluster_count {
-        eligible_axis_count += 1;
-        min_cells *= 2;
-    }
-    eligible_axis_count
-}
-
 fn evaluate_collapse_diagnostics(
     represented_item_count: usize,
     embeddings: &[Vec<f32>],
@@ -310,7 +321,11 @@ fn evaluate_collapse_diagnostics(
             "adaptive diagnostics require non-empty embeddings".into(),
         ));
     }
-    let cluster_count = diagnostic_cluster_count(settings.cluster_count, embeddings.len())?;
+    let cluster_count = diagnostic_cluster_count(
+        settings.cluster_count,
+        embeddings.len(),
+        settings.params.allocation_policy,
+    )?;
 
     let config = StreamingClusteringConfig {
         cluster_count,
@@ -359,6 +374,7 @@ fn map_streaming_clustering_error(error: StreamingClusteringError) -> AdaptivePl
 fn diagnostic_cluster_count(
     configured_cluster_count: u32,
     embedding_count: usize,
+    allocation_policy: lexongraph_directional_pca::DirectionalPcaAllocationPolicy,
 ) -> Result<u32, AdaptivePlanningError> {
     let capped = usize::try_from(configured_cluster_count)
         .map_err(|_| {
@@ -367,11 +383,27 @@ fn diagnostic_cluster_count(
             )
         })?
         .min(embedding_count.max(1));
-    u32::try_from(capped).map_err(|_| {
+    let adjusted = if allocation_policy
+        == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits
+        && capped > 1
+    {
+        highest_power_of_two_at_most(capped)
+    } else {
+        capped
+    };
+    u32::try_from(adjusted).map_err(|_| {
         AdaptivePlanningError::InvalidConfiguration(
             "diagnostic cluster_count exceeds u32::MAX".into(),
         )
     })
+}
+
+fn highest_power_of_two_at_most(value: usize) -> usize {
+    if value <= 1 {
+        value
+    } else {
+        1usize << (usize::BITS - 1 - value.leading_zeros())
+    }
 }
 
 fn compute_mean_cluster_radius(

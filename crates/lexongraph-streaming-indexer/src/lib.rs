@@ -2271,10 +2271,11 @@ fn create_built_in_trainer(
             .map_err(map_clustering_error)
         }
         BuiltInPlanningPhase::DirectionalPca(settings) => {
-            let cluster_count = effective_cluster_count(
+            let cluster_count = effective_directional_pca_cluster_count(
                 settings.cluster_count,
                 partition_len,
                 materializability_bound,
+                settings.params.allocation_policy,
             )
             .map_err(map_clustering_configuration_error)?;
             DirectionalPcaStreamingTrainer::new(
@@ -3996,6 +3997,24 @@ fn effective_cluster_count(
     u32::try_from(effective).map_err(|_| "effective cluster count exceeds u32::MAX".into())
 }
 
+fn effective_directional_pca_cluster_count(
+    requested_cluster_count: u32,
+    estimated_child_count: usize,
+    materializability_bound: usize,
+    allocation_policy: DirectionalPcaAllocationPolicy,
+) -> Result<u32, String> {
+    let effective = effective_cluster_count(
+        requested_cluster_count,
+        estimated_child_count,
+        materializability_bound,
+    )?;
+    if allocation_policy != DirectionalPcaAllocationPolicy::EigenvalueLogBits || effective <= 1 {
+        return Ok(effective);
+    }
+    let adjusted = 1u32 << (u32::BITS - 1 - effective.leading_zeros());
+    Ok(adjusted.max(2))
+}
+
 fn materializability_bound(
     spec: &EmbeddingSpec,
     block_size_target: usize,
@@ -4582,7 +4601,10 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChildSummaryInput, exact_centroid_child_summary, weighted_mean_f32_embeddings};
+    use super::{
+        ChildSummaryInput, DirectionalPcaAllocationPolicy, effective_directional_pca_cluster_count,
+        exact_centroid_child_summary, weighted_mean_f32_embeddings,
+    };
     use crate::{BlockHash, EmbeddingSpec};
 
     #[test]
@@ -4623,5 +4645,17 @@ mod tests {
             error,
             "exact-centroid total descendant count overflowed usize"
         );
+    }
+
+    #[test]
+    fn eigenvalue_log_bit_profiles_keep_effective_cluster_count_power_of_two() {
+        let effective = effective_directional_pca_cluster_count(
+            64,
+            13,
+            7,
+            DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+        )
+        .expect("effective cluster count should succeed");
+        assert_eq!(effective, 4);
     }
 }

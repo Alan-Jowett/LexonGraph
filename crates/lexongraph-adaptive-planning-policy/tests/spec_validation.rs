@@ -102,6 +102,25 @@ fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
 }
 
 #[test]
+fn val_adaptive_policy_rejects_non_power_of_two_eigenvalue_bit_configuration() {
+    let mut invalid = settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    );
+    invalid.directional_pca.cluster_count = 3;
+    invalid.directional_pca.params.retained_axis_policy =
+        DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible;
+    invalid.directional_pca.params.allocation_policy =
+        DirectionalPcaAllocationPolicy::EigenvalueLogBits;
+    invalid.directional_pca.params.binning_policy = DirectionalPcaBinningPolicy::DensityValley;
+    let err = AdaptivePlanningSelector::new(invalid).unwrap_err();
+    assert!(matches!(
+        err,
+        AdaptivePlanningError::InvalidConfiguration(_)
+    ));
+}
+
+#[test]
 fn regression_adaptive_policy_caps_diagnostic_cluster_count_to_available_embeddings() {
     let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
         direction: AdaptivePlanningDirection::Divisive,

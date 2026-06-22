@@ -376,6 +376,14 @@ fn validate_params(
             ));
         }
     }
+    if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits
+        && !config.cluster_count.is_power_of_two()
+    {
+        return Err(invalid_configuration(format!(
+            "eigenvalue log-bit allocation requires a power-of-two cluster_count, got {}",
+            config.cluster_count
+        )));
+    }
     if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
         return Err(invalid_configuration(format!(
             "variance_exponent must be finite and non-negative, got {}",
@@ -1237,6 +1245,33 @@ mod tests {
         let bins = allocate_axis_bins_from_eigenvalue_bits(&[10.0, 1.0, 0.1, 0.01], 64).unwrap();
         assert_eq!(bins.iter().product::<usize>(), 64);
         assert!(bins.contains(&1));
+    }
+
+    #[test]
+    fn eigenvalue_log_bit_policy_rejects_non_power_of_two_cluster_count_at_construction() {
+        let error = DirectionalPcaStreamingTrainer::new(
+            StreamingClusteringConfig {
+                cluster_count: 3,
+                dimensions: 2,
+                balance_constraints: None,
+                random_seed: None,
+            },
+            DirectionalPcaParams {
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+                variance_exponent: 1.0,
+                temperature: 1.0,
+                min_input_count: 2,
+                min_effective_rank: 1,
+                min_cumulative_variance: 0.0,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            StreamingClusteringError::InvalidConfiguration { .. }
+        ));
     }
 
     #[test]
