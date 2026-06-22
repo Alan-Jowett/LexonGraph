@@ -485,6 +485,7 @@ impl fmt::Display for PublishedProfileVersion {
 
 pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
 pub const PUBLISHED_PROFILE_V0_2_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 0);
+pub const PUBLISHED_PROFILE_V0_2_1: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -523,6 +524,34 @@ pub struct PublishedIndexingProfile {
     pub planning_strategy: PublishedPlanningStrategy,
 }
 
+fn directional_pca_published_profile(
+    version: PublishedProfileVersion,
+    cluster_count: u32,
+) -> PublishedIndexingProfile {
+    PublishedIndexingProfile {
+        version,
+        planning_algorithm_id: "directional-pca",
+        planning_direction: Some(BuiltInPlanningDirection::Divisive),
+        packing_strategy_id: None,
+        hierarchy_strategy_id: "built-in-divisive",
+        summary_policy_id: "exact-centroid",
+        planning_strategy: PublishedPlanningStrategy::DirectionalPcaDivisive(
+            PublishedDirectionalPcaProfileSettings {
+                cluster_count,
+                random_seed: Some(7),
+                params: DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            },
+        ),
+    }
+}
+
 pub fn published_indexing_profile(
     version: PublishedProfileVersion,
 ) -> Result<PublishedIndexingProfile, StreamingIndexerError> {
@@ -548,28 +577,8 @@ pub fn published_indexing_profile(
                 },
             ),
         }),
-        PUBLISHED_PROFILE_V0_2_0 => Ok(PublishedIndexingProfile {
-            version,
-            planning_algorithm_id: "directional-pca",
-            planning_direction: Some(BuiltInPlanningDirection::Divisive),
-            packing_strategy_id: None,
-            hierarchy_strategy_id: "built-in-divisive",
-            summary_policy_id: "exact-centroid",
-            planning_strategy: PublishedPlanningStrategy::DirectionalPcaDivisive(
-                PublishedDirectionalPcaProfileSettings {
-                    cluster_count: 2,
-                    random_seed: Some(7),
-                    params: DirectionalPcaParams {
-                        retained_dimension_count: 1,
-                        variance_exponent: 1.0,
-                        temperature: 1.0,
-                        min_input_count: 2,
-                        min_effective_rank: 1,
-                        min_cumulative_variance: 0.0,
-                    },
-                },
-            ),
-        }),
+        PUBLISHED_PROFILE_V0_2_0 => Ok(directional_pca_published_profile(version, 2)),
+        PUBLISHED_PROFILE_V0_2_1 => Ok(directional_pca_published_profile(version, 64)),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }
 }
