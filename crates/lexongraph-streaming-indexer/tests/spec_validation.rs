@@ -700,6 +700,7 @@ impl HierarchicalPlanningPolicy for SizeOnlyStatusPlanningPolicy {
             current_partition_path: None,
             current_partition_size: Some(embeddings.len()),
             current_recursion_depth: None,
+            started_subproblem_count: Some(1),
             visited_partition_count: Some(1),
             finalized_partition_count: Some(0),
             terminal_partition_count: Some(0),
@@ -780,6 +781,7 @@ impl HierarchicalPlanningPolicy for ExplicitStartedSizeOnlyStatusPlanningPolicy 
             current_partition_path: None,
             current_partition_size: Some(embeddings.len()),
             current_recursion_depth: None,
+            started_subproblem_count: Some(1),
             visited_partition_count: Some(1),
             finalized_partition_count: Some(0),
             terminal_partition_count: Some(0),
@@ -3255,6 +3257,7 @@ async fn val_stream_indexer_059_recursive_planning_emits_live_current_unit_updat
         status.current_unit_elapsed.is_some()
             && status.current_partition_size.is_some()
             && status.current_recursion_depth == Some(0)
+            && status.last_progress_at.is_some()
     }));
     assert!(
         root_in_progress
@@ -3262,6 +3265,10 @@ async fn val_stream_indexer_059_recursive_planning_emits_live_current_unit_updat
             .all(|pair| pair[1].current_unit_elapsed.unwrap()
                 >= pair[0].current_unit_elapsed.unwrap())
     );
+    assert!(root_in_progress.windows(2).any(|pair| {
+        pair[0].completed_unit_count == pair[1].completed_unit_count
+            && pair[1].last_progress_at.unwrap() > pair[0].last_progress_at.unwrap()
+    }));
     assert!(hierarchy_statuses.iter().any(|status| {
         status.state == StreamingIndexingStatusState::InProgress && status.completed_unit_count > 0
     }));
@@ -3323,6 +3330,11 @@ async fn val_stream_indexer_060_published_directional_pca_reports_structured_rec
     }));
     assert!(hierarchy_statuses.iter().any(|status| {
         status
+            .started_subproblem_count
+            .is_some_and(|count| Some(count) == status.discovered_unit_count)
+    }));
+    assert!(hierarchy_statuses.iter().any(|status| {
+        status
             .current_partition_path
             .as_deref()
             .is_some_and(|path| path != "p0")
@@ -3330,8 +3342,13 @@ async fn val_stream_indexer_060_published_directional_pca_reports_structured_rec
     }));
     assert!(hierarchy_statuses.iter().any(|status| {
         status.discovered_unit_count.is_some()
-            && status.completed_planner_invocation_count == Some(status.completed_unit_count)
+            && status.completed_planner_invocation_count.unwrap_or(0) <= status.completed_unit_count
     }));
+    assert!(
+        hierarchy_statuses
+            .iter()
+            .any(|status| status.last_progress_at.is_some())
+    );
 
     let monotonic_recursive_counters = hierarchy_statuses
         .iter()

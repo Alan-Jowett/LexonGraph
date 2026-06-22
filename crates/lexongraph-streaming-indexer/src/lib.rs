@@ -437,6 +437,7 @@ pub struct HierarchyPlanningStatusEvent {
     pub current_partition_path: Option<String>,
     pub current_partition_size: Option<usize>,
     pub current_recursion_depth: Option<usize>,
+    pub started_subproblem_count: Option<usize>,
     pub visited_partition_count: Option<usize>,
     pub finalized_partition_count: Option<usize>,
     pub terminal_partition_count: Option<usize>,
@@ -460,6 +461,7 @@ impl HierarchyPlanningStatusEvent {
             current_partition_path: None,
             current_partition_size: None,
             current_recursion_depth: None,
+            started_subproblem_count: None,
             visited_partition_count: None,
             finalized_partition_count: None,
             terminal_partition_count: None,
@@ -483,12 +485,14 @@ pub struct StreamingIndexingStatus {
     pub current_partition_path: Option<String>,
     pub current_partition_size: Option<usize>,
     pub current_recursion_depth: Option<usize>,
+    pub started_subproblem_count: Option<usize>,
     pub visited_partition_count: Option<usize>,
     pub finalized_partition_count: Option<usize>,
     pub terminal_partition_count: Option<usize>,
     pub completed_planner_invocation_count: Option<usize>,
     pub fallback_count: Option<usize>,
     pub elapsed: Duration,
+    pub last_progress_at: Option<Duration>,
     pub error: Option<String>,
 }
 
@@ -2821,10 +2825,13 @@ impl<T> PartitionPlanner<T> {
 
 trait PartitionPlannerRunner {
     fn stage(&self) -> PlanningStage;
-    fn run(
+    fn run<OP>(
         self,
         embeddings: &[Vec<f32>],
-    ) -> Result<(PassReport, Vec<ClusterId>), StreamingClusteringError>;
+        observe_progress: &mut OP,
+    ) -> Result<(PassReport, Vec<ClusterId>), StreamingClusteringError>
+    where
+        OP: FnMut();
 }
 
 impl<T> PartitionPlannerRunner for PartitionPlanner<T>
@@ -2835,15 +2842,23 @@ where
         self.stage
     }
 
-    fn run(
+    fn run<OP>(
         mut self,
         embeddings: &[Vec<f32>],
-    ) -> Result<(PassReport, Vec<ClusterId>), StreamingClusteringError> {
+        observe_progress: &mut OP,
+    ) -> Result<(PassReport, Vec<ClusterId>), StreamingClusteringError>
+    where
+        OP: FnMut(),
+    {
         self.trainer.ingest_batch(embeddings)?;
+        observe_progress();
         let pass_report = self.trainer.finish_pass()?;
+        observe_progress();
         self.trainer.complete_training()?;
+        observe_progress();
         let classifier = self.trainer.into_classifier()?;
         let assignments = classifier.assign_batch(embeddings)?;
+        observe_progress();
         Ok((pass_report, assignments))
     }
 }
@@ -2889,6 +2904,7 @@ where
     derive_partition_recursive(
         &root_indices,
         "p0".into(),
+        None,
         None,
         embeddings,
         materializability_bound,
@@ -2991,7 +3007,9 @@ where
             represented_item_count,
             StreamingIndexingStatusState::InProgress,
         ));
-        let (pass_report, assignments) = planner.run(&layer_embeddings).map_err(E::from)?;
+        let (pass_report, assignments) = planner
+            .run(&layer_embeddings, &mut || {})
+            .map_err(E::from)?;
         if assignments.len() != layer_embeddings.len() {
             return Err(E::from(invalid_config(format!(
                 "planner returned {} cluster ids for {} planning units",
@@ -3115,6 +3133,7 @@ fn derive_partition_recursive<E, B, P, SO>(
     indices: &[usize],
     partition_id: String,
     parent_id: Option<String>,
+    stage_hint: Option<PlanningStage>,
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
     stage_observer: &mut SO,
@@ -3129,11 +3148,27 @@ where
     P: PartitionPlannerRunner,
     SO: FnMut(HierarchyPlanningStatusEvent),
 {
+    telemetry.started_subproblem_count += 1;
     telemetry.visited_partition_count += 1;
     let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
     if terminal {
         telemetry.finalized_partition_count += 1;
         telemetry.terminal_partition_count += 1;
+        telemetry.completed_subproblem_count += 1;
+        if let Some(stage) = stage_hint {
+            stage_observer(telemetry.unit_event(
+                stage,
+                indices.len(),
+                &partition_id,
+                StreamingIndexingStatusState::Started,
+            ));
+            stage_observer(telemetry.unit_event(
+                stage,
+                indices.len(),
+                &partition_id,
+                StreamingIndexingStatusState::Completed,
+            ));
+        }
         partitions.push(FinalizedPartition {
             id: partition_id,
             parent_id,
@@ -3151,7 +3186,6 @@ where
         .collect::<Vec<_>>();
     let planner = planner_builder(&partition_embeddings)?;
     let stage = planner.stage();
-    telemetry.discovered_unit_count += 1;
     stage_observer(telemetry.unit_event(
         stage,
         indices.len(),
@@ -3164,10 +3198,19 @@ where
         &partition_id,
         StreamingIndexingStatusState::InProgress,
     ));
-    let (pass_report, assignments) = planner.run(&partition_embeddings).map_err(|error| {
-        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
-        E::from(error)
-    })?;
+    let (pass_report, assignments) = planner
+        .run(&partition_embeddings, &mut || {
+            stage_observer(telemetry.unit_event(
+                stage,
+                indices.len(),
+                &partition_id,
+                StreamingIndexingStatusState::InProgress,
+            ));
+        })
+        .map_err(|error| {
+            telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+            E::from(error)
+        })?;
     if assignments.len() != partition_embeddings.len() {
         telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
         return Err(E::from(invalid_config(format!(
@@ -3187,6 +3230,12 @@ where
     groups.sort_by_key(|group| group[0]);
     if groups.len() <= 1 {
         telemetry.fallback_count += 1;
+        stage_observer(telemetry.unit_event(
+            stage,
+            indices.len(),
+            &partition_id,
+            StreamingIndexingStatusState::InProgress,
+        ));
         groups = balanced_groups(indices.len(), materializability_bound).map_err(|error| {
             telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
             E::from(invalid_config(error))
@@ -3204,6 +3253,8 @@ where
         terminal: false,
         planning_stage: stage,
     });
+    telemetry.finalized_partition_count += 1;
+    telemetry.completed_subproblem_count += 1;
     telemetry.completed_planner_invocation_count += 1;
     stage_observer(telemetry.unit_event(
         stage,
@@ -3221,6 +3272,7 @@ where
             &child_indices,
             child_ids[child_index].clone(),
             Some(partition_id.clone()),
+            Some(stage),
             embeddings,
             materializability_bound,
             stage_observer,
@@ -3231,13 +3283,13 @@ where
         )?;
     }
 
-    telemetry.finalized_partition_count += 1;
     Ok(())
 }
 
 #[derive(Default)]
 struct RecursivePlanningTelemetry {
-    discovered_unit_count: usize,
+    started_subproblem_count: usize,
+    completed_subproblem_count: usize,
     visited_partition_count: usize,
     finalized_partition_count: usize,
     terminal_partition_count: usize,
@@ -3253,6 +3305,7 @@ impl RecursivePlanningTelemetry {
         partition_path: &str,
         stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
     ) {
+        self.completed_subproblem_count += 1;
         self.completed_planner_invocation_count += 1;
         stage_observer(self.unit_event(
             stage,
@@ -3276,11 +3329,12 @@ impl RecursivePlanningTelemetry {
             progress_unit_kind: Some(
                 StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
             ),
-            completed_unit_count: Some(self.completed_planner_invocation_count),
-            discovered_unit_count: Some(self.discovered_unit_count),
+            completed_unit_count: Some(self.completed_subproblem_count),
+            discovered_unit_count: Some(self.started_subproblem_count),
             current_partition_path: Some(partition_path.to_owned()),
             current_partition_size: Some(legacy_item_count),
             current_recursion_depth: Some(partition_depth(partition_path)),
+            started_subproblem_count: Some(self.started_subproblem_count),
             visited_partition_count: Some(self.visited_partition_count),
             finalized_partition_count: Some(self.finalized_partition_count),
             terminal_partition_count: Some(self.terminal_partition_count),
@@ -3381,6 +3435,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
             completed_unit_count,
             progress_unit_kind,
             discovered_unit_count,
+            started_subproblem_count,
             visited_partition_count,
             finalized_partition_count,
             terminal_partition_count,
@@ -3396,6 +3451,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
                 stage_state.completed_unit_count,
                 stage_state.progress_unit_kind,
                 stage_state.discovered_unit_count,
+                stage_state.started_subproblem_count,
                 stage_state.visited_partition_count,
                 stage_state.finalized_partition_count,
                 stage_state.terminal_partition_count,
@@ -3404,12 +3460,13 @@ impl<'a> PlanningStageStatusTracker<'a> {
             )
         };
         let unit_started = self.update_current_unit_started(&event);
+        let last_progress_at = self.pass_started.elapsed();
         let status = status_with_hierarchy_details(
             StreamingIndexingPhase::HierarchyPlanning { stage: event.stage },
             event.state,
             None,
             completed_unit_count,
-            self.pass_started.elapsed(),
+            last_progress_at,
             None,
             HierarchyPlanningDetailFields {
                 legacy_item_count: Some(event.legacy_item_count),
@@ -3422,11 +3479,13 @@ impl<'a> PlanningStageStatusTracker<'a> {
                 current_partition_path: event.current_partition_path.clone(),
                 current_partition_size: event.current_partition_size,
                 current_recursion_depth: event.current_recursion_depth,
+                started_subproblem_count,
                 visited_partition_count,
                 finalized_partition_count,
                 terminal_partition_count,
                 completed_planner_invocation_count,
                 fallback_count,
+                last_progress_at: Some(last_progress_at),
             },
         );
         match event.state {
@@ -3466,12 +3525,14 @@ impl<'a> PlanningStageStatusTracker<'a> {
                         current_partition_path: None,
                         current_partition_size: None,
                         current_recursion_depth: None,
+                        started_subproblem_count: state.started_subproblem_count,
                         visited_partition_count: state.visited_partition_count,
                         finalized_partition_count: state.finalized_partition_count,
                         terminal_partition_count: state.terminal_partition_count,
                         completed_planner_invocation_count: state
                             .completed_planner_invocation_count,
                         fallback_count: state.fallback_count,
+                        last_progress_at: Some(elapsed),
                     },
                 ),
             );
@@ -3499,12 +3560,14 @@ impl<'a> PlanningStageStatusTracker<'a> {
                         current_partition_path: None,
                         current_partition_size: None,
                         current_recursion_depth: None,
+                        started_subproblem_count: state.started_subproblem_count,
                         visited_partition_count: state.visited_partition_count,
                         finalized_partition_count: state.finalized_partition_count,
                         terminal_partition_count: state.terminal_partition_count,
                         completed_planner_invocation_count: state
                             .completed_planner_invocation_count,
                         fallback_count: state.fallback_count,
+                        last_progress_at: Some(elapsed),
                     },
                 ),
             );
@@ -3537,11 +3600,13 @@ impl<'a> PlanningStageStatusTracker<'a> {
                     current_partition_path: event.current_partition_path.clone(),
                     current_partition_size: event.current_partition_size,
                     current_recursion_depth: event.current_recursion_depth,
+                    started_subproblem_count: event.started_subproblem_count,
                     visited_partition_count: event.visited_partition_count,
                     finalized_partition_count: event.finalized_partition_count,
                     terminal_partition_count: event.terminal_partition_count,
                     completed_planner_invocation_count: event.completed_planner_invocation_count,
                     fallback_count: event.fallback_count,
+                    last_progress_at: Some(self.pass_started.elapsed()),
                 },
             ),
         );
@@ -3618,6 +3683,7 @@ struct PlanningStageProgressState {
     progress_unit_kind: Option<StreamingIndexingProgressUnitKind>,
     completed_unit_count: usize,
     discovered_unit_count: Option<usize>,
+    started_subproblem_count: Option<usize>,
     visited_partition_count: Option<usize>,
     finalized_partition_count: Option<usize>,
     terminal_partition_count: Option<usize>,
@@ -3632,6 +3698,7 @@ impl PlanningStageProgressState {
             progress_unit_kind: None,
             completed_unit_count: 0,
             discovered_unit_count: None,
+            started_subproblem_count: None,
             visited_partition_count: None,
             finalized_partition_count: None,
             terminal_partition_count: None,
@@ -3649,6 +3716,9 @@ impl PlanningStageProgressState {
             self.completed_unit_count += event.legacy_item_count;
         }
         self.discovered_unit_count = event.discovered_unit_count.or(self.discovered_unit_count);
+        self.started_subproblem_count = event
+            .started_subproblem_count
+            .or(self.started_subproblem_count);
         self.visited_partition_count = event
             .visited_partition_count
             .or(self.visited_partition_count);
@@ -3706,12 +3776,14 @@ fn status_with_progress(
         current_partition_path: None,
         current_partition_size: None,
         current_recursion_depth: None,
+        started_subproblem_count: None,
         visited_partition_count: None,
         finalized_partition_count: None,
         terminal_partition_count: None,
         completed_planner_invocation_count: None,
         fallback_count: None,
         elapsed,
+        last_progress_at: None,
         error,
     }
 }
@@ -3742,11 +3814,13 @@ struct HierarchyPlanningDetailFields {
     current_partition_path: Option<String>,
     current_partition_size: Option<usize>,
     current_recursion_depth: Option<usize>,
+    started_subproblem_count: Option<usize>,
     visited_partition_count: Option<usize>,
     finalized_partition_count: Option<usize>,
     terminal_partition_count: Option<usize>,
     completed_planner_invocation_count: Option<usize>,
     fallback_count: Option<usize>,
+    last_progress_at: Option<Duration>,
 }
 
 fn status_with_hierarchy_details(
@@ -3773,11 +3847,13 @@ fn status_with_hierarchy_details(
     status.current_partition_path = detail.current_partition_path;
     status.current_partition_size = detail.current_partition_size;
     status.current_recursion_depth = detail.current_recursion_depth;
+    status.started_subproblem_count = detail.started_subproblem_count;
     status.visited_partition_count = detail.visited_partition_count;
     status.finalized_partition_count = detail.finalized_partition_count;
     status.terminal_partition_count = detail.terminal_partition_count;
     status.completed_planner_invocation_count = detail.completed_planner_invocation_count;
     status.fallback_count = detail.fallback_count;
+    status.last_progress_at = detail.last_progress_at;
     if let Some(legacy_item_count) = legacy_item_count {
         status.item_count = legacy_item_count;
     }
