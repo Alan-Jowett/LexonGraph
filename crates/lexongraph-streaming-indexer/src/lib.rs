@@ -3350,12 +3350,14 @@ struct PlanningStageStatusTracker<'a> {
     pass_started: Instant,
     stage_states: BTreeMap<PlanningStage, PlanningStageProgressState>,
     active_snapshot: Arc<Mutex<Option<HierarchyPlanningHeartbeatSnapshot>>>,
+    active_snapshot_generation: Arc<AtomicUsize>,
     heartbeat: StatusHeartbeatGuard,
 }
 
 impl<'a> PlanningStageStatusTracker<'a> {
     fn new(observer: &'a Option<StreamingIndexingStatusObserver>, pass_started: Instant) -> Self {
         let active_snapshot = Arc::new(Mutex::new(None));
+        let active_snapshot_generation = Arc::new(AtomicUsize::new(0));
         Self {
             observer,
             pass_started,
@@ -3363,9 +3365,11 @@ impl<'a> PlanningStageStatusTracker<'a> {
             heartbeat: StatusHeartbeatGuard::new(start_hierarchy_status_heartbeat(
                 observer,
                 Arc::clone(&active_snapshot),
+                Arc::clone(&active_snapshot_generation),
                 pass_started,
             )),
             active_snapshot,
+            active_snapshot_generation,
         }
     }
 
@@ -3426,6 +3430,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
             StreamingIndexingStatusState::Started | StreamingIndexingStatusState::InProgress => {
                 emit_status(self.observer, status.clone());
                 self.replace_active_snapshot(HierarchyPlanningHeartbeatSnapshot {
+                    snapshot_generation: 0,
                     status,
                     current_unit_started: unit_started,
                 });
@@ -3542,12 +3547,21 @@ impl<'a> PlanningStageStatusTracker<'a> {
     }
 
     fn replace_active_snapshot(&self, snapshot: HierarchyPlanningHeartbeatSnapshot) {
+        let snapshot_generation = self
+            .active_snapshot_generation
+            .fetch_add(1, AtomicOrdering::Relaxed)
+            + 1;
         if let Ok(mut active) = self.active_snapshot.lock() {
-            *active = Some(snapshot);
+            *active = Some(HierarchyPlanningHeartbeatSnapshot {
+                snapshot_generation,
+                ..snapshot
+            });
         }
     }
 
     fn clear_active_snapshot(&self) {
+        self.active_snapshot_generation
+            .fetch_add(1, AtomicOrdering::Relaxed);
         if let Ok(mut active) = self.active_snapshot.lock() {
             *active = None;
         }
@@ -3579,6 +3593,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
 
 #[derive(Clone)]
 struct HierarchyPlanningHeartbeatSnapshot {
+    snapshot_generation: usize,
     status: StreamingIndexingStatus,
     current_unit_started: Option<Instant>,
 }
@@ -3774,6 +3789,7 @@ fn emit_status(
 fn start_hierarchy_status_heartbeat(
     observer: &Option<StreamingIndexingStatusObserver>,
     active_snapshot: Arc<Mutex<Option<HierarchyPlanningHeartbeatSnapshot>>>,
+    active_snapshot_generation: Arc<AtomicUsize>,
     pass_started: Instant,
 ) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
     let observer = observer.as_ref().map(Arc::clone)?;
@@ -3794,6 +3810,11 @@ fn start_hierarchy_status_heartbeat(
                 status.current_unit_elapsed = snapshot
                     .current_unit_started
                     .map(|started| started.elapsed());
+                if active_snapshot_generation.load(AtomicOrdering::Relaxed)
+                    != snapshot.snapshot_generation
+                {
+                    return;
+                }
                 observer(status);
             }));
         }
