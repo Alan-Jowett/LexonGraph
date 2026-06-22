@@ -3529,10 +3529,8 @@ impl<'a> PlanningStageStatusTracker<'a> {
                     legacy_item_count: Some(event.legacy_item_count),
                     progress_unit_kind: event.progress_unit_kind,
                     discovered_unit_count: event.discovered_unit_count,
-                    current_unit_elapsed: event
-                        .current_partition_path
-                        .as_ref()
-                        .map(|_| Duration::ZERO),
+                    current_unit_elapsed: hierarchy_event_has_unit_descriptor(event)
+                        .then_some(Duration::ZERO),
                     current_partition_path: event.current_partition_path.clone(),
                     current_partition_size: event.current_partition_size,
                     current_recursion_depth: event.current_recursion_depth,
@@ -3568,10 +3566,7 @@ impl<'a> PlanningStageStatusTracker<'a> {
     }
 
     fn update_current_unit_started(&self, event: &HierarchyPlanningStatusEvent) -> Option<Instant> {
-        let has_unit_descriptor = event.current_partition_path.is_some()
-            || event.current_partition_size.is_some()
-            || event.current_recursion_depth.is_some();
-        if !has_unit_descriptor {
+        if !hierarchy_event_has_unit_descriptor(event) {
             return None;
         }
         let now = Instant::now();
@@ -3589,6 +3584,12 @@ impl<'a> PlanningStageStatusTracker<'a> {
             _ => Some(now),
         }
     }
+}
+
+fn hierarchy_event_has_unit_descriptor(event: &HierarchyPlanningStatusEvent) -> bool {
+    event.current_partition_path.is_some()
+        || event.current_partition_size.is_some()
+        || event.current_recursion_depth.is_some()
 }
 
 #[derive(Clone)]
