@@ -204,15 +204,59 @@ fn validate_directional_pca_params(
     settings: &AdaptiveDirectionalPcaSettings,
 ) -> Result<(), AdaptivePlanningError> {
     let params = &settings.params;
-    if params.retained_dimension_count == 0 {
-        return Err(AdaptivePlanningError::InvalidConfiguration(
-            "retained_dimension_count must be greater than zero".into(),
-        ));
+    match params.retained_axis_policy {
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(
+            retained_dimension_count,
+        ) => {
+            if retained_dimension_count == 0 {
+                return Err(AdaptivePlanningError::InvalidConfiguration(
+                    "retained_axis_policy = FixedCount(n) requires n to be greater than zero"
+                        .into(),
+                ));
+            }
+            if retained_dimension_count > settings.cluster_count as usize {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "retained_axis_policy = FixedCount({}) cannot exceed directional-PCA cluster_count {}",
+                    retained_dimension_count, settings.cluster_count
+                )));
+            }
+            if params.min_effective_rank > retained_dimension_count {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "min_effective_rank must be in [1, FixedCount(n)={}], got {}",
+                    retained_dimension_count, params.min_effective_rank
+                )));
+            }
+        }
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {}
     }
-    if params.retained_dimension_count > settings.cluster_count as usize {
+    match (
+        params.retained_axis_policy,
+        params.allocation_policy,
+        params.binning_policy,
+    ) {
+        (
+            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(_),
+            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+            lexongraph_directional_pca::DirectionalPcaBinningPolicy::Quantile,
+        )
+        | (
+            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            lexongraph_directional_pca::DirectionalPcaBinningPolicy::DensityValley,
+        ) => {}
+        _ => {
+            return Err(AdaptivePlanningError::InvalidConfiguration(
+                "unsupported directional-PCA policy combination".into(),
+            ));
+        }
+    }
+    if params.allocation_policy
+        == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits
+        && !settings.cluster_count.is_power_of_two()
+    {
         return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-            "retained_dimension_count {} cannot exceed directional-PCA cluster_count {}",
-            params.retained_dimension_count, settings.cluster_count
+            "directional-PCA eigenvalue log-bit allocation requires a power-of-two cluster_count, got {}",
+            settings.cluster_count
         )));
     }
     if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
@@ -233,11 +277,10 @@ fn validate_directional_pca_params(
             params.min_input_count
         )));
     }
-    if params.min_effective_rank == 0 || params.min_effective_rank > params.retained_dimension_count
-    {
+    if params.min_effective_rank == 0 {
         return Err(AdaptivePlanningError::InvalidConfiguration(format!(
-            "min_effective_rank must be in [1, {}], got {}",
-            params.retained_dimension_count, params.min_effective_rank
+            "min_effective_rank must be at least 1, got {}",
+            params.min_effective_rank
         )));
     }
     if !params.min_cumulative_variance.is_finite()
@@ -278,7 +321,11 @@ fn evaluate_collapse_diagnostics(
             "adaptive diagnostics require non-empty embeddings".into(),
         ));
     }
-    let cluster_count = diagnostic_cluster_count(settings.cluster_count, embeddings.len())?;
+    let cluster_count = diagnostic_cluster_count(
+        settings.cluster_count,
+        embeddings.len(),
+        settings.params.allocation_policy,
+    )?;
 
     let config = StreamingClusteringConfig {
         cluster_count,
@@ -327,6 +374,7 @@ fn map_streaming_clustering_error(error: StreamingClusteringError) -> AdaptivePl
 fn diagnostic_cluster_count(
     configured_cluster_count: u32,
     embedding_count: usize,
+    allocation_policy: lexongraph_directional_pca::DirectionalPcaAllocationPolicy,
 ) -> Result<u32, AdaptivePlanningError> {
     let capped = usize::try_from(configured_cluster_count)
         .map_err(|_| {
@@ -335,11 +383,27 @@ fn diagnostic_cluster_count(
             )
         })?
         .min(embedding_count.max(1));
-    u32::try_from(capped).map_err(|_| {
+    let adjusted = if allocation_policy
+        == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits
+        && capped > 1
+    {
+        highest_power_of_two_at_most(capped)
+    } else {
+        capped
+    };
+    u32::try_from(adjusted).map_err(|_| {
         AdaptivePlanningError::InvalidConfiguration(
             "diagnostic cluster_count exceeds u32::MAX".into(),
         )
     })
+}
+
+fn highest_power_of_two_at_most(value: usize) -> usize {
+    if value <= 1 {
+        value
+    } else {
+        1usize << (usize::BITS - 1 - value.leading_zeros())
+    }
 }
 
 fn compute_mean_cluster_radius(

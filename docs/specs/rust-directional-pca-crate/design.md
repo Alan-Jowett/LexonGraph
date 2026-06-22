@@ -116,48 +116,55 @@ over the embeddings observed in that pass:
 
 1. validate exact-K feasibility prerequisites
 2. fit layer-local PCA through the repository PCA crate
-3. compute centroid-direction coefficients and explained-variance-weighted axis
-   scores
-4. derive per-axis resolution from the hard cluster target `K`
-5. quantile-bin retained PCA coordinates
-6. materialize populated cells from the quantized PCA grid
-7. if the populated cells already realize exactly `K` stable, non-empty
+3. select one explicit policy combination
+4. realize either the legacy centroid-weighted/quantile path or the redesigned
+   adaptive eigenvalue-bit/density-valley path
+5. materialize populated cells from the resulting PCA-partition grid
+6. if the populated cells already realize exactly `K` stable, non-empty
    clusters, expose them directly
-8. otherwise, if the shortfall is attributable to duplicate-collapse, refine the
+7. otherwise, if the shortfall is attributable to duplicate-collapse, refine the
    collapsed duplicate members deterministically
-9. otherwise fail explicitly
-10. compute pass metrics and expose the pass report
+8. otherwise fail explicitly
+9. compute pass metrics and expose the pass report
 
 The crate does not perform hidden extra passes.
 
-### DSG-DPCA-STREAM-009 `Directional scoring`
+### DSG-DPCA-STREAM-009 `Legacy directional scoring`
 
-The crate computes:
+For the legacy explicit/default path, the crate computes:
 
 - the pass centroid in embedding space
 - directional coefficients by projecting that centroid onto retained PCA axes
 - per-axis scores by combining directional magnitude with explained variance
   using the configured `gamma`
 
-The conformant scoring effect is equivalent to `|alpha_i| * lambda_i^gamma`.
+The conformant legacy scoring effect is equivalent to
+`|alpha_i| * lambda_i^gamma`.
 
-### DSG-DPCA-STREAM-010 `Temperature-controlled resolution allocation`
+### DSG-DPCA-STREAM-010 `Policy-specific resolution allocation`
 
-The crate log-damps the per-axis scores, applies temperature-controlled
-normalization, converts the result into per-axis resolution counts relative to
-the hard cluster target `K`, and applies deterministic correction so the
-documented allocation semantics are satisfied.
+For the legacy explicit/default path, the crate log-damps the per-axis scores,
+applies temperature-controlled normalization, converts the result into per-axis
+resolution counts relative to the hard cluster target `K`, and applies
+deterministic correction so the documented allocation semantics are satisfied.
 
-The design keeps the distinction explicit between per-axis resolution and the
-realized Cartesian cell count induced by those choices.
+For the redesigned adaptive path, the crate derives a total split-bit budget
+from `K`, scores retained axes from eigenvalue-only log weights, permits many
+axes to keep zero bits, and deterministically converts the resulting sparse bit
+budget into per-axis bin counts.
 
-### DSG-DPCA-STREAM-011 `Quantile binning`
+The adaptive path does not cap participating axes by an exact-`K` feasibility
+bound before allocation.
 
-The conformant assignment path partitions each retained PCA coordinate with
-quantile binning and assigns each embedding to one grid cell determined by its
-retained-coordinate bin tuple.
+### DSG-DPCA-STREAM-011 `Policy-specific coordinate partitioning`
 
-Equal-width binning is outside the conformant default path for this crate.
+The legacy explicit/default assignment path partitions each retained PCA
+coordinate with quantile binning and assigns each embedding to one grid cell
+determined by its retained-coordinate bin tuple.
+
+The redesigned adaptive path instead estimates one-dimensional density along
+each participating retained PCA axis and places cuts at the deepest available
+valleys within the recursively selected segments.
 
 ### DSG-DPCA-STREAM-012 `Exact-K boundary`
 
@@ -264,6 +271,34 @@ are derived from the final refined partition state. Replaying the same ordered
 dataset across passes therefore reproduces the same observable cluster-ID
 surface.
 
+### DSG-DPCA-STREAM-023 `Adaptive retained-axis selection`
+
+The crate may realize retained-coordinate truncation through an explicit
+adaptive retained-axis policy instead of a fixed retained-dimension count.
+
+When selected, the policy deterministically retains all eligible PCA axes, where
+eligibility is bounded by realized PCA output rank and the exact-`K` feasibility
+limit preserved by this crate boundary, rather than by a caller-provided fixed
+count.
+
+### DSG-DPCA-STREAM-024 `Density-valley binning`
+
+The crate may realize retained-coordinate partitioning through an explicit
+density-valley binning policy instead of quantile binning.
+
+For each retained axis with assigned resolution `b_i`, the policy sorts the
+retained coordinates, scores candidate cuts by valley depth, chooses the
+strongest `b_i - 1` deterministic valleys with stable tie-breaking, and assigns
+embeddings by the resulting interval boundaries.
+
+### DSG-DPCA-STREAM-025 `Policy isolation`
+
+Adaptive retained-axis selection and density-valley binning are opt-in policy
+choices.
+
+The conformant default path remains fixed retained-dimension truncation plus
+quantile binning unless the caller explicitly selects the alternate policies.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -288,3 +323,6 @@ surface.
 | DSG-DPCA-STREAM-020 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-023 |
 | DSG-DPCA-STREAM-021 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-024 |
 | DSG-DPCA-STREAM-022 | REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018 |
+| DSG-DPCA-STREAM-023 | REQ-DPCA-STREAM-025 |
+| DSG-DPCA-STREAM-024 | REQ-DPCA-STREAM-026 |
+| DSG-DPCA-STREAM-025 | REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-027 |

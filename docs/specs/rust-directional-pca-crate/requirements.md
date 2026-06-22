@@ -149,26 +149,51 @@ behavior independently.
 
 ### REQ-DPCA-STREAM-012
 
-For each completed pass, the crate shall compute per-axis allocation scores
-using both:
+The crate shall expose explicit directional-PCA policy combinations rather than
+silently mutating one scoring path.
 
-- centroid-direction coefficients
-- explained-variance information
+In this revision, the conformant combinations are:
 
-The conformant score shall be equivalent in effect to
+- the legacy explicit/default path:
+  - retained-axis policy = fixed retained count
+  - allocation policy = centroid-weighted bins
+  - binning policy = quantile
+- the redesigned adaptive path:
+  - retained-axis policy = adaptive all-eligible axes
+  - allocation policy = eigenvalue log-bit budgeting
+  - binning policy = density valley
+
+For the legacy explicit/default path, the crate shall compute per-axis
+allocation scores using both centroid-direction coefficients and
+explained-variance information.
+
+The conformant legacy score shall be equivalent in effect to
 `|alpha_i| * lambda_i^gamma`, where `gamma` is an explicit typed parameter.
 
 ### REQ-DPCA-STREAM-013
 
-For each completed pass, the crate shall convert the per-axis scores into
-per-axis resolution using a temperature-controlled allocation rule over the
-shared hard cluster target `K`, with deterministic rounding and correction
-behavior.
+For the legacy explicit/default path, the crate shall convert the per-axis
+scores into per-axis resolution using a temperature-controlled allocation rule
+over the shared hard cluster target `K`, with deterministic rounding and
+correction behavior.
+
+For the redesigned adaptive path, the crate shall:
+
+- consider all retained PCA axes that remain eligible after truncation rather
+  than capping participating axes by an exact-`K` feasibility bound
+- allocate split budget from eigenvalue-only log-weight semantics rather than
+  centroid-direction coefficients
+- permit weak axes to receive zero split bits
+- deterministically realize per-axis bin counts from that sparse bit budget
 
 ### REQ-DPCA-STREAM-014
 
-The conformant default binning policy shall be quantile binning over the
+The conformant default binning policy shall remain quantile binning over the
 retained PCA coordinates.
+
+For the redesigned adaptive path, the crate shall instead place cuts by
+selecting deepest density valleys along each participating retained PCA axis
+rather than by quantiles or by a largest-gap proxy.
 
 ### REQ-DPCA-STREAM-015
 
@@ -264,6 +289,33 @@ The duplicate-refinement fallback shall not be used for:
 
 Those cases shall continue to fail explicitly through the existing shared error
 categories.
+
+### REQ-DPCA-STREAM-025
+
+The crate shall support an explicit opt-in adaptive retained-axis policy as an
+equivalent truncation control.
+
+When that policy is selected, the crate shall retain all eligible PCA axes
+deterministically rather than requiring a fixed retained-dimension count.
+Eligibility shall remain bounded by the realized PCA output, the effective-rank
+guard, and exact-`K` feasibility constraints preserved by this crate boundary.
+
+### REQ-DPCA-STREAM-026
+
+The crate shall support an explicit opt-in density-valley binning policy for
+retained PCA coordinates.
+
+If per-axis resolution assigns `b_i` bins to axis `i`, the density-valley
+policy shall select `b_i - 1` deterministic valley cut points on that axis to
+form `b_i` high-density intervals rather than using quantile cuts.
+
+### REQ-DPCA-STREAM-027
+
+The adaptive retained-axis policy and density-valley binning policy shall be
+opt-in only.
+
+Absent explicit selection of those policies, the default directional-PCA path
+shall continue to use fixed retained-dimension truncation and quantile binning.
 
 ### REQ-DPCA-STREAM-021
 

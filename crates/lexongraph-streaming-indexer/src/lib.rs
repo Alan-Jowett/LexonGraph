@@ -46,7 +46,10 @@ pub use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
-use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
+use lexongraph_directional_pca::{
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
+    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
+};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
@@ -485,6 +488,7 @@ impl fmt::Display for PublishedProfileVersion {
 
 pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
 pub const PUBLISHED_PROFILE_V0_2_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 0);
+pub const PUBLISHED_PROFILE_V0_3_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -523,6 +527,44 @@ pub struct PublishedIndexingProfile {
     pub planning_strategy: PublishedPlanningStrategy,
 }
 
+fn directional_pca_published_profile(
+    version: PublishedProfileVersion,
+    cluster_count: u32,
+    retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
+    binning_policy: DirectionalPcaBinningPolicy,
+) -> PublishedIndexingProfile {
+    PublishedIndexingProfile {
+        version,
+        planning_algorithm_id: "directional-pca",
+        planning_direction: Some(BuiltInPlanningDirection::Divisive),
+        packing_strategy_id: None,
+        hierarchy_strategy_id: "built-in-divisive",
+        summary_policy_id: "exact-centroid",
+        planning_strategy: PublishedPlanningStrategy::DirectionalPcaDivisive(
+            PublishedDirectionalPcaProfileSettings {
+                cluster_count,
+                random_seed: Some(7),
+                params: DirectionalPcaParams {
+                    retained_axis_policy,
+                    allocation_policy: if retained_axis_policy
+                        == DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible
+                    {
+                        DirectionalPcaAllocationPolicy::EigenvalueLogBits
+                    } else {
+                        DirectionalPcaAllocationPolicy::CentroidWeightedBins
+                    },
+                    binning_policy,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            },
+        ),
+    }
+}
+
 pub fn published_indexing_profile(
     version: PublishedProfileVersion,
 ) -> Result<PublishedIndexingProfile, StreamingIndexerError> {
@@ -548,28 +590,18 @@ pub fn published_indexing_profile(
                 },
             ),
         }),
-        PUBLISHED_PROFILE_V0_2_0 => Ok(PublishedIndexingProfile {
+        PUBLISHED_PROFILE_V0_2_0 => Ok(directional_pca_published_profile(
             version,
-            planning_algorithm_id: "directional-pca",
-            planning_direction: Some(BuiltInPlanningDirection::Divisive),
-            packing_strategy_id: None,
-            hierarchy_strategy_id: "built-in-divisive",
-            summary_policy_id: "exact-centroid",
-            planning_strategy: PublishedPlanningStrategy::DirectionalPcaDivisive(
-                PublishedDirectionalPcaProfileSettings {
-                    cluster_count: 2,
-                    random_seed: Some(7),
-                    params: DirectionalPcaParams {
-                        retained_dimension_count: 1,
-                        variance_exponent: 1.0,
-                        temperature: 1.0,
-                        min_input_count: 2,
-                        min_effective_rank: 1,
-                        min_cumulative_variance: 0.0,
-                    },
-                },
-            ),
-        }),
+            2,
+            DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            DirectionalPcaBinningPolicy::Quantile,
+        )),
+        PUBLISHED_PROFILE_V0_3_0 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            DirectionalPcaBinningPolicy::DensityValley,
+        )),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }
 }
@@ -2239,10 +2271,11 @@ fn create_built_in_trainer(
             .map_err(map_clustering_error)
         }
         BuiltInPlanningPhase::DirectionalPca(settings) => {
-            let cluster_count = effective_cluster_count(
+            let cluster_count = effective_directional_pca_cluster_count(
                 settings.cluster_count,
                 partition_len,
                 materializability_bound,
+                settings.params.allocation_policy,
             )
             .map_err(map_clustering_configuration_error)?;
             DirectionalPcaStreamingTrainer::new(
@@ -3964,6 +3997,24 @@ fn effective_cluster_count(
     u32::try_from(effective).map_err(|_| "effective cluster count exceeds u32::MAX".into())
 }
 
+fn effective_directional_pca_cluster_count(
+    requested_cluster_count: u32,
+    estimated_child_count: usize,
+    materializability_bound: usize,
+    allocation_policy: DirectionalPcaAllocationPolicy,
+) -> Result<u32, String> {
+    let effective = effective_cluster_count(
+        requested_cluster_count,
+        estimated_child_count,
+        materializability_bound,
+    )?;
+    if allocation_policy != DirectionalPcaAllocationPolicy::EigenvalueLogBits || effective <= 1 {
+        return Ok(effective);
+    }
+    let adjusted = 1u32 << (u32::BITS - 1 - effective.leading_zeros());
+    Ok(adjusted.max(2))
+}
+
 fn materializability_bound(
     spec: &EmbeddingSpec,
     block_size_target: usize,
@@ -4550,7 +4601,10 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChildSummaryInput, exact_centroid_child_summary, weighted_mean_f32_embeddings};
+    use super::{
+        ChildSummaryInput, DirectionalPcaAllocationPolicy, effective_directional_pca_cluster_count,
+        exact_centroid_child_summary, weighted_mean_f32_embeddings,
+    };
     use crate::{BlockHash, EmbeddingSpec};
 
     #[test]
@@ -4591,5 +4645,17 @@ mod tests {
             error,
             "exact-centroid total descendant count overflowed usize"
         );
+    }
+
+    #[test]
+    fn eigenvalue_log_bit_profiles_keep_effective_cluster_count_power_of_two() {
+        let effective = effective_directional_pca_cluster_count(
+            64,
+            13,
+            7,
+            DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+        )
+        .expect("effective cluster count should succeed");
+        assert_eq!(effective, 4);
     }
 }

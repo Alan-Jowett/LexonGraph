@@ -8,14 +8,19 @@ use lexongraph_adaptive_planning_policy::{
     AdaptivePlanningSelector, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
     DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
 };
-use lexongraph_directional_pca::DirectionalPcaParams;
+use lexongraph_directional_pca::{
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
+    DirectionalPcaRetainedAxisPolicy,
+};
 
 fn directional_pca_settings() -> AdaptiveDirectionalPcaSettings {
     AdaptiveDirectionalPcaSettings {
         cluster_count: 2,
         random_seed: Some(7),
         params: DirectionalPcaParams {
-            retained_dimension_count: 1,
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
             variance_exponent: 1.0,
             temperature: 1.0,
             min_input_count: 2,
@@ -97,6 +102,25 @@ fn val_adaptive_policy_011_rejects_invalid_directional_pca_configuration() {
 }
 
 #[test]
+fn val_adaptive_policy_rejects_non_power_of_two_eigenvalue_bit_configuration() {
+    let mut invalid = settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    );
+    invalid.directional_pca.cluster_count = 3;
+    invalid.directional_pca.params.retained_axis_policy =
+        DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible;
+    invalid.directional_pca.params.allocation_policy =
+        DirectionalPcaAllocationPolicy::EigenvalueLogBits;
+    invalid.directional_pca.params.binning_policy = DirectionalPcaBinningPolicy::DensityValley;
+    let err = AdaptivePlanningSelector::new(invalid).unwrap_err();
+    assert!(matches!(
+        err,
+        AdaptivePlanningError::InvalidConfiguration(_)
+    ));
+}
+
+#[test]
 fn regression_adaptive_policy_caps_diagnostic_cluster_count_to_available_embeddings() {
     let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
         direction: AdaptivePlanningDirection::Divisive,
@@ -104,7 +128,9 @@ fn regression_adaptive_policy_caps_diagnostic_cluster_count_to_available_embeddi
             cluster_count: 8,
             random_seed: Some(7),
             params: DirectionalPcaParams {
-                retained_dimension_count: 1,
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,

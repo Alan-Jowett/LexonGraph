@@ -657,3 +657,51 @@ Resolve both published indexing profile `0.1.0` and published indexing profile
 selecting `0.2.0` does not mutate the published behavior declared for `0.1.0`.
 
 **Traces to:** REQ-STREAM-INDEXER-056, REQ-STREAM-INDEXER-058
+
+### VAL-STREAM-INDEXER-055
+
+Resolve published indexing profile `0.2.1` through the crate's convenience
+surface.
+
+**Pass condition:** the crate rejects `0.2.1` as an unsupported published
+profile version.
+
+**Traces to:** REQ-STREAM-INDEXER-058
+
+### VAL-STREAM-INDEXER-056
+
+Resolve published indexing profile `0.3.0` through the crate's convenience
+surface.
+
+**Pass condition:** the crate exposes a published profile version selector, the
+selected `0.3.0` profile resolves successfully, and its declared crate-owned
+runtime knobs match the published divisive directional-PCA bundle, including
+its preserved exact-centroid summary policy, preserved bottom-up final
+materialization behavior, requested cluster count, random seed, retained-axis
+policy, allocation policy, binning policy, variance exponent, temperature,
+minimum input count, minimum effective rank, and minimum cumulative variance.
+
+**Traces to:** REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-062, REQ-STREAM-INDEXER-063
+
+### VAL-STREAM-INDEXER-057
+
+Run the same deterministic indexing fixture twice through published indexing
+profile `0.3.0`.
+
+**Pass condition:** both runs realize the same effective crate-owned planning
+and summary behavior and produce the same deterministic final result without
+substituting `0.2.0` behavior.
+
+**Traces to:** REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-062, REQ-STREAM-INDEXER-063
+
+### VAL-STREAM-INDEXER-058
+
+Resolve published indexing profiles `0.1.0`, `0.2.0`, and `0.3.0` through the
+convenience surface in the same revision.
+
+**Pass condition:** all published profile versions remain explicitly
+resolvable, selecting `0.3.0` does not mutate the published behavior declared
+for `0.1.0` or `0.2.0`, and published profile `0.2.0` retains its declared
+requested cluster count of `2` and retained dimension count of `1`.
+
+**Traces to:** REQ-STREAM-INDEXER-056, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-060, REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-062, REQ-STREAM-INDEXER-063

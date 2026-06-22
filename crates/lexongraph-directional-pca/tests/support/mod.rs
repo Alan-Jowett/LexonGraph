@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 
-use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
+use lexongraph_directional_pca::{
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
+    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
+};
 use lexongraph_streaming_clustering::{
     BalanceConstraints, ClusterId, Embedding, PassInput, PassReport, StreamingClusteringConfig,
 };
@@ -17,7 +20,9 @@ pub fn config() -> StreamingClusteringConfig {
 
 pub fn params() -> DirectionalPcaParams {
     DirectionalPcaParams {
-        retained_dimension_count: 1,
+        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+        binning_policy: DirectionalPcaBinningPolicy::Quantile,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
@@ -37,7 +42,9 @@ pub fn exact_k_failure_config() -> StreamingClusteringConfig {
 
 pub fn exact_k_failure_params() -> DirectionalPcaParams {
     DirectionalPcaParams {
-        retained_dimension_count: 2,
+        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+        binning_policy: DirectionalPcaBinningPolicy::Quantile,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
@@ -57,7 +64,9 @@ pub fn duplicate_refinement_config() -> StreamingClusteringConfig {
 
 pub fn duplicate_refinement_params() -> DirectionalPcaParams {
     DirectionalPcaParams {
-        retained_dimension_count: 2,
+        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+        binning_policy: DirectionalPcaBinningPolicy::Quantile,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
