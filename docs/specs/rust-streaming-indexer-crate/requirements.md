@@ -677,6 +677,7 @@ In this revision, those pinned directional-PCA values for published profile
 - requested cluster count = `64`
 - random seed = `7`
 - retained-axis policy = `AdaptiveAllEligible`
+- allocation policy = `EigenvalueLogBits`
 - binning policy = `DensityValley`
 - variance exponent = `1.0`
 - temperature = `1.0`
@@ -686,9 +687,10 @@ In this revision, those pinned directional-PCA values for published profile
 
 ### REQ-STREAM-INDEXER-063
 
-Published indexing profile `0.3.0` shall select the adaptive retained-axis and
-density-valley directional-PCA policies without mutating the lower-level
-explicit directional-PCA default path or the published behavior of `0.2.0`.
+Published indexing profile `0.3.0` shall select the adaptive retained-axis,
+eigenvalue-log-bit allocation, and density-valley directional-PCA policies
+without mutating the lower-level explicit directional-PCA default path or the
+published behavior of `0.2.0`.
 
 ## Out of Scope
 

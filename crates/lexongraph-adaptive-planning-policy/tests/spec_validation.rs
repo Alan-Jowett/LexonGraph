@@ -9,7 +9,8 @@ use lexongraph_adaptive_planning_policy::{
     DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
 };
 use lexongraph_directional_pca::{
-    DirectionalPcaBinningPolicy, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
+    DirectionalPcaRetainedAxisPolicy,
 };
 
 fn directional_pca_settings() -> AdaptiveDirectionalPcaSettings {
@@ -18,6 +19,7 @@ fn directional_pca_settings() -> AdaptiveDirectionalPcaSettings {
         random_seed: Some(7),
         params: DirectionalPcaParams {
             retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
             binning_policy: DirectionalPcaBinningPolicy::Quantile,
             variance_exponent: 1.0,
             temperature: 1.0,
@@ -108,6 +110,7 @@ fn regression_adaptive_policy_caps_diagnostic_cluster_count_to_available_embeddi
             random_seed: Some(7),
             params: DirectionalPcaParams {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,

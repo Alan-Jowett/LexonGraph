@@ -15,7 +15,9 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::DirectionalPcaParams;
-use lexongraph_directional_pca::{DirectionalPcaBinningPolicy, DirectionalPcaRetainedAxisPolicy};
+use lexongraph_directional_pca::{
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaRetainedAxisPolicy,
+};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalInitializationPolicy, SphericalKmeansParams};
 use lexongraph_streaming_clustering::{
@@ -593,6 +595,7 @@ fn directional_pca_planning(direction: BuiltInPlanningDirection) -> BuiltInPlann
         random_seed: Some(7),
         params: DirectionalPcaParams {
             retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
             binning_policy: DirectionalPcaBinningPolicy::Quantile,
             variance_exponent: 1.0,
             temperature: 1.0,
@@ -631,6 +634,7 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
                 random_seed: Some(13),
                 params: DirectionalPcaParams {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
@@ -659,6 +663,7 @@ fn adaptive_planning(
             random_seed: Some(17),
             params: DirectionalPcaParams {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
@@ -686,6 +691,7 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
             random_seed: None,
             params: DirectionalPcaParams {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
@@ -720,6 +726,7 @@ fn invalid_hybrid_planning() -> BuiltInPlanning {
                 random_seed: None,
                 params: DirectionalPcaParams {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
@@ -748,6 +755,7 @@ fn mixed_direction_hybrid_planning() -> BuiltInPlanning {
                 random_seed: Some(13),
                 params: DirectionalPcaParams {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
@@ -2331,6 +2339,7 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
                 random_seed: Some(17),
                 params: DirectionalPcaParams {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
@@ -2480,6 +2489,7 @@ async fn val_stream_indexer_052_published_profile_v0_2_0_is_declared_explicitly(
                 settings.params,
                 DirectionalPcaParams {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
                     variance_exponent: 1.0,
                     temperature: 1.0,
@@ -2608,6 +2618,7 @@ async fn val_stream_indexer_056_published_profile_v0_3_0_is_declared_explicitly(
                 settings.params,
                 DirectionalPcaParams {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                    allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
                     binning_policy: DirectionalPcaBinningPolicy::DensityValley,
                     variance_exponent: 1.0,
                     temperature: 1.0,
@@ -2719,6 +2730,10 @@ fn val_stream_indexer_058_all_published_profiles_remain_resolvable() {
             assert_eq!(
                 settings.params.retained_axis_policy,
                 DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible
+            );
+            assert_eq!(
+                settings.params.allocation_policy,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits
             );
             assert_eq!(
                 settings.params.binning_policy,

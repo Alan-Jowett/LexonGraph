@@ -678,8 +678,8 @@ selected `0.3.0` profile resolves successfully, and its declared crate-owned
 runtime knobs match the published divisive directional-PCA bundle, including
 its preserved exact-centroid summary policy, preserved bottom-up final
 materialization behavior, requested cluster count, random seed, retained-axis
-policy, binning policy, variance exponent, temperature, minimum input count,
-minimum effective rank, and minimum cumulative variance.
+policy, allocation policy, binning policy, variance exponent, temperature,
+minimum input count, minimum effective rank, and minimum cumulative variance.
 
 **Traces to:** REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-062, REQ-STREAM-INDEXER-063
 

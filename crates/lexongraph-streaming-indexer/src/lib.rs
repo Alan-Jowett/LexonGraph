@@ -47,8 +47,8 @@ pub use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{
-    DirectionalPcaBinningPolicy, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
-    DirectionalPcaStreamingTrainer,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
+    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
@@ -546,6 +546,13 @@ fn directional_pca_published_profile(
                 random_seed: Some(7),
                 params: DirectionalPcaParams {
                     retained_axis_policy,
+                    allocation_policy: if retained_axis_policy
+                        == DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible
+                    {
+                        DirectionalPcaAllocationPolicy::EigenvalueLogBits
+                    } else {
+                        DirectionalPcaAllocationPolicy::CentroidWeightedBins
+                    },
                     binning_policy,
                     variance_exponent: 1.0,
                     temperature: 1.0,

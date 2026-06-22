@@ -102,8 +102,8 @@ crate surface rather than an undocumented independent PCA implementation.
 
 ### VAL-DPCA-STREAM-009
 
-Use a fixture with known retained PCA coordinates, centroid direction, and
-explained variance.
+Use a legacy-path fixture with known retained PCA coordinates, centroid
+direction, and explained variance.
 
 **Pass condition:** the realized per-axis scores reflect both directional
 coefficients and explained variance according to the configured `gamma`.
@@ -112,22 +112,24 @@ coefficients and explained variance according to the configured `gamma`.
 
 ### VAL-DPCA-STREAM-010
 
-Use a fixture whose damped axis scores produce non-trivial allocation relative
-to a hard cluster target `K`.
+Exercise both supported allocation modes.
 
-**Pass condition:** the per-axis resolution counts follow the documented
-temperature-controlled allocation rule and deterministic correction behavior.
+**Pass condition:** the legacy path follows the documented
+temperature-controlled centroid-weighted allocation rule, and the redesigned
+adaptive path allocates eigenvalue-driven split bits while permitting at least
+one weak eligible axis to receive zero bits.
 
-**Traces to:** REQ-DPCA-STREAM-013
+**Traces to:** REQ-DPCA-STREAM-012, REQ-DPCA-STREAM-013
 
 ### VAL-DPCA-STREAM-011
 
-Use a fixture whose retained PCA coordinates are unevenly distributed.
+Use fixtures whose retained PCA coordinates are unevenly distributed.
 
 **Pass condition:** the conformant default assignment path uses quantile binning
-rather than equal-width binning.
+rather than equal-width binning, and the redesigned adaptive path chooses cuts
+through deepest density valleys rather than by a largest-gap proxy.
 
-**Traces to:** REQ-DPCA-STREAM-014
+**Traces to:** REQ-DPCA-STREAM-012, REQ-DPCA-STREAM-014
 
 ### VAL-DPCA-STREAM-012
 

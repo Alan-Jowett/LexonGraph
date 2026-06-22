@@ -23,6 +23,12 @@ pub enum DirectionalPcaRetainedAxisPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectionalPcaAllocationPolicy {
+    CentroidWeightedBins,
+    EigenvalueLogBits,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectionalPcaBinningPolicy {
     Quantile,
     DensityValley,
@@ -31,6 +37,7 @@ pub enum DirectionalPcaBinningPolicy {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaParams {
     pub retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
+    pub allocation_policy: DirectionalPcaAllocationPolicy,
     pub binning_policy: DirectionalPcaBinningPolicy,
     pub variance_exponent: f32,
     pub temperature: f32,
@@ -261,16 +268,15 @@ fn fit_pass_model(
         )));
     }
 
-    let retained_axis_count = resolve_retained_axis_count(
+    let candidate_axis_count = resolve_retained_axis_count(
         &transform,
-        config,
         params,
         effective_rank,
         allow_duplicate_refinement,
     )?;
     let cumulative_variance = transform
         .cumulative_variance()
-        .and_then(|values| values.get(retained_axis_count.saturating_sub(1)).copied())
+        .and_then(|values| values.get(candidate_axis_count.saturating_sub(1)).copied())
         .unwrap_or(0.0);
     if !allow_duplicate_refinement && cumulative_variance < params.min_cumulative_variance {
         return Err(unsatisfiable_constraint(format!(
@@ -280,17 +286,17 @@ fn fit_pass_model(
     }
 
     let truncated = transform
-        .truncate(retained_axis_count)
+        .truncate(candidate_axis_count)
         .map_err(map_pca_error)?;
     let coordinates = embeddings
         .iter()
         .map(|embedding| truncated.apply(embedding).map_err(map_pca_error))
         .collect::<Result<Vec<_>, _>>()?;
-    let axis_scores = compute_axis_scores(embeddings, &truncated, params)?;
     let axis_bin_counts = allocate_axis_bins(
-        axis_scores.as_slice(),
+        embeddings,
+        &truncated,
+        params,
         config.cluster_count as usize,
-        params.temperature,
     )?;
     let point_bins = assign_bins(
         coordinates.as_slice(),
@@ -341,14 +347,33 @@ fn validate_params(
             }
         }
         DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
-            let max_eligible_axes = max_exact_k_eligible_axis_count(config.cluster_count as usize)
-                .min(config.dimensions);
-            if params.min_effective_rank > max_eligible_axes {
+            if params.min_effective_rank > config.dimensions {
                 return Err(invalid_configuration(format!(
-                    "min_effective_rank {} cannot exceed adaptive eligible axis bound {}",
-                    params.min_effective_rank, max_eligible_axes
+                    "min_effective_rank {} cannot exceed adaptive candidate axis count {}",
+                    params.min_effective_rank, config.dimensions
                 )));
             }
+        }
+    }
+    match (
+        params.retained_axis_policy,
+        params.allocation_policy,
+        params.binning_policy,
+    ) {
+        (
+            DirectionalPcaRetainedAxisPolicy::FixedCount(_),
+            DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+            DirectionalPcaBinningPolicy::Quantile,
+        )
+        | (
+            DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            DirectionalPcaBinningPolicy::DensityValley,
+        ) => {}
+        _ => {
+            return Err(invalid_configuration(
+                "unsupported directional-PCA policy combination",
+            ));
         }
     }
     if !params.variance_exponent.is_finite() || params.variance_exponent < 0.0 {
@@ -388,7 +413,6 @@ fn validate_params(
 
 fn resolve_retained_axis_count(
     transform: &PcaTransform,
-    config: &StreamingClusteringConfig,
     params: &DirectionalPcaParams,
     effective_rank: usize,
     allow_duplicate_refinement: bool,
@@ -401,14 +425,9 @@ fn resolve_retained_axis_count(
             let rank_bound = if allow_duplicate_refinement {
                 transform.output_dim
             } else {
-                effective_rank
+                effective_rank.max(params.min_effective_rank)
             };
-            let retained_axis_count = rank_bound
-                .min(transform.output_dim)
-                .min(max_exact_k_eligible_axis_count(
-                    config.cluster_count as usize,
-                ))
-                .max(1);
+            let retained_axis_count = rank_bound.min(transform.output_dim).max(1);
             if retained_axis_count < params.min_effective_rank {
                 return Err(unsatisfiable_constraint(format!(
                     "adaptive retained axis count {retained_axis_count} is smaller than the required minimum {}",
@@ -418,16 +437,6 @@ fn resolve_retained_axis_count(
             Ok(retained_axis_count)
         }
     }
-}
-
-fn max_exact_k_eligible_axis_count(cluster_count: usize) -> usize {
-    let mut eligible_axis_count = 1usize;
-    let mut min_cells = 2usize;
-    while min_cells.saturating_mul(2) <= cluster_count {
-        eligible_axis_count += 1;
-        min_cells *= 2;
-    }
-    eligible_axis_count
 }
 
 fn reject_balance_constraints(
@@ -469,10 +478,27 @@ fn compute_axis_scores(
     transform: &PcaTransform,
     params: &DirectionalPcaParams,
 ) -> Result<Vec<f64>, StreamingClusteringError> {
-    let centroid = compute_centroid(embeddings)?;
     let explained_variance = transform
         .explained_variance()
         .ok_or_else(|| unsatisfiable_constraint("missing explained variance in PCA transform"))?;
+    if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits {
+        return explained_variance
+            .iter()
+            .enumerate()
+            .map(|(column, variance)| {
+                let lambda = f64::from(*variance).max(0.0);
+                let score = lambda.powf(f64::from(params.variance_exponent));
+                if !score.is_finite() {
+                    return Err(unsatisfiable_constraint(format!(
+                        "axis score became non-finite for retained dimension {column}"
+                    )));
+                }
+                Ok(score)
+            })
+            .collect();
+    }
+
+    let centroid = compute_centroid(embeddings)?;
     let gamma = f64::from(params.variance_exponent);
 
     (0..transform.output_dim)
@@ -513,14 +539,19 @@ fn dot_with_basis_column(
 }
 
 fn allocate_axis_bins(
-    axis_scores: &[f64],
+    embeddings: &[Embedding],
+    transform: &PcaTransform,
+    params: &DirectionalPcaParams,
     cluster_count: usize,
-    temperature: f32,
 ) -> Result<Vec<usize>, StreamingClusteringError> {
+    let axis_scores = compute_axis_scores(embeddings, transform, params)?;
     if axis_scores.is_empty() {
         return Err(invalid_configuration(
             "cannot allocate bins with zero retained dimensions",
         ));
+    }
+    if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits {
+        return allocate_axis_bins_from_eigenvalue_bits(axis_scores.as_slice(), cluster_count);
     }
     if cluster_count < axis_scores.len() {
         return Err(invalid_configuration(format!(
@@ -533,7 +564,7 @@ fn allocate_axis_bins(
         .iter()
         .map(|score| (1.0 + score.max(0.0)).ln())
         .collect::<Vec<_>>();
-    let temperature = f64::from(temperature);
+    let temperature = f64::from(params.temperature);
     let max_scaled = damped
         .iter()
         .map(|value| value / temperature)
@@ -589,6 +620,53 @@ fn allocate_axis_bins(
     }
 
     Ok(counts)
+}
+
+fn allocate_axis_bins_from_eigenvalue_bits(
+    axis_scores: &[f64],
+    cluster_count: usize,
+) -> Result<Vec<usize>, StreamingClusteringError> {
+    if !cluster_count.is_power_of_two() {
+        return Err(invalid_configuration(format!(
+            "eigenvalue log-bit allocation requires a power-of-two cluster_count, got {cluster_count}"
+        )));
+    }
+    let total_bits = cluster_count.ilog2() as usize;
+    if total_bits == 0 {
+        return Ok(vec![1; axis_scores.len()]);
+    }
+
+    let mut bit_budget = vec![0usize; axis_scores.len()];
+    let log_weights = axis_scores
+        .iter()
+        .map(|score| (1.0 + score.max(0.0)).ln())
+        .collect::<Vec<_>>();
+    for _ in 0..total_bits {
+        let mut best_axis = 0usize;
+        let mut best_weight = f64::NEG_INFINITY;
+        for (axis, &weight) in log_weights.iter().enumerate() {
+            let adjusted_weight = if bit_budget[axis] == 0 {
+                weight
+            } else {
+                weight / (bit_budget[axis] + 1) as f64
+            };
+            if adjusted_weight > best_weight || (adjusted_weight == best_weight && axis < best_axis)
+            {
+                best_axis = axis;
+                best_weight = adjusted_weight;
+            }
+        }
+        bit_budget[best_axis] += 1;
+    }
+
+    bit_budget
+        .into_iter()
+        .map(|bits| {
+            1usize
+                .checked_shl(bits as u32)
+                .ok_or_else(|| invalid_configuration("allocated bit budget overflowed"))
+        })
+        .collect()
 }
 
 fn assign_bins(
@@ -648,8 +726,11 @@ fn assign_density_valley_bins(
                 .total_cmp(&coordinates[*right][axis])
                 .then_with(|| left.cmp(right))
         });
-        let cut_positions =
-            select_density_valley_cut_positions(coordinates, order.as_slice(), axis, bin_count);
+        let axis_values = order
+            .iter()
+            .map(|&point_index| coordinates[point_index][axis])
+            .collect::<Vec<_>>();
+        let cut_positions = select_deepest_valley_cut_positions(axis_values.as_slice(), bin_count);
         let mut next_cut_index = 0usize;
         let mut current_bin = 0usize;
         for (rank, point_index) in order.into_iter().enumerate() {
@@ -664,36 +745,141 @@ fn assign_density_valley_bins(
     point_bins
 }
 
-fn select_density_valley_cut_positions(
-    coordinates: &[Embedding],
-    order: &[usize],
-    axis: usize,
-    bin_count: usize,
-) -> Vec<usize> {
-    let mut candidates = Vec::new();
-    for split_after in 0..order.len().saturating_sub(1) {
-        let left = coordinates[order[split_after]][axis];
-        let right = coordinates[order[split_after + 1]][axis];
-        let gap = f64::from(right) - f64::from(left);
-        if gap > 0.0 {
-            candidates.push((split_after + 1, gap));
+fn select_deepest_valley_cut_positions(axis_values: &[f32], bin_count: usize) -> Vec<usize> {
+    if axis_values.len() <= 1 || bin_count <= 1 {
+        return Vec::new();
+    }
+    let densities = estimate_axis_densities(axis_values);
+    let mut segments = vec![(0usize, axis_values.len())];
+    let mut cut_positions = Vec::with_capacity(bin_count.saturating_sub(1));
+
+    while cut_positions.len() < bin_count.saturating_sub(1) {
+        let mut best_split: Option<(usize, usize, usize, f64, f64)> = None;
+        for (segment_index, &(start, end)) in segments.iter().enumerate() {
+            if end.saturating_sub(start) <= 1 {
+                continue;
+            }
+            if let Some((split_position, valley_density, valley_depth)) =
+                best_valley_in_segment(axis_values, densities.as_slice(), start, end)
+            {
+                match best_split {
+                    None => {
+                        best_split = Some((
+                            segment_index,
+                            start,
+                            split_position,
+                            valley_density,
+                            valley_depth,
+                        ));
+                    }
+                    Some((_, _, best_position, best_density, best_depth)) => {
+                        if valley_depth > best_depth
+                            || (valley_depth == best_depth
+                                && (valley_density < best_density
+                                    || (valley_density == best_density
+                                        && split_position < best_position)))
+                        {
+                            best_split = Some((
+                                segment_index,
+                                start,
+                                split_position,
+                                valley_density,
+                                valley_depth,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        let Some((segment_index, start, split_position, _, _)) = best_split else {
+            break;
+        };
+        let (_, end) = segments.remove(segment_index);
+        segments.push((start, split_position));
+        segments.push((split_position, end));
+        segments.sort_unstable();
+        cut_positions.push(split_position);
+    }
+
+    cut_positions.sort_unstable();
+    cut_positions
+}
+
+fn estimate_axis_densities(axis_values: &[f32]) -> Vec<f64> {
+    let bandwidth = estimate_density_bandwidth(axis_values);
+    axis_values
+        .iter()
+        .map(|&value| estimate_density(axis_values, value, bandwidth))
+        .collect()
+}
+
+fn estimate_density_bandwidth(axis_values: &[f32]) -> f64 {
+    if axis_values.len() <= 1 {
+        return 1.0;
+    }
+    let min = axis_values[0];
+    let max = axis_values[axis_values.len() - 1];
+    let spread = (f64::from(max) - f64::from(min)).abs();
+    if spread == 0.0 {
+        return 1.0;
+    }
+    (spread / axis_values.len() as f64).max(f64::EPSILON)
+}
+
+fn estimate_density(axis_values: &[f32], position: f32, bandwidth: f64) -> f64 {
+    let variance = bandwidth * bandwidth;
+    axis_values
+        .iter()
+        .map(|&value| {
+            let delta = f64::from(value) - f64::from(position);
+            (-0.5 * delta * delta / variance).exp()
+        })
+        .sum::<f64>()
+}
+
+fn best_valley_in_segment(
+    axis_values: &[f32],
+    densities: &[f64],
+    start: usize,
+    end: usize,
+) -> Option<(usize, f64, f64)> {
+    if end.saturating_sub(start) <= 1 {
+        return None;
+    }
+    let bandwidth = estimate_density_bandwidth(&axis_values[start..end]);
+    let mut best: Option<(usize, f64, f64)> = None;
+
+    for split_after in start..end.saturating_sub(1) {
+        if axis_values[split_after] == axis_values[split_after + 1] {
+            continue;
+        }
+        let midpoint = 0.5 * (axis_values[split_after] + axis_values[split_after + 1]);
+        let valley_density = estimate_density(&axis_values[start..end], midpoint, bandwidth);
+        let left_peak = densities[start..=split_after]
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let right_peak = densities[split_after + 1..end]
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let valley_depth = left_peak.min(right_peak) - valley_density;
+        match best {
+            None => best = Some((split_after + 1, valley_density, valley_depth)),
+            Some((best_position, best_density, best_depth)) => {
+                if valley_depth > best_depth
+                    || (valley_depth == best_depth
+                        && (valley_density < best_density
+                            || (valley_density == best_density && split_after + 1 < best_position)))
+                {
+                    best = Some((split_after + 1, valley_density, valley_depth));
+                }
+            }
         }
     }
 
-    candidates.sort_by(|left, right| {
-        right
-            .1
-            .total_cmp(&left.1)
-            .then_with(|| left.0.cmp(&right.0))
-    });
-
-    let mut cut_positions = candidates
-        .into_iter()
-        .take(bin_count.saturating_sub(1))
-        .map(|(split_position, _)| split_position)
-        .collect::<Vec<_>>();
-    cut_positions.sort_unstable();
-    cut_positions
+    best
 }
 
 fn materialize_clusters(
@@ -981,6 +1167,7 @@ mod tests {
             &transform,
             &DirectionalPcaParams {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
                 variance_exponent: 1.0,
                 temperature: 1.0,
@@ -997,7 +1184,29 @@ mod tests {
 
     #[test]
     fn temperature_controlled_allocation_is_deterministic() {
-        let bins = allocate_axis_bins(&[10.0, 1.0], 4, 1.0).unwrap();
+        let embeddings = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![10.0, 1.0],
+            vec![11.0, 1.0],
+        ];
+        let transform = fit(&embeddings).unwrap().truncate(2).unwrap();
+        let bins = allocate_axis_bins(
+            &embeddings,
+            &transform,
+            &DirectionalPcaParams {
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                variance_exponent: 1.0,
+                temperature: 1.0,
+                min_input_count: 2,
+                min_effective_rank: 1,
+                min_cumulative_variance: 0.0,
+            },
+            4,
+        )
+        .unwrap();
         assert_eq!(bins, vec![3, 1]);
     }
 
@@ -1009,18 +1218,17 @@ mod tests {
     }
 
     #[test]
-    fn density_valley_assignment_splits_on_largest_gap() {
+    fn density_valley_assignment_splits_at_a_low_density_valley() {
         let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
         let bins = assign_density_valley_bins(&coordinates, &[2]);
         assert_eq!(bins, vec![vec![0], vec![0], vec![0], vec![1]]);
     }
 
     #[test]
-    fn adaptive_retained_axis_policy_caps_by_exact_k_feasibility() {
-        assert_eq!(max_exact_k_eligible_axis_count(2), 1);
-        assert_eq!(max_exact_k_eligible_axis_count(3), 1);
-        assert_eq!(max_exact_k_eligible_axis_count(4), 2);
-        assert_eq!(max_exact_k_eligible_axis_count(64), 6);
+    fn eigenvalue_log_bit_budget_allows_zero_bit_axes() {
+        let bins = allocate_axis_bins_from_eigenvalue_bits(&[10.0, 1.0, 0.1, 0.01], 64).unwrap();
+        assert_eq!(bins.iter().product::<usize>(), 64);
+        assert!(bins.contains(&1));
     }
 
     #[test]
@@ -1043,6 +1251,7 @@ mod tests {
         };
         let params = DirectionalPcaParams {
             retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
             binning_policy: DirectionalPcaBinningPolicy::Quantile,
             variance_exponent: 1.0,
             temperature: 1.0,

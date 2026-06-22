@@ -4481,6 +4481,8 @@ fn default_directional_pca_params() -> DirectionalPcaParams {
     DirectionalPcaParams {
         retained_axis_policy:
             lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+        allocation_policy:
+            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins,
         binning_policy: lexongraph_directional_pca::DirectionalPcaBinningPolicy::Quantile,
         variance_exponent: 1.0,
         temperature: 1.0,

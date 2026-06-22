@@ -635,6 +635,7 @@ for its lifetime in this revision:
 - requested cluster count = `64`
 - random seed = `7`
 - retained-axis policy = `AdaptiveAllEligible`
+- allocation policy = `EigenvalueLogBits`
 - binning policy = `DensityValley`
 - variance exponent = `1.0`
 - temperature = `1.0`
@@ -644,8 +645,9 @@ for its lifetime in this revision:
 
 ### DSG-STREAM-INDEXER-053 `Published profile 0.3.0 policy isolation`
 
-Published indexing profile `0.3.0` realizes the new adaptive retained-axis and
-density-valley policies only through the explicit published-profile mapping.
+Published indexing profile `0.3.0` realizes the new adaptive retained-axis,
+eigenvalue-log-bit allocation, and density-valley policies only through the
+explicit published-profile mapping.
 
 The lower-level explicit directional-PCA default path and the previously
 published `0.2.0` contract therefore remain unchanged.

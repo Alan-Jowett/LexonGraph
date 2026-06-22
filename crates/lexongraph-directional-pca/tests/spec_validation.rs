@@ -7,8 +7,8 @@ use std::fs;
 use std::path::Path;
 
 use lexongraph_directional_pca::{
-    DirectionalPcaBinningPolicy, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
-    DirectionalPcaStreamingTrainer,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
+    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringError,
@@ -179,7 +179,7 @@ fn val_dpca_stream_024_adaptive_retained_axes_are_opt_in() {
     )
     .unwrap();
     assert!(source.contains("AdaptiveAllEligible"));
-    assert!(source.contains("max_exact_k_eligible_axis_count"));
+    assert!(source.contains("EigenvalueLogBits"));
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn val_dpca_stream_025_density_valley_binning_is_available() {
     )
     .unwrap();
     assert!(source.contains("DensityValley"));
-    assert!(source.contains("select_density_valley_cut_positions"));
+    assert!(source.contains("select_deepest_valley_cut_positions"));
 }
 
 #[test]
@@ -219,6 +219,7 @@ fn val_dpca_stream_012_exact_k_failures_are_explicit() {
 
     let invalid_params = DirectionalPcaParams {
         retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(0),
+        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
         binning_policy: DirectionalPcaBinningPolicy::Quantile,
         ..params()
     };
