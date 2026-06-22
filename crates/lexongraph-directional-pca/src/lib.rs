@@ -813,35 +813,62 @@ fn select_deepest_valley_cut_positions(axis_values: &[f32], bin_count: usize) ->
     cut_positions
 }
 
-fn estimate_density_bandwidth(axis_values: &[f32]) -> f64 {
-    if axis_values.len() <= 1 {
-        return 1.0;
-    }
-    let min = axis_values[0];
-    let max = axis_values[axis_values.len() - 1];
-    let spread = (f64::from(max) - f64::from(min)).abs();
-    if spread == 0.0 {
-        return 1.0;
-    }
-    (spread / axis_values.len() as f64).max(f64::EPSILON)
+const DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP: usize = 256;
+
+struct SmoothedAxisHistogram {
+    min: f64,
+    max: f64,
+    smoothed_counts: Vec<f64>,
 }
 
-fn estimate_density(axis_values: &[f32], position: f32, bandwidth: f64) -> f64 {
-    const EXP_UNDERFLOW_TO_ZERO_CUTOFF: f64 =
-        (f64::MIN_EXP as f64 - f64::MANTISSA_DIGITS as f64) * std::f64::consts::LN_2;
-    let variance = bandwidth * bandwidth;
-    axis_values
-        .iter()
-        .map(|&value| {
-            let delta = f64::from(value) - f64::from(position);
-            let exponent = -0.5 * delta * delta / variance;
-            if exponent <= EXP_UNDERFLOW_TO_ZERO_CUTOFF {
-                0.0
+impl SmoothedAxisHistogram {
+    fn from_sorted_values(axis_values: &[f32]) -> Self {
+        let min = f64::from(axis_values[0]);
+        let max = f64::from(axis_values[axis_values.len() - 1]);
+        let bucket_count = axis_values
+            .len()
+            .clamp(2, DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP);
+        let mut raw_counts = vec![0usize; bucket_count];
+        for &value in axis_values {
+            raw_counts[histogram_bucket_index(min, max, bucket_count, f64::from(value))] += 1;
+        }
+
+        let mut smoothed_counts = vec![0.0; bucket_count];
+        for index in 0..bucket_count {
+            let left = if index > 0 {
+                raw_counts[index - 1] as f64
             } else {
-                exponent.exp()
-            }
-        })
-        .sum::<f64>()
+                raw_counts[index] as f64
+            };
+            let center = raw_counts[index] as f64;
+            let right = if index + 1 < bucket_count {
+                raw_counts[index + 1] as f64
+            } else {
+                raw_counts[index] as f64
+            };
+            smoothed_counts[index] = left + (2.0 * center) + right;
+        }
+
+        Self {
+            min,
+            max,
+            smoothed_counts,
+        }
+    }
+
+    fn density_at_value(&self, value: f64) -> f64 {
+        let index = histogram_bucket_index(self.min, self.max, self.smoothed_counts.len(), value);
+        self.smoothed_counts[index]
+    }
+}
+
+fn histogram_bucket_index(min: f64, max: f64, bucket_count: usize, value: f64) -> usize {
+    if bucket_count <= 1 || max <= min {
+        return 0;
+    }
+    let normalized = ((value - min) / (max - min)).clamp(0.0, 1.0);
+    let scaled = normalized * (bucket_count - 1) as f64;
+    scaled.round() as usize
 }
 
 fn best_valley_in_segment(
@@ -853,24 +880,32 @@ fn best_valley_in_segment(
         return None;
     }
     let segment_values = &axis_values[start..end];
-    let bandwidth = estimate_density_bandwidth(segment_values);
+    let histogram = SmoothedAxisHistogram::from_sorted_values(segment_values);
     let segment_densities = segment_values
         .iter()
-        .map(|&value| estimate_density(segment_values, value, bandwidth))
+        .map(|&value| histogram.density_at_value(f64::from(value)))
         .collect::<Vec<_>>();
+    let mut left_peaks = Vec::with_capacity(segment_densities.len());
+    let mut running_left_peak = f64::NEG_INFINITY;
+    for density in segment_densities.iter().copied() {
+        running_left_peak = running_left_peak.max(density);
+        left_peaks.push(running_left_peak);
+    }
+    let mut right_peaks = vec![f64::NEG_INFINITY; segment_densities.len()];
+    let mut running_right_peak = f64::NEG_INFINITY;
+    for (index, density) in segment_densities.iter().copied().enumerate().rev() {
+        running_right_peak = running_right_peak.max(density);
+        right_peaks[index] = running_right_peak;
+    }
     let mut best: Option<(usize, f64, f64)> = None;
 
     for split_after in start..end.saturating_sub(1) {
-        let midpoint = 0.5 * (axis_values[split_after] + axis_values[split_after + 1]);
-        let valley_density = estimate_density(segment_values, midpoint, bandwidth);
-        let left_peak = segment_densities[..=split_after - start]
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, f64::max);
-        let right_peak = segment_densities[split_after + 1 - start..]
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, f64::max);
+        let midpoint =
+            0.5 * (f64::from(axis_values[split_after]) + f64::from(axis_values[split_after + 1]));
+        let valley_density = histogram.density_at_value(midpoint);
+        let relative_split = split_after - start;
+        let left_peak = left_peaks[relative_split];
+        let right_peak = right_peaks[relative_split + 1];
         let valley_depth = left_peak.min(right_peak) - valley_density;
         match best {
             None => best = Some((split_after + 1, valley_density, valley_depth)),
@@ -1243,9 +1278,9 @@ mod tests {
     }
 
     #[test]
-    fn density_estimation_short_circuits_far_tail_underflow() {
-        let density = estimate_density(&[0.0], 40.0, 1.0);
-        assert_eq!(density, 0.0);
+    fn density_valley_histogram_treats_far_tail_as_a_low_density_region() {
+        let histogram = SmoothedAxisHistogram::from_sorted_values(&[0.0, 0.1, 0.2, 40.0]);
+        assert!(histogram.density_at_value(20.0) < histogram.density_at_value(0.1));
     }
 
     #[test]
