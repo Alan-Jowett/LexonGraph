@@ -827,13 +827,15 @@ fn estimate_density_bandwidth(axis_values: &[f32]) -> f64 {
 }
 
 fn estimate_density(axis_values: &[f32], position: f32, bandwidth: f64) -> f64 {
+    const EXP_UNDERFLOW_TO_ZERO_CUTOFF: f64 =
+        (f64::MIN_EXP as f64 - f64::MANTISSA_DIGITS as f64) * std::f64::consts::LN_2;
     let variance = bandwidth * bandwidth;
     axis_values
         .iter()
         .map(|&value| {
             let delta = f64::from(value) - f64::from(position);
             let exponent = -0.5 * delta * delta / variance;
-            if exponent <= f64::MIN_EXP as f64 * std::f64::consts::LN_2 {
+            if exponent <= EXP_UNDERFLOW_TO_ZERO_CUTOFF {
                 0.0
             } else {
                 exponent.exp()
@@ -1242,7 +1244,7 @@ mod tests {
 
     #[test]
     fn density_estimation_short_circuits_far_tail_underflow() {
-        let density = estimate_density(&[0.0], 1.0e20_f32, 1.0);
+        let density = estimate_density(&[0.0], 40.0, 1.0);
         assert_eq!(density, 0.0);
     }
 
