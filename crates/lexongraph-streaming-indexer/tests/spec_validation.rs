@@ -321,13 +321,43 @@ impl StreamingClusteringFactory for PairClusteringFactory {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecursivePlannerBehavior {
+    Successful,
+    FinishPassFailure,
+    ShortAssignmentBatch,
+}
+
 #[derive(Clone, Copy)]
-struct SlowRecursiveClusteringFactory;
+struct SlowRecursiveClusteringFactory {
+    behavior: RecursivePlannerBehavior,
+}
+
+impl SlowRecursiveClusteringFactory {
+    fn successful() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::Successful,
+        }
+    }
+
+    fn finish_pass_failure() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::FinishPassFailure,
+        }
+    }
+
+    fn short_assignment_batch() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::ShortAssignmentBatch,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct SlowRecursiveClassifier {
     config: StreamingClusteringConfig,
     threshold: f32,
+    behavior: RecursivePlannerBehavior,
 }
 
 impl lexongraph_streaming_clustering::StreamingClusterClassifier for SlowRecursiveClassifier {
@@ -347,6 +377,22 @@ impl lexongraph_streaming_clustering::StreamingClusterClassifier for SlowRecursi
         }
         Ok(u32::from(embedding[0] > self.threshold))
     }
+
+    fn assign_batch(
+        &self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<Vec<ClusterId>, StreamingClusteringError> {
+        let mut assignments = embeddings
+            .iter()
+            .map(|embedding| self.assign(embedding.as_slice()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if self.behavior == RecursivePlannerBehavior::ShortAssignmentBatch
+            && !assignments.is_empty()
+        {
+            assignments.pop();
+        }
+        Ok(assignments)
+    }
 }
 
 struct SlowRecursiveTrainer {
@@ -354,6 +400,7 @@ struct SlowRecursiveTrainer {
     state: TrainerState,
     embeddings: Vec<Vec<f32>>,
     threshold: Option<f32>,
+    behavior: RecursivePlannerBehavior,
 }
 
 impl StreamingClusteringFactory for SlowRecursiveClusteringFactory {
@@ -377,6 +424,7 @@ impl StreamingClusteringFactory for SlowRecursiveClusteringFactory {
             state: TrainerState::Idle,
             embeddings: Vec::new(),
             threshold: None,
+            behavior: self.behavior,
         })
     }
 }
@@ -407,6 +455,12 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
             });
         }
         thread::sleep(Duration::from_millis(250));
+        if self.behavior == RecursivePlannerBehavior::FinishPassFailure {
+            self.state = TrainerState::Error;
+            return Err(StreamingClusteringError::MalformedInput {
+                message: "synthetic recursive planning failure".into(),
+            });
+        }
         let mut sorted = self
             .embeddings
             .iter()
@@ -446,6 +500,7 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
         Ok(SlowRecursiveClassifier {
             config: self.config,
             threshold,
+            behavior: self.behavior,
         })
     }
 }
@@ -2904,7 +2959,7 @@ async fn val_stream_indexer_059_recursive_planning_emits_live_current_unit_updat
         MapResolver,
         AsciiEmbeddingProvider,
         ArithmeticMeanCanonicalEmbeddingPolicy,
-        SlowRecursiveClusteringFactory,
+        SlowRecursiveClusteringFactory::successful(),
         embedding_spec(),
         128,
     )
@@ -3050,6 +3105,66 @@ async fn val_stream_indexer_060_published_directional_pca_reports_structured_rec
         })
         .is_some();
     assert!(monotonic_recursive_counters);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_recursive_failed_units_advance_completion_counters() {
+    for (factory, expected_error_substring) in [
+        (
+            SlowRecursiveClusteringFactory::finish_pass_failure(),
+            "synthetic recursive planning failure",
+        ),
+        (
+            SlowRecursiveClusteringFactory::short_assignment_batch(),
+            "planner returned",
+        ),
+    ] {
+        let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+        let observer: StreamingIndexingStatusObserver = {
+            let statuses = Arc::clone(&statuses);
+            Arc::new(move |status| statuses.lock().unwrap().push(status))
+        };
+
+        let items = switch_trigger_items();
+        let mut run = StreamingIndexingRun::with_streaming_clustering_factory(
+            MapResolver,
+            AsciiEmbeddingProvider,
+            ArithmeticMeanCanonicalEmbeddingPolicy,
+            factory,
+            embedding_spec(),
+            128,
+        )
+        .with_observer(observer);
+        let error = async {
+            run.ingest_batch(&items).await.unwrap();
+            run.finish_pass().unwrap_err()
+        }
+        .await;
+        assert!(
+            error.to_string().contains(expected_error_substring),
+            "unexpected error: {error}"
+        );
+
+        let statuses = statuses.lock().unwrap().clone();
+        let failed_unit = statuses
+            .iter()
+            .find(|status| {
+                matches!(
+                    status.phase,
+                    StreamingIndexingPhase::HierarchyPlanning {
+                        stage: PlanningStage::Custom
+                    }
+                ) && status.state == StreamingIndexingStatusState::Failed
+                    && status.progress_unit_kind
+                        == Some(StreamingIndexingProgressUnitKind::PartitionPlanningInvocation)
+            })
+            .expect("recursive failed unit status");
+        assert_eq!(failed_unit.current_partition_path.as_deref(), Some("p0"));
+        assert_eq!(failed_unit.completed_unit_count, 1);
+        assert_eq!(failed_unit.completed_planner_invocation_count, Some(1));
+        assert_eq!(failed_unit.discovered_unit_count, Some(1));
+        assert_eq!(failed_unit.current_recursion_depth, Some(0));
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

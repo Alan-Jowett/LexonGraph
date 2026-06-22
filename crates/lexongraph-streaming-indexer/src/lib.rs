@@ -3165,21 +3165,11 @@ where
         StreamingIndexingStatusState::InProgress,
     ));
     let (pass_report, assignments) = planner.run(&partition_embeddings).map_err(|error| {
-        stage_observer(telemetry.unit_event(
-            stage,
-            indices.len(),
-            &partition_id,
-            StreamingIndexingStatusState::Failed,
-        ));
+        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
         E::from(error)
     })?;
     if assignments.len() != partition_embeddings.len() {
-        stage_observer(telemetry.unit_event(
-            stage,
-            indices.len(),
-            &partition_id,
-            StreamingIndexingStatusState::Failed,
-        ));
+        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
         return Err(E::from(invalid_config(format!(
             "planner returned {} cluster ids for {} embeddings",
             assignments.len(),
@@ -3197,9 +3187,10 @@ where
     groups.sort_by_key(|group| group[0]);
     if groups.len() <= 1 {
         telemetry.fallback_count += 1;
-        groups = balanced_groups(indices.len(), materializability_bound)
-            .map_err(invalid_config)
-            .map_err(E::from)?;
+        groups = balanced_groups(indices.len(), materializability_bound).map_err(|error| {
+            telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+            E::from(invalid_config(error))
+        })?;
     }
 
     let child_ids = (0..groups.len())
@@ -3255,6 +3246,22 @@ struct RecursivePlanningTelemetry {
 }
 
 impl RecursivePlanningTelemetry {
+    fn fail_unit(
+        &mut self,
+        stage: PlanningStage,
+        legacy_item_count: usize,
+        partition_path: &str,
+        stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
+    ) {
+        self.completed_planner_invocation_count += 1;
+        stage_observer(self.unit_event(
+            stage,
+            legacy_item_count,
+            partition_path,
+            StreamingIndexingStatusState::Failed,
+        ));
+    }
+
     fn unit_event(
         &self,
         stage: PlanningStage,
