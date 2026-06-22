@@ -701,6 +701,7 @@ impl HierarchicalPlanningPolicy for SizeOnlyStatusPlanningPolicy {
             current_partition_size: Some(embeddings.len()),
             current_recursion_depth: None,
             started_subproblem_count: Some(1),
+            completed_subproblem_count: Some(0),
             visited_partition_count: Some(1),
             finalized_partition_count: Some(0),
             terminal_partition_count: Some(0),
@@ -782,6 +783,7 @@ impl HierarchicalPlanningPolicy for ExplicitStartedSizeOnlyStatusPlanningPolicy 
             current_partition_size: Some(embeddings.len()),
             current_recursion_depth: None,
             started_subproblem_count: Some(1),
+            completed_subproblem_count: Some(0),
             visited_partition_count: Some(1),
             finalized_partition_count: Some(0),
             terminal_partition_count: Some(0),
@@ -3351,7 +3353,8 @@ async fn val_stream_indexer_060_published_directional_pca_reports_structured_rec
     assert!(hierarchy_statuses.iter().any(|status| {
         status
             .started_subproblem_count
-            .is_some_and(|count| Some(count) == status.discovered_unit_count)
+            .zip(status.discovered_unit_count)
+            .is_some_and(|(started, discovered)| started >= discovered)
     }));
     assert!(hierarchy_statuses.iter().any(|status| {
         status
@@ -3362,7 +3365,15 @@ async fn val_stream_indexer_060_published_directional_pca_reports_structured_rec
     }));
     assert!(hierarchy_statuses.iter().any(|status| {
         status.discovered_unit_count.is_some()
-            && status.completed_planner_invocation_count.unwrap_or(0) <= status.completed_unit_count
+            && status.completed_planner_invocation_count == Some(status.completed_unit_count)
+    }));
+    assert!(hierarchy_statuses.iter().any(|status| {
+        status
+            .completed_subproblem_count
+            .zip(status.completed_planner_invocation_count)
+            .is_some_and(|(completed_subproblems, completed_invocations)| {
+                completed_subproblems >= completed_invocations
+            })
     }));
     assert!(
         hierarchy_statuses
