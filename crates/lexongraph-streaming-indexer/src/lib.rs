@@ -24,7 +24,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -281,6 +281,30 @@ pub trait HierarchicalPlanningPolicy {
             block_size_target,
         )
     }
+
+    fn finish_planning_pass_with_status_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_status: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(HierarchyPlanningStatusEvent),
+    {
+        self.finish_planning_pass_with_stage_observer(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            |stage, item_count, state| {
+                observe_status(HierarchyPlanningStatusEvent::legacy(
+                    stage, item_count, state,
+                ));
+            },
+        )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -393,6 +417,58 @@ pub enum StreamingIndexingStatusState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamingIndexingProgressUnitKind {
+    PassItem,
+    HierarchyPlanningItem,
+    PartitionPlanningInvocation,
+    ReplayItem,
+    AssemblyGroup,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HierarchyPlanningStatusEvent {
+    pub stage: PlanningStage,
+    pub state: StreamingIndexingStatusState,
+    pub legacy_item_count: usize,
+    pub progress_unit_kind: Option<StreamingIndexingProgressUnitKind>,
+    pub completed_unit_count: Option<usize>,
+    pub discovered_unit_count: Option<usize>,
+    pub current_partition_path: Option<String>,
+    pub current_partition_size: Option<usize>,
+    pub current_recursion_depth: Option<usize>,
+    pub visited_partition_count: Option<usize>,
+    pub finalized_partition_count: Option<usize>,
+    pub terminal_partition_count: Option<usize>,
+    pub completed_planner_invocation_count: Option<usize>,
+    pub fallback_count: Option<usize>,
+}
+
+impl HierarchyPlanningStatusEvent {
+    pub fn legacy(
+        stage: PlanningStage,
+        legacy_item_count: usize,
+        state: StreamingIndexingStatusState,
+    ) -> Self {
+        Self {
+            stage,
+            state,
+            legacy_item_count,
+            progress_unit_kind: Some(StreamingIndexingProgressUnitKind::HierarchyPlanningItem),
+            completed_unit_count: None,
+            discovered_unit_count: None,
+            current_partition_path: None,
+            current_partition_size: None,
+            current_recursion_depth: None,
+            visited_partition_count: None,
+            finalized_partition_count: None,
+            terminal_partition_count: None,
+            completed_planner_invocation_count: None,
+            fallback_count: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StreamingIndexingStatus {
     pub phase: StreamingIndexingPhase,
@@ -401,6 +477,17 @@ pub struct StreamingIndexingStatus {
     pub phase_total_unit_count: Option<usize>,
     pub completed_unit_count: usize,
     pub remaining_unit_count: Option<usize>,
+    pub progress_unit_kind: Option<StreamingIndexingProgressUnitKind>,
+    pub discovered_unit_count: Option<usize>,
+    pub current_unit_elapsed: Option<Duration>,
+    pub current_partition_path: Option<String>,
+    pub current_partition_size: Option<usize>,
+    pub current_recursion_depth: Option<usize>,
+    pub visited_partition_count: Option<usize>,
+    pub finalized_partition_count: Option<usize>,
+    pub terminal_partition_count: Option<usize>,
+    pub completed_planner_invocation_count: Option<usize>,
+    pub fallback_count: Option<usize>,
     pub elapsed: Duration,
     pub error: Option<String>,
 }
@@ -861,7 +948,7 @@ where
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
-        let mut noop = |_, _, _| {};
+        let mut noop = |_| {};
         derive_hierarchy_from_factory(
             &self.factory,
             embeddings,
@@ -889,7 +976,28 @@ where
             embedding_spec,
             materializability_bound,
             block_size_target,
-            &mut observe_stage,
+            &mut |event| observe_stage(event.stage, event.legacy_item_count, event.state),
+        )
+    }
+
+    fn finish_planning_pass_with_status_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_status: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(HierarchyPlanningStatusEvent),
+    {
+        derive_hierarchy_from_factory(
+            &self.factory,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut observe_status,
         )
     }
 }
@@ -916,7 +1024,7 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         materializability_bound: usize,
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
-        let mut noop = |_, _, _| {};
+        let mut noop = |_| {};
         let (outcome, decision_records) = derive_hierarchy_from_built_in(
             &self.planning,
             embeddings,
@@ -946,7 +1054,30 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
             embedding_spec,
             materializability_bound,
             block_size_target,
-            &mut observe_stage,
+            &mut |event| observe_stage(event.stage, event.legacy_item_count, event.state),
+        )?;
+        self.last_adaptive_decision_records = decision_records;
+        Ok(outcome)
+    }
+
+    fn finish_planning_pass_with_status_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        mut observe_status: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(HierarchyPlanningStatusEvent),
+    {
+        let (outcome, decision_records) = derive_hierarchy_from_built_in(
+            &self.planning,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            &mut observe_status,
         )?;
         self.last_adaptive_decision_records = decision_records;
         Ok(outcome)
@@ -974,7 +1105,7 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
         materializability_bound: usize,
         _block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
-        let mut noop = |_, _, _| {};
+        let mut noop = |_| {};
         derive_hierarchy_from_published_profile(
             &self.profile,
             embeddings,
@@ -1000,7 +1131,27 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
             embeddings,
             embedding_spec,
             materializability_bound,
-            &mut observe_stage,
+            &mut |event| observe_stage(event.stage, event.legacy_item_count, event.state),
+        )
+    }
+
+    fn finish_planning_pass_with_status_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        _block_size_target: usize,
+        mut observe_status: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(HierarchyPlanningStatusEvent),
+    {
+        derive_hierarchy_from_published_profile(
+            &self.profile,
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            &mut observe_status,
         )
     }
 }
@@ -1382,13 +1533,13 @@ where
         let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
         let outcome = self
             .planning_policy
-            .finish_planning_pass_with_stage_observer(
+            .finish_planning_pass_with_status_observer(
                 &buffered,
                 &self.embedding_spec,
                 materializability_bound,
                 self.block_size_target,
-                |stage, item_count, state| {
-                    stage_statuses.observe(stage, state, item_count);
+                |event| {
+                    stage_statuses.observe(event);
                 },
             )
             .map_err(map_planning_policy_error);
@@ -2092,7 +2243,7 @@ fn derive_hierarchy_from_built_in(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     _block_size_target: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<(PlanningPassOutcome, Vec<AdaptiveSwitchDecisionRecord>), StreamingIndexerError> {
     match planning {
         BuiltInPlanning::Dcbc(settings) => derive_hierarchy_for_single_built_in_phase(
@@ -2189,7 +2340,7 @@ fn derive_hierarchy_for_single_built_in_phase(
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match phase.direction() {
         BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder(
@@ -2317,7 +2468,7 @@ fn derive_hierarchy_for_adaptive_built_in(
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<(PlanningPassOutcome, Vec<AdaptiveSwitchDecisionRecord>), StreamingIndexerError> {
     let mut selector =
         AdaptivePlanningSelector::new(settings.clone()).map_err(map_adaptive_planning_error)?;
@@ -2420,7 +2571,7 @@ fn derive_hierarchy_from_published_profile(
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
@@ -2452,7 +2603,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
     settings: &PublishedSphericalKmeansProfileSettings,
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
@@ -2489,16 +2640,16 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
         });
     }
 
-    stage_observer(
+    stage_observer(HierarchyPlanningStatusEvent::legacy(
         PlanningStage::Fine,
         embeddings.len(),
         StreamingIndexingStatusState::Started,
-    );
-    stage_observer(
+    ));
+    stage_observer(HierarchyPlanningStatusEvent::legacy(
         PlanningStage::Fine,
         embeddings.len(),
         StreamingIndexingStatusState::InProgress,
-    );
+    ));
 
     let requested_cluster_count = effective_cluster_count(
         settings.cluster_count,
@@ -2549,16 +2700,16 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
     let mut current_layer = (0..nodes.len()).collect::<Vec<_>>();
 
     if current_layer.len() > 1 {
-        stage_observer(
+        stage_observer(HierarchyPlanningStatusEvent::legacy(
             PlanningStage::Coarse,
             current_layer.len(),
             StreamingIndexingStatusState::Started,
-        );
-        stage_observer(
+        ));
+        stage_observer(HierarchyPlanningStatusEvent::legacy(
             PlanningStage::Coarse,
             current_layer.len(),
             StreamingIndexingStatusState::InProgress,
-        );
+        ));
     }
 
     while current_layer.len() > 1 {
@@ -2634,7 +2785,7 @@ fn derive_hierarchy_from_factory<F>(
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     block_size_target: usize,
-    stage_observer: &mut impl FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingClusteringError>
 where
     F: StreamingClusteringFactory,
@@ -2715,7 +2866,7 @@ where
     E: From<StreamingClusteringError>,
     B: FnMut(&[Vec<f32>]) -> Result<P, E>,
     P: PartitionPlannerRunner,
-    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    SO: FnMut(HierarchyPlanningStatusEvent),
 {
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
@@ -2734,6 +2885,7 @@ where
     let mut accumulator = PlanningMetricAccumulator::default();
     let root_indices = (0..embeddings.len()).collect::<Vec<_>>();
     let mut partitions = Vec::new();
+    let mut telemetry = RecursivePlanningTelemetry::default();
     derive_partition_recursive(
         &root_indices,
         "p0".into(),
@@ -2741,6 +2893,7 @@ where
         embeddings,
         materializability_bound,
         stage_observer,
+        &mut telemetry,
         &mut planner_builder,
         &mut accumulator,
         &mut partitions,
@@ -2769,7 +2922,7 @@ where
     E: From<StreamingClusteringError>,
     B: FnMut(&[Vec<f32>], usize, usize) -> Result<P, E>,
     P: PartitionPlannerRunner,
-    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    SO: FnMut(HierarchyPlanningStatusEvent),
 {
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
@@ -2828,16 +2981,16 @@ where
             max_unit_item_count,
         )?;
         let stage = planner.stage();
-        stage_observer(
+        stage_observer(HierarchyPlanningStatusEvent::legacy(
             stage,
             represented_item_count,
             StreamingIndexingStatusState::Started,
-        );
-        stage_observer(
+        ));
+        stage_observer(HierarchyPlanningStatusEvent::legacy(
             stage,
             represented_item_count,
             StreamingIndexingStatusState::InProgress,
-        );
+        ));
         let (pass_report, assignments) = planner.run(&layer_embeddings).map_err(E::from)?;
         if assignments.len() != layer_embeddings.len() {
             return Err(E::from(invalid_config(format!(
@@ -2965,6 +3118,7 @@ fn derive_partition_recursive<E, B, P, SO>(
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
     stage_observer: &mut SO,
+    telemetry: &mut RecursivePlanningTelemetry,
     planner_builder: &mut B,
     accumulator: &mut PlanningMetricAccumulator,
     partitions: &mut Vec<FinalizedPartition>,
@@ -2973,10 +3127,13 @@ where
     E: From<StreamingClusteringError>,
     B: FnMut(&[Vec<f32>]) -> Result<P, E>,
     P: PartitionPlannerRunner,
-    SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
+    SO: FnMut(HierarchyPlanningStatusEvent),
 {
+    telemetry.visited_partition_count += 1;
     let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
     if terminal {
+        telemetry.finalized_partition_count += 1;
+        telemetry.terminal_partition_count += 1;
         partitions.push(FinalizedPartition {
             id: partition_id,
             parent_id,
@@ -2994,14 +3151,25 @@ where
         .collect::<Vec<_>>();
     let planner = planner_builder(&partition_embeddings)?;
     let stage = planner.stage();
-    stage_observer(stage, indices.len(), StreamingIndexingStatusState::Started);
-    stage_observer(
+    telemetry.discovered_unit_count += 1;
+    stage_observer(telemetry.unit_event(
         stage,
         indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::Started,
+    ));
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
         StreamingIndexingStatusState::InProgress,
-    );
-    let (pass_report, assignments) = planner.run(&partition_embeddings).map_err(E::from)?;
+    ));
+    let (pass_report, assignments) = planner.run(&partition_embeddings).map_err(|error| {
+        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+        E::from(error)
+    })?;
     if assignments.len() != partition_embeddings.len() {
+        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
         return Err(E::from(invalid_config(format!(
             "planner returned {} cluster ids for {} embeddings",
             assignments.len(),
@@ -3018,9 +3186,11 @@ where
     }
     groups.sort_by_key(|group| group[0]);
     if groups.len() <= 1 {
-        groups = balanced_groups(indices.len(), materializability_bound)
-            .map_err(invalid_config)
-            .map_err(E::from)?;
+        telemetry.fallback_count += 1;
+        groups = balanced_groups(indices.len(), materializability_bound).map_err(|error| {
+            telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+            E::from(invalid_config(error))
+        })?;
     }
 
     let child_ids = (0..groups.len())
@@ -3034,6 +3204,13 @@ where
         terminal: false,
         planning_stage: stage,
     });
+    telemetry.completed_planner_invocation_count += 1;
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::Completed,
+    ));
 
     for (child_index, group) in groups.into_iter().enumerate() {
         let child_indices = group
@@ -3047,13 +3224,74 @@ where
             embeddings,
             materializability_bound,
             stage_observer,
+            telemetry,
             planner_builder,
             accumulator,
             partitions,
         )?;
     }
 
+    telemetry.finalized_partition_count += 1;
     Ok(())
+}
+
+#[derive(Default)]
+struct RecursivePlanningTelemetry {
+    discovered_unit_count: usize,
+    visited_partition_count: usize,
+    finalized_partition_count: usize,
+    terminal_partition_count: usize,
+    completed_planner_invocation_count: usize,
+    fallback_count: usize,
+}
+
+impl RecursivePlanningTelemetry {
+    fn fail_unit(
+        &mut self,
+        stage: PlanningStage,
+        legacy_item_count: usize,
+        partition_path: &str,
+        stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
+    ) {
+        self.completed_planner_invocation_count += 1;
+        stage_observer(self.unit_event(
+            stage,
+            legacy_item_count,
+            partition_path,
+            StreamingIndexingStatusState::Failed,
+        ));
+    }
+
+    fn unit_event(
+        &self,
+        stage: PlanningStage,
+        legacy_item_count: usize,
+        partition_path: &str,
+        state: StreamingIndexingStatusState,
+    ) -> HierarchyPlanningStatusEvent {
+        HierarchyPlanningStatusEvent {
+            stage,
+            state,
+            legacy_item_count,
+            progress_unit_kind: Some(
+                StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+            ),
+            completed_unit_count: Some(self.completed_planner_invocation_count),
+            discovered_unit_count: Some(self.discovered_unit_count),
+            current_partition_path: Some(partition_path.to_owned()),
+            current_partition_size: Some(legacy_item_count),
+            current_recursion_depth: Some(partition_depth(partition_path)),
+            visited_partition_count: Some(self.visited_partition_count),
+            finalized_partition_count: Some(self.finalized_partition_count),
+            terminal_partition_count: Some(self.terminal_partition_count),
+            completed_planner_invocation_count: Some(self.completed_planner_invocation_count),
+            fallback_count: Some(self.fallback_count),
+        }
+    }
+}
+
+fn partition_depth(partition_path: &str) -> usize {
+    partition_path.split('.').count().saturating_sub(1)
 }
 
 struct PlanningMetricAccumulator {
@@ -3110,97 +3348,320 @@ impl PlanningMetricAccumulator {
 struct PlanningStageStatusTracker<'a> {
     observer: &'a Option<StreamingIndexingStatusObserver>,
     pass_started: Instant,
-    stage_item_counts: BTreeMap<PlanningStage, usize>,
+    stage_states: BTreeMap<PlanningStage, PlanningStageProgressState>,
+    active_snapshot: Arc<Mutex<Option<HierarchyPlanningHeartbeatSnapshot>>>,
+    active_snapshot_generation: Arc<AtomicUsize>,
+    heartbeat: StatusHeartbeatGuard,
 }
 
 impl<'a> PlanningStageStatusTracker<'a> {
     fn new(observer: &'a Option<StreamingIndexingStatusObserver>, pass_started: Instant) -> Self {
+        let active_snapshot = Arc::new(Mutex::new(None));
+        let active_snapshot_generation = Arc::new(AtomicUsize::new(0));
         Self {
             observer,
             pass_started,
-            stage_item_counts: BTreeMap::new(),
+            stage_states: BTreeMap::new(),
+            heartbeat: StatusHeartbeatGuard::new(start_hierarchy_status_heartbeat(
+                observer,
+                Arc::clone(&active_snapshot),
+                Arc::clone(&active_snapshot_generation),
+                pass_started,
+            )),
+            active_snapshot,
+            active_snapshot_generation,
         }
     }
 
-    fn observe(
-        &mut self,
-        stage: PlanningStage,
-        state: StreamingIndexingStatusState,
-        item_count: usize,
-    ) {
-        match state {
-            StreamingIndexingStatusState::Started => self.ensure_started(stage, item_count),
-            StreamingIndexingStatusState::InProgress => {
-                self.ensure_started(stage, item_count);
-                let total = self.stage_item_counts.entry(stage).or_insert(0);
-                *total += item_count;
-                emit_status(
-                    self.observer,
-                    status_with_progress(
-                        StreamingIndexingPhase::HierarchyPlanning { stage },
-                        state,
-                        None,
-                        *total,
-                        self.pass_started.elapsed(),
-                        None,
-                    ),
-                );
+    fn observe(&mut self, event: HierarchyPlanningStatusEvent) {
+        if event.state != StreamingIndexingStatusState::Started {
+            self.ensure_started(&event);
+        }
+        let (
+            completed_unit_count,
+            progress_unit_kind,
+            discovered_unit_count,
+            visited_partition_count,
+            finalized_partition_count,
+            terminal_partition_count,
+            completed_planner_invocation_count,
+            fallback_count,
+        ) = {
+            let stage_state = self
+                .stage_states
+                .entry(event.stage)
+                .or_insert_with(|| PlanningStageProgressState::new(event.legacy_item_count));
+            stage_state.observe(&event);
+            (
+                stage_state.completed_unit_count,
+                stage_state.progress_unit_kind,
+                stage_state.discovered_unit_count,
+                stage_state.visited_partition_count,
+                stage_state.finalized_partition_count,
+                stage_state.terminal_partition_count,
+                stage_state.completed_planner_invocation_count,
+                stage_state.fallback_count,
+            )
+        };
+        let unit_started = self.update_current_unit_started(&event);
+        let status = status_with_hierarchy_details(
+            StreamingIndexingPhase::HierarchyPlanning { stage: event.stage },
+            event.state,
+            None,
+            completed_unit_count,
+            self.pass_started.elapsed(),
+            None,
+            HierarchyPlanningDetailFields {
+                legacy_item_count: Some(event.legacy_item_count),
+                progress_unit_kind,
+                discovered_unit_count,
+                current_unit_elapsed: hierarchy_event_current_unit_elapsed(
+                    event.state,
+                    unit_started,
+                ),
+                current_partition_path: event.current_partition_path.clone(),
+                current_partition_size: event.current_partition_size,
+                current_recursion_depth: event.current_recursion_depth,
+                visited_partition_count,
+                finalized_partition_count,
+                terminal_partition_count,
+                completed_planner_invocation_count,
+                fallback_count,
+            },
+        );
+        match event.state {
+            StreamingIndexingStatusState::Started | StreamingIndexingStatusState::InProgress => {
+                emit_status(self.observer, status.clone());
+                self.replace_active_snapshot(HierarchyPlanningHeartbeatSnapshot {
+                    snapshot_generation: 0,
+                    status,
+                    current_unit_started: unit_started,
+                });
             }
-            StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed => {}
+            StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed => {
+                self.clear_active_snapshot();
+                emit_status(self.observer, status);
+            }
         }
     }
 
-    fn complete_all(&self, elapsed: Duration) {
-        for (stage, item_count) in &self.stage_item_counts {
+    fn complete_all(&mut self, elapsed: Duration) {
+        self.clear_active_snapshot();
+        self.heartbeat.stop();
+        for (stage, state) in &self.stage_states {
             emit_status(
                 self.observer,
-                status_with_progress(
+                status_with_hierarchy_details(
                     StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
                     StreamingIndexingStatusState::Completed,
                     None,
-                    *item_count,
+                    state.completed_unit_count,
                     elapsed,
                     None,
+                    HierarchyPlanningDetailFields {
+                        legacy_item_count: None,
+                        progress_unit_kind: state.progress_unit_kind,
+                        discovered_unit_count: state.discovered_unit_count,
+                        current_unit_elapsed: None,
+                        current_partition_path: None,
+                        current_partition_size: None,
+                        current_recursion_depth: None,
+                        visited_partition_count: state.visited_partition_count,
+                        finalized_partition_count: state.finalized_partition_count,
+                        terminal_partition_count: state.terminal_partition_count,
+                        completed_planner_invocation_count: state
+                            .completed_planner_invocation_count,
+                        fallback_count: state.fallback_count,
+                    },
                 ),
             );
         }
     }
 
-    fn fail_all(&self, elapsed: Duration, error: &str) {
-        for (stage, item_count) in &self.stage_item_counts {
+    fn fail_all(&mut self, elapsed: Duration, error: &str) {
+        self.clear_active_snapshot();
+        self.heartbeat.stop();
+        for (stage, state) in &self.stage_states {
             emit_status(
                 self.observer,
-                status_with_progress(
+                status_with_hierarchy_details(
                     StreamingIndexingPhase::HierarchyPlanning { stage: *stage },
                     StreamingIndexingStatusState::Failed,
                     None,
-                    *item_count,
+                    state.completed_unit_count,
                     elapsed,
                     Some(error.to_owned()),
+                    HierarchyPlanningDetailFields {
+                        legacy_item_count: None,
+                        progress_unit_kind: state.progress_unit_kind,
+                        discovered_unit_count: state.discovered_unit_count,
+                        current_unit_elapsed: None,
+                        current_partition_path: None,
+                        current_partition_size: None,
+                        current_recursion_depth: None,
+                        visited_partition_count: state.visited_partition_count,
+                        finalized_partition_count: state.finalized_partition_count,
+                        terminal_partition_count: state.terminal_partition_count,
+                        completed_planner_invocation_count: state
+                            .completed_planner_invocation_count,
+                        fallback_count: state.fallback_count,
+                    },
                 ),
             );
         }
     }
 
-    fn ensure_started(&mut self, stage: PlanningStage, item_count: usize) {
-        if self.stage_item_counts.contains_key(&stage) {
+    fn ensure_started(&mut self, event: &HierarchyPlanningStatusEvent) {
+        if self.stage_states.contains_key(&event.stage) {
             return;
         }
-        self.stage_item_counts.insert(stage, 0);
+        self.stage_states.insert(
+            event.stage,
+            PlanningStageProgressState::new(event.legacy_item_count),
+        );
         emit_status(
             self.observer,
-            with_legacy_item_count(
-                status_with_progress(
-                    StreamingIndexingPhase::HierarchyPlanning { stage },
-                    StreamingIndexingStatusState::Started,
-                    None,
-                    0,
-                    Duration::ZERO,
-                    None,
-                ),
-                item_count,
+            status_with_hierarchy_details(
+                StreamingIndexingPhase::HierarchyPlanning { stage: event.stage },
+                StreamingIndexingStatusState::Started,
+                None,
+                0,
+                Duration::ZERO,
+                None,
+                HierarchyPlanningDetailFields {
+                    legacy_item_count: Some(event.legacy_item_count),
+                    progress_unit_kind: event.progress_unit_kind,
+                    discovered_unit_count: event.discovered_unit_count,
+                    current_unit_elapsed: hierarchy_event_has_unit_descriptor(event)
+                        .then_some(Duration::ZERO),
+                    current_partition_path: event.current_partition_path.clone(),
+                    current_partition_size: event.current_partition_size,
+                    current_recursion_depth: event.current_recursion_depth,
+                    visited_partition_count: event.visited_partition_count,
+                    finalized_partition_count: event.finalized_partition_count,
+                    terminal_partition_count: event.terminal_partition_count,
+                    completed_planner_invocation_count: event.completed_planner_invocation_count,
+                    fallback_count: event.fallback_count,
+                },
             ),
         );
+    }
+
+    fn replace_active_snapshot(&self, snapshot: HierarchyPlanningHeartbeatSnapshot) {
+        let snapshot_generation = self
+            .active_snapshot_generation
+            .fetch_add(1, AtomicOrdering::SeqCst)
+            + 1;
+        if let Ok(mut active) = self.active_snapshot.lock() {
+            *active = Some(HierarchyPlanningHeartbeatSnapshot {
+                snapshot_generation,
+                ..snapshot
+            });
+        }
+    }
+
+    fn clear_active_snapshot(&self) {
+        self.active_snapshot_generation
+            .fetch_add(1, AtomicOrdering::SeqCst);
+        if let Ok(mut active) = self.active_snapshot.lock() {
+            *active = None;
+        }
+    }
+
+    fn update_current_unit_started(&self, event: &HierarchyPlanningStatusEvent) -> Option<Instant> {
+        if !hierarchy_event_has_unit_descriptor(event) {
+            return None;
+        }
+        let now = Instant::now();
+        let active = self.active_snapshot.lock().ok()?;
+        match active.as_ref() {
+            Some(existing)
+                if existing.status.phase
+                    == (StreamingIndexingPhase::HierarchyPlanning { stage: event.stage })
+                    && existing.status.current_partition_path == event.current_partition_path
+                    && existing.status.current_partition_size == event.current_partition_size
+                    && existing.status.current_recursion_depth == event.current_recursion_depth =>
+            {
+                existing.current_unit_started
+            }
+            _ => Some(now),
+        }
+    }
+}
+
+fn hierarchy_event_has_unit_descriptor(event: &HierarchyPlanningStatusEvent) -> bool {
+    event.current_partition_path.is_some()
+        || event.current_partition_size.is_some()
+        || event.current_recursion_depth.is_some()
+}
+
+fn hierarchy_event_current_unit_elapsed(
+    state: StreamingIndexingStatusState,
+    unit_started: Option<Instant>,
+) -> Option<Duration> {
+    match (state, unit_started) {
+        (StreamingIndexingStatusState::Started, Some(_)) => Some(Duration::ZERO),
+        (_, Some(started)) => Some(started.elapsed()),
+        (_, None) => None,
+    }
+}
+
+#[derive(Clone)]
+struct HierarchyPlanningHeartbeatSnapshot {
+    snapshot_generation: usize,
+    status: StreamingIndexingStatus,
+    current_unit_started: Option<Instant>,
+}
+
+struct PlanningStageProgressState {
+    legacy_item_count: usize,
+    progress_unit_kind: Option<StreamingIndexingProgressUnitKind>,
+    completed_unit_count: usize,
+    discovered_unit_count: Option<usize>,
+    visited_partition_count: Option<usize>,
+    finalized_partition_count: Option<usize>,
+    terminal_partition_count: Option<usize>,
+    completed_planner_invocation_count: Option<usize>,
+    fallback_count: Option<usize>,
+}
+
+impl PlanningStageProgressState {
+    fn new(legacy_item_count: usize) -> Self {
+        Self {
+            legacy_item_count,
+            progress_unit_kind: None,
+            completed_unit_count: 0,
+            discovered_unit_count: None,
+            visited_partition_count: None,
+            finalized_partition_count: None,
+            terminal_partition_count: None,
+            completed_planner_invocation_count: None,
+            fallback_count: None,
+        }
+    }
+
+    fn observe(&mut self, event: &HierarchyPlanningStatusEvent) {
+        self.legacy_item_count = event.legacy_item_count;
+        self.progress_unit_kind = event.progress_unit_kind.or(self.progress_unit_kind);
+        if let Some(completed_unit_count) = event.completed_unit_count {
+            self.completed_unit_count = completed_unit_count;
+        } else if event.state == StreamingIndexingStatusState::InProgress {
+            self.completed_unit_count += event.legacy_item_count;
+        }
+        self.discovered_unit_count = event.discovered_unit_count.or(self.discovered_unit_count);
+        self.visited_partition_count = event
+            .visited_partition_count
+            .or(self.visited_partition_count);
+        self.finalized_partition_count = event
+            .finalized_partition_count
+            .or(self.finalized_partition_count);
+        self.terminal_partition_count = event
+            .terminal_partition_count
+            .or(self.terminal_partition_count);
+        self.completed_planner_invocation_count = event
+            .completed_planner_invocation_count
+            .or(self.completed_planner_invocation_count);
+        self.fallback_count = event.fallback_count.or(self.fallback_count);
     }
 }
 
@@ -3220,6 +3681,18 @@ fn status_with_progress(
     elapsed: Duration,
     error: Option<String>,
 ) -> StreamingIndexingStatus {
+    let progress_unit_kind = match &phase {
+        StreamingIndexingPhase::PlanningPass { .. } => {
+            Some(StreamingIndexingProgressUnitKind::PassItem)
+        }
+        StreamingIndexingPhase::HierarchyPlanning { .. } => None,
+        StreamingIndexingPhase::FinalMaterializationReplay => {
+            Some(StreamingIndexingProgressUnitKind::ReplayItem)
+        }
+        StreamingIndexingPhase::BottomUpAssembly { .. } => {
+            Some(StreamingIndexingProgressUnitKind::AssemblyGroup)
+        }
+    };
     StreamingIndexingStatus {
         phase,
         state,
@@ -3227,6 +3700,17 @@ fn status_with_progress(
         phase_total_unit_count,
         completed_unit_count,
         remaining_unit_count: remaining_units(phase_total_unit_count, completed_unit_count),
+        progress_unit_kind,
+        discovered_unit_count: None,
+        current_unit_elapsed: None,
+        current_partition_path: None,
+        current_partition_size: None,
+        current_recursion_depth: None,
+        visited_partition_count: None,
+        finalized_partition_count: None,
+        terminal_partition_count: None,
+        completed_planner_invocation_count: None,
+        fallback_count: None,
         elapsed,
         error,
     }
@@ -3250,6 +3734,56 @@ fn status_with_known_total(
     )
 }
 
+struct HierarchyPlanningDetailFields {
+    legacy_item_count: Option<usize>,
+    progress_unit_kind: Option<StreamingIndexingProgressUnitKind>,
+    discovered_unit_count: Option<usize>,
+    current_unit_elapsed: Option<Duration>,
+    current_partition_path: Option<String>,
+    current_partition_size: Option<usize>,
+    current_recursion_depth: Option<usize>,
+    visited_partition_count: Option<usize>,
+    finalized_partition_count: Option<usize>,
+    terminal_partition_count: Option<usize>,
+    completed_planner_invocation_count: Option<usize>,
+    fallback_count: Option<usize>,
+}
+
+fn status_with_hierarchy_details(
+    phase: StreamingIndexingPhase,
+    state: StreamingIndexingStatusState,
+    phase_total_unit_count: Option<usize>,
+    completed_unit_count: usize,
+    elapsed: Duration,
+    error: Option<String>,
+    detail: HierarchyPlanningDetailFields,
+) -> StreamingIndexingStatus {
+    let legacy_item_count = detail.legacy_item_count;
+    let mut status = status_with_progress(
+        phase,
+        state,
+        phase_total_unit_count,
+        completed_unit_count,
+        elapsed,
+        error,
+    );
+    status.progress_unit_kind = detail.progress_unit_kind;
+    status.discovered_unit_count = detail.discovered_unit_count;
+    status.current_unit_elapsed = detail.current_unit_elapsed;
+    status.current_partition_path = detail.current_partition_path;
+    status.current_partition_size = detail.current_partition_size;
+    status.current_recursion_depth = detail.current_recursion_depth;
+    status.visited_partition_count = detail.visited_partition_count;
+    status.finalized_partition_count = detail.finalized_partition_count;
+    status.terminal_partition_count = detail.terminal_partition_count;
+    status.completed_planner_invocation_count = detail.completed_planner_invocation_count;
+    status.fallback_count = detail.fallback_count;
+    if let Some(legacy_item_count) = legacy_item_count {
+        status.item_count = legacy_item_count;
+    }
+    status
+}
+
 fn with_legacy_item_count(
     mut status: StreamingIndexingStatus,
     legacy_item_count: usize,
@@ -3265,6 +3799,42 @@ fn emit_status(
     if let Some(obs) = observer {
         let _ = catch_unwind(AssertUnwindSafe(|| obs(status)));
     }
+}
+
+fn start_hierarchy_status_heartbeat(
+    observer: &Option<StreamingIndexingStatusObserver>,
+    active_snapshot: Arc<Mutex<Option<HierarchyPlanningHeartbeatSnapshot>>>,
+    active_snapshot_generation: Arc<AtomicUsize>,
+    pass_started: Instant,
+) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
+    let observer = observer.as_ref().map(Arc::clone)?;
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        while matches!(
+            stop_rx.recv_timeout(STATUS_HEARTBEAT_INTERVAL),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ) {
+            let snapshot = active_snapshot.lock().ok().and_then(|guard| guard.clone());
+            let Some(snapshot) = snapshot else {
+                continue;
+            };
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let mut status = snapshot.status.clone();
+                status.state = StreamingIndexingStatusState::InProgress;
+                status.elapsed = pass_started.elapsed();
+                status.current_unit_elapsed = snapshot
+                    .current_unit_started
+                    .map(|started| started.elapsed());
+                if active_snapshot_generation.load(AtomicOrdering::SeqCst)
+                    != snapshot.snapshot_generation
+                {
+                    return;
+                }
+                observer(status);
+            }));
+        }
+    });
+    Some((stop_tx, handle))
 }
 
 fn start_status_heartbeat(

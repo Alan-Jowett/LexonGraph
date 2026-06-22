@@ -431,9 +431,14 @@ Capture the observer stream and inspect the per-phase progress payloads.
 `phase_total_unit_count`, `completed_unit_count`, and `remaining_unit_count`
 match the phase-specific semantics defined in the design, and a downstream can
 derive materially useful progress such as "processed X / Y, Z remaining"
-without inferring semantics from elapsed time alone.
+without inferring semantics from elapsed time alone. For recursive
+hierarchy-planning work, the captured structured payload also exposes the
+declared planning-unit kind plus any current-unit descriptor and
+discovered-unit fields required by the design, or explicitly reports those
+fields as unavailable when they are not yet knowable.
 
-**Traces to:** REQ-STREAM-INDEXER-039
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
+REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064
 
 ### VAL-STREAM-INDEXER-037
 
@@ -705,3 +710,45 @@ for `0.1.0` or `0.2.0`, and published profile `0.2.0` retains its declared
 requested cluster count of `2` and retained dimension count of `1`.
 
 **Traces to:** REQ-STREAM-INDEXER-056, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-060, REQ-STREAM-INDEXER-061, REQ-STREAM-INDEXER-062, REQ-STREAM-INDEXER-063
+
+### VAL-STREAM-INDEXER-059
+
+Run a deterministic recursive or divisive planning fixture that forces at least
+one hierarchy-planning unit to remain active long enough for multiple
+`InProgress` observer updates to be emitted before the enclosing planning pass
+completes.
+
+Capture the observer stream for the relevant `HierarchyPlanning { stage }`
+phase.
+
+**Pass condition:** before planning-pass completion, the observer stream shows
+all of the following:
+
+- a declared planning-unit kind for the recursive phase
+- repeated `InProgress` updates for the same current planning unit with
+  monotonically increasing `current_unit_elapsed`
+- at least one later update whose `current_partition_path` or equivalent unit
+  descriptor changes because work moved to a different partition, or whose
+  `completed_unit_count` advances because one planning unit completed
+- no requirement for downstream callers to infer that state transition from
+  free-form log text
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064
+
+### VAL-STREAM-INDEXER-060
+
+Run a deterministic recursive or divisive planning fixture that discovers
+multiple subpartitions and completes multiple planning units.
+
+Capture the `HierarchyPlanning { stage }` observer updates and inspect the
+recursive planning detail fields.
+
+**Pass condition:** the observer stream exposes, or explicitly marks as
+unavailable, the recursive planning fields required by the design for current
+unit identity and discovered work. When those fields are available,
+`discovered_unit_count`, `completed_unit_count`, and the aggregate partition or
+planner counters are monotonic non-decreasing, and a downstream caller can
+distinguish "still working the same partition" from "advanced to another
+partition" without guessing from elapsed time alone.
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064
