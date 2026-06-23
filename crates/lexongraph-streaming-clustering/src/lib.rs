@@ -18,12 +18,6 @@ pub type Embedding = Vec<f32>;
 pub type EmbeddingBatch = Vec<Embedding>;
 pub type PassInput = Vec<EmbeddingBatch>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClusterCardinalityMode {
-    Exact,
-    UnderfullSuccess,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct StreamingClusteringConfig {
     pub cluster_count: u32,
