@@ -4038,6 +4038,14 @@ fn val_stream_indexer_085_v0_4_profiles_fail_when_materializability_conflicts_wi
 
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_086_v0_4_profiles_allow_emergent_underfill_from_too_few_children() {
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_4_1).unwrap();
+    match profile.planning_strategy {
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+            assert_eq!(settings.cluster_count, 128);
+        }
+        other => panic!("unexpected published planning strategy: {other:?}"),
+    }
+
     let items = (0..220)
         .map(|index| IndexItem {
             metadata: vec![],
