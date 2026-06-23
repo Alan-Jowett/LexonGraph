@@ -227,27 +227,16 @@ fn validate_directional_pca_params(
                 )));
             }
         }
-        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {}
-    }
-    match (
-        params.retained_axis_policy,
-        params.allocation_policy,
-        params.binning_policy,
-    ) {
-        (
-            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(_),
-            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-            lexongraph_directional_pca::DirectionalPcaBinningPolicy::Quantile,
-        )
-        | (
-            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-            lexongraph_directional_pca::DirectionalPcaBinningPolicy::DensityValley,
-        ) => {}
-        _ => {
-            return Err(AdaptivePlanningError::InvalidConfiguration(
-                "unsupported directional-PCA policy combination".into(),
-            ));
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
+            if params.allocation_policy
+                == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins
+                && params.min_effective_rank > settings.cluster_count as usize
+            {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "min_effective_rank {} cannot exceed centroid-weighted adaptive axis budget {}",
+                    params.min_effective_rank, settings.cluster_count
+                )));
+            }
         }
     }
     if params.allocation_policy

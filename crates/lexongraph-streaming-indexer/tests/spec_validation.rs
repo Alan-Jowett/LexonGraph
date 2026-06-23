@@ -34,12 +34,15 @@ use lexongraph_streaming_indexer::{
     BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
     DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
     FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PUBLISHED_PROFILE_V0_1_0,
-    PUBLISHED_PROFILE_V0_2_0, PUBLISHED_PROFILE_V0_3_0, PlanningPassOutcome, PlanningStage,
-    PublishedHierarchyMetric, PublishedPlanningStrategy, PublishedProfileVersion,
-    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
-    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
-    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
-    published_indexing_profile,
+    PUBLISHED_PROFILE_V0_2_0, PUBLISHED_PROFILE_V0_3_0, PUBLISHED_PROFILE_V0_3_1,
+    PUBLISHED_PROFILE_V0_3_2, PUBLISHED_PROFILE_V0_3_3, PUBLISHED_PROFILE_V0_3_4,
+    PUBLISHED_PROFILE_V0_3_5, PUBLISHED_PROFILE_V0_3_6, PUBLISHED_PROFILE_V0_3_7,
+    PUBLISHED_PROFILE_V0_3_8, PUBLISHED_PROFILE_V0_3_9, PUBLISHED_PROFILE_V0_3_10,
+    PlanningPassOutcome, PlanningStage, PublishedHierarchyMetric, PublishedPlanningStrategy,
+    PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
+    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingStatusState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -3217,6 +3220,7 @@ fn val_stream_indexer_058_all_published_profiles_remain_resolvable() {
                 DirectionalPcaClusterCardinalityMode::Exact
             );
         }
+
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
     match v0_3_0.planning_strategy {
@@ -3238,6 +3242,31 @@ fn val_stream_indexer_058_all_published_profiles_remain_resolvable() {
                 settings.params.cluster_cardinality_mode,
                 DirectionalPcaClusterCardinalityMode::UnderfullSuccess
             );
+        }
+        other => panic!("unexpected published planning strategy: {other:?}"),
+    }
+}
+
+fn assert_directional_pca_published_profile(
+    version: PublishedProfileVersion,
+    expected_cluster_count: u32,
+    expected_params: DirectionalPcaParams,
+) {
+    let profile = published_indexing_profile(version).unwrap();
+    assert_eq!(profile.version, version);
+    assert_eq!(profile.planning_algorithm_id, "directional-pca");
+    assert_eq!(
+        profile.planning_direction,
+        Some(BuiltInPlanningDirection::Divisive)
+    );
+    assert_eq!(profile.packing_strategy_id, None);
+    assert_eq!(profile.hierarchy_strategy_id, "built-in-divisive");
+    assert_eq!(profile.summary_policy_id, "exact-centroid");
+    match profile.planning_strategy {
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+            assert_eq!(settings.cluster_count, expected_cluster_count);
+            assert_eq!(settings.random_seed, Some(7));
+            assert_eq!(settings.params, expected_params);
         }
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
@@ -3466,6 +3495,244 @@ async fn val_stream_indexer_060_published_directional_pca_reports_structured_rec
         })
         .is_some();
     assert!(monotonic_recursive_counters);
+}
+
+#[test]
+fn val_stream_indexer_061_published_profile_v0_3_1_increases_fanout() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_1,
+        128,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_062_published_profile_v0_3_2_decreases_fanout() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_2,
+        32,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_063_published_profile_v0_3_3_switches_to_quantile() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_3,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_064_published_profile_v0_3_4_reverts_to_pc1_only() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_4,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_065_published_profile_v0_3_5_uses_centroid_weighted_density_valley() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_5,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_066_published_profile_v0_3_6_caps_retained_axes_at_two() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_6,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_067_published_profile_v0_3_7_caps_retained_axes_at_three() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_7,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(3),
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_068_published_profile_v0_3_8_raises_cumulative_variance_floor() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_8,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.5,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_069_published_profile_v0_3_9_raises_effective_rank_floor() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_9,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 2,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_070_published_profile_v0_3_10_restores_exact_cardinality() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_3_10,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_071_experiment_profiles_do_not_mutate_v0_3_0() {
+    let baseline = published_indexing_profile(PUBLISHED_PROFILE_V0_3_0).unwrap();
+    for version in [
+        PUBLISHED_PROFILE_V0_3_1,
+        PUBLISHED_PROFILE_V0_3_2,
+        PUBLISHED_PROFILE_V0_3_3,
+        PUBLISHED_PROFILE_V0_3_4,
+        PUBLISHED_PROFILE_V0_3_5,
+        PUBLISHED_PROFILE_V0_3_6,
+        PUBLISHED_PROFILE_V0_3_7,
+        PUBLISHED_PROFILE_V0_3_8,
+        PUBLISHED_PROFILE_V0_3_9,
+        PUBLISHED_PROFILE_V0_3_10,
+    ] {
+        published_indexing_profile(version).unwrap();
+    }
+
+    assert_eq!(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_3_0).unwrap(),
+        baseline
+    );
+}
+
+#[test]
+fn val_stream_indexer_072_all_experiment_profiles_resolve_deterministically() {
+    for version in [
+        PUBLISHED_PROFILE_V0_1_0,
+        PUBLISHED_PROFILE_V0_2_0,
+        PUBLISHED_PROFILE_V0_3_0,
+        PUBLISHED_PROFILE_V0_3_1,
+        PUBLISHED_PROFILE_V0_3_2,
+        PUBLISHED_PROFILE_V0_3_3,
+        PUBLISHED_PROFILE_V0_3_4,
+        PUBLISHED_PROFILE_V0_3_5,
+        PUBLISHED_PROFILE_V0_3_6,
+        PUBLISHED_PROFILE_V0_3_7,
+        PUBLISHED_PROFILE_V0_3_8,
+        PUBLISHED_PROFILE_V0_3_9,
+        PUBLISHED_PROFILE_V0_3_10,
+    ] {
+        assert_eq!(
+            published_indexing_profile(version).unwrap(),
+            published_indexing_profile(version).unwrap()
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
