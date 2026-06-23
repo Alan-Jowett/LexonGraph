@@ -829,6 +829,81 @@ Published indexing profile `0.3.10` shall pin the `0.3.0` directional-PCA
 bundle except that it restores exact cardinality mode in place of
 underfull-success mode.
 
+### REQ-STREAM-INDEXER-079
+
+The repository shall publish a parallel experimental `0.4.x`
+directional-PCA profile ladder alongside the existing `0.3.x` ladder.
+
+Each `0.4.x` profile shall remain explicitly resolvable through the stable
+published-profile selector, shall remain compatible with the existing
+quality-report workflow, and shall not mutate the declared behavior of any
+existing `0.1.x`, `0.2.x`, or `0.3.x` profile.
+
+### REQ-STREAM-INDEXER-080
+
+Published indexing profile `0.4.0` shall define the baseline directional-PCA
+contract for the experimental `0.4.x` ladder and shall equal the `0.3.3`
+directional-PCA bundle:
+
+- requested cluster count = `64`
+- retained-axis policy = `AdaptiveAllEligible`
+- allocation policy = `EigenvalueLogBits`
+- binning policy = `Quantile`
+- cluster cardinality mode = `UnderfullSuccess`
+- `min_effective_rank = 1`
+- `min_cumulative_variance = 0.0`
+
+### REQ-STREAM-INDEXER-081
+
+Published indexing profile `0.4.1` shall pin the `0.4.0` directional-PCA
+bundle except that it increases requested cluster count to `128`.
+
+### REQ-STREAM-INDEXER-082
+
+Published indexing profile `0.4.2` shall pin the `0.4.0` directional-PCA
+bundle except that it decreases requested cluster count to `32`.
+
+### REQ-STREAM-INDEXER-083
+
+Published indexing profile `0.4.3` shall pin the `0.4.0` directional-PCA
+bundle except that it reverts to fixed PC1-only splitting through:
+
+- retained-axis policy = `FixedCount(1)`
+- allocation policy = `CentroidWeightedBins`
+- binning policy = `Quantile`
+
+### REQ-STREAM-INDEXER-084
+
+Published indexing profile `0.4.4` shall pin the `0.4.0` directional-PCA
+bundle except that it selects centroid-weighted allocation in place of
+eigenvalue log-bit allocation.
+
+### REQ-STREAM-INDEXER-085
+
+Published indexing profile `0.4.5` shall pin the `0.4.0` directional-PCA
+bundle except that it caps retained-axis selection at `FixedCount(2)`.
+
+### REQ-STREAM-INDEXER-086
+
+Published indexing profile `0.4.6` shall pin the `0.4.0` directional-PCA
+bundle except that it caps retained-axis selection at `FixedCount(3)`.
+
+### REQ-STREAM-INDEXER-087
+
+Published indexing profile `0.4.7` shall pin the `0.4.0` directional-PCA
+bundle except that it raises minimum cumulative variance to `0.5`.
+
+### REQ-STREAM-INDEXER-088
+
+Published indexing profile `0.4.8` shall pin the `0.4.0` directional-PCA
+bundle except that it raises minimum effective rank to `2`.
+
+### REQ-STREAM-INDEXER-089
+
+Published indexing profile `0.4.9` shall pin the `0.4.0` directional-PCA
+bundle except that it restores exact cardinality mode in place of
+underfull-success mode.
+
 ## Out of Scope
 
 This crate does not define or own:

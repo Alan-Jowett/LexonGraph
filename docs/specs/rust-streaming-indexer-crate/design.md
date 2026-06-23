@@ -787,6 +787,91 @@ behavior.
 Resolving any experimental `0.3.x` profile does not mutate the declared mapping
 of `0.3.0`.
 
+### DSG-STREAM-INDEXER-069 `Experimental 0.4.x profile ladder catalog`
+
+Published indexing profiles `0.4.0` through `0.4.9` are added alongside the
+existing `0.3.x` ladder rather than replacing it.
+
+The published-profile resolver therefore remains an explicit exact-match
+catalog whose experimental ladder entries are independently addressable
+behavioral contracts.
+
+### DSG-STREAM-INDEXER-070 `Quantile-baseline experiment attribution`
+
+Each experimental `0.4.x` profile is specified relative to the `0.4.0`
+directional-PCA baseline with one named primary changed variable wherever
+feasible.
+
+If a selected experiment requires a secondary mechanical compatibility rule,
+that rule is part of the declared profile mapping rather than an implicit
+runtime adjustment.
+
+### DSG-STREAM-INDEXER-071 `Indexing profile 0.4.0 mapping`
+
+Published indexing profile `0.4.0` resolves to the `0.3.3` directional-PCA
+bundle, making quantile binning the baseline for the `0.4.x` ladder.
+
+### DSG-STREAM-INDEXER-072 `Indexing profile 0.4.1 mapping`
+
+Published indexing profile `0.4.1` resolves to the `0.4.0` directional-PCA
+bundle with requested cluster count increased to `128`.
+
+### DSG-STREAM-INDEXER-073 `Indexing profile 0.4.2 mapping`
+
+Published indexing profile `0.4.2` resolves to the `0.4.0` directional-PCA
+bundle with requested cluster count decreased to `32`.
+
+### DSG-STREAM-INDEXER-074 `Indexing profile 0.4.3 mapping`
+
+Published indexing profile `0.4.3` resolves to the `0.4.0` directional-PCA
+bundle with fixed PC1-only retained-axis selection plus the centroid-weighted
+and quantile policies required by that single-axis path.
+
+### DSG-STREAM-INDEXER-075 `Indexing profile 0.4.4 mapping`
+
+Published indexing profile `0.4.4` resolves to the `0.4.0` directional-PCA
+bundle with centroid-weighted allocation selected in place of eigenvalue
+log-bit allocation while preserving quantile binning.
+
+### DSG-STREAM-INDEXER-076 `Indexing profile 0.4.5 mapping`
+
+Published indexing profile `0.4.5` resolves to the `0.4.0` directional-PCA
+bundle with retained-axis selection capped at `FixedCount(2)` while preserving
+quantile binning.
+
+### DSG-STREAM-INDEXER-077 `Indexing profile 0.4.6 mapping`
+
+Published indexing profile `0.4.6` resolves to the `0.4.0` directional-PCA
+bundle with retained-axis selection capped at `FixedCount(3)` while preserving
+quantile binning.
+
+### DSG-STREAM-INDEXER-078 `Indexing profile 0.4.7 mapping`
+
+Published indexing profile `0.4.7` resolves to the `0.4.0` directional-PCA
+bundle with `min_cumulative_variance = 0.5` while preserving quantile binning.
+
+### DSG-STREAM-INDEXER-079 `Indexing profile 0.4.8 mapping`
+
+Published indexing profile `0.4.8` resolves to the `0.4.0` directional-PCA
+bundle with `min_effective_rank = 2` while preserving quantile binning.
+
+### DSG-STREAM-INDEXER-080 `Indexing profile 0.4.9 mapping`
+
+Published indexing profile `0.4.9` resolves to the `0.4.0` directional-PCA
+bundle with exact cardinality mode restored in place of underfull-success mode
+while preserving quantile binning.
+
+### DSG-STREAM-INDEXER-081 `Quantile-baseline ladder evaluation contract`
+
+Each experimental `0.4.x` published profile is documented as a sequentially
+evaluable comparison point against `0.4.0`, not as an alias for "current best"
+behavior.
+
+### DSG-STREAM-INDEXER-082 `Quantile baseline preservation`
+
+Resolving any experimental `0.4.x` profile does not mutate the declared mapping
+of `0.4.0`.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -845,4 +930,18 @@ of `0.3.0`.
 | DSG-STREAM-INDEXER-066 | REQ-STREAM-INDEXER-078 |
 | DSG-STREAM-INDEXER-067 | REQ-STREAM-INDEXER-068 |
 | DSG-STREAM-INDEXER-068 | REQ-STREAM-INDEXER-067 |
+| DSG-STREAM-INDEXER-069 | REQ-STREAM-INDEXER-079 |
+| DSG-STREAM-INDEXER-070 | REQ-STREAM-INDEXER-079, REQ-STREAM-INDEXER-080 |
+| DSG-STREAM-INDEXER-071 | REQ-STREAM-INDEXER-080 |
+| DSG-STREAM-INDEXER-072 | REQ-STREAM-INDEXER-081 |
+| DSG-STREAM-INDEXER-073 | REQ-STREAM-INDEXER-082 |
+| DSG-STREAM-INDEXER-074 | REQ-STREAM-INDEXER-083 |
+| DSG-STREAM-INDEXER-075 | REQ-STREAM-INDEXER-084 |
+| DSG-STREAM-INDEXER-076 | REQ-STREAM-INDEXER-085 |
+| DSG-STREAM-INDEXER-077 | REQ-STREAM-INDEXER-086 |
+| DSG-STREAM-INDEXER-078 | REQ-STREAM-INDEXER-087 |
+| DSG-STREAM-INDEXER-079 | REQ-STREAM-INDEXER-088 |
+| DSG-STREAM-INDEXER-080 | REQ-STREAM-INDEXER-089 |
+| DSG-STREAM-INDEXER-081 | REQ-STREAM-INDEXER-079 |
+| DSG-STREAM-INDEXER-082 | REQ-STREAM-INDEXER-080 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |
