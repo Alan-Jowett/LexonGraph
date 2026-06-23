@@ -255,6 +255,8 @@ Each completed streaming indexing pass shall return a deterministic structured
 pass report that includes:
 
 - the observed item count for that pass
+- the requested and realized planning cluster counts when clustering
+  participates in the reported planning work
 - deterministic planning progress or quality information for the caller-visible
   hierarchy-building work for the selected planning direction, derived from the
   shared streaming clustering surface wherever clustering participates in that
@@ -710,6 +712,7 @@ In this revision, those pinned directional-PCA values for published profile
 - retained-axis policy = `AdaptiveAllEligible`
 - allocation policy = `EigenvalueLogBits`
 - binning policy = `DensityValley`
+- cluster-cardinality mode = `UnderfullSuccess`
 - variance exponent = `1.0`
 - temperature = `1.0`
 - minimum input count = `2`
@@ -719,9 +722,9 @@ In this revision, those pinned directional-PCA values for published profile
 ### REQ-STREAM-INDEXER-063
 
 Published indexing profile `0.3.0` shall select the adaptive retained-axis,
-eigenvalue-log-bit allocation, and density-valley directional-PCA policies
-without mutating the lower-level explicit directional-PCA default path or the
-published behavior of `0.2.0`.
+eigenvalue-log-bit allocation, density-valley, and underfull-success
+directional-PCA policies without mutating the lower-level explicit
+directional-PCA default path or the published behavior of `0.2.0`.
 
 ### REQ-STREAM-INDEXER-064
 

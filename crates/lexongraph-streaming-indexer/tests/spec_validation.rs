@@ -16,7 +16,8 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::DirectionalPcaParams;
 use lexongraph_directional_pca::{
-    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
+    DirectionalPcaClusterCardinalityMode, DirectionalPcaRetainedAxisPolicy,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalInitializationPolicy, SphericalKmeansParams};
@@ -326,6 +327,7 @@ enum RecursivePlannerBehavior {
     Successful,
     FinishPassFailure,
     ShortAssignmentBatch,
+    UnderfullSuccess,
 }
 
 #[derive(Clone, Copy)]
@@ -351,6 +353,12 @@ impl SlowRecursiveClusteringFactory {
             behavior: RecursivePlannerBehavior::ShortAssignmentBatch,
         }
     }
+
+    fn underfull_success() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::UnderfullSuccess,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -363,6 +371,14 @@ struct SlowRecursiveClassifier {
 impl lexongraph_streaming_clustering::StreamingClusterClassifier for SlowRecursiveClassifier {
     fn config(&self) -> &StreamingClusteringConfig {
         &self.config
+    }
+
+    fn realized_cluster_count(&self) -> u32 {
+        if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
+            2
+        } else {
+            self.config.cluster_count
+        }
     }
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
@@ -416,7 +432,11 @@ impl StreamingClusteringFactory for SlowRecursiveClusteringFactory {
     ) -> Result<Self::Trainer, Self::Error> {
         Ok(SlowRecursiveTrainer {
             config: StreamingClusteringConfig {
-                cluster_count: 2,
+                cluster_count: if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
+                    4
+                } else {
+                    2
+                },
                 dimensions,
                 balance_constraints: None,
                 random_seed: Some(7),
@@ -477,6 +497,12 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
         self.state = TrainerState::PassComplete;
         Ok(lexongraph_streaming_clustering::PassReport {
             observed_count: self.embeddings.len(),
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
+                2
+            } else {
+                self.config.cluster_count
+            },
             quality_metric: 1.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::LargerIsBetter,
@@ -549,6 +575,8 @@ impl HierarchicalPlanningPolicy for InvalidHierarchyPlanningPolicy {
                     },
                 ],
             },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 0.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -602,6 +630,8 @@ impl HierarchicalPlanningPolicy for FixedHierarchyPlanningPolicy {
                     },
                 ],
             },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 1.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -863,6 +893,8 @@ impl HierarchicalPlanningPolicy for NestedHierarchyPlanningPolicy {
                     },
                 ],
             },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 1.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -896,6 +928,7 @@ fn directional_pca_planning(direction: BuiltInPlanningDirection) -> BuiltInPlann
             retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
             allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
             binning_policy: DirectionalPcaBinningPolicy::Quantile,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
             variance_exponent: 1.0,
             temperature: 1.0,
             min_input_count: 2,
@@ -935,6 +968,7 @@ fn hybrid_planning(direction: BuiltInPlanningDirection) -> BuiltInPlanning {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                     allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                    cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -964,6 +998,7 @@ fn adaptive_planning(
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                 allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -992,6 +1027,7 @@ fn invalid_adaptive_planning() -> BuiltInPlanning {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                 allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -1027,6 +1063,7 @@ fn invalid_hybrid_planning() -> BuiltInPlanning {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                     allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                    cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -1056,6 +1093,7 @@ fn mixed_direction_hybrid_planning() -> BuiltInPlanning {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                     allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                    cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -2795,6 +2833,7 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                     allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                    cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -2945,6 +2984,7 @@ async fn val_stream_indexer_052_published_profile_v0_2_0_is_declared_explicitly(
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
                     allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                     binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                    cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -3074,6 +3114,8 @@ async fn val_stream_indexer_056_published_profile_v0_3_0_is_declared_explicitly(
                     retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
                     allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
                     binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+                    cluster_cardinality_mode:
+                        DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -3175,6 +3217,10 @@ fn val_stream_indexer_058_all_published_profiles_remain_resolvable() {
     match v0_2_0.planning_strategy {
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
             assert_eq!(settings.cluster_count, 2);
+            assert_eq!(
+                settings.params.cluster_cardinality_mode,
+                DirectionalPcaClusterCardinalityMode::Exact
+            );
         }
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
@@ -3193,9 +3239,31 @@ fn val_stream_indexer_058_all_published_profiles_remain_resolvable() {
                 settings.params.binning_policy,
                 DirectionalPcaBinningPolicy::DensityValley
             );
+            assert_eq!(
+                settings.params.cluster_cardinality_mode,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess
+            );
         }
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_058b_underfull_success_is_reported_in_indexing_pass_reports() {
+    let items = switch_trigger_items();
+    let mut run = StreamingIndexingRun::with_streaming_clustering_factory(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        SlowRecursiveClusteringFactory::underfull_success(),
+        embedding_spec(),
+        128,
+    );
+    run.ingest_batch(&items).await.unwrap();
+
+    let report = run.finish_pass().unwrap();
+    assert_eq!(report.requested_planning_cluster_count, Some(4));
+    assert_eq!(report.realized_planning_cluster_count, Some(2));
 }
 
 #[tokio::test(flavor = "current_thread")]

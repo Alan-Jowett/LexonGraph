@@ -47,8 +47,9 @@ pub use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{
-    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
-    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
+    DirectionalPcaClusterCardinalityMode, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaStreamingTrainer,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
@@ -84,6 +85,8 @@ pub struct StreamingIndexingResult {
 pub struct IndexingPassReport {
     pub observed_item_count: usize,
     pub completed_pass_count: usize,
+    pub requested_planning_cluster_count: Option<u32>,
+    pub realized_planning_cluster_count: Option<u32>,
     pub planning_quality_metric: f64,
     pub planning_balance_metric: f64,
     pub planning_quality_direction: MetricDirection,
@@ -119,6 +122,8 @@ pub struct FinalizedPartitionHierarchy {
 
 pub struct PlanningPassOutcome {
     pub hierarchy: FinalizedPartitionHierarchy,
+    pub requested_cluster_count: Option<u32>,
+    pub realized_cluster_count: Option<u32>,
     pub planning_quality_metric: f64,
     pub planning_balance_metric: f64,
     pub planning_quality_direction: MetricDirection,
@@ -648,6 +653,11 @@ fn directional_pca_published_profile(
                         DirectionalPcaAllocationPolicy::CentroidWeightedBins
                     },
                     binning_policy,
+                    cluster_cardinality_mode: if version == PUBLISHED_PROFILE_V0_3_0 {
+                        DirectionalPcaClusterCardinalityMode::UnderfullSuccess
+                    } else {
+                        DirectionalPcaClusterCardinalityMode::Exact
+                    },
                     variance_exponent: 1.0,
                     temperature: 1.0,
                     min_input_count: 2,
@@ -1617,6 +1627,8 @@ where
         Ok(IndexingPassReport {
             observed_item_count: self.baseline.as_ref().map_or(0, std::vec::Vec::len),
             completed_pass_count: self.completed_passes,
+            requested_planning_cluster_count: outcome.requested_cluster_count,
+            realized_planning_cluster_count: outcome.realized_cluster_count,
             planning_quality_metric: outcome.planning_quality_metric,
             planning_balance_metric: outcome.planning_balance_metric,
             planning_quality_direction: outcome.planning_quality_direction,
@@ -2618,6 +2630,8 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                 root_partition_id: "p0".into(),
                 partitions: Vec::new(),
             },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 0.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -2639,6 +2653,8 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                     planning_stage: PlanningStage::Single,
                 }],
             },
+            requested_cluster_count: Some(1),
+            realized_cluster_count: Some(1),
             planning_quality_metric: 0.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -2778,6 +2794,8 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
             root_partition_id: "p0".into(),
             partitions,
         },
+        requested_cluster_count: Some(requested_cluster_count),
+        realized_cluster_count: Some(pass_report.realized_cluster_count),
         planning_quality_metric: accumulator.average_quality(),
         planning_balance_metric: accumulator.average_balance(),
         planning_quality_direction: accumulator.quality_direction,
@@ -2892,6 +2910,8 @@ where
                 root_partition_id: "p0".into(),
                 partitions: Vec::new(),
             },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 0.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -2923,6 +2943,8 @@ where
             root_partition_id: "p0".into(),
             partitions,
         },
+        requested_cluster_count: accumulator.requested_cluster_count,
+        realized_cluster_count: accumulator.realized_cluster_count,
         planning_quality_metric: accumulator.average_quality(),
         planning_balance_metric: accumulator.average_balance(),
         planning_quality_direction: accumulator.quality_direction,
@@ -2949,6 +2971,8 @@ where
                 root_partition_id: "p0".into(),
                 partitions: Vec::new(),
             },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 0.0,
             planning_balance_metric: 0.0,
             planning_quality_direction: MetricDirection::LargerIsBetter,
@@ -3090,6 +3114,8 @@ where
             root_partition_id: "p0".into(),
             partitions,
         },
+        requested_cluster_count: accumulator.requested_cluster_count,
+        realized_cluster_count: accumulator.realized_cluster_count,
         planning_quality_metric: accumulator.average_quality(),
         planning_balance_metric: accumulator.average_balance(),
         planning_quality_direction: accumulator.quality_direction,
@@ -3344,6 +3370,8 @@ struct PlanningMetricAccumulator {
     quality_sum: f64,
     balance_sum: f64,
     cluster_runs: usize,
+    requested_cluster_count: Option<u32>,
+    realized_cluster_count: Option<u32>,
     quality_direction: MetricDirection,
     balance_direction: MetricDirection,
     stages_used: BTreeSet<PlanningStage>,
@@ -3355,6 +3383,8 @@ impl Default for PlanningMetricAccumulator {
             quality_sum: 0.0,
             balance_sum: 0.0,
             cluster_runs: 0,
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             quality_direction: MetricDirection::LargerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
             stages_used: BTreeSet::new(),
@@ -3367,6 +3397,8 @@ impl PlanningMetricAccumulator {
         if self.cluster_runs == 0 {
             self.quality_direction = report.quality_direction;
             self.balance_direction = report.balance_direction;
+            self.requested_cluster_count = Some(report.requested_cluster_count);
+            self.realized_cluster_count = Some(report.realized_cluster_count);
         }
         self.quality_sum += report.quality_metric;
         self.balance_sum += report.balance_metric;

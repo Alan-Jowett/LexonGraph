@@ -34,11 +34,18 @@ pub enum DirectionalPcaBinningPolicy {
     DensityValley,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectionalPcaClusterCardinalityMode {
+    Exact,
+    UnderfullSuccess,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DirectionalPcaParams {
     pub retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
     pub allocation_policy: DirectionalPcaAllocationPolicy,
     pub binning_policy: DirectionalPcaBinningPolicy,
+    pub cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode,
     pub variance_exponent: f32,
     pub temperature: f32,
     pub min_input_count: usize,
@@ -131,10 +138,15 @@ impl DirectionalPcaStreamingTrainer {
         let observed_count = self.current_pass.len();
         let current_fingerprint = fingerprint_pass(self.current_pass.as_slice());
         if self.completed_passes == 0 {
-            let minimum_required = self
-                .params
-                .min_input_count
-                .max(self.config.cluster_count as usize);
+            let minimum_required = match self.params.cluster_cardinality_mode {
+                DirectionalPcaClusterCardinalityMode::Exact => self
+                    .params
+                    .min_input_count
+                    .max(self.config.cluster_count as usize),
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess => {
+                    self.params.min_input_count
+                }
+            };
             if observed_count < minimum_required {
                 return Err(unsatisfiable_constraint(format!(
                     "first pass established N = {observed_count}, smaller than the required minimum {minimum_required}"
@@ -163,11 +175,20 @@ impl DirectionalPcaStreamingTrainer {
 
         Ok(PassReport {
             observed_count,
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self
+                .model
+                .as_ref()
+                .map_or(0, |model| model.centroids.len() as u32),
             quality_metric,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: (0..self.config.cluster_count).collect(),
+            cluster_ids: (0..self
+                .model
+                .as_ref()
+                .map_or(0, |model| model.centroids.len() as u32))
+                .collect(),
         })
     }
 }
@@ -236,6 +257,10 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
 impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
     fn config(&self) -> &StreamingClusteringConfig {
         &self.config
+    }
+
+    fn realized_cluster_count(&self) -> u32 {
+        self.centroids.len() as u32
     }
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
@@ -308,6 +333,7 @@ fn fit_pass_model(
         coordinates.as_slice(),
         point_bins.as_slice(),
         config.cluster_count as usize,
+        params.cluster_cardinality_mode,
     )?;
     let centroids = clusters
         .iter()
@@ -894,6 +920,7 @@ fn materialize_clusters(
     coordinates: &[Embedding],
     point_bins: &[Vec<usize>],
     cluster_count: usize,
+    cardinality_mode: DirectionalPcaClusterCardinalityMode,
 ) -> Result<Vec<Cluster>, StreamingClusteringError> {
     let mut buckets: BTreeMap<Vec<usize>, Vec<usize>> = BTreeMap::new();
     for (point_index, key) in point_bins.iter().cloned().enumerate() {
@@ -908,12 +935,17 @@ fn materialize_clusters(
             buckets.len()
         )));
     } else {
-        refine_duplicate_collapse(coordinates, &buckets, cluster_count).ok_or_else(|| {
-            unsatisfiable_constraint(format!(
+        let refined = refine_duplicate_collapse(coordinates, &buckets, cluster_count)?;
+        if refined.len() == cluster_count
+            || cardinality_mode == DirectionalPcaClusterCardinalityMode::UnderfullSuccess
+        {
+            refined
+        } else {
+            return Err(unsatisfiable_constraint(format!(
                 "directional-PCA partition realized {} populated cells and duplicate refinement could not realize the required {cluster_count}",
                 buckets.len()
-            ))
-        })?
+            )));
+        }
     };
 
     member_groups
@@ -929,8 +961,11 @@ fn refine_duplicate_collapse(
     coordinates: &[Embedding],
     buckets: &BTreeMap<Vec<usize>, Vec<usize>>,
     cluster_count: usize,
-) -> Option<Vec<Vec<usize>>> {
-    let mut remaining_extra_clusters = cluster_count.checked_sub(buckets.len())?;
+) -> Result<Vec<Vec<usize>>, StreamingClusteringError> {
+    let mut remaining_extra_clusters =
+        cluster_count.checked_sub(buckets.len()).ok_or_else(|| {
+            unsatisfiable_constraint("cluster_count cannot be smaller than bucket count")
+        })?;
     let mut planned_splits = Vec::with_capacity(buckets.len());
 
     for members in buckets.values() {
@@ -945,10 +980,6 @@ fn refine_duplicate_collapse(
             remaining_extra_clusters -= extras_for_group;
         }
         planned_splits.push((members.clone(), duplicate_groups, allocated_extras));
-    }
-
-    if remaining_extra_clusters != 0 {
-        return None;
     }
 
     let mut refined = Vec::with_capacity(cluster_count);
@@ -970,14 +1001,16 @@ fn refine_duplicate_collapse(
             .filter(|member_index| !peeled_members.contains(member_index))
             .collect::<Vec<_>>();
         if base_cluster.is_empty() {
-            return None;
+            return Err(unsatisfiable_constraint(
+                "duplicate refinement produced an empty base cluster",
+            ));
         }
 
         refined.push(base_cluster);
         refined.extend(extra_clusters);
     }
 
-    Some(refined)
+    Ok(refined)
 }
 
 fn duplicate_coordinate_groups(coordinates: &[Embedding], members: &[usize]) -> Vec<Vec<usize>> {
@@ -1176,6 +1209,7 @@ mod tests {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
                 allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -1205,6 +1239,7 @@ mod tests {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
                 allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
                 binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -1275,6 +1310,7 @@ mod tests {
                 retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
                 allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
                 binning_policy: DirectionalPcaBinningPolicy::DensityValley,
+                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
                 variance_exponent: 1.0,
                 temperature: 1.0,
                 min_input_count: 2,
@@ -1311,6 +1347,7 @@ mod tests {
             retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
             allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
             binning_policy: DirectionalPcaBinningPolicy::Quantile,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
             variance_exponent: 1.0,
             temperature: 1.0,
             min_input_count: 2,

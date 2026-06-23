@@ -7,8 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use lexongraph_directional_pca::{
-    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
-    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
+    DirectionalPcaClusterCardinalityMode, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
     MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringError,
@@ -360,4 +361,25 @@ fn val_dpca_stream_023_non_duplicate_exact_k_failure_still_fails() {
         trainer.finish_pass(),
         Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
     ));
+}
+
+#[test]
+fn val_dpca_stream_023b_underfull_mode_succeeds_and_reports_realized_cluster_count() {
+    let mut underfull_params = exact_k_failure_params();
+    underfull_params.cluster_cardinality_mode =
+        DirectionalPcaClusterCardinalityMode::UnderfullSuccess;
+    let mut trainer =
+        DirectionalPcaStreamingTrainer::new(exact_k_failure_config(), underfull_params).unwrap();
+    for batch in exact_k_failure_pass() {
+        trainer.ingest_batch(batch.as_slice()).unwrap();
+    }
+
+    let report = trainer.finish_pass().unwrap();
+    assert_eq!(report.requested_cluster_count, 3);
+    assert_eq!(report.realized_cluster_count, 2);
+    assert_eq!(report.cluster_ids, vec![0, 1]);
+
+    trainer.complete_training().unwrap();
+    let classifier = trainer.into_classifier().unwrap();
+    assert_eq!(classifier.realized_cluster_count(), 2);
 }

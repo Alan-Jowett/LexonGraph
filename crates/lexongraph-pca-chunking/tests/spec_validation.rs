@@ -45,6 +45,8 @@ fn expected_pass_reports() -> Vec<PassReport> {
     vec![
         PassReport {
             observed_count: 4,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 0.0625,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
@@ -53,6 +55,8 @@ fn expected_pass_reports() -> Vec<PassReport> {
         },
         PassReport {
             observed_count: 4,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 0.0625,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,

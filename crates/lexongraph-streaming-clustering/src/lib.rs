@@ -18,6 +18,12 @@ pub type Embedding = Vec<f32>;
 pub type EmbeddingBatch = Vec<Embedding>;
 pub type PassInput = Vec<EmbeddingBatch>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClusterCardinalityMode {
+    Exact,
+    UnderfullSuccess,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StreamingClusteringConfig {
     pub cluster_count: u32,
@@ -52,6 +58,8 @@ pub enum TrainerState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PassReport {
     pub observed_count: usize,
+    pub requested_cluster_count: u32,
+    pub realized_cluster_count: u32,
     pub quality_metric: f64,
     pub balance_metric: f64,
     pub quality_direction: MetricDirection,
@@ -178,6 +186,10 @@ pub fn validate_embedding(
 
 pub trait StreamingClusterClassifier {
     fn config(&self) -> &StreamingClusteringConfig;
+
+    fn realized_cluster_count(&self) -> u32 {
+        self.config().cluster_count
+    }
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError>;
 
@@ -413,10 +425,28 @@ mod conformance_support {
                 }
             }
             let report = trainer.finish_pass()?;
-            if report.cluster_ids.len() != trainer.config().cluster_count as usize {
+            if report.requested_cluster_count != trainer.config().cluster_count {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected requested cluster count {} in pass report, got {}",
+                    trainer.config().cluster_count,
+                    report.requested_cluster_count
+                )));
+            }
+            if report.realized_cluster_count == 0 {
+                return Err(ConformanceError::Expectation(
+                    "expected pass report to realize at least one cluster".into(),
+                ));
+            }
+            if report.realized_cluster_count > report.requested_cluster_count {
+                return Err(ConformanceError::Expectation(format!(
+                    "expected realized cluster count {} to be <= requested cluster count {}",
+                    report.realized_cluster_count, report.requested_cluster_count
+                )));
+            }
+            if report.cluster_ids.len() != report.realized_cluster_count as usize {
                 return Err(ConformanceError::Expectation(format!(
                     "expected {} cluster ids in pass report, got {}",
-                    trainer.config().cluster_count,
+                    report.realized_cluster_count,
                     report.cluster_ids.len()
                 )));
             }
@@ -449,12 +479,24 @@ mod conformance_support {
             .iter()
             .map(|(embedding, _)| classifier.assign(embedding.as_slice()))
             .collect::<Result<Vec<_>, _>>()?;
+        let realized_cluster_count = classifier.realized_cluster_count();
+        if realized_cluster_count == 0 {
+            return Err(ConformanceError::Expectation(
+                "expected classifier to realize at least one cluster".into(),
+            ));
+        }
+        if realized_cluster_count > classifier.config().cluster_count {
+            return Err(ConformanceError::Expectation(format!(
+                "expected classifier realized cluster count {} to be <= requested cluster count {}",
+                realized_cluster_count,
+                classifier.config().cluster_count
+            )));
+        }
         for cluster_id in &assignments {
-            if *cluster_id >= classifier.config().cluster_count {
+            if *cluster_id >= realized_cluster_count {
                 return Err(ConformanceError::Expectation(format!(
                     "expected classifier assignment to be in [0, {}), got {}",
-                    classifier.config().cluster_count,
-                    cluster_id
+                    realized_cluster_count, cluster_id
                 )));
             }
         }
