@@ -222,6 +222,21 @@ impl ContentResolver<&'static str> for MapResolver {
     }
 }
 
+impl ContentResolver<String> for MapResolver {
+    type Error = FixtureError;
+
+    fn resolve(&self, content_ref: &String) -> Result<Content, Self::Error> {
+        Ok(Content {
+            media_type: "text/plain".into(),
+            body: content_ref.as_bytes().to_vec(),
+        })
+    }
+
+    fn fingerprint(&self, content_ref: &String) -> Result<BlockHash, Self::Error> {
+        Ok(hash_bytes(content_ref.as_bytes()))
+    }
+}
+
 #[derive(Clone, Copy)]
 struct AliasResolver;
 
@@ -4024,12 +4039,18 @@ fn val_stream_indexer_085_v0_4_profiles_fail_when_materializability_conflicts_wi
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_086_v0_4_profiles_allow_emergent_underfill_from_too_few_children() {
     let items = (0..220)
-        .map(|index| {
-            let content_ref = Box::leak(format!("item-{index:03}").into_boxed_str());
-            item(content_ref)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: format!("item-{index:03}"),
         })
         .collect::<Vec<_>>();
-    let mut run = StreamingIndexingRun::with_published_profile(
+    let mut run = StreamingIndexingRun::<
+        String,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
         MapResolver,
         AsciiEmbeddingProvider,
         PUBLISHED_PROFILE_V0_4_1,
