@@ -942,8 +942,9 @@ fn materialize_clusters(
             refined
         } else {
             return Err(unsatisfiable_constraint(format!(
-                "directional-PCA partition realized {} populated cells and duplicate refinement could not realize the required {cluster_count}",
-                buckets.len()
+                "directional-PCA partition realized {} populated cells and duplicate refinement could only realize {} of the required {cluster_count}",
+                buckets.len(),
+                refined.len()
             )));
         }
     };
@@ -1365,5 +1366,33 @@ mod tests {
 
         assert_eq!(model.centroids.len(), 3);
         assert_eq!(model.quality_metric, 0.0);
+    }
+
+    #[test]
+    fn exact_k_failure_reports_post_refinement_realized_count() {
+        let embeddings = vec![
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![2.0, 0.0],
+        ];
+        let coordinates = vec![vec![0.0], vec![0.0], vec![1.0], vec![2.0]];
+        let point_bins = vec![vec![0], vec![0], vec![0], vec![0]];
+
+        let error = materialize_clusters(
+            &embeddings,
+            &coordinates,
+            &point_bins,
+            4,
+            DirectionalPcaClusterCardinalityMode::Exact,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            StreamingClusteringError::UnsatisfiableConstraint { ref message }
+                if message.contains("realized 1 populated cells")
+                    && message.contains("could only realize 2 of the required 4")
+        ));
     }
 }

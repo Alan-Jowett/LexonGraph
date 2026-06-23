@@ -488,11 +488,6 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
             .collect::<Vec<_>>();
         sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
         let threshold = sorted[sorted.len() / 2];
-        let cluster_ids = self
-            .embeddings
-            .iter()
-            .map(|embedding| u32::from(embedding[0] > threshold))
-            .collect::<Vec<_>>();
         self.threshold = Some(threshold);
         self.state = TrainerState::PassComplete;
         Ok(lexongraph_streaming_clustering::PassReport {
@@ -507,7 +502,7 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
             balance_metric: 0.0,
             quality_direction: MetricDirection::LargerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids,
+            cluster_ids: vec![0, 1],
         })
     }
 
