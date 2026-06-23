@@ -983,7 +983,12 @@ fn refine_duplicate_collapse(
         planned_splits.push((members.clone(), duplicate_groups, allocated_extras));
     }
 
-    let mut refined = Vec::with_capacity(cluster_count);
+    let realized_cluster_capacity = buckets.len()
+        + planned_splits
+            .iter()
+            .map(|(_, _, allocated_extras)| allocated_extras.iter().sum::<usize>())
+            .sum::<usize>();
+    let mut refined = Vec::with_capacity(realized_cluster_capacity);
     for (members, duplicate_groups, allocated_extras) in planned_splits {
         let mut peeled_members = BTreeSet::new();
         let mut extra_clusters = Vec::new();
