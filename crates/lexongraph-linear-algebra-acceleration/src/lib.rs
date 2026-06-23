@@ -908,20 +908,20 @@ mod tests {
 
     #[test]
     fn backend_request_scope_restores_previous_request_after_panic() {
-        set_execution_backend_request(ExecutionBackendRequest::Auto);
-
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
-                assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
-                with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
-                    assert_eq!(execution_backend_request(), ExecutionBackendRequest::Wgpu);
-                    panic!("boom");
+        with_execution_backend_request_for_test(ExecutionBackendRequest::Auto, || {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                with_execution_backend_request_for_test(ExecutionBackendRequest::Cpu, || {
+                    assert_eq!(execution_backend_request(), ExecutionBackendRequest::Cpu);
+                    with_execution_backend_request_for_test(ExecutionBackendRequest::Wgpu, || {
+                        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Wgpu);
+                        panic!("boom");
+                    });
                 });
-            });
-        }));
+            }));
 
-        assert!(result.is_err());
-        assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+            assert!(result.is_err());
+            assert_eq!(execution_backend_request(), ExecutionBackendRequest::Auto);
+        });
     }
 
     #[test]
