@@ -42,10 +42,11 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_4_3, PUBLISHED_PROFILE_V0_4_4, PUBLISHED_PROFILE_V0_4_5,
     PUBLISHED_PROFILE_V0_4_6, PUBLISHED_PROFILE_V0_4_7, PUBLISHED_PROFILE_V0_4_8,
     PUBLISHED_PROFILE_V0_4_9, PlanningPassOutcome, PlanningStage, PublishedHierarchyMetric,
-    PublishedPlanningStrategy, PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings,
-    StreamingClusteringFactory, StreamingIndexerError, StreamingIndexingPhase,
-    StreamingIndexingProgressUnitKind, StreamingIndexingRun, StreamingIndexingStatus,
-    StreamingIndexingStatusObserver, StreamingIndexingStatusState, published_indexing_profile,
+    PublishedPlanningStrategy, PublishedProfilePlanningPolicy, PublishedProfileVersion,
+    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
+    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
+    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -217,6 +218,21 @@ impl ContentResolver<&'static str> for MapResolver {
     }
 
     fn fingerprint(&self, content_ref: &&'static str) -> Result<BlockHash, Self::Error> {
+        Ok(hash_bytes(content_ref.as_bytes()))
+    }
+}
+
+impl ContentResolver<String> for MapResolver {
+    type Error = FixtureError;
+
+    fn resolve(&self, content_ref: &String) -> Result<Content, Self::Error> {
+        Ok(Content {
+            media_type: "text/plain".into(),
+            body: content_ref.as_bytes().to_vec(),
+        })
+    }
+
+    fn fingerprint(&self, content_ref: &String) -> Result<BlockHash, Self::Error> {
         Ok(hash_bytes(content_ref.as_bytes()))
     }
 }
@@ -3984,6 +4000,95 @@ fn val_stream_indexer_084_all_profiles_resolve_deterministically_with_parallel_l
             published_indexing_profile(version).unwrap()
         );
     }
+}
+
+#[test]
+fn val_stream_indexer_085_v0_4_profiles_fail_when_materializability_conflicts_with_requested_fanout()
+ {
+    let result = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_4_1,
+        embedding_spec(),
+        128,
+    );
+    let error: StreamingIndexerError = match result {
+        Ok(_) => {
+            panic!("v0.4.1 should fail when materializability conflicts with requested fanout")
+        }
+        Err(error) => error,
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("published profile 0.4.1 requires cluster_count 128"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("block-size/materializability bound"),
+        "unexpected error: {message}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_086_v0_4_profiles_allow_emergent_underfill_from_too_few_children() {
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_4_1).unwrap();
+    match profile.planning_strategy {
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+            assert_eq!(settings.cluster_count, 128);
+        }
+        other => panic!("unexpected published planning strategy: {other:?}"),
+    }
+
+    let items = (0..220)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: format!("item-{index:03}"),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRun::<
+        String,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_4_1,
+        embedding_spec(),
+        6000,
+    )
+    .unwrap();
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let report = run.finish_pass().unwrap();
+    assert_eq!(report.requested_planning_cluster_count, Some(64));
+    assert_eq!(report.realized_planning_cluster_count, Some(64));
+}
+
+#[test]
+fn val_stream_indexer_087_v0_3_profiles_keep_legacy_materializability_clipping_behavior() {
+    let run = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_3_1,
+        embedding_spec(),
+        128,
+    )
+    .unwrap();
+    drop(run);
 }
 
 #[tokio::test(flavor = "current_thread")]

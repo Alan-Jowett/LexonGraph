@@ -1577,6 +1577,7 @@ impl<R, CR, EP>
         block_size_target: usize,
     ) -> Result<Self, StreamingIndexerError> {
         let profile = published_indexing_profile(profile_version)?;
+        validate_published_profile_configuration(&profile, &embedding_spec, block_size_target)?;
         Ok(Self::new(
             resolver,
             embedding_provider,
@@ -1586,6 +1587,31 @@ impl<R, CR, EP>
             block_size_target,
         ))
     }
+}
+
+fn validate_published_profile_configuration(
+    profile: &PublishedIndexingProfile,
+    embedding_spec: &EmbeddingSpec,
+    block_size_target: usize,
+) -> Result<(), StreamingIndexerError> {
+    let PublishedProfileVersion { major, minor, .. } = profile.version;
+    if (major, minor) != (0, 4) {
+        return Ok(());
+    }
+
+    let PublishedPlanningStrategy::DirectionalPcaDivisive(settings) = &profile.planning_strategy
+    else {
+        return Ok(());
+    };
+    let materializability_bound =
+        materializability_bound(embedding_spec, block_size_target).map_err(invalid_config)?;
+    if settings.cluster_count as usize > materializability_bound {
+        return Err(map_clustering_configuration_error(format!(
+            "published profile {} requires cluster_count {} but block-size/materializability bound is {} for the supplied embedding spec and block size target {}",
+            profile.version, settings.cluster_count, materializability_bound, block_size_target
+        )));
+    }
+    Ok(())
 }
 
 impl<R, CR, EP, CEP, F> StreamingIndexingRun<R, CR, EP, CEP, FactoryHierarchicalPlanningPolicy<F>>

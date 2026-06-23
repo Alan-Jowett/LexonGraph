@@ -984,3 +984,38 @@ the parallel experiment ladders remain compatible with sequential comparative
 execution.
 
 **Traces to:** REQ-STREAM-INDEXER-079, REQ-STREAM-INDEXER-080
+
+### VAL-STREAM-INDEXER-085
+
+Resolve published indexing profile `0.4.1` through the convenience surface
+under a block-size target whose branch materializability bound is smaller than
+the profile's requested fanout.
+
+**Pass condition:** published-profile construction fails explicitly and the
+error reports a configured fanout conflict rather than silently clipping the
+request.
+
+**Traces to:** REQ-STREAM-INDEXER-090, REQ-STREAM-INDEXER-091
+
+### VAL-STREAM-INDEXER-086
+
+Run published indexing profile `0.4.1` under a configuration whose requested
+fanout is compatible with the configured materializability bound, but on data
+that does not provide enough represented children to realize a larger
+partition-local fanout.
+
+**Pass condition:** execution remains allowed and any reduction caused by
+insufficient represented children is treated as emergent runtime behavior, not
+as a configuration conflict.
+
+**Traces to:** REQ-STREAM-INDEXER-092
+
+### VAL-STREAM-INDEXER-087
+
+Resolve published indexing profile `0.3.1` under the same conflicting
+configured materializability conditions used for `VAL-STREAM-INDEXER-085`.
+
+**Pass condition:** the legacy profile retains its existing behavior and does
+not inherit the `0.4.x` fail-fast configured-conflict rule.
+
+**Traces to:** REQ-STREAM-INDEXER-093

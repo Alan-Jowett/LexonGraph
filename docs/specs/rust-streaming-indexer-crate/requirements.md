@@ -904,6 +904,33 @@ Published indexing profile `0.4.9` shall pin the `0.4.0` directional-PCA
 bundle except that it restores exact cardinality mode in place of
 underfull-success mode.
 
+### REQ-STREAM-INDEXER-090
+
+Published directional-PCA profiles in the `0.4.x` ladder shall fail explicitly
+when their requested cluster count conflicts with configured non-data
+constraints required by the same profile contract, including the effective
+branch materializability bound implied by the selected embedding spec and block
+size target.
+
+### REQ-STREAM-INDEXER-091
+
+When `REQ-STREAM-INDEXER-090` is violated, the published-profile execution path
+shall return an explicit error that reports the requested fanout and the
+conflicting configured limit rather than silently clipping the request.
+
+### REQ-STREAM-INDEXER-092
+
+Published directional-PCA profiles in the `0.4.x` ladder may still realize
+fewer clusters when a specific partition has too few represented children to
+support the requested fanout, because that reduction is emergent runtime
+behavior rather than a conflict between configured requirements.
+
+### REQ-STREAM-INDEXER-093
+
+Published profiles `0.1.x`, `0.2.x`, and `0.3.x` shall remain behaviorally
+unchanged and shall not inherit the `0.4.x` fail-fast rule for configured
+fanout conflicts.
+
 ## Out of Scope
 
 This crate does not define or own:
