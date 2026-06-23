@@ -140,6 +140,8 @@ impl PcaChunkingStreamingTrainer {
 
         Ok(PassReport {
             observed_count,
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self.config.cluster_count,
             quality_metric,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,

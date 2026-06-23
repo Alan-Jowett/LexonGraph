@@ -41,8 +41,15 @@ shall not require a concrete clustering algorithm.
 
 ### REQ-STREAM-TRAIT-003
 
-The trainer contract shall accept a hard required cluster count `K` and shall
-surface explicit failure once the first completed pass establishes `N < K`.
+The trainer contract shall accept a requested cluster count `K`.
+
+By default, the shared contract remains exact-`K`: the trainer shall surface
+explicit failure once the first completed pass establishes `N < K`.
+
+Concrete implementations may additionally expose an implementation-owned opt-in
+underfull-success mode that permits successful completion with a realized count
+`R` such that `1 <= R <= K` when exact-`K` realization is infeasible under the
+implementation's documented mechanics.
 
 ### REQ-STREAM-TRAIT-004
 
@@ -56,14 +63,20 @@ and stop/continue decisions to the caller.
 
 ### REQ-STREAM-TRAIT-006
 
-The contract shall expose deterministic per-pass fitness reporting with
-separate `quality_metric` and `balance_metric` values plus
-direction-of-improvement metadata.
+The contract shall expose deterministic per-pass fitness reporting with:
+
+- requested cluster count
+- realized cluster count
+- separate `quality_metric` and `balance_metric` values
+- direction-of-improvement metadata
 
 ### REQ-STREAM-TRAIT-007
 
 The classifier contract shall deterministically map each valid embedding to
-exactly one cluster ID in `[0, K)`.
+exactly one cluster ID in `[0, R)`, where `R` is the classifier's realized
+cluster count and `1 <= R <= K`.
+
+For exact-`K` runs, `R = K`.
 
 ### REQ-STREAM-TRAIT-008
 
@@ -80,6 +93,10 @@ state without requiring the original dataset thereafter.
 The crate shall define deterministic explicit error categories covering invalid
 configuration, invalid state transition, unsatisfiable constraint, and
 malformed input.
+
+When a conformant implementation has entered an explicit underfull-success mode,
+failure is still required for malformed input, invalid configuration, invalid
+state transitions, and any case where zero clusters would be realized.
 
 ### REQ-STREAM-TRAIT-011
 

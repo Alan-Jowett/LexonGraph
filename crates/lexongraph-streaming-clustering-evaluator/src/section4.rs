@@ -2966,6 +2966,8 @@ mod tests {
             }],
             pass_reports: vec![ObservablePassReport {
                 observed_count: 4,
+                requested_cluster_count: 2,
+                realized_cluster_count: 2,
                 quality_metric: 0.0,
                 balance_metric: 0.0,
                 quality_direction: crate::ObservableMetricDirection::SmallerIsBetter,

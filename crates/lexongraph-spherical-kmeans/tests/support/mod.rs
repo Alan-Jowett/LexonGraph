@@ -59,6 +59,8 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
     vec![
         PassReport {
             observed_count: 2,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
@@ -67,6 +69,8 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
         },
         PassReport {
             observed_count: 2,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,

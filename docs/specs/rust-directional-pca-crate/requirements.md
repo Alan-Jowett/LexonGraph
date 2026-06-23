@@ -86,6 +86,7 @@ The shared `cluster_count` is a hard requirement for the observable clustering
 surface, and the directional parameters shall include at minimum:
 
 - retained PCA dimension count or equivalent truncation control
+- cluster-cardinality mode for exact-`K` versus underfull-success behavior
 - variance exponent `gamma`
 - temperature `tau`
 - explicit stability or eligibility thresholds retained by the scaled-down
@@ -197,9 +198,9 @@ rather than by quantiles or by a largest-gap proxy.
 
 ### REQ-DPCA-STREAM-015
 
-The crate shall fail explicitly when one completed pass cannot realize exact-K
-partitioning under the documented directional-PCA mechanics, including at
-minimum:
+By default, the crate shall fail explicitly when one completed pass cannot
+realize exact-K partitioning under the documented directional-PCA mechanics,
+including at minimum:
 
 - first-pass `Observed N < K`
 - invalid or infeasible directional parameters
@@ -216,11 +217,18 @@ otherwise indistinguishable members collapse into too few populated cells, the
 crate shall apply the documented deterministic duplicate-refinement rule rather
 than fail.
 
+When an explicit underfull-success cardinality mode is selected, the crate may
+instead succeed with the best deterministic realized count `R` such that
+`1 <= R <= K` after applying the same primary partitioning and
+duplicate-refinement mechanics.
+
 ### REQ-DPCA-STREAM-016
 
 Each completed pass shall return a deterministic `PassReport` containing:
 
 - `observed_count`
+- `requested_cluster_count`
+- `realized_cluster_count`
 - `quality_metric`
 - `balance_metric`
 - quality and balance metric directions
@@ -242,7 +250,8 @@ completed passes and in the final classifier surface.
 After caller-directed training completion, the crate shall produce a
 deterministic classifier that:
 
-- assigns each valid embedding to exactly one cluster ID in `[0, K)`
+- assigns each valid embedding to exactly one cluster ID in `[0, R)`, where
+  `R` is the realized cluster count from the final pass and `1 <= R <= K`
 - rejects malformed embeddings through the shared malformed-input error category
 - does not require the original dataset after classifier production
 

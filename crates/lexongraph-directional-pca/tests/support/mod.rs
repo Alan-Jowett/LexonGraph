@@ -2,8 +2,9 @@
 // Copyright (c) 2026 LexonGraph contributors
 
 use lexongraph_directional_pca::{
-    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy, DirectionalPcaParams,
-    DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingTrainer,
+    DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
+    DirectionalPcaClusterCardinalityMode, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
     BalanceConstraints, ClusterId, Embedding, PassInput, PassReport, StreamingClusteringConfig,
@@ -23,6 +24,7 @@ pub fn params() -> DirectionalPcaParams {
         retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
         allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
         binning_policy: DirectionalPcaBinningPolicy::Quantile,
+        cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
@@ -45,6 +47,7 @@ pub fn exact_k_failure_params() -> DirectionalPcaParams {
         retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
         allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
         binning_policy: DirectionalPcaBinningPolicy::Quantile,
+        cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
@@ -67,6 +70,7 @@ pub fn duplicate_refinement_params() -> DirectionalPcaParams {
         retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
         allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
         binning_policy: DirectionalPcaBinningPolicy::Quantile,
+        cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
@@ -99,6 +103,8 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
     vec![
         PassReport {
             observed_count: 4,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 1.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
@@ -107,6 +113,8 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
         },
         PassReport {
             observed_count: 4,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 1.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,

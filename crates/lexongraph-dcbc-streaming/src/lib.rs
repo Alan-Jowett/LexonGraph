@@ -10,6 +10,7 @@ use lexongraph_streaming_clustering::{
     StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_config,
     validate_embedding,
 };
+use sha2::{Digest, Sha256};
 use solver::solve_lexicographic_assignment;
 
 pub const DCBC_STREAMING_SOFTWARE_IDENTITY: &str =
@@ -24,10 +25,9 @@ pub struct DcbcStreamingTrainer {
     config: StreamingClusteringConfig,
     state: TrainerState,
     current_pass: Vec<Vec<f32>>,
-    baseline_pass: Option<Vec<Vec<f32>>>,
+    baseline_fingerprint: Option<PassFingerprint>,
     completed_passes: usize,
     occupancy_bounds: Option<OccupancyBounds>,
-    raw_centroids: Option<DenseVectors>,
     normalized_centroids: Option<DenseVectors>,
 }
 
@@ -59,6 +59,12 @@ struct PreparedPass {
     dimensions: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PassFingerprint {
+    observed_count: usize,
+    digest: [u8; 32],
+}
+
 impl DcbcStreamingTrainer {
     pub fn new(config: StreamingClusteringConfig) -> Result<Self, StreamingClusteringError> {
         validate_config(&config)?;
@@ -67,10 +73,9 @@ impl DcbcStreamingTrainer {
             config,
             state: TrainerState::Idle,
             current_pass: Vec::new(),
-            baseline_pass: None,
+            baseline_fingerprint: None,
             completed_passes: 0,
             occupancy_bounds: None,
-            raw_centroids: None,
             normalized_centroids: None,
         })
     }
@@ -97,13 +102,14 @@ impl DcbcStreamingTrainer {
 
         let prepared = prepare_pass(&self.current_pass, self.config.dimensions)?;
         let cluster_count = self.config.cluster_count as usize;
+        let current_fingerprint = fingerprint_pass(self.current_pass.as_slice());
         let bounds = match self.occupancy_bounds {
             Some(bounds) => bounds,
             None => derive_occupancy_bounds(&self.config, prepared.raw_points.len())?,
         };
 
         let start_normalized_centroids = if self.completed_passes == 0 {
-            self.baseline_pass = Some(self.current_pass.clone());
+            self.baseline_fingerprint = Some(current_fingerprint);
             self.occupancy_bounds = Some(bounds);
             let (_, normalized_centroids) = initialize_centroids(
                 &prepared.raw_points,
@@ -112,10 +118,15 @@ impl DcbcStreamingTrainer {
             )?;
             normalized_centroids
         } else {
-            let baseline_pass = self.baseline_pass.as_ref().ok_or_else(|| {
+            let baseline_fingerprint = self.baseline_fingerprint.as_ref().ok_or_else(|| {
                 constraint_error("missing baseline dataset for later DCBC passes")
             })?;
-            validate_dataset_continuity(baseline_pass, &self.current_pass)?;
+            if baseline_fingerprint != &current_fingerprint {
+                return Err(StreamingClusteringError::MalformedInput {
+                    message: "later passes must replay the same logical dataset in the same order"
+                        .into(),
+                });
+            }
             self.normalized_centroids
                 .clone()
                 .ok_or_else(|| constraint_error("missing centroid state for later DCBC passes"))?
@@ -129,15 +140,15 @@ impl DcbcStreamingTrainer {
             bounds,
             cluster_count,
         )?;
-
         self.completed_passes += 1;
-        self.raw_centroids = Some(result.raw_centroids.clone());
         self.normalized_centroids = Some(result.normalized_centroids.clone());
         self.current_pass.clear();
         self.state = TrainerState::PassComplete;
 
         Ok(PassReport {
             observed_count: prepared.raw_points.len(),
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self.config.cluster_count,
             quality_metric: result.objective_value,
             balance_metric: balance_metric(self.config.balance_constraints.as_ref()),
             quality_direction: MetricDirection::SmallerIsBetter,
@@ -369,33 +380,19 @@ fn derive_occupancy_bounds(
     Ok(OccupancyBounds { min, max })
 }
 
-fn validate_dataset_continuity(
-    baseline: &[Vec<f32>],
-    current_pass: &[Vec<f32>],
-) -> Result<(), StreamingClusteringError> {
-    if baseline.len() != current_pass.len() {
-        return Err(StreamingClusteringError::MalformedInput {
-            message: format!(
-                "later pass observed_count {} does not match baseline {}",
-                current_pass.len(),
-                baseline.len()
-            ),
-        });
-    }
-
-    for (point_index, (baseline_embedding, current_embedding)) in
-        baseline.iter().zip(current_pass.iter()).enumerate()
-    {
-        if baseline_embedding != current_embedding {
-            return Err(StreamingClusteringError::MalformedInput {
-                message: format!(
-                    "later pass embedding at index {point_index} does not match the baseline dataset order"
-                ),
-            });
+fn fingerprint_pass(embeddings: &[Vec<f32>]) -> PassFingerprint {
+    let mut hasher = Sha256::new();
+    for embedding in embeddings {
+        hasher.update((embedding.len() as u64).to_le_bytes());
+        for value in embedding {
+            hasher.update(value.to_bits().to_le_bytes());
         }
     }
 
-    Ok(())
+    PassFingerprint {
+        observed_count: embeddings.len(),
+        digest: hasher.finalize().into(),
+    }
 }
 
 fn run_iteration(
@@ -888,6 +885,20 @@ mod tests {
             Err(StreamingClusteringError::MalformedInput { .. })
         ));
         assert_eq!(trainer.state(), TrainerState::Error);
+    }
+
+    #[test]
+    fn trainer_tracks_baseline_by_fingerprint_instead_of_retaining_embeddings() {
+        let mut trainer = DcbcStreamingTrainer::new(config()).unwrap();
+        trainer
+            .ingest_batch(&[vec![1.0, 0.0], vec![-1.0, 0.0]])
+            .unwrap();
+
+        trainer.finish_pass().unwrap();
+
+        assert!(trainer.baseline_fingerprint.is_some());
+        assert!(trainer.current_pass.is_empty());
+        assert_eq!(trainer.state(), TrainerState::PassComplete);
     }
 
     #[test]

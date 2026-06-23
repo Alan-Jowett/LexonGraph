@@ -174,6 +174,8 @@ impl From<MetricDirection> for ObservableMetricDirection {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObservablePassReport {
     pub observed_count: usize,
+    pub requested_cluster_count: u32,
+    pub realized_cluster_count: u32,
     pub quality_metric: f64,
     pub balance_metric: f64,
     pub quality_direction: ObservableMetricDirection,
@@ -185,6 +187,8 @@ impl From<PassReport> for ObservablePassReport {
     fn from(value: PassReport) -> Self {
         Self {
             observed_count: value.observed_count,
+            requested_cluster_count: value.requested_cluster_count,
+            realized_cluster_count: value.realized_cluster_count,
             quality_metric: value.quality_metric,
             balance_metric: value.balance_metric,
             quality_direction: value.quality_direction.into(),
@@ -4484,6 +4488,8 @@ fn default_directional_pca_params() -> DirectionalPcaParams {
         allocation_policy:
             lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins,
         binning_policy: lexongraph_directional_pca::DirectionalPcaBinningPolicy::Quantile,
+        cluster_cardinality_mode:
+            lexongraph_directional_pca::DirectionalPcaClusterCardinalityMode::Exact,
         variance_exponent: 1.0,
         temperature: 1.0,
         min_input_count: 2,
@@ -4584,6 +4590,8 @@ impl StreamingClusterTrainer for Section4FamilyStrategyTrainer {
         }
         let report = PassReport {
             observed_count: self.pass_observed_count,
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self.config.cluster_count,
             quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
@@ -5298,6 +5306,8 @@ impl StreamingClusterTrainer for FixtureTrainer {
 
         let report = PassReport {
             observed_count: self.pass_observed_count,
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self.config.cluster_count,
             quality_metric: if matches!(self.mode, FixtureMode::SkewedGateFail) {
                 1.0
             } else {

@@ -121,6 +121,8 @@ impl StreamingClusterTrainer for FixtureTrainer {
         let pass_index = self.completed_passes;
         let report = PassReport {
             observed_count: self.current_pass_count,
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self.config.cluster_count,
             quality_metric: if pass_index == 0 { 10.0 } else { 5.0 },
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
@@ -187,6 +189,8 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
     vec![
         PassReport {
             observed_count: 2,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 10.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
@@ -195,6 +199,8 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
         },
         PassReport {
             observed_count: 2,
+            requested_cluster_count: 2,
+            realized_cluster_count: 2,
             quality_metric: 5.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,

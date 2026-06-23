@@ -52,6 +52,9 @@ and finalization into a classifier only after that completion step.
 The classifier trait exposes deterministic hard assignment for valid embeddings
 and rejects malformed embeddings through the shared error surface.
 
+The classifier also exposes its realized cluster count so callers can interpret
+assignment IDs within `[0, R)`.
+
 ### DSG-STREAM-TRAIT-004 `Shared configuration types`
 
 The crate defines shared configuration types that include `K`, input
@@ -60,9 +63,9 @@ deterministic seed without fixing the downstream optimization method.
 
 ### DSG-STREAM-TRAIT-005 `Pass reporting`
 
-The crate defines shared pass-report types carrying `quality_metric`,
-`balance_metric`, and explicit metric-direction metadata so callers can compare
-passes within one run.
+The crate defines shared pass-report types carrying requested cluster count,
+realized cluster count, `quality_metric`, `balance_metric`, and explicit
+metric-direction metadata so callers can compare passes within one run.
 
 ### DSG-STREAM-TRAIT-006 `Shared error categories`
 

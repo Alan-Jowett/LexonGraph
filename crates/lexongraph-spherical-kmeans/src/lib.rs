@@ -14,6 +14,7 @@ use lexongraph_streaming_clustering::{
     validate_config, validate_embedding,
 };
 use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 
 pub const SPHERICAL_KMEANS_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-spherical-kmeans-v", env!("CARGO_PKG_VERSION"));
@@ -40,7 +41,7 @@ pub struct SphericalKmeansStreamingTrainer {
     params: SphericalKmeansParams,
     state: TrainerState,
     current_pass: Vec<Embedding>,
-    baseline_pass: Option<Vec<Embedding>>,
+    baseline_fingerprint: Option<PassFingerprint>,
     completed_passes: usize,
     normalized_centroids: Option<Vec<Vec<f32>>>,
 }
@@ -57,6 +58,12 @@ struct FitResult {
     objective_value: f64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PassFingerprint {
+    observed_count: usize,
+    digest: [u8; 32],
+}
+
 impl SphericalKmeansStreamingTrainer {
     pub fn new(
         config: StreamingClusteringConfig,
@@ -70,7 +77,7 @@ impl SphericalKmeansStreamingTrainer {
             params,
             state: TrainerState::Idle,
             current_pass: Vec::new(),
-            baseline_pass: None,
+            baseline_fingerprint: None,
             completed_passes: 0,
             normalized_centroids: None,
         })
@@ -109,9 +116,10 @@ impl SphericalKmeansStreamingTrainer {
             )));
         }
 
+        let current_fingerprint = fingerprint_pass(self.current_pass.as_slice());
         if self.completed_passes == 0 {
-            self.baseline_pass = Some(self.current_pass.clone());
-        } else if self.baseline_pass.as_ref() != Some(&self.current_pass) {
+            self.baseline_fingerprint = Some(current_fingerprint);
+        } else if self.baseline_fingerprint.as_ref() != Some(&current_fingerprint) {
             return Err(malformed_input(
                 "later passes must replay the same logical dataset in the same order",
             ));
@@ -141,6 +149,8 @@ impl SphericalKmeansStreamingTrainer {
 
         Ok(PassReport {
             observed_count,
+            requested_cluster_count: self.config.cluster_count,
+            realized_cluster_count: self.config.cluster_count,
             quality_metric: fit.objective_value,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
@@ -789,6 +799,21 @@ fn deterministic_embedding_hash(embedding: &[f32], seed: u64) -> u64 {
     hash
 }
 
+fn fingerprint_pass(embeddings: &[Embedding]) -> PassFingerprint {
+    let mut hasher = Sha256::new();
+    for embedding in embeddings {
+        hasher.update((embedding.len() as u64).to_le_bytes());
+        for value in embedding {
+            hasher.update(value.to_bits().to_le_bytes());
+        }
+    }
+
+    PassFingerprint {
+        observed_count: embeddings.len(),
+        digest: hasher.finalize().into(),
+    }
+}
+
 fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
     StreamingClusteringError::MalformedInput {
         message: message.into(),
@@ -819,9 +844,12 @@ mod tests {
         dense_distance_matrix, detected_execution_backend_selection,
         with_execution_backend_request,
     };
-    use lexongraph_streaming_clustering::StreamingClusteringError;
+    use lexongraph_streaming_clustering::{
+        StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    };
 
     use super::{
+        SphericalInitializationPolicy, SphericalKmeansParams, SphericalKmeansStreamingTrainer,
         assign_points_accelerated, assign_points_cpu, assign_points_serial, best_cluster,
         best_cluster_from_distances,
     };
@@ -975,6 +1003,34 @@ mod tests {
         .unwrap();
 
         assert_eq!(parallel, serial);
+    }
+
+    #[test]
+    fn trainer_tracks_baseline_by_fingerprint_instead_of_retaining_embeddings() {
+        let mut trainer = SphericalKmeansStreamingTrainer::new(
+            StreamingClusteringConfig {
+                cluster_count: 2,
+                dimensions: 2,
+                balance_constraints: None,
+                random_seed: Some(7),
+            },
+            SphericalKmeansParams {
+                initialization_policy:
+                    SphericalInitializationPolicy::SeededDeterministicFarthestPoint,
+                max_iteration_count: 8,
+                convergence_tolerance: 1e-4,
+            },
+        )
+        .unwrap();
+
+        trainer
+            .ingest_batch(&[vec![1.0, 0.0], vec![-1.0, 0.0]])
+            .unwrap();
+        trainer.finish_pass().unwrap();
+
+        assert!(trainer.baseline_fingerprint.is_some());
+        assert!(trainer.current_pass.is_empty());
+        assert_eq!(trainer.state(), TrainerState::PassComplete);
     }
 
     #[test]

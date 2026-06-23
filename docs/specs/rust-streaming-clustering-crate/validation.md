@@ -38,8 +38,8 @@ stop/continue decisions.
 
 Exercise a fixture where first-pass completion establishes `N < K`.
 
-**Pass condition:** the contract surfaces explicit failure rather than silently
-reducing `K` or producing empty clusters.
+**Pass condition:** under the default exact-`K` contract, the fixture surfaces
+explicit failure rather than silently reducing `K` or producing empty clusters.
 
 **Traces to:** REQ-STREAM-TRAIT-003, REQ-STREAM-TRAIT-010
 
@@ -47,8 +47,9 @@ reducing `K` or producing empty clusters.
 
 Inspect or execute pass reporting.
 
-**Pass condition:** each pass report exposes deterministic `quality_metric`,
-`balance_metric`, and direction-of-improvement metadata.
+**Pass condition:** each pass report exposes deterministic requested cluster
+count, realized cluster count, `quality_metric`, `balance_metric`, and
+direction-of-improvement metadata.
 
 **Traces to:** REQ-STREAM-TRAIT-006
 
@@ -57,7 +58,8 @@ Inspect or execute pass reporting.
 Exercise classifier production after training completion.
 
 **Pass condition:** the classifier deterministically assigns each valid
-embedding to exactly one cluster ID in `[0, K)`.
+embedding to exactly one cluster ID in `[0, R)`, where `R` is the realized
+cluster count reported by the classifier.
 
 **Traces to:** REQ-STREAM-TRAIT-007, REQ-STREAM-TRAIT-009
 

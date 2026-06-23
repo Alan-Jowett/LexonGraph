@@ -178,6 +178,8 @@ materialized parent layer.
 `IndexingPassReport` carries at least:
 
 - the observed item count for the completed pass
+- the requested and realized planning cluster counts when the reported planning
+  work flowed through the shared clustering surface
 - deterministic planning progress or quality information for the caller-visible
   hierarchy-building work for the selected planning direction, derived from the
   shared streaming clustering pass-report surface wherever clustering
@@ -665,6 +667,7 @@ for its lifetime in this revision:
 - retained-axis policy = `AdaptiveAllEligible`
 - allocation policy = `EigenvalueLogBits`
 - binning policy = `DensityValley`
+- cluster-cardinality mode = `UnderfullSuccess`
 - variance exponent = `1.0`
 - temperature = `1.0`
 - minimum input count = `2`
@@ -674,8 +677,8 @@ for its lifetime in this revision:
 ### DSG-STREAM-INDEXER-053 `Published profile 0.3.0 policy isolation`
 
 Published indexing profile `0.3.0` realizes the new adaptive retained-axis,
-eigenvalue-log-bit allocation, and density-valley policies only through the
-explicit published-profile mapping.
+eigenvalue-log-bit allocation, density-valley, and underfull-success
+cardinality policies only through the explicit published-profile mapping.
 
 The lower-level explicit directional-PCA default path and the previously
 published `0.2.0` contract therefore remain unchanged.

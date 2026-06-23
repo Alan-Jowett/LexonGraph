@@ -223,6 +223,8 @@ impl HierarchicalPlanningPolicy for FixedHierarchyPlanningPolicy {
     ) -> Result<PlanningPassOutcome, Self::Error> {
         Ok(PlanningPassOutcome {
             hierarchy: self.hierarchy.clone(),
+            requested_cluster_count: None,
+            realized_cluster_count: None,
             planning_quality_metric: 1.0,
             planning_balance_metric: 0.0,
             planning_quality_direction:

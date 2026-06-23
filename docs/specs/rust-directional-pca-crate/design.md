@@ -70,8 +70,8 @@ Trainer construction is driven by:
 
 - `StreamingClusteringConfig` for hard `K`, dimensionality, optional balance
   constraints, and deterministic seed behavior
-- typed directional parameters for retained dimensions, `gamma`, `tau`, and any
-  retained eligibility or stability thresholds
+- typed directional parameters for retained dimensions, cluster-cardinality
+  mode, `gamma`, `tau`, and any retained eligibility or stability thresholds
 
 The shared `cluster_count` is the hard observable cluster target for each
 completed pass and for the final classifier.
@@ -124,7 +124,8 @@ over the embeddings observed in that pass:
    clusters, expose them directly
 7. otherwise, if the shortfall is attributable to duplicate-collapse, refine the
    collapsed duplicate members deterministically
-8. otherwise fail explicitly
+8. otherwise either fail explicitly or, when underfull-success mode is selected,
+   expose the best deterministic underfull realization
 9. compute pass metrics and expose the pass report
 
 The crate does not perform hidden extra passes.
@@ -176,8 +177,10 @@ the crate first checks whether duplicate-collapse recovery is applicable.
 If recovery is not applicable, if recovery still cannot realize exact `K`, if
 the partition yields more than `K` populated cells without a documented
 deterministic collapse rule, or if exact-K otherwise cannot be satisfied without
-changing the documented semantics, the trainer fails explicitly through the
-shared unsatisfiable-constraint or invalid-configuration surface as appropriate.
+changing the documented semantics, the trainer either fails explicitly through
+the shared unsatisfiable-constraint or invalid-configuration surface as
+appropriate, or in underfull-success mode exposes the best deterministic
+realized count below `K`.
 
 ### DSG-DPCA-STREAM-013 `Stable cluster identity`
 
@@ -192,6 +195,8 @@ reports or classifier assignments.
 Each completed pass yields a `PassReport` whose:
 
 - `observed_count` equals the number of embeddings ingested in that pass
+- `requested_cluster_count` equals the configured target for that pass
+- `realized_cluster_count` equals the number of stable clusters actually exposed
 - `quality_metric` is deterministic and comparable across passes within one run
 - `balance_metric` is deterministic and comparable across passes within one run
 - metric directions remain fixed for the full run
@@ -203,7 +208,8 @@ When no explicit balance constraints are configured, `balance_metric` is zero.
 
 After `complete_training()`, `into_classifier()` consumes the trainer and yields
 a classifier that uses the final stable directional-PCA partition state to
-assign valid embeddings deterministically into `[0, K)`.
+assign valid embeddings deterministically into `[0, R)`, where `R` is the
+realized cluster count from the final pass.
 
 The classifier reuses the shared malformed-input surface.
 

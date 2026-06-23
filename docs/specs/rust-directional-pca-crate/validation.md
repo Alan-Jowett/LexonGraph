@@ -140,8 +140,8 @@ Exercise three exact-K boundary fixtures:
 - a realized directional-PCA partition that cannot produce exactly `K` stable,
   non-empty clusters without changing the documented semantics
 
-**Pass condition:** each case fails explicitly rather than silently forcing an
-exact-K outcome.
+**Pass condition:** in the default exact-`K` mode, each case fails explicitly
+rather than silently forcing an exact-K outcome.
 
 **Traces to:** REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-019
 
@@ -150,9 +150,9 @@ exact-K outcome.
 Inspect pass reports across at least two passes.
 
 **Pass condition:** each report exposes deterministic `observed_count`,
-`quality_metric`, `balance_metric`, fixed metric directions, and stable cluster
-IDs. When no explicit balance constraints are configured, `balance_metric` is
-zero.
+`requested_cluster_count`, `realized_cluster_count`, `quality_metric`,
+`balance_metric`, fixed metric directions, and stable cluster IDs. When no
+explicit balance constraints are configured, `balance_metric` is zero.
 
 **Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017
 
@@ -172,9 +172,9 @@ Complete training and exercise classifier assignment on valid and malformed
 embeddings.
 
 **Pass condition:** the classifier deterministically maps each valid embedding
-to exactly one cluster ID in `[0, K)`, rejects malformed embeddings through the
-shared malformed-input category, and does not require replay of the original
-training dataset.
+to exactly one cluster ID in `[0, R)`, where `R` is the realized cluster count,
+rejects malformed embeddings through the shared malformed-input category, and
+does not require replay of the original training dataset.
 
 **Traces to:** REQ-DPCA-STREAM-018, REQ-DPCA-STREAM-019
 

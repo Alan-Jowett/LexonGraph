@@ -1725,6 +1725,7 @@ name = "lexongraph-dcbc-streaming"
 version = "0.1.0"
 dependencies = [
  "lexongraph-streaming-clustering",
+ "sha2",
 ]
 
 [[package]]
@@ -1796,6 +1797,7 @@ dependencies = [
  "lexongraph-linear-algebra-acceleration",
  "lexongraph-streaming-clustering",
  "rayon",
+ "sha2",
 ]
 
 [[package]]
