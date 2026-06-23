@@ -227,7 +227,17 @@ fn validate_directional_pca_params(
                 )));
             }
         }
-        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {}
+        lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
+            if params.allocation_policy
+                == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins
+                && params.min_effective_rank > settings.cluster_count as usize
+            {
+                return Err(AdaptivePlanningError::InvalidConfiguration(format!(
+                    "min_effective_rank {} cannot exceed centroid-weighted adaptive axis budget {}",
+                    params.min_effective_rank, settings.cluster_count
+                )));
+            }
+        }
     }
     if params.allocation_policy
         == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits

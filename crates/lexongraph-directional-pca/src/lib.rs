@@ -380,6 +380,14 @@ fn validate_params(
                     params.min_effective_rank, config.dimensions
                 )));
             }
+            if params.allocation_policy == DirectionalPcaAllocationPolicy::CentroidWeightedBins
+                && params.min_effective_rank > config.cluster_count as usize
+            {
+                return Err(invalid_configuration(format!(
+                    "min_effective_rank {} cannot exceed centroid-weighted adaptive axis budget {}",
+                    params.min_effective_rank, config.cluster_count
+                )));
+            }
         }
     }
     if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits

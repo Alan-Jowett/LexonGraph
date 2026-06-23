@@ -122,6 +122,24 @@ fn val_adaptive_policy_rejects_non_power_of_two_eigenvalue_bit_configuration() {
 }
 
 #[test]
+fn val_adaptive_policy_rejects_centroid_weighted_adaptive_rank_above_cluster_count() {
+    let mut invalid = settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    );
+    invalid.directional_pca.params.retained_axis_policy =
+        DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible;
+    invalid.directional_pca.params.allocation_policy =
+        DirectionalPcaAllocationPolicy::CentroidWeightedBins;
+    invalid.directional_pca.params.min_effective_rank = 3;
+    let err = AdaptivePlanningSelector::new(invalid).unwrap_err();
+    assert!(matches!(
+        err,
+        AdaptivePlanningError::InvalidConfiguration(_)
+    ));
+}
+
+#[test]
 fn regression_adaptive_policy_caps_diagnostic_cluster_count_to_available_embeddings() {
     let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
         direction: AdaptivePlanningDirection::Divisive,

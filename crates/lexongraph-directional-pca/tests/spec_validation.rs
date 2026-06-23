@@ -229,6 +229,17 @@ fn val_dpca_stream_012_exact_k_failures_are_explicit() {
         Err(StreamingClusteringError::InvalidConfiguration { .. })
     ));
 
+    let invalid_adaptive_params = DirectionalPcaParams {
+        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+        min_effective_rank: 3,
+        ..params()
+    };
+    assert!(matches!(
+        DirectionalPcaStreamingTrainer::new(config(), invalid_adaptive_params),
+        Err(StreamingClusteringError::InvalidConfiguration { .. })
+    ));
+
     let mut exact_k_failure =
         DirectionalPcaStreamingTrainer::new(exact_k_failure_config(), exact_k_failure_params())
             .unwrap();
