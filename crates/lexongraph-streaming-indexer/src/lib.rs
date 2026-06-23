@@ -599,6 +599,16 @@ pub const PUBLISHED_PROFILE_V0_3_8: PublishedProfileVersion = PublishedProfileVe
 pub const PUBLISHED_PROFILE_V0_3_9: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 9);
 pub const PUBLISHED_PROFILE_V0_3_10: PublishedProfileVersion =
     PublishedProfileVersion::new(0, 3, 10);
+pub const PUBLISHED_PROFILE_V0_4_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 0);
+pub const PUBLISHED_PROFILE_V0_4_1: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 1);
+pub const PUBLISHED_PROFILE_V0_4_2: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 2);
+pub const PUBLISHED_PROFILE_V0_4_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 3);
+pub const PUBLISHED_PROFILE_V0_4_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 4);
+pub const PUBLISHED_PROFILE_V0_4_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 5);
+pub const PUBLISHED_PROFILE_V0_4_6: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 6);
+pub const PUBLISHED_PROFILE_V0_4_7: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 7);
+pub const PUBLISHED_PROFILE_V0_4_8: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 8);
+pub const PUBLISHED_PROFILE_V0_4_9: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 9);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -844,6 +854,126 @@ pub fn published_indexing_profile(
                 DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
                 DirectionalPcaAllocationPolicy::EigenvalueLogBits,
                 DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::Exact,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_0 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_1 => Ok(directional_pca_published_profile(
+            version,
+            128,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_2 => Ok(directional_pca_published_profile(
+            version,
+            32,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_3 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_4 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_5 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_6 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(3),
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_7 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.5,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_8 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                2,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_4_9 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
                 DirectionalPcaClusterCardinalityMode::Exact,
                 1,
                 0.0,
