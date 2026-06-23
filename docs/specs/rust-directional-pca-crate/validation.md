@@ -114,10 +114,10 @@ coefficients and explained variance according to the configured `gamma`.
 
 Exercise both supported allocation modes.
 
-**Pass condition:** the legacy path follows the documented
-temperature-controlled centroid-weighted allocation rule, and the redesigned
-adaptive path allocates eigenvalue-driven split bits while permitting at least
-one weak eligible axis to receive zero bits.
+**Pass condition:** the centroid-weighted path follows the documented
+temperature-controlled allocation rule, and the eigenvalue-log-bit path
+allocates eigenvalue-driven split bits while permitting at least one weak
+eligible axis to receive zero bits.
 
 **Traces to:** REQ-DPCA-STREAM-012, REQ-DPCA-STREAM-013
 
@@ -125,9 +125,10 @@ one weak eligible axis to receive zero bits.
 
 Use fixtures whose retained PCA coordinates are unevenly distributed.
 
-**Pass condition:** the conformant default assignment path uses quantile binning
-rather than equal-width binning, and the redesigned adaptive path chooses cuts
-through deepest density valleys rather than by a largest-gap proxy.
+**Pass condition:** when quantile binning is selected, the crate uses quantile
+binning rather than equal-width binning, and when density-valley binning is
+selected, the crate chooses cuts through deepest density valleys rather than by
+a largest-gap proxy.
 
 **Traces to:** REQ-DPCA-STREAM-012, REQ-DPCA-STREAM-014
 
@@ -269,9 +270,9 @@ duplicate-refinement fallback.
 Exercise the crate with the explicit adaptive retained-axis policy selected and
 again with the default fixed retained-dimension policy.
 
-**Pass condition:** the adaptive policy deterministically engages the retained
-axis cap implied by exact-`K` feasibility, while the default path remains fixed
-retained-dimension truncation.
+**Pass condition:** the adaptive policy deterministically retains all eligible
+axes admitted by the realized PCA output and effective-rank guard, while the
+default path remains fixed retained-dimension truncation.
 
 **Traces to:** REQ-DPCA-STREAM-025, REQ-DPCA-STREAM-027
 
@@ -292,3 +293,46 @@ Inspect the explicit default path after the opt-in policy additions.
 still uses fixed retained-dimension truncation and quantile binning.
 
 **Traces to:** REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-027
+
+### VAL-DPCA-STREAM-027
+
+Construct trainers using mixed retained-axis, allocation, and binning policy
+combinations that are relied on by published experiment profiles.
+
+**Pass condition:** the crate accepts those compatible mixed-policy
+configurations rather than rejecting them as unsupported policy bundles.
+
+**Traces to:** REQ-DPCA-STREAM-028
+
+### VAL-DPCA-STREAM-028
+
+Use a fixture with adaptive retained-axis selection, eigenvalue log-bit
+allocation, and quantile binning.
+
+**Pass condition:** construction succeeds and the realized partition follows the
+quantile-binning semantics rather than silently switching to density-valley
+cuts.
+
+**Traces to:** REQ-DPCA-STREAM-013, REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-028
+
+### VAL-DPCA-STREAM-029
+
+Use a fixture with adaptive retained-axis selection, centroid-weighted
+allocation, and density-valley binning.
+
+**Pass condition:** construction succeeds, the crate preserves
+centroid-weighted allocation semantics, and any required retained-axis cap is
+applied deterministically rather than by rejecting the mixed policy outright.
+
+**Traces to:** REQ-DPCA-STREAM-013, REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-028
+
+### VAL-DPCA-STREAM-030
+
+Use a fixture with fixed retained-axis selection, eigenvalue log-bit
+allocation, and density-valley binning.
+
+**Pass condition:** construction succeeds when the selected `K` satisfies the
+eigenvalue log-bit invariants, and the crate preserves the selected fixed-axis
+boundary rather than silently switching to the adaptive retained-axis policy.
+
+**Traces to:** REQ-DPCA-STREAM-013, REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-028

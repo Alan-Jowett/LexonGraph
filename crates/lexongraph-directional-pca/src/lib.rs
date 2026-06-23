@@ -296,6 +296,7 @@ fn fit_pass_model(
     let candidate_axis_count = resolve_retained_axis_count(
         &transform,
         params,
+        config.cluster_count as usize,
         effective_rank,
         allow_duplicate_refinement,
     )?;
@@ -381,27 +382,6 @@ fn validate_params(
             }
         }
     }
-    match (
-        params.retained_axis_policy,
-        params.allocation_policy,
-        params.binning_policy,
-    ) {
-        (
-            DirectionalPcaRetainedAxisPolicy::FixedCount(_),
-            DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-            DirectionalPcaBinningPolicy::Quantile,
-        )
-        | (
-            DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-            DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-            DirectionalPcaBinningPolicy::DensityValley,
-        ) => {}
-        _ => {
-            return Err(invalid_configuration(
-                "unsupported directional-PCA policy combination",
-            ));
-        }
-    }
     if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits
         && !config.cluster_count.is_power_of_two()
     {
@@ -448,6 +428,7 @@ fn validate_params(
 fn resolve_retained_axis_count(
     transform: &PcaTransform,
     params: &DirectionalPcaParams,
+    cluster_count: usize,
     effective_rank: usize,
     allow_duplicate_refinement: bool,
 ) -> Result<usize, StreamingClusteringError> {
@@ -462,6 +443,13 @@ fn resolve_retained_axis_count(
                 effective_rank.max(params.min_effective_rank)
             };
             let retained_axis_count = rank_bound.min(transform.output_dim).max(1);
+            let retained_axis_count = if params.allocation_policy
+                == DirectionalPcaAllocationPolicy::CentroidWeightedBins
+            {
+                retained_axis_count.min(cluster_count)
+            } else {
+                retained_axis_count
+            };
             if retained_axis_count < params.min_effective_rank {
                 return Err(unsatisfiable_constraint(format!(
                     "adaptive retained axis count {retained_axis_count} is smaller than the required minimum {}",

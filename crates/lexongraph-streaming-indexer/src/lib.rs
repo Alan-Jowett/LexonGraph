@@ -588,6 +588,17 @@ impl fmt::Display for PublishedProfileVersion {
 pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
 pub const PUBLISHED_PROFILE_V0_2_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 0);
 pub const PUBLISHED_PROFILE_V0_3_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 0);
+pub const PUBLISHED_PROFILE_V0_3_1: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 1);
+pub const PUBLISHED_PROFILE_V0_3_2: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 2);
+pub const PUBLISHED_PROFILE_V0_3_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 3);
+pub const PUBLISHED_PROFILE_V0_3_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 4);
+pub const PUBLISHED_PROFILE_V0_3_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 5);
+pub const PUBLISHED_PROFILE_V0_3_6: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 6);
+pub const PUBLISHED_PROFILE_V0_3_7: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 7);
+pub const PUBLISHED_PROFILE_V0_3_8: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 8);
+pub const PUBLISHED_PROFILE_V0_3_9: PublishedProfileVersion = PublishedProfileVersion::new(0, 3, 9);
+pub const PUBLISHED_PROFILE_V0_3_10: PublishedProfileVersion =
+    PublishedProfileVersion::new(0, 3, 10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -629,8 +640,7 @@ pub struct PublishedIndexingProfile {
 fn directional_pca_published_profile(
     version: PublishedProfileVersion,
     cluster_count: u32,
-    retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
-    binning_policy: DirectionalPcaBinningPolicy,
+    params: DirectionalPcaParams,
 ) -> PublishedIndexingProfile {
     PublishedIndexingProfile {
         version,
@@ -643,29 +653,30 @@ fn directional_pca_published_profile(
             PublishedDirectionalPcaProfileSettings {
                 cluster_count,
                 random_seed: Some(7),
-                params: DirectionalPcaParams {
-                    retained_axis_policy,
-                    allocation_policy: if retained_axis_policy
-                        == DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible
-                    {
-                        DirectionalPcaAllocationPolicy::EigenvalueLogBits
-                    } else {
-                        DirectionalPcaAllocationPolicy::CentroidWeightedBins
-                    },
-                    binning_policy,
-                    cluster_cardinality_mode: if version == PUBLISHED_PROFILE_V0_3_0 {
-                        DirectionalPcaClusterCardinalityMode::UnderfullSuccess
-                    } else {
-                        DirectionalPcaClusterCardinalityMode::Exact
-                    },
-                    variance_exponent: 1.0,
-                    temperature: 1.0,
-                    min_input_count: 2,
-                    min_effective_rank: 1,
-                    min_cumulative_variance: 0.0,
-                },
+                params,
             },
         ),
+    }
+}
+
+fn directional_pca_published_profile_params(
+    retained_axis_policy: DirectionalPcaRetainedAxisPolicy,
+    allocation_policy: DirectionalPcaAllocationPolicy,
+    binning_policy: DirectionalPcaBinningPolicy,
+    cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode,
+    min_effective_rank: usize,
+    min_cumulative_variance: f32,
+) -> DirectionalPcaParams {
+    DirectionalPcaParams {
+        retained_axis_policy,
+        allocation_policy,
+        binning_policy,
+        cluster_cardinality_mode,
+        variance_exponent: 1.0,
+        temperature: 1.0,
+        min_input_count: 2,
+        min_effective_rank,
+        min_cumulative_variance,
     }
 }
 
@@ -697,14 +708,146 @@ pub fn published_indexing_profile(
         PUBLISHED_PROFILE_V0_2_0 => Ok(directional_pca_published_profile(
             version,
             2,
-            DirectionalPcaRetainedAxisPolicy::FixedCount(1),
-            DirectionalPcaBinningPolicy::Quantile,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::Exact,
+                1,
+                0.0,
+            ),
         )),
         PUBLISHED_PROFILE_V0_3_0 => Ok(directional_pca_published_profile(
             version,
             64,
-            DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-            DirectionalPcaBinningPolicy::DensityValley,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_1 => Ok(directional_pca_published_profile(
+            version,
+            128,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_2 => Ok(directional_pca_published_profile(
+            version,
+            32,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_3 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_4 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_5 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_6 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_7 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(3),
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_8 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.5,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_9 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                2,
+                0.0,
+            ),
+        )),
+        PUBLISHED_PROFILE_V0_3_10 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::DensityValley,
+                DirectionalPcaClusterCardinalityMode::Exact,
+                1,
+                0.0,
+            ),
         )),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }

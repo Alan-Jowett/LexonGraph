@@ -754,3 +754,116 @@ distinguish "still working the same partition" from "advanced to another
 partition" without guessing from elapsed time alone.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064
+
+### VAL-STREAM-INDEXER-061
+
+Resolve published indexing profile `0.3.1` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except for requested cluster count `128`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-069
+
+### VAL-STREAM-INDEXER-062
+
+Resolve published indexing profile `0.3.2` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except for requested cluster count `32`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-070
+
+### VAL-STREAM-INDEXER-063
+
+Resolve published indexing profile `0.3.3` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it selects quantile binning.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-071
+
+### VAL-STREAM-INDEXER-064
+
+Resolve published indexing profile `0.3.4` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it selects fixed PC1-only splitting.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-072
+
+### VAL-STREAM-INDEXER-065
+
+Resolve published indexing profile `0.3.5` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it selects centroid-weighted
+allocation.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-073
+
+### VAL-STREAM-INDEXER-066
+
+Resolve published indexing profile `0.3.6` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it caps retained axes at `2`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-074
+
+### VAL-STREAM-INDEXER-067
+
+Resolve published indexing profile `0.3.7` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it caps retained axes at `3`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-075
+
+### VAL-STREAM-INDEXER-068
+
+Resolve published indexing profile `0.3.8` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it raises minimum cumulative
+variance to `0.5`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-076
+
+### VAL-STREAM-INDEXER-069
+
+Resolve published indexing profile `0.3.9` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it raises minimum effective rank to
+`2`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-077
+
+### VAL-STREAM-INDEXER-070
+
+Resolve published indexing profile `0.3.10` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+`0.3.0` directional-PCA bundle except that it restores exact cardinality mode.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-078
+
+### VAL-STREAM-INDEXER-071
+
+Resolve `0.3.0` and the full experimental `0.3.x` ladder through the
+convenience surface in the same revision.
+
+**Pass condition:** the experimental profiles remain explicitly resolvable and
+selecting them does not mutate the declared mapping of `0.3.0`.
+
+**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-067
+
+### VAL-STREAM-INDEXER-072
+
+Resolve the full published profile set, including the experimental `0.3.x`
+ladder, more than once under identical conditions.
+
+**Pass condition:** profile resolution is deterministic for each version and the
+experiment ladder remains compatible with sequential comparative execution.
+
+**Traces to:** REQ-STREAM-INDEXER-053, REQ-STREAM-INDEXER-068

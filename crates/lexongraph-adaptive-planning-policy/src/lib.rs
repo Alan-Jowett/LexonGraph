@@ -229,27 +229,6 @@ fn validate_directional_pca_params(
         }
         lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {}
     }
-    match (
-        params.retained_axis_policy,
-        params.allocation_policy,
-        params.binning_policy,
-    ) {
-        (
-            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::FixedCount(_),
-            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-            lexongraph_directional_pca::DirectionalPcaBinningPolicy::Quantile,
-        )
-        | (
-            lexongraph_directional_pca::DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-            lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-            lexongraph_directional_pca::DirectionalPcaBinningPolicy::DensityValley,
-        ) => {}
-        _ => {
-            return Err(AdaptivePlanningError::InvalidConfiguration(
-                "unsupported directional-PCA policy combination".into(),
-            ));
-        }
-    }
     if params.allocation_policy
         == lexongraph_directional_pca::DirectionalPcaAllocationPolicy::EigenvalueLogBits
         && !settings.cluster_count.is_power_of_two()

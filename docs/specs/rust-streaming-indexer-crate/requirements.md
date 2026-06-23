@@ -744,6 +744,91 @@ The crate may rate-limit repeated in-progress updates for the same unit, but it
 shall not regress to per-pass heartbeats that leave long-running recursive
 planning indistinguishable from a stuck computation.
 
+### REQ-STREAM-INDEXER-065
+
+The repository shall publish an experimental `0.3.x` directional-PCA profile
+ladder alongside `0.3.0`.
+
+Each experimental profile shall remain explicitly resolvable through the stable
+published-profile selector and shall not mutate the declared behavior of
+`0.1.0`, `0.2.0`, or `0.3.0`.
+
+### REQ-STREAM-INDEXER-066
+
+The experimental `0.3.x` ladder shall be curated for attribution rather than as
+an exhaustive combinatorial sweep.
+
+Each experimental profile shall differ from `0.3.0` in one named primary
+directional-PCA variable unless a secondary mechanical adjustment is required to
+realize that selected policy combination.
+
+### REQ-STREAM-INDEXER-067
+
+Published indexing profile `0.3.0` shall remain the baseline directional-PCA
+contract for the experimental `0.3.x` ladder.
+
+### REQ-STREAM-INDEXER-068
+
+Each experimental `0.3.x` published profile shall carry a documented evaluation
+hypothesis and remain compatible with the existing quality-report workflow so
+the profiles can be run sequentially and compared.
+
+### REQ-STREAM-INDEXER-069
+
+Published indexing profile `0.3.1` shall pin the `0.3.0` directional-PCA bundle
+except that it increases requested cluster count to `128`.
+
+### REQ-STREAM-INDEXER-070
+
+Published indexing profile `0.3.2` shall pin the `0.3.0` directional-PCA bundle
+except that it decreases requested cluster count to `32`.
+
+### REQ-STREAM-INDEXER-071
+
+Published indexing profile `0.3.3` shall pin the `0.3.0` directional-PCA bundle
+except that it selects quantile binning in place of density-valley binning.
+
+### REQ-STREAM-INDEXER-072
+
+Published indexing profile `0.3.4` shall pin the `0.3.0` directional-PCA bundle
+except that it reverts to fixed PC1-only splitting through:
+
+- retained-axis policy = `FixedCount(1)`
+- allocation policy = `CentroidWeightedBins`
+- binning policy = `Quantile`
+
+### REQ-STREAM-INDEXER-073
+
+Published indexing profile `0.3.5` shall pin the `0.3.0` directional-PCA bundle
+except that it selects centroid-weighted allocation in place of eigenvalue
+log-bit allocation.
+
+### REQ-STREAM-INDEXER-074
+
+Published indexing profile `0.3.6` shall pin the `0.3.0` directional-PCA bundle
+except that it caps retained-axis selection at `FixedCount(2)`.
+
+### REQ-STREAM-INDEXER-075
+
+Published indexing profile `0.3.7` shall pin the `0.3.0` directional-PCA bundle
+except that it caps retained-axis selection at `FixedCount(3)`.
+
+### REQ-STREAM-INDEXER-076
+
+Published indexing profile `0.3.8` shall pin the `0.3.0` directional-PCA bundle
+except that it raises minimum cumulative variance to `0.5`.
+
+### REQ-STREAM-INDEXER-077
+
+Published indexing profile `0.3.9` shall pin the `0.3.0` directional-PCA bundle
+except that it raises minimum effective rank to `2`.
+
+### REQ-STREAM-INDEXER-078
+
+Published indexing profile `0.3.10` shall pin the `0.3.0` directional-PCA
+bundle except that it restores exact cardinality mode in place of
+underfull-success mode.
+
 ## Out of Scope
 
 This crate does not define or own:
