@@ -3730,16 +3730,7 @@ fn val_stream_indexer_072_all_experiment_profiles_resolve_deterministically() {
         PUBLISHED_PROFILE_V0_3_8,
         PUBLISHED_PROFILE_V0_3_9,
         PUBLISHED_PROFILE_V0_3_10,
-        PUBLISHED_PROFILE_V0_4_0,
-        PUBLISHED_PROFILE_V0_4_1,
-        PUBLISHED_PROFILE_V0_4_2,
-        PUBLISHED_PROFILE_V0_4_3,
-        PUBLISHED_PROFILE_V0_4_4,
-        PUBLISHED_PROFILE_V0_4_5,
-        PUBLISHED_PROFILE_V0_4_6,
-        PUBLISHED_PROFILE_V0_4_7,
-        PUBLISHED_PROFILE_V0_4_8,
-        PUBLISHED_PROFILE_V0_4_9,
+        // 0.4.x ladder determinism is validated separately in VAL-STREAM-INDEXER-084.
     ] {
         assert_eq!(
             published_indexing_profile(version).unwrap(),
