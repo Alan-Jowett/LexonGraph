@@ -872,6 +872,35 @@ behavior.
 Resolving any experimental `0.4.x` profile does not mutate the declared mapping
 of `0.4.0`.
 
+### DSG-STREAM-INDEXER-083 `v0.4 published-profile preflight contract`
+
+The published-profile construction path performs a preflight compatibility
+check for directional-PCA profiles in the `0.4.x` ladder before constructing
+the indexing run.
+
+That preflight compares the profile's requested cluster count against
+configured non-data limits derived from the selected embedding spec and block
+size target, including the branch materializability bound.
+
+### DSG-STREAM-INDEXER-084 `Configured conflict versus emergent underfill`
+
+The `0.4.x` preflight rejection applies only to configured non-data conflicts.
+Runtime reductions caused by a partition exposing too few represented children
+remain allowed and are not treated as configuration errors.
+
+### DSG-STREAM-INDEXER-085 `Fail-fast scope isolation`
+
+The configured-conflict preflight rule applies only to published directional-PCA
+profiles in the `0.4.x` ladder. Earlier published profiles and non-published
+planning paths retain their existing clipping or underfill behavior.
+
+### DSG-STREAM-INDEXER-086 `Conflict diagnostic surface`
+
+When the preflight rejects a `0.4.x` profile, the surfaced error reports the
+published profile version, the requested fanout, and the conflicting
+configured limit so callers can distinguish profile-contract incompatibility
+from emergent runtime underfill.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -944,4 +973,8 @@ of `0.4.0`.
 | DSG-STREAM-INDEXER-080 | REQ-STREAM-INDEXER-089 |
 | DSG-STREAM-INDEXER-081 | REQ-STREAM-INDEXER-079 |
 | DSG-STREAM-INDEXER-082 | REQ-STREAM-INDEXER-080 |
+| DSG-STREAM-INDEXER-083 | REQ-STREAM-INDEXER-090 |
+| DSG-STREAM-INDEXER-084 | REQ-STREAM-INDEXER-092 |
+| DSG-STREAM-INDEXER-085 | REQ-STREAM-INDEXER-093 |
+| DSG-STREAM-INDEXER-086 | REQ-STREAM-INDEXER-091 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |
