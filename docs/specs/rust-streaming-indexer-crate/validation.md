@@ -1076,7 +1076,7 @@ and dimensionality while redistributing those bits by variance.
 **Traces to:** REQ-STREAM-INDEXER-099, REQ-STREAM-INDEXER-101,
 REQ-STREAM-INDEXER-102
 
-### VAL-STREAM-INDEXER-093
+### VAL-STREAM-INDEXER-092b
 
 Resolve published indexing profile `0.5.5` through the convenience surface.
 
@@ -1088,7 +1088,7 @@ lowest routing non-leaf levels respectively, and emits no rotation metadata.
 **Traces to:** REQ-STREAM-INDEXER-100, REQ-STREAM-INDEXER-101,
 REQ-STREAM-INDEXER-102
 
-### VAL-STREAM-INDEXER-094
+### VAL-STREAM-INDEXER-093
 
 Resolve the full published profile set, including the `0.4.x` and `0.5.x`
 ladders, more than once under identical conditions.
