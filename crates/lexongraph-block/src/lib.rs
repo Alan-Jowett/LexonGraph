@@ -699,12 +699,12 @@ fn parse_ebcp_descriptor_fields(
                 "rotated quantized EBCP encodings require rotation, base_centroid, and quantization metadata",
             ));
         }
-        "ambient-delta-uq" => {
-            if rotation.is_some() || base_centroid.is_none() || quantization.is_none() {
-                return Err(BlockError::NonConforming(
-                    "ambient-delta-uq requires base_centroid and quantization metadata and forbids rotation metadata",
-                ));
-            }
+        "ambient-delta-uq"
+            if rotation.is_some() || base_centroid.is_none() || quantization.is_none() =>
+        {
+            return Err(BlockError::NonConforming(
+                "ambient-delta-uq requires base_centroid and quantization metadata and forbids rotation metadata",
+            ));
         }
         _ => {}
     }
