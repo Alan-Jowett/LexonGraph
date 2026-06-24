@@ -4,9 +4,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
+use ciborium::ser::into_writer;
+use ciborium::value::{Integer, Value};
 use lexongraph_block::{
-    Block, BlockHash, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1,
-    build_branch_block, build_leaf_block, compute_block_hash,
+    Block, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpRotation, EmbeddingSpec, LeafEntry,
+    VERSION_1, build_branch_block, build_leaf_block, compute_block_hash, ebcp_extension_map,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
@@ -1418,6 +1420,247 @@ fn val_search_033_profiled_searcher_matches_the_default_policy_bundle() {
         .unwrap();
 
     assert_eq!(profiled_result, default_result);
+}
+
+#[test]
+fn val_search_034_ebcp_rotated_branch_blocks_preserve_uncompressed_results() {
+    assert_eq!(
+        run_single_result_search(|store| ebcp_fixture(store, "pca-rot-f32le")).unwrap(),
+        run_single_result_search(uncompressed_fixture).unwrap()
+    );
+}
+
+#[test]
+fn val_search_035_ebcp_delta_branch_blocks_preserve_uncompressed_results() {
+    assert_eq!(
+        run_single_result_search(|store| ebcp_fixture(store, "pca-rot-delta-f32le")).unwrap(),
+        run_single_result_search(uncompressed_fixture).unwrap()
+    );
+}
+
+#[test]
+fn val_search_036_uniform_quantized_ebcp_branch_blocks_remain_searchable() {
+    let result = run_single_result_search(|store| ebcp_fixture(store, "pca-rot-delta-uq")).unwrap();
+    assert_eq!(result.leaves[0].entry.content.body, b"left");
+}
+
+#[test]
+fn val_search_037_variable_quantized_ebcp_branch_blocks_remain_searchable() {
+    let result =
+        run_single_result_search(|store| ebcp_fixture(store, "pca-rot-delta-vbq")).unwrap();
+    assert_eq!(result.leaves[0].entry.content.body, b"left");
+}
+
+#[test]
+fn val_search_038_malformed_ebcp_blocks_fail_through_invalid_block_path() {
+    let store = MemoryBlockStore::default();
+    let (left_id, right_id) = put_leaf_fixture(&store);
+    let malformed_root = malformed_ebcp_root(left_id, right_id);
+    let root_hash = compute_block_hash(&malformed_root);
+    store.raw_insert(root_hash, malformed_root);
+
+    let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+    let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+    let error = searcher
+        .search(&root_hash, &target, 1, 1, &store)
+        .unwrap_err();
+    assert!(matches!(error, SearchError::MalformedBlock { .. }));
+}
+
+fn run_single_result_search<F>(build_root: F) -> Result<SearchResult, SearchError>
+where
+    F: FnOnce(&MemoryBlockStore) -> Block,
+{
+    let store = MemoryBlockStore::default();
+    let root = build_root(&store);
+    let root_id = store.put(&root).unwrap();
+    let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+    let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+    searcher.search(&root_id, &target, 1, 1, &store)
+}
+
+fn put_leaf_fixture(store: &MemoryBlockStore) -> (BlockHash, BlockHash) {
+    let left_id = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "left",
+        ))
+        .unwrap();
+    let right_id = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([0.0, 1.0]),
+            "right",
+        ))
+        .unwrap();
+    (left_id, right_id)
+}
+
+fn uncompressed_fixture(store: &MemoryBlockStore) -> Block {
+    let (left_id, right_id) = put_leaf_fixture(store);
+    branch_block_with_ext(
+        1,
+        embedding_spec_f32(),
+        vec![
+            BranchEntry {
+                embedding: f32_embedding([1.0, 0.0]),
+                child: left_id,
+            },
+            BranchEntry {
+                embedding: f32_embedding([0.0, 1.0]),
+                child: right_id,
+            },
+        ],
+        None,
+    )
+}
+
+fn ebcp_fixture(store: &MemoryBlockStore, encoding: &str) -> Block {
+    let (left_id, right_id) = put_leaf_fixture(store);
+    let rotation = EbcpRotation {
+        matrix_format: "f32le-row-major".into(),
+        matrix: vec![1.0, 0.0, 0.0, 1.0],
+    };
+    let descriptor = match encoding {
+        "pca-rot-f32le" => EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: embedding_spec_f32(),
+            base_centroid: None,
+            rotation,
+            quantization: None,
+        },
+        "pca-rot-delta-f32le" => EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: embedding_spec_f32(),
+            base_centroid: Some(vec![0.0, 0.0]),
+            rotation,
+            quantization: None,
+        },
+        "pca-rot-delta-uq" => EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: embedding_spec_f32(),
+            base_centroid: Some(vec![0.0, 0.0]),
+            rotation,
+            quantization: Some(lexongraph_block::EbcpQuantization::Uniform {
+                bit_width: 12,
+                scale_factors: vec![1.0 / 2047.0, 1.0 / 2047.0],
+            }),
+        },
+        "pca-rot-delta-vbq" => EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: embedding_spec_f32(),
+            base_centroid: Some(vec![0.0, 0.0]),
+            rotation,
+            quantization: Some(lexongraph_block::EbcpQuantization::Variable {
+                bit_widths: vec![12, 12],
+                scale_factors: vec![1.0 / 2047.0, 1.0 / 2047.0],
+            }),
+        },
+        other => panic!("unexpected fixture encoding {other}"),
+    };
+
+    let (left_embedding, right_embedding) = match encoding {
+        "pca-rot-f32le" => (f32_embedding([1.0, 0.0]), f32_embedding([0.0, 1.0])),
+        "pca-rot-delta-f32le" => (f32_embedding([1.0, 0.0]), f32_embedding([0.0, 1.0])),
+        "pca-rot-delta-uq" | "pca-rot-delta-vbq" => (
+            pack_quantized_fixture([1.0, 0.0], [12, 12]),
+            pack_quantized_fixture([0.0, 1.0], [12, 12]),
+        ),
+        _ => unreachable!(),
+    };
+
+    branch_block_with_ext(
+        1,
+        EmbeddingSpec {
+            dims: 2,
+            encoding: encoding.into(),
+        },
+        vec![
+            BranchEntry {
+                embedding: left_embedding,
+                child: left_id,
+            },
+            BranchEntry {
+                embedding: right_embedding,
+                child: right_id,
+            },
+        ],
+        Some(ebcp_extension_map(&descriptor)),
+    )
+}
+
+fn branch_block_with_ext(
+    level: u64,
+    spec: EmbeddingSpec,
+    entries: Vec<BranchEntry>,
+    ext: Option<Vec<(Value, Value)>>,
+) -> Block {
+    Block::Branch(build_branch_block(VERSION_1, level, spec, entries, ext).unwrap())
+}
+
+fn malformed_ebcp_root(left_id: BlockHash, right_id: BlockHash) -> Vec<u8> {
+    encode_value(Value::Map(vec![
+        (int_value(0), int_value(VERSION_1)),
+        (int_value(1), int_value(1)),
+        (
+            int_value(2),
+            Value::Map(vec![
+                (int_value(0), int_value(2)),
+                (int_value(1), Value::Text("pca-rot-f32le".into())),
+            ]),
+        ),
+        (
+            int_value(3),
+            Value::Array(vec![
+                raw_branch_entry(f32_embedding([1.0, 0.0]), left_id),
+                raw_branch_entry(f32_embedding([0.0, 1.0]), right_id),
+            ]),
+        ),
+    ]))
+}
+
+fn pack_quantized_fixture(values: [f32; 2], bit_widths: [u8; 2]) -> Vec<u8> {
+    let scales = [1.0 / 2047.0, 1.0 / 2047.0];
+    let total_bits = bit_widths
+        .iter()
+        .map(|width| usize::from(*width))
+        .sum::<usize>();
+    let mut bytes = vec![0u8; total_bits.div_ceil(8)];
+    let mut offset = 0usize;
+    for ((value, bit_width), scale) in values.into_iter().zip(bit_widths).zip(scales) {
+        let qmax = ((1_i32 << (bit_width - 1)) - 1) as f64;
+        let centered = (f64::from(value) / scale)
+            .round_ties_even()
+            .clamp(-qmax, qmax) as i32;
+        let stored = u32::try_from(centered + (1_i32 << (bit_width - 1))).unwrap();
+        for bit_index in 0..usize::from(bit_width) {
+            let absolute = offset + bit_index;
+            let byte_index = absolute / 8;
+            let intra = absolute % 8;
+            let bit = ((stored >> bit_index) & 1) as u8;
+            bytes[byte_index] |= bit << intra;
+        }
+        offset += usize::from(bit_width);
+    }
+    bytes
+}
+
+fn raw_branch_entry(embedding: Vec<u8>, child: BlockHash) -> Value {
+    Value::Map(vec![
+        (int_value(0), Value::Bytes(embedding)),
+        (int_value(1), Value::Bytes(child.as_bytes().to_vec())),
+    ])
+}
+
+fn encode_value(value: Value) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    into_writer(&value, &mut bytes).unwrap();
+    bytes
+}
+
+fn int_value(value: u64) -> Value {
+    Value::Integer(Integer::from(value))
 }
 
 fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {

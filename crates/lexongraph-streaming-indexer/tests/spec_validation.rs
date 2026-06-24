@@ -10,7 +10,8 @@ use std::thread;
 use std::time::Duration;
 
 use lexongraph_block::{
-    BlockError, BlockHash, BranchBlock, Content, EmbeddingSpec, TypedEntries, into_entries,
+    BlockError, BlockHash, BranchBlock, Content, EbcpQuantization, EmbeddingSpec, TypedEntries,
+    into_entries, parse_branch_ebcp_descriptor,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
@@ -41,7 +42,9 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_4_0, PUBLISHED_PROFILE_V0_4_1, PUBLISHED_PROFILE_V0_4_2,
     PUBLISHED_PROFILE_V0_4_3, PUBLISHED_PROFILE_V0_4_4, PUBLISHED_PROFILE_V0_4_5,
     PUBLISHED_PROFILE_V0_4_6, PUBLISHED_PROFILE_V0_4_7, PUBLISHED_PROFILE_V0_4_8,
-    PUBLISHED_PROFILE_V0_4_9, PlanningPassOutcome, PlanningStage, PublishedHierarchyMetric,
+    PUBLISHED_PROFILE_V0_4_9, PUBLISHED_PROFILE_V0_5_0, PUBLISHED_PROFILE_V0_5_1,
+    PUBLISHED_PROFILE_V0_5_2, PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4,
+    PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy, PublishedHierarchyMetric,
     PublishedPlanningStrategy, PublishedProfilePlanningPolicy, PublishedProfileVersion,
     SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
@@ -187,6 +190,13 @@ fn embedding_spec() -> EmbeddingSpec {
     }
 }
 
+fn embedding_spec_f32() -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: 2,
+        encoding: "f32le".into(),
+    }
+}
+
 fn markdown_section<'a>(document: &'a str, heading: &str) -> &'a str {
     let marker = format!("### {heading}");
     let start = document
@@ -296,6 +306,32 @@ impl EmbeddingProvider for AsciiEmbeddingProvider {
             .first()
             .ok_or_else(|| FixtureError("empty content body".into()))?;
         Ok(vec![first, input.body.len() as u8])
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AsciiF32EmbeddingProvider;
+
+impl EmbeddingProvider for AsciiF32EmbeddingProvider {
+    type Error = FixtureError;
+
+    async fn embed(
+        &self,
+        input: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        if spec.encoding != "f32le" || spec.dims != 2 {
+            return Err(FixtureError("unexpected embedding spec".into()));
+        }
+        let first = *input
+            .body
+            .first()
+            .ok_or_else(|| FixtureError("empty content body".into()))?;
+        let values = [f32::from(first), input.body.len() as f32];
+        Ok(values
+            .into_iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect())
     }
 }
 
@@ -2991,6 +3027,10 @@ async fn val_stream_indexer_052_published_profile_v0_2_0_is_declared_explicitly(
     assert_eq!(profile.packing_strategy_id, None);
     assert_eq!(profile.hierarchy_strategy_id, "built-in-divisive");
     assert_eq!(profile.summary_policy_id, "exact-centroid");
+    assert_eq!(
+        profile.branch_encoding_policy,
+        PublishedBranchEncodingPolicy::Ordinary
+    );
     match profile.planning_strategy {
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
             assert_eq!(settings.cluster_count, 2);
@@ -3289,6 +3329,48 @@ fn assert_directional_pca_published_profile(
         }
         other => panic!("unexpected published planning strategy: {other:?}"),
     }
+}
+
+fn assert_directional_pca_profile_branch_policy(
+    version: PublishedProfileVersion,
+    expected_policy: PublishedBranchEncodingPolicy,
+) {
+    let profile = published_indexing_profile(version).unwrap();
+    assert_eq!(profile.version, version);
+    assert_eq!(profile.planning_algorithm_id, "directional-pca");
+    assert_eq!(profile.branch_encoding_policy, expected_policy);
+}
+
+async fn materialize_profile_root(
+    version: PublishedProfileVersion,
+) -> (
+    MemoryBlockStore,
+    lexongraph_streaming_indexer::StreamingIndexingResult,
+) {
+    let items = vec![item("aa"), item("bb"), item("cc"), item("dd")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        version,
+        embedding_spec_f32(),
+        6000,
+    )
+    .unwrap();
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    (store, result)
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4089,6 +4171,215 @@ fn val_stream_indexer_087_v0_3_profiles_keep_legacy_materializability_clipping_b
     )
     .unwrap();
     drop(run);
+}
+
+#[test]
+fn val_stream_indexer_088_published_profile_v0_5_0_preserves_v0_4_0_baseline_mapping() {
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_5_0,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+}
+
+#[test]
+fn val_stream_indexer_088b_published_profile_v0_5_0_keeps_non_f32_baseline_compatibility() {
+    let run = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_5_0,
+        embedding_spec(),
+        6000,
+    )
+    .unwrap();
+    drop(run);
+
+    let error = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_5_1,
+        embedding_spec(),
+        6000,
+    );
+    let error = match error {
+        Ok(_) => panic!("expected 0.5.1 non-f32 configuration to be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("requires embedding_spec.encoding f32le")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_089_published_profile_v0_5_1_emits_rotated_branch_entries() {
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_5_1,
+        PublishedBranchEncodingPolicy::PcaRotF32Le,
+    );
+    let (store, result) = materialize_profile_root(PUBLISHED_PROFILE_V0_5_1).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "pca-rot-f32le");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert!(descriptor.base_centroid.is_none());
+            assert!(descriptor.quantization.is_none());
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_090_published_profile_v0_5_2_emits_delta_rotated_branch_entries() {
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_5_2,
+        PublishedBranchEncodingPolicy::PcaRotDeltaF32Le,
+    );
+    let (store, result) = materialize_profile_root(PUBLISHED_PROFILE_V0_5_2).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "pca-rot-delta-f32le");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(descriptor.base_centroid.as_ref().unwrap().len(), 2);
+            assert!(descriptor.quantization.is_none());
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_091_published_profile_v0_5_3_uses_root_uniform_quantization_budget() {
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_5_3,
+        PublishedBranchEncodingPolicy::PcaRotDeltaUniform {
+            root_bits: 12,
+            interior_bits: 8,
+            lowest_routing_bits: 6,
+        },
+    );
+    let (store, result) = materialize_profile_root(PUBLISHED_PROFILE_V0_5_3).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "pca-rot-delta-uq");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            match descriptor.quantization.unwrap() {
+                EbcpQuantization::Uniform { bit_width, .. } => assert_eq!(bit_width, 12),
+                other => panic!("unexpected quantization: {other:?}"),
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_092_published_profile_v0_5_4_uses_root_variable_quantization_budget() {
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_5_4,
+        PublishedBranchEncodingPolicy::PcaRotDeltaVariable {
+            root_bits: 12,
+            interior_bits: 8,
+            lowest_routing_bits: 6,
+        },
+    );
+    let (store, result) = materialize_profile_root(PUBLISHED_PROFILE_V0_5_4).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "pca-rot-delta-vbq");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            match descriptor.quantization.unwrap() {
+                EbcpQuantization::Variable { bit_widths, .. } => {
+                    assert_eq!(
+                        bit_widths
+                            .iter()
+                            .map(|width| usize::from(*width))
+                            .sum::<usize>(),
+                        24
+                    );
+                    assert!(bit_widths.iter().all(|width| *width >= 1));
+                }
+                other => panic!("unexpected quantization: {other:?}"),
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[test]
+fn val_stream_indexer_093_all_profiles_resolve_deterministically_with_0_5_ladder_included() {
+    for version in [
+        PUBLISHED_PROFILE_V0_1_0,
+        PUBLISHED_PROFILE_V0_2_0,
+        PUBLISHED_PROFILE_V0_3_0,
+        PUBLISHED_PROFILE_V0_3_1,
+        PUBLISHED_PROFILE_V0_3_2,
+        PUBLISHED_PROFILE_V0_3_3,
+        PUBLISHED_PROFILE_V0_3_4,
+        PUBLISHED_PROFILE_V0_3_5,
+        PUBLISHED_PROFILE_V0_3_6,
+        PUBLISHED_PROFILE_V0_3_7,
+        PUBLISHED_PROFILE_V0_3_8,
+        PUBLISHED_PROFILE_V0_3_9,
+        PUBLISHED_PROFILE_V0_3_10,
+        PUBLISHED_PROFILE_V0_4_0,
+        PUBLISHED_PROFILE_V0_4_1,
+        PUBLISHED_PROFILE_V0_4_2,
+        PUBLISHED_PROFILE_V0_4_3,
+        PUBLISHED_PROFILE_V0_4_4,
+        PUBLISHED_PROFILE_V0_4_5,
+        PUBLISHED_PROFILE_V0_4_6,
+        PUBLISHED_PROFILE_V0_4_7,
+        PUBLISHED_PROFILE_V0_4_8,
+        PUBLISHED_PROFILE_V0_4_9,
+        PUBLISHED_PROFILE_V0_5_0,
+        PUBLISHED_PROFILE_V0_5_1,
+        PUBLISHED_PROFILE_V0_5_2,
+        PUBLISHED_PROFILE_V0_5_3,
+        PUBLISHED_PROFILE_V0_5_4,
+    ] {
+        assert_eq!(
+            published_indexing_profile(version).unwrap(),
+            published_indexing_profile(version).unwrap()
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

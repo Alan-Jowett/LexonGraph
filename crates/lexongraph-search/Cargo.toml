@@ -14,3 +14,5 @@ conformance = []
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
 
+[dev-dependencies]
+ciborium = "0.2.2"

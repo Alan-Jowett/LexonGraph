@@ -195,8 +195,14 @@ The crate shall expose a public default `EmbeddingCompatibility`
 implementation for crate-owned encoded target embeddings.
 
 That default compatibility policy shall accept a visited block when the target
-embedding and the block's `embedding_spec` have the same encoding and
-dimensionality, and shall reject the block explicitly otherwise.
+embedding and the block's logical comparison representation have the same
+encoding and dimensionality, and shall reject the block explicitly otherwise.
+
+For ordinary non-EBCP blocks, the logical comparison representation is the
+block's declared `embedding_spec`.
+
+For EBCP-encoded non-leaf blocks, the logical comparison representation is the
+ambient-space encoding declared by `docs/protocol/ebcp.md`.
 
 ### REQ-SEARCH-020
 
@@ -207,6 +213,11 @@ default compatibility policy.
 That default scorer shall compute a deterministic cosine similarity, or an
 equivalent standard cosine-based comparison, over compatible target and
 candidate embeddings.
+
+For supported EBCP branch encodings, the default scorer shall reconstruct or
+otherwise compare the logical ambient-space branch embeddings defined by
+`docs/protocol/ebcp.md` rather than scoring the compressed payload bytes
+directly.
 
 ### REQ-SEARCH-021
 
@@ -293,6 +304,43 @@ The existing low-level explicit search surface shall remain available for
 callers that want direct policy substitution instead of selecting a published
 profile.
 
+### REQ-SEARCH-033
+
+The search crate shall accept non-leaf blocks whose `embedding_spec.encoding`
+uses one of the EBCP branch encodings defined by `docs/protocol/ebcp.md`,
+provided the enclosing block is otherwise valid under `docs/protocol/blocks.md`.
+
+### REQ-SEARCH-034
+
+When search visits an EBCP-encoded non-leaf block, it shall interpret each
+branch-entry embedding according to `docs/protocol/ebcp.md` so that ranking and
+expansion decisions are based on the logical child-centroid embeddings defined
+by that protocol rather than on the raw stored payload bytes.
+
+### REQ-SEARCH-035
+
+The search crate shall remain subordinate to `docs/protocol/search.md` for
+traversal, ranking, deduplication, and termination behavior when visiting
+EBCP-encoded blocks.
+
+EBCP support shall extend the candidate-interpretation boundary only; it shall
+not alter the search protocol itself.
+
+### REQ-SEARCH-036
+
+If two indexes differ only in that one stores non-leaf branch embeddings using
+`pca-rot-f32le` or `pca-rot-delta-f32le` while preserving the same logical
+branch centroids and tree topology, the search crate shall return the same
+ordered leaf results or the same explicit failure for identical search inputs.
+
+### REQ-SEARCH-037
+
+When an index uses the lossy EBCP encodings `pca-rot-delta-uq` or
+`pca-rot-delta-vbq`, any observable recall difference relative to the same
+topology under uncompressed branch embeddings shall arise only from the encoded
+branch-vector approximation rather than from a change in search API shape,
+traversal rules, or termination rules.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -309,8 +357,8 @@ This crate does not define or own:
 
 ## Relationship to Other Specifications
 
-This document is subordinate to `docs/protocol/search.md` and
-`docs/protocol/blocks.md`.
+This document is subordinate to `docs/protocol/search.md`,
+`docs/protocol/blocks.md`, and `docs/protocol/ebcp.md`.
 
 This document is also subordinate to the `docs/specs/rust-block-crate/` and
 `docs/specs/rust-block-storage-trait/` specification packages for their

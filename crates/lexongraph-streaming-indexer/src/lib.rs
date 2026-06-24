@@ -38,8 +38,9 @@ pub use lexongraph_adaptive_planning_policy::{
     AdaptiveSwitchDecisionRecord, DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
 };
 use lexongraph_block::{
-    Block, BlockError, BranchEntry, LeafEntry, VERSION_1, build_branch_block, build_leaf_block,
-    canonicalize_metadata, serialize_block,
+    Block, BlockError, BranchEntry, EbcpDescriptor, EbcpQuantization, EbcpRotation, LeafEntry,
+    VERSION_1, build_branch_block, build_leaf_block, canonicalize_metadata, ebcp_extension_map,
+    serialize_block,
 };
 pub use lexongraph_block::{
     BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata, SerializedBlock,
@@ -52,6 +53,7 @@ use lexongraph_directional_pca::{
     DirectionalPcaStreamingTrainer,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
+use lexongraph_pca::fit;
 use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
 use lexongraph_streaming_clustering::{
@@ -609,6 +611,11 @@ pub const PUBLISHED_PROFILE_V0_4_6: PublishedProfileVersion = PublishedProfileVe
 pub const PUBLISHED_PROFILE_V0_4_7: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 7);
 pub const PUBLISHED_PROFILE_V0_4_8: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 8);
 pub const PUBLISHED_PROFILE_V0_4_9: PublishedProfileVersion = PublishedProfileVersion::new(0, 4, 9);
+pub const PUBLISHED_PROFILE_V0_5_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 0);
+pub const PUBLISHED_PROFILE_V0_5_1: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 1);
+pub const PUBLISHED_PROFILE_V0_5_2: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 2);
+pub const PUBLISHED_PROFILE_V0_5_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 3);
+pub const PUBLISHED_PROFILE_V0_5_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -636,6 +643,23 @@ pub enum PublishedPlanningStrategy {
     DirectionalPcaDivisive(PublishedDirectionalPcaProfileSettings),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublishedBranchEncodingPolicy {
+    Ordinary,
+    PcaRotF32Le,
+    PcaRotDeltaF32Le,
+    PcaRotDeltaUniform {
+        root_bits: u8,
+        interior_bits: u8,
+        lowest_routing_bits: u8,
+    },
+    PcaRotDeltaVariable {
+        root_bits: u8,
+        interior_bits: u8,
+        lowest_routing_bits: u8,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PublishedIndexingProfile {
     pub version: PublishedProfileVersion,
@@ -645,12 +669,57 @@ pub struct PublishedIndexingProfile {
     pub hierarchy_strategy_id: &'static str,
     pub summary_policy_id: &'static str,
     pub planning_strategy: PublishedPlanningStrategy,
+    pub branch_encoding_policy: PublishedBranchEncodingPolicy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BranchEncodingPolicy {
+    Ordinary,
+    PcaRotF32Le,
+    PcaRotDeltaF32Le,
+    PcaRotDeltaUniform {
+        root_bits: u8,
+        interior_bits: u8,
+        lowest_routing_bits: u8,
+    },
+    PcaRotDeltaVariable {
+        root_bits: u8,
+        interior_bits: u8,
+        lowest_routing_bits: u8,
+    },
+}
+
+fn branch_encoding_policy_for_profile(profile: &PublishedIndexingProfile) -> BranchEncodingPolicy {
+    match profile.branch_encoding_policy {
+        PublishedBranchEncodingPolicy::Ordinary => BranchEncodingPolicy::Ordinary,
+        PublishedBranchEncodingPolicy::PcaRotF32Le => BranchEncodingPolicy::PcaRotF32Le,
+        PublishedBranchEncodingPolicy::PcaRotDeltaF32Le => BranchEncodingPolicy::PcaRotDeltaF32Le,
+        PublishedBranchEncodingPolicy::PcaRotDeltaUniform {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        } => BranchEncodingPolicy::PcaRotDeltaUniform {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        },
+        PublishedBranchEncodingPolicy::PcaRotDeltaVariable {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        } => BranchEncodingPolicy::PcaRotDeltaVariable {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        },
+    }
 }
 
 fn directional_pca_published_profile(
     version: PublishedProfileVersion,
     cluster_count: u32,
     params: DirectionalPcaParams,
+    branch_encoding_policy: PublishedBranchEncodingPolicy,
 ) -> PublishedIndexingProfile {
     PublishedIndexingProfile {
         version,
@@ -666,6 +735,7 @@ fn directional_pca_published_profile(
                 params,
             },
         ),
+        branch_encoding_policy,
     }
 }
 
@@ -701,6 +771,7 @@ pub fn published_indexing_profile(
             packing_strategy_id: Some("cluster-order-balanced-range-packer-v1"),
             hierarchy_strategy_id: "greedy-pack",
             summary_policy_id: "exact-centroid",
+            branch_encoding_policy: PublishedBranchEncodingPolicy::Ordinary,
             planning_strategy: PublishedPlanningStrategy::SphericalKmeansGreedyPack(
                 PublishedSphericalKmeansProfileSettings {
                     cluster_count: 157,
@@ -726,6 +797,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_0 => Ok(directional_pca_published_profile(
             version,
@@ -738,6 +810,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_1 => Ok(directional_pca_published_profile(
             version,
@@ -750,6 +823,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_2 => Ok(directional_pca_published_profile(
             version,
@@ -762,6 +836,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_3 => Ok(directional_pca_published_profile(
             version,
@@ -774,6 +849,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_4 => Ok(directional_pca_published_profile(
             version,
@@ -786,6 +862,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_5 => Ok(directional_pca_published_profile(
             version,
@@ -798,6 +875,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_6 => Ok(directional_pca_published_profile(
             version,
@@ -810,6 +888,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_7 => Ok(directional_pca_published_profile(
             version,
@@ -822,6 +901,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_8 => Ok(directional_pca_published_profile(
             version,
@@ -834,6 +914,7 @@ pub fn published_indexing_profile(
                 1,
                 0.5,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_9 => Ok(directional_pca_published_profile(
             version,
@@ -846,6 +927,7 @@ pub fn published_indexing_profile(
                 2,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_3_10 => Ok(directional_pca_published_profile(
             version,
@@ -858,6 +940,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_0 => Ok(directional_pca_published_profile(
             version,
@@ -870,6 +953,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_1 => Ok(directional_pca_published_profile(
             version,
@@ -882,6 +966,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_2 => Ok(directional_pca_published_profile(
             version,
@@ -894,6 +979,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_3 => Ok(directional_pca_published_profile(
             version,
@@ -906,6 +992,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_4 => Ok(directional_pca_published_profile(
             version,
@@ -918,6 +1005,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_5 => Ok(directional_pca_published_profile(
             version,
@@ -930,6 +1018,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_6 => Ok(directional_pca_published_profile(
             version,
@@ -942,6 +1031,7 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_7 => Ok(directional_pca_published_profile(
             version,
@@ -954,6 +1044,7 @@ pub fn published_indexing_profile(
                 1,
                 0.5,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_8 => Ok(directional_pca_published_profile(
             version,
@@ -966,6 +1057,7 @@ pub fn published_indexing_profile(
                 2,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
         )),
         PUBLISHED_PROFILE_V0_4_9 => Ok(directional_pca_published_profile(
             version,
@@ -978,6 +1070,80 @@ pub fn published_indexing_profile(
                 1,
                 0.0,
             ),
+            PublishedBranchEncodingPolicy::Ordinary,
+        )),
+        PUBLISHED_PROFILE_V0_5_0 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::Ordinary,
+        )),
+        PUBLISHED_PROFILE_V0_5_1 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotF32Le,
+        )),
+        PUBLISHED_PROFILE_V0_5_2 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotDeltaF32Le,
+        )),
+        PUBLISHED_PROFILE_V0_5_3 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotDeltaUniform {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
+        PUBLISHED_PROFILE_V0_5_4 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotDeltaVariable {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
         )),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }
@@ -1478,6 +1644,7 @@ struct LayerBuildStatus<'a> {
     started: Instant,
     progress: &'a Arc<AtomicUsize>,
     legacy_item_count: usize,
+    is_global_root_partition: bool,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1489,6 +1656,7 @@ pub struct StreamingIndexingRun<R, CR, EP, CEP, HPP> {
     embedding_provider: EP,
     canonical_embedding_policy: CEP,
     planning_policy: HPP,
+    branch_encoding_policy: BranchEncodingPolicy,
     embedding_spec: EmbeddingSpec,
     block_size_target: usize,
     observer: Option<StreamingIndexingStatusObserver>,
@@ -1578,11 +1746,13 @@ impl<R, CR, EP>
     ) -> Result<Self, StreamingIndexerError> {
         let profile = published_indexing_profile(profile_version)?;
         validate_published_profile_configuration(&profile, &embedding_spec, block_size_target)?;
-        Ok(Self::new(
+        let branch_encoding_policy = branch_encoding_policy_for_profile(&profile);
+        Ok(Self::new_with_branch_encoding(
             resolver,
             embedding_provider,
             ExactCentroidChildSummaryPolicy,
             PublishedProfilePlanningPolicy::new(profile),
+            branch_encoding_policy,
             embedding_spec,
             block_size_target,
         ))
@@ -1595,7 +1765,15 @@ fn validate_published_profile_configuration(
     block_size_target: usize,
 ) -> Result<(), StreamingIndexerError> {
     let PublishedProfileVersion { major, minor, .. } = profile.version;
-    if (major, minor) != (0, 4) {
+    if published_branch_policy_requires_f32le(&profile.branch_encoding_policy)
+        && embedding_spec.encoding != "f32le"
+    {
+        return Err(map_clustering_configuration_error(format!(
+            "published profile {} requires embedding_spec.encoding f32le so branch EBCP logical and leaf encodings remain compatible",
+            profile.version
+        )));
+    }
+    if !matches!((major, minor), (0, 4) | (0, 5)) {
         return Ok(());
     }
 
@@ -1612,6 +1790,10 @@ fn validate_published_profile_configuration(
         )));
     }
     Ok(())
+}
+
+fn published_branch_policy_requires_f32le(policy: &PublishedBranchEncodingPolicy) -> bool {
+    !matches!(policy, PublishedBranchEncodingPolicy::Ordinary)
 }
 
 impl<R, CR, EP, CEP, F> StreamingIndexingRun<R, CR, EP, CEP, FactoryHierarchicalPlanningPolicy<F>>
@@ -1646,11 +1828,32 @@ impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP> {
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Self {
+        Self::new_with_branch_encoding(
+            resolver,
+            embedding_provider,
+            canonical_embedding_policy,
+            planning_policy,
+            BranchEncodingPolicy::Ordinary,
+            embedding_spec,
+            block_size_target,
+        )
+    }
+
+    fn new_with_branch_encoding(
+        resolver: CR,
+        embedding_provider: EP,
+        canonical_embedding_policy: CEP,
+        planning_policy: HPP,
+        branch_encoding_policy: BranchEncodingPolicy,
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Self {
         Self {
             resolver,
             embedding_provider,
             canonical_embedding_policy,
             planning_policy,
+            branch_encoding_policy,
             embedding_spec,
             block_size_target,
             observer: None,
@@ -2257,6 +2460,7 @@ where
             &hierarchy.root_partition_id,
             &partitions,
             leaf_children,
+            true,
             materializability_bound,
             store,
             persisted_ids,
@@ -2269,6 +2473,7 @@ where
         partition_id: &str,
         partitions: &HashMap<String, FinalizedPartition>,
         leaf_children: &[IndexedChild],
+        is_global_root_partition: bool,
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
@@ -2300,6 +2505,7 @@ where
                         child_id,
                         partitions,
                         leaf_children,
+                        false,
                         materializability_bound,
                         store,
                         persisted_ids,
@@ -2308,12 +2514,19 @@ where
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        self.assemble_child_set(children, materializability_bound, store, persisted_ids)
+        self.assemble_child_set(
+            children,
+            is_global_root_partition,
+            materializability_bound,
+            store,
+            persisted_ids,
+        )
     }
 
     fn assemble_child_set(
         &self,
         children: Vec<IndexedChild>,
+        is_global_root_partition: bool,
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
@@ -2394,6 +2607,7 @@ where
                     started,
                     progress: &phase_progress,
                     legacy_item_count,
+                    is_global_root_partition,
                 },
                 store,
                 persisted_ids,
@@ -2479,12 +2693,20 @@ where
                 ));
             }
 
+            let encoded_branch = encode_branch_entries(
+                self.branch_encoding_policy,
+                &self.embedding_spec,
+                entries.as_slice(),
+                parent_level,
+                uses_root_branch_budget(status.is_global_root_partition, groups.len()),
+            )?;
+
             let branch = build_branch_block(
                 VERSION_1,
                 parent_level,
-                self.embedding_spec.clone(),
-                entries,
-                None,
+                encoded_branch.embedding_spec,
+                encoded_branch.entries,
+                encoded_branch.ext,
             )
             .map_err(StreamingIndexerError::BlockConstruction)?;
 
@@ -4614,6 +4836,645 @@ fn compare_indexed_children(left: &IndexedChild, right: &IndexedChild) -> Orderi
         .then_with(|| left.child.as_bytes().cmp(right.child.as_bytes()))
 }
 
+struct EncodedBranchEntries {
+    embedding_spec: EmbeddingSpec,
+    entries: Vec<BranchEntry>,
+    ext: Option<Metadata>,
+}
+
+fn encode_branch_entries(
+    policy: BranchEncodingPolicy,
+    logical_embedding_spec: &EmbeddingSpec,
+    entries: &[BranchEntry],
+    parent_level: u64,
+    is_root: bool,
+) -> Result<EncodedBranchEntries, StreamingIndexerError> {
+    match policy {
+        BranchEncodingPolicy::Ordinary => Ok(EncodedBranchEntries {
+            embedding_spec: logical_embedding_spec.clone(),
+            entries: entries.to_vec(),
+            ext: None,
+        }),
+        BranchEncodingPolicy::PcaRotF32Le
+        | BranchEncodingPolicy::PcaRotDeltaF32Le
+        | BranchEncodingPolicy::PcaRotDeltaUniform { .. }
+        | BranchEncodingPolicy::PcaRotDeltaVariable { .. } => {
+            if logical_embedding_spec.encoding != "f32le" {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "EBCP branch authoring currently requires f32le logical embeddings".into(),
+                ));
+            }
+            let decoded = entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    decode_f32_embedding_exact(
+                        &entry.embedding,
+                        logical_embedding_spec,
+                        "EBCP branch authoring",
+                    )
+                    .map_err(|error| {
+                        StreamingIndexerError::TerminalPartitionMaterialization(format!(
+                            "failed to decode logical branch entry {index}: {error}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<Vec<f32>>, StreamingIndexerError>>()?;
+            let (rotation_matrix, explained_variance) = fit_ebcp_rotation(decoded.as_slice())?;
+            let encoded = match policy {
+                BranchEncodingPolicy::PcaRotF32Le => encode_pca_rot_f32le_entries(
+                    entries,
+                    decoded.as_slice(),
+                    logical_embedding_spec,
+                    rotation_matrix.as_slice(),
+                ),
+                BranchEncodingPolicy::PcaRotDeltaF32Le => {
+                    let centroid = exact_f32_centroid(decoded.as_slice())?;
+                    encode_pca_rot_delta_f32le_entries(
+                        entries,
+                        decoded.as_slice(),
+                        logical_embedding_spec,
+                        rotation_matrix.as_slice(),
+                        centroid.as_slice(),
+                    )
+                }
+                BranchEncodingPolicy::PcaRotDeltaUniform {
+                    root_bits,
+                    interior_bits,
+                    lowest_routing_bits,
+                } => {
+                    let centroid = exact_f32_centroid(decoded.as_slice())?;
+                    encode_pca_rot_delta_quantized_entries(
+                        entries,
+                        decoded.as_slice(),
+                        logical_embedding_spec,
+                        rotation_matrix.as_slice(),
+                        centroid.as_slice(),
+                        QuantizedBranchEncoding::Uniform(resolve_branch_bit_budget(
+                            parent_level,
+                            is_root,
+                            root_bits,
+                            interior_bits,
+                            lowest_routing_bits,
+                        )),
+                        Some(explained_variance.as_slice()),
+                    )
+                }
+                BranchEncodingPolicy::PcaRotDeltaVariable {
+                    root_bits,
+                    interior_bits,
+                    lowest_routing_bits,
+                } => {
+                    let centroid = exact_f32_centroid(decoded.as_slice())?;
+                    encode_pca_rot_delta_quantized_entries(
+                        entries,
+                        decoded.as_slice(),
+                        logical_embedding_spec,
+                        rotation_matrix.as_slice(),
+                        centroid.as_slice(),
+                        QuantizedBranchEncoding::Variable(resolve_branch_bit_budget(
+                            parent_level,
+                            is_root,
+                            root_bits,
+                            interior_bits,
+                            lowest_routing_bits,
+                        )),
+                        Some(explained_variance.as_slice()),
+                    )
+                }
+                BranchEncodingPolicy::Ordinary => unreachable!(),
+            }?;
+            Ok(encoded)
+        }
+    }
+}
+
+fn resolve_branch_bit_budget(
+    parent_level: u64,
+    is_root: bool,
+    root_bits: u8,
+    interior_bits: u8,
+    lowest_routing_bits: u8,
+) -> u8 {
+    if is_root {
+        root_bits
+    } else if parent_level == 1 {
+        lowest_routing_bits
+    } else {
+        interior_bits
+    }
+}
+
+fn uses_root_branch_budget(is_global_root_partition: bool, group_count: usize) -> bool {
+    is_global_root_partition && group_count == 1
+}
+
+fn fit_ebcp_rotation(
+    embeddings: &[Vec<f32>],
+) -> Result<(Vec<f32>, Vec<f32>), StreamingIndexerError> {
+    let first =
+        embeddings
+            .first()
+            .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+                "cannot fit block-local PCA rotation from an empty branch-entry set".into(),
+            ))?;
+    let dims = first.len();
+    for embedding in embeddings {
+        if embedding.len() != dims {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP branch embeddings disagree on dimensionality".into(),
+            ));
+        }
+    }
+    if embeddings.len() < 2 {
+        let mut rotation = vec![0.0f32; dims * dims];
+        for index in 0..dims {
+            rotation[index * dims + index] = 1.0;
+        }
+        return Ok((rotation, vec![0.0; dims]));
+    }
+    let transform = fit(embeddings).map_err(|error| {
+        StreamingIndexerError::TerminalPartitionMaterialization(format!(
+            "failed to fit block-local PCA rotation: {error}"
+        ))
+    })?;
+    let explained_variance = transform
+        .explained_variance()
+        .map(|values| values.to_vec())
+        .unwrap_or_else(|| vec![0.0; transform.output_dim]);
+    let mut rotation = Vec::with_capacity(transform.input_dim * transform.output_dim);
+    for rotated_index in 0..transform.output_dim {
+        for ambient_index in 0..transform.input_dim {
+            rotation.push(transform.basis[ambient_index + rotated_index * transform.input_dim]);
+        }
+    }
+    Ok((rotation, explained_variance))
+}
+
+fn exact_f32_centroid(embeddings: &[Vec<f32>]) -> Result<Vec<f32>, StreamingIndexerError> {
+    let first =
+        embeddings
+            .first()
+            .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+                "cannot compute EBCP centroid from an empty branch-entry set".into(),
+            ))?;
+    let mut sums = vec![0.0f64; first.len()];
+    for embedding in embeddings {
+        if embedding.len() != sums.len() {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP branch embeddings disagree on dimensionality".into(),
+            ));
+        }
+        for (index, value) in embedding.iter().copied().enumerate() {
+            sums[index] += f64::from(value);
+        }
+    }
+    sums.into_iter()
+        .enumerate()
+        .map(|(index, sum)| {
+            let mean = (sum / embeddings.len() as f64) as f32;
+            if !mean.is_finite() {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    format!("EBCP centroid became non-finite at dimension {index}"),
+                ));
+            }
+            Ok(mean)
+        })
+        .collect()
+}
+
+fn decode_f32_embedding_exact(
+    embedding: &[u8],
+    spec: &EmbeddingSpec,
+    context: &str,
+) -> Result<Vec<f32>, String> {
+    validate_embedding_bytes(embedding, spec, context)?;
+    if spec.encoding != "f32le" {
+        return Err(format!(
+            "{context} requires f32le embeddings, got {:?}",
+            spec.encoding
+        ));
+    }
+    embedding
+        .chunks_exact(4)
+        .map(|chunk| {
+            let value = f32::from_le_bytes(chunk.try_into().unwrap());
+            if !value.is_finite() {
+                return Err("embedding contains non-finite f32 values".into());
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
+fn encode_pca_rot_f32le_entries(
+    original_entries: &[BranchEntry],
+    decoded: &[Vec<f32>],
+    logical_embedding_spec: &EmbeddingSpec,
+    rotation_matrix: &[f32],
+) -> Result<EncodedBranchEntries, StreamingIndexerError> {
+    let encoded_entries = original_entries
+        .iter()
+        .zip(decoded.iter())
+        .map(|(entry, vector)| {
+            let rotated = apply_row_major_rotation(rotation_matrix, vector)?;
+            Ok(BranchEntry {
+                embedding: encode_f32_vec(rotated.as_slice()),
+                child: entry.child,
+            })
+        })
+        .collect::<Result<Vec<BranchEntry>, StreamingIndexerError>>()?;
+    Ok(EncodedBranchEntries {
+        embedding_spec: EmbeddingSpec {
+            dims: logical_embedding_spec.dims,
+            encoding: "pca-rot-f32le".into(),
+        },
+        entries: encoded_entries,
+        ext: Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: logical_embedding_spec.clone(),
+            base_centroid: None,
+            rotation: EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: rotation_matrix.to_vec(),
+            },
+            quantization: None,
+        })),
+    })
+}
+
+fn encode_pca_rot_delta_f32le_entries(
+    original_entries: &[BranchEntry],
+    decoded: &[Vec<f32>],
+    logical_embedding_spec: &EmbeddingSpec,
+    rotation_matrix: &[f32],
+    centroid: &[f32],
+) -> Result<EncodedBranchEntries, StreamingIndexerError> {
+    let encoded_entries = original_entries
+        .iter()
+        .zip(decoded.iter())
+        .map(|(entry, vector)| {
+            let delta = subtract_f32_vectors(vector, centroid)?;
+            let rotated = apply_row_major_rotation(rotation_matrix, delta.as_slice())?;
+            Ok(BranchEntry {
+                embedding: encode_f32_vec(rotated.as_slice()),
+                child: entry.child,
+            })
+        })
+        .collect::<Result<Vec<BranchEntry>, StreamingIndexerError>>()?;
+    Ok(EncodedBranchEntries {
+        embedding_spec: EmbeddingSpec {
+            dims: logical_embedding_spec.dims,
+            encoding: "pca-rot-delta-f32le".into(),
+        },
+        entries: encoded_entries,
+        ext: Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: logical_embedding_spec.clone(),
+            base_centroid: Some(centroid.to_vec()),
+            rotation: EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: rotation_matrix.to_vec(),
+            },
+            quantization: None,
+        })),
+    })
+}
+
+enum QuantizedBranchEncoding {
+    Uniform(u8),
+    Variable(u8),
+}
+
+fn encode_pca_rot_delta_quantized_entries(
+    original_entries: &[BranchEntry],
+    decoded: &[Vec<f32>],
+    logical_embedding_spec: &EmbeddingSpec,
+    rotation_matrix: &[f32],
+    centroid: &[f32],
+    encoding: QuantizedBranchEncoding,
+    explained_variance: Option<&[f32]>,
+) -> Result<EncodedBranchEntries, StreamingIndexerError> {
+    let rotated_deltas = decoded
+        .iter()
+        .map(|vector| {
+            let delta = subtract_f32_vectors(vector, centroid)?;
+            apply_row_major_rotation(rotation_matrix, delta.as_slice())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let bit_widths = match encoding {
+        QuantizedBranchEncoding::Uniform(bit_width) => vec![bit_width; centroid.len()],
+        QuantizedBranchEncoding::Variable(total_uniform_bits) => allocate_variable_bit_widths(
+            explained_variance.ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+                "missing explained variance for variable-bit EBCP encoding".into(),
+            ))?,
+            total_uniform_bits,
+        )?,
+    };
+    let scale_factors =
+        compute_quantization_scales(rotated_deltas.as_slice(), bit_widths.as_slice())?;
+    let encoded_entries = original_entries
+        .iter()
+        .zip(rotated_deltas.iter())
+        .map(|(entry, rotated)| {
+            let embedding = pack_quantized_rotated_delta(
+                rotated,
+                bit_widths.as_slice(),
+                scale_factors.as_slice(),
+            )?;
+            Ok(BranchEntry {
+                embedding,
+                child: entry.child,
+            })
+        })
+        .collect::<Result<Vec<BranchEntry>, StreamingIndexerError>>()?;
+    let (encoding_name, quantization) = match encoding {
+        QuantizedBranchEncoding::Uniform(bit_width) => (
+            "pca-rot-delta-uq",
+            EbcpQuantization::Uniform {
+                bit_width,
+                scale_factors,
+            },
+        ),
+        QuantizedBranchEncoding::Variable(_) => (
+            "pca-rot-delta-vbq",
+            EbcpQuantization::Variable {
+                bit_widths,
+                scale_factors,
+            },
+        ),
+    };
+    Ok(EncodedBranchEntries {
+        embedding_spec: EmbeddingSpec {
+            dims: logical_embedding_spec.dims,
+            encoding: encoding_name.into(),
+        },
+        entries: encoded_entries,
+        ext: Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: logical_embedding_spec.clone(),
+            base_centroid: Some(centroid.to_vec()),
+            rotation: EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: rotation_matrix.to_vec(),
+            },
+            quantization: Some(quantization),
+        })),
+    })
+}
+
+fn apply_row_major_rotation(
+    rotation_matrix: &[f32],
+    vector: &[f32],
+) -> Result<Vec<f32>, StreamingIndexerError> {
+    if rotation_matrix.len() != vector.len() * vector.len() {
+        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+            "EBCP rotation matrix shape does not match logical dimensions".into(),
+        ));
+    }
+    let dims = vector.len();
+    let mut rotated = vec![0.0f32; dims];
+    for rotated_index in 0..dims {
+        let mut acc = 0.0f32;
+        for ambient_index in 0..dims {
+            acc += rotation_matrix[rotated_index * dims + ambient_index] * vector[ambient_index];
+        }
+        if !acc.is_finite() {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP rotation produced a non-finite value".into(),
+            ));
+        }
+        rotated[rotated_index] = acc;
+    }
+    Ok(rotated)
+}
+
+fn subtract_f32_vectors(left: &[f32], right: &[f32]) -> Result<Vec<f32>, StreamingIndexerError> {
+    if left.len() != right.len() {
+        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+            "EBCP vector subtraction requires matching dimensions".into(),
+        ));
+    }
+    left.iter()
+        .zip(right.iter())
+        .map(|(&lhs, &rhs)| {
+            let value = lhs - rhs;
+            if !value.is_finite() {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "EBCP delta vector produced a non-finite value".into(),
+                ));
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
+fn encode_f32_vec(values: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn compute_quantization_scales(
+    rotated_deltas: &[Vec<f32>],
+    bit_widths: &[u8],
+) -> Result<Vec<f32>, StreamingIndexerError> {
+    let dims = bit_widths.len();
+    let mut max_abs = vec![0.0f32; dims];
+    for rotated in rotated_deltas {
+        if rotated.len() != dims {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP rotated deltas disagree on dimensionality".into(),
+            ));
+        }
+        for (index, value) in rotated.iter().copied().enumerate() {
+            max_abs[index] = max_abs[index].max(value.abs());
+        }
+    }
+    max_abs
+        .into_iter()
+        .zip(bit_widths.iter().copied())
+        .map(|(max_abs, bit_width)| {
+            if bit_width == 0 {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "EBCP quantization bit widths must be nonzero".into(),
+                ));
+            }
+            let qmax = ((1_u32 << (bit_width - 1)) - 1) as f32;
+            let scale = if max_abs == 0.0 || qmax == 0.0 {
+                1.0
+            } else {
+                max_abs / qmax
+            };
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "EBCP quantization scale must be finite and positive".into(),
+                ));
+            }
+            Ok(scale)
+        })
+        .collect()
+}
+
+fn pack_quantized_rotated_delta(
+    rotated: &[f32],
+    bit_widths: &[u8],
+    scale_factors: &[f32],
+) -> Result<Vec<u8>, StreamingIndexerError> {
+    if rotated.len() != bit_widths.len() || rotated.len() != scale_factors.len() {
+        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+            "EBCP quantization metadata dimension mismatch".into(),
+        ));
+    }
+    let total_bits = bit_widths.iter().try_fold(0usize, |sum, width| {
+        sum.checked_add(usize::from(*width)).ok_or(
+            StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP quantized payload bit length overflowed".into(),
+            ),
+        )
+    })?;
+    let mut bytes = vec![0u8; total_bits.div_ceil(8)];
+    let mut bit_offset = 0usize;
+    for ((&value, &bit_width), &scale) in rotated
+        .iter()
+        .zip(bit_widths.iter())
+        .zip(scale_factors.iter())
+    {
+        let qmax = ((1_i32 << (bit_width - 1)) - 1) as f64;
+        let centered = if scale == 0.0 {
+            0.0
+        } else {
+            f64::from(value) / f64::from(scale)
+        };
+        let quantized = centered.round_ties_even().clamp(-qmax, qmax) as i32;
+        let stored = u32::try_from(quantized + (1_i32 << (bit_width - 1))).map_err(|_| {
+            StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP quantized code did not fit the declared bit width".into(),
+            )
+        })?;
+        write_lsb_first_bits(bytes.as_mut_slice(), bit_offset, bit_width, stored)?;
+        bit_offset += usize::from(bit_width);
+    }
+    Ok(bytes)
+}
+
+fn write_lsb_first_bits(
+    bytes: &mut [u8],
+    start_bit: usize,
+    bit_width: u8,
+    value: u32,
+) -> Result<(), StreamingIndexerError> {
+    for bit_index in 0..usize::from(bit_width) {
+        let absolute_bit = start_bit + bit_index;
+        let byte_index = absolute_bit / 8;
+        let intra_byte = absolute_bit % 8;
+        let bit = ((value >> bit_index) & 1) as u8;
+        bytes[byte_index] |= bit << intra_byte;
+    }
+    Ok(())
+}
+
+fn allocate_variable_bit_widths(
+    explained_variance: &[f32],
+    uniform_bit_width: u8,
+) -> Result<Vec<u8>, StreamingIndexerError> {
+    const MAX_EBCP_BIT_WIDTH: u8 = 31;
+    if explained_variance.is_empty() {
+        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+            "variable-bit EBCP encoding requires at least one explained-variance entry".into(),
+        ));
+    }
+    let total_bits = usize::from(uniform_bit_width)
+        .checked_mul(explained_variance.len())
+        .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+            "variable-bit EBCP bit budget overflowed".into(),
+        ))?;
+    let max_total_bits = usize::from(MAX_EBCP_BIT_WIDTH)
+        .checked_mul(explained_variance.len())
+        .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+            "variable-bit EBCP maximum bit budget overflowed".into(),
+        ))?;
+    if total_bits > max_total_bits {
+        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+            "variable-bit EBCP budget exceeds the 31-bit per-dimension limit".into(),
+        ));
+    }
+    let mut widths = vec![1u8; explained_variance.len()];
+    let remaining = total_bits.saturating_sub(explained_variance.len());
+    if remaining == 0 {
+        return Ok(widths);
+    }
+
+    let weights = explained_variance
+        .iter()
+        .map(|value| (1.0 + f64::from((*value).max(0.0))).ln())
+        .collect::<Vec<_>>();
+    let weight_sum = weights.iter().sum::<f64>();
+    let desired = if weight_sum > 0.0 {
+        weights
+            .iter()
+            .map(|weight| (weight / weight_sum) * remaining as f64)
+            .collect::<Vec<_>>()
+    } else {
+        vec![remaining as f64 / widths.len() as f64; widths.len()]
+    };
+    let base = desired
+        .iter()
+        .map(|value| value.floor() as usize)
+        .collect::<Vec<_>>();
+    for (width, addend) in widths.iter_mut().zip(base.iter().copied()) {
+        let capped_addend = addend.min(usize::from(MAX_EBCP_BIT_WIDTH - 1));
+        *width = width.saturating_add(u8::try_from(capped_addend).map_err(|_| {
+            StreamingIndexerError::TerminalPartitionMaterialization(
+                "variable-bit EBCP bit width exceeded u8".into(),
+            )
+        })?);
+    }
+    let used = widths
+        .iter()
+        .map(|width| usize::from(*width) - 1)
+        .sum::<usize>();
+    let mut leftovers = remaining - used;
+    let mut remainders = desired
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (index, value - value.floor()))
+        .collect::<Vec<_>>();
+    remainders.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    while leftovers > 0 {
+        let mut progressed = false;
+        for (index, _) in remainders.iter().copied() {
+            if leftovers == 0 {
+                break;
+            }
+            if widths[index] >= MAX_EBCP_BIT_WIDTH {
+                continue;
+            }
+            widths[index] = widths[index].checked_add(1).ok_or(
+                StreamingIndexerError::TerminalPartitionMaterialization(
+                    "variable-bit EBCP bit width exceeded u8".into(),
+                ),
+            )?;
+            leftovers -= 1;
+            progressed = true;
+        }
+        if !progressed {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "variable-bit EBCP allocation could not satisfy the 31-bit per-dimension limit"
+                    .into(),
+            ));
+        }
+    }
+    Ok(widths)
+}
+
 fn normalize_branch_entries(mut entries: Vec<BranchEntry>) -> Vec<BranchEntry> {
     entries.sort_by(|left, right| {
         left.child
@@ -5585,8 +6446,9 @@ pub mod conformance {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildSummaryInput, DirectionalPcaAllocationPolicy, effective_directional_pca_cluster_count,
-        exact_centroid_child_summary, weighted_mean_f32_embeddings,
+        ChildSummaryInput, DirectionalPcaAllocationPolicy, allocate_variable_bit_widths,
+        effective_directional_pca_cluster_count, exact_centroid_child_summary, fit_ebcp_rotation,
+        uses_root_branch_budget, weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -5640,5 +6502,35 @@ mod tests {
         )
         .expect("effective cluster count should succeed");
         assert_eq!(effective, 4);
+    }
+
+    #[test]
+    fn single_entry_ebcp_rotation_uses_identity_fallback() {
+        let (rotation, explained_variance) = fit_ebcp_rotation(&[vec![3.0f32, -2.0f32]])
+            .expect("single-entry fallback should succeed");
+        assert_eq!(rotation, vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(explained_variance, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn root_branch_budget_applies_only_to_single_group_global_root() {
+        assert!(uses_root_branch_budget(true, 1));
+        assert!(!uses_root_branch_budget(false, 1));
+        assert!(!uses_root_branch_budget(true, 2));
+    }
+
+    #[test]
+    fn variable_bit_widths_respect_protocol_cap_and_preserve_budget() {
+        let widths = allocate_variable_bit_widths(&[1_000_000_000.0, 0.0, 0.0, 0.0], 12)
+            .expect("allocation should succeed");
+        assert_eq!(
+            widths
+                .iter()
+                .map(|width| usize::from(*width))
+                .sum::<usize>(),
+            48
+        );
+        assert!(widths.iter().all(|width| (1..=31).contains(width)));
+        assert_eq!(widths[0], 31);
     }
 }

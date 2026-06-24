@@ -98,6 +98,29 @@ mismatched content as valid.
 The crate shall preserve and expose arbitrary nonnegative block levels in
 version-1 serialization, deserialization, and typed validated output.
 
+### REQ-BLOCK-CRATE-015
+
+The crate shall implement the EBCP branch-encoding validity rules defined by
+`docs/protocol/ebcp.md` together with the enclosing block rules from
+`docs/protocol/blocks.md`.
+
+### REQ-BLOCK-CRATE-016
+
+The crate shall accept EBCP encodings only on non-leaf blocks and shall reject
+leaf blocks that declare any EBCP encoding.
+
+### REQ-BLOCK-CRATE-017
+
+For an EBCP-encoded non-leaf block, the crate shall validate the presence and
+shape of the required `ext` metadata and shall reject payload bytes whose length
+is inconsistent with the declared EBCP encoding and metadata.
+
+### REQ-BLOCK-CRATE-018
+
+The crate shall preserve and expose EBCP branch-encoding metadata and raw branch
+payload bytes to downstream indexing and search consumers without embedding
+indexing or search policy decisions into the block crate itself.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -110,7 +133,8 @@ This crate does not define or own:
 
 ## Relationship to the Protocol
 
-This document is subordinate to `docs/protocol/blocks.md`.
+This document is subordinate to `docs/protocol/blocks.md` and
+`docs/protocol/ebcp.md`.
 
 If this document appears to conflict with the protocol document, the protocol
 document is authoritative for wire format, canonicalization, and validity

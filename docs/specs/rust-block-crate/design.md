@@ -136,6 +136,37 @@ The repository shall include automated tests that realize the validation
 entries in `docs/specs/rust-block-crate/validation.md`, with each validation
 entry mapped to one or more executable tests.
 
+### DSG-018 `EBCP-aware typed block model`
+
+The typed block model continues to treat `EmbeddingSpec` as the protocol-owned
+declaration of the stored branch-entry representation, including the EBCP
+branch-only encodings defined by `docs/protocol/ebcp.md`.
+
+The block crate preserves that declaration exactly and makes the enclosing
+block's `ext` metadata available to downstream consumers as typed or otherwise
+structured protocol data without deciding how indexing or search should use it.
+
+### DSG-019 `EBCP validity gate`
+
+During branch-block construction and hash-verified deserialization, the crate
+enforces the EBCP-specific structural rules owned by `docs/protocol/ebcp.md`.
+
+That includes:
+
+- rejecting EBCP encodings on leaf blocks
+- requiring the EBCP descriptor for EBCP branch blocks
+- validating EBCP dimensionality and metadata shape
+- validating that branch-entry payload lengths match the selected EBCP encoding
+  and descriptor metadata
+
+### DSG-020 `Policy-neutral consumer surface`
+
+When a validated block uses an EBCP encoding, the block crate exposes the
+decoded protocol metadata and raw branch payload bytes in a consumer-neutral
+form. Search or indexing layers may then reconstruct or compare embeddings
+according to their own subordinate specifications without re-parsing canonical
+CBOR or bypassing block-level validation.
+
 ## Decode and Verification Flow
 
 The deserialize path is:
@@ -186,3 +217,6 @@ Both consumers use the same typed model and protocol-conformance logic.
 | DSG-014 | REQ-BLOCK-CRATE-004, 011, 012 |
 | DSG-015 | REQ-BLOCK-CRATE-003, 006 |
 | DSG-016..017 | REQ-BLOCK-CRATE-010 |
+| DSG-018 | REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-018 |
+| DSG-019 | REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-016, REQ-BLOCK-CRATE-017 |
+| DSG-020 | REQ-BLOCK-CRATE-006, REQ-BLOCK-CRATE-018 |

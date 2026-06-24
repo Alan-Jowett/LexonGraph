@@ -1019,3 +1019,71 @@ configured materializability conditions used for `VAL-STREAM-INDEXER-085`.
 not inherit the `0.4.x` fail-fast configured-conflict rule.
 
 **Traces to:** REQ-STREAM-INDEXER-093
+
+### VAL-STREAM-INDEXER-088
+
+Resolve published indexing profile `0.5.0` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully and preserves the
+same tree-construction settings, emitted block-topology contract, and ordinary
+uncompressed branch-entry representation as `0.4.0`.
+
+**Traces to:** REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095
+
+### VAL-STREAM-INDEXER-089
+
+Resolve published indexing profile `0.5.1` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.5.0` topology contract, and changes only the authored non-leaf branch-entry
+representation to EBCP `pca-rot-f32le`.
+
+**Traces to:** REQ-STREAM-INDEXER-096, REQ-STREAM-INDEXER-100,
+REQ-STREAM-INDEXER-101
+
+### VAL-STREAM-INDEXER-090
+
+Resolve published indexing profile `0.5.2` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.5.0` topology contract, and changes only the authored non-leaf branch-entry
+representation to EBCP `pca-rot-delta-f32le`.
+
+**Traces to:** REQ-STREAM-INDEXER-097, REQ-STREAM-INDEXER-100,
+REQ-STREAM-INDEXER-101
+
+### VAL-STREAM-INDEXER-091
+
+Resolve published indexing profile `0.5.3` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.5.0` topology contract, uses EBCP `pca-rot-delta-uq`, and assigns uniform
+per-dimension bit widths of `12`, `8`, and `6` on the root, interior, and
+lowest routing non-leaf levels respectively.
+
+**Traces to:** REQ-STREAM-INDEXER-098, REQ-STREAM-INDEXER-100,
+REQ-STREAM-INDEXER-101
+
+### VAL-STREAM-INDEXER-092
+
+Resolve published indexing profile `0.5.4` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.5.0` topology contract, uses EBCP `pca-rot-delta-vbq`, and preserves the
+same total per-level bit budget that `0.5.3` would have used at the same level
+and dimensionality while redistributing those bits by variance.
+
+**Traces to:** REQ-STREAM-INDEXER-099, REQ-STREAM-INDEXER-100,
+REQ-STREAM-INDEXER-101
+
+### VAL-STREAM-INDEXER-093
+
+Resolve the full published profile set, including the `0.4.x` and `0.5.x`
+ladders, more than once under identical conditions.
+
+**Pass condition:** profile resolution remains deterministic for each version,
+the `0.5.x` ladder remains explicitly addressable alongside earlier ladders,
+and selecting any `0.5.x` profile does not mutate the declared mapping of
+`0.5.0` or any earlier published profile.
+
+**Traces to:** REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095
