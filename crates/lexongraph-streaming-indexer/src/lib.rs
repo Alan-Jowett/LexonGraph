@@ -5257,7 +5257,7 @@ fn encode_pca_rot_delta_quantized_entries(
         .iter()
         .zip(rotated_deltas.iter())
         .map(|(entry, rotated)| {
-            let embedding = pack_quantized_rotated_delta(
+            let embedding = pack_quantized_delta_vector(
                 rotated,
                 bit_widths.as_slice(),
                 scale_factors.as_slice(),
@@ -5321,7 +5321,7 @@ fn encode_ambient_delta_quantized_entries(
         .iter()
         .zip(ambient_deltas.iter())
         .map(|(entry, ambient_delta)| {
-            let embedding = pack_quantized_rotated_delta(
+            let embedding = pack_quantized_delta_vector(
                 ambient_delta,
                 bit_widths.as_slice(),
                 scale_factors.as_slice(),
@@ -5406,18 +5406,18 @@ fn encode_f32_vec(values: &[f32]) -> Vec<u8> {
 }
 
 fn compute_quantization_scales(
-    rotated_deltas: &[Vec<f32>],
+    delta_vectors: &[Vec<f32>],
     bit_widths: &[u8],
 ) -> Result<Vec<f32>, StreamingIndexerError> {
     let dims = bit_widths.len();
     let mut max_abs = vec![0.0f32; dims];
-    for rotated in rotated_deltas {
-        if rotated.len() != dims {
+    for vector in delta_vectors {
+        if vector.len() != dims {
             return Err(StreamingIndexerError::TerminalPartitionMaterialization(
-                "EBCP rotated deltas disagree on dimensionality".into(),
+                "EBCP delta vectors disagree on dimensionality".into(),
             ));
         }
-        for (index, value) in rotated.iter().copied().enumerate() {
+        for (index, value) in vector.iter().copied().enumerate() {
             max_abs[index] = max_abs[index].max(value.abs());
         }
     }
@@ -5446,12 +5446,12 @@ fn compute_quantization_scales(
         .collect()
 }
 
-fn pack_quantized_rotated_delta(
-    rotated: &[f32],
+fn pack_quantized_delta_vector(
+    values: &[f32],
     bit_widths: &[u8],
     scale_factors: &[f32],
 ) -> Result<Vec<u8>, StreamingIndexerError> {
-    if rotated.len() != bit_widths.len() || rotated.len() != scale_factors.len() {
+    if values.len() != bit_widths.len() || values.len() != scale_factors.len() {
         return Err(StreamingIndexerError::TerminalPartitionMaterialization(
             "EBCP quantization metadata dimension mismatch".into(),
         ));
@@ -5465,7 +5465,7 @@ fn pack_quantized_rotated_delta(
     })?;
     let mut bytes = vec![0u8; total_bits.div_ceil(8)];
     let mut bit_offset = 0usize;
-    for ((&value, &bit_width), &scale) in rotated
+    for ((&value, &bit_width), &scale) in values
         .iter()
         .zip(bit_widths.iter())
         .zip(scale_factors.iter())
