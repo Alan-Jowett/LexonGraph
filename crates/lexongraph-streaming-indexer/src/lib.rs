@@ -4942,6 +4942,27 @@ fn resolve_branch_bit_budget(
 fn fit_ebcp_rotation(
     embeddings: &[Vec<f32>],
 ) -> Result<(Vec<f32>, Vec<f32>), StreamingIndexerError> {
+    let first =
+        embeddings
+            .first()
+            .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+                "cannot fit block-local PCA rotation from an empty branch-entry set".into(),
+            ))?;
+    let dims = first.len();
+    for embedding in embeddings {
+        if embedding.len() != dims {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "EBCP branch embeddings disagree on dimensionality".into(),
+            ));
+        }
+    }
+    if embeddings.len() < 2 {
+        let mut rotation = vec![0.0f32; dims * dims];
+        for index in 0..dims {
+            rotation[index * dims + index] = 1.0;
+        }
+        return Ok((rotation, vec![0.0; dims]));
+    }
     let transform = fit(embeddings).map_err(|error| {
         StreamingIndexerError::TerminalPartitionMaterialization(format!(
             "failed to fit block-local PCA rotation: {error}"
@@ -6368,7 +6389,7 @@ pub mod conformance {
 mod tests {
     use super::{
         ChildSummaryInput, DirectionalPcaAllocationPolicy, effective_directional_pca_cluster_count,
-        exact_centroid_child_summary, weighted_mean_f32_embeddings,
+        exact_centroid_child_summary, fit_ebcp_rotation, weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -6422,5 +6443,13 @@ mod tests {
         )
         .expect("effective cluster count should succeed");
         assert_eq!(effective, 4);
+    }
+
+    #[test]
+    fn single_entry_ebcp_rotation_uses_identity_fallback() {
+        let (rotation, explained_variance) = fit_ebcp_rotation(&[vec![3.0f32, -2.0f32]])
+            .expect("single-entry fallback should succeed");
+        assert_eq!(rotation, vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(explained_variance, vec![0.0, 0.0]);
     }
 }

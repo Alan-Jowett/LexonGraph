@@ -724,20 +724,25 @@ impl<EC, CS> Searcher<EC, CS> {
             LoadedEntries::Branch(entries) => entries
                 .into_iter()
                 .map(|entry| {
-                    let candidate_embedding = match branch_ebcp.as_ref() {
-                        Some(descriptor) => reconstruct_ebcp_embedding_bytes(
-                            &entry.embedding,
-                            &metadata.embedding_spec,
-                            descriptor,
-                        ),
-                        None => Ok(entry.embedding.clone()),
-                    }
-                    .map_err(|error| SearchError::ScoringFailure {
-                        block_id: *block_id,
-                        message: error.to_string(),
-                    })?;
+                    let reconstructed;
+                    let candidate_embedding =
+                        match branch_ebcp.as_ref() {
+                            Some(descriptor) => {
+                                reconstructed = reconstruct_ebcp_embedding_bytes(
+                                    &entry.embedding,
+                                    &metadata.embedding_spec,
+                                    descriptor,
+                                )
+                                .map_err(|error| SearchError::ScoringFailure {
+                                    block_id: *block_id,
+                                    message: error.to_string(),
+                                })?;
+                                reconstructed.as_slice()
+                            }
+                            None => entry.embedding.as_slice(),
+                        };
                     self.scorer
-                        .score(target, &candidate_embedding, comparison_spec)
+                        .score(target, candidate_embedding, comparison_spec)
                         .map(|score| SearchCandidate::Branch {
                             child: entry.child,
                             depth: depth + 1,
