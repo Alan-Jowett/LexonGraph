@@ -3,9 +3,9 @@
 use ciborium::ser::into_writer;
 use ciborium::value::{Integer, Value};
 use lexongraph_block::{
-    Block, BlockError, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpRotation,
-    EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1, build_branch_block, build_leaf_block,
-    compute_block_hash, deserialize_block, ebcp_extension_map, into_entries,
+    Block, BlockError, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpQuantization,
+    EbcpRotation, EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1, build_branch_block,
+    build_leaf_block, compute_block_hash, deserialize_block, ebcp_extension_map, into_entries,
     parse_branch_ebcp_descriptor, serialize_block,
 };
 
@@ -602,6 +602,59 @@ fn val_023_ebcp_blocks_reject_inconsistent_metadata_and_payload_lengths() {
         invalid_payload_error,
         BlockError::NonConforming(_)
     ));
+}
+
+#[test]
+fn val_024_ebcp_quantization_rejects_bit_widths_above_31() {
+    let uniform_error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-delta-uq"),
+        vec![branch_entry(vec![0; 8], [0x11; 32])],
+        Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            base_centroid: Some(vec![0.0, 0.0]),
+            rotation: EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: vec![1.0, 0.0, 0.0, 1.0],
+            },
+            quantization: Some(EbcpQuantization::Uniform {
+                bit_width: 32,
+                scale_factors: vec![1.0, 1.0],
+            }),
+        })),
+    )
+    .unwrap_err();
+    assert!(matches!(uniform_error, BlockError::NonConforming(_)));
+
+    let variable_error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-delta-vbq"),
+        vec![branch_entry(vec![0; 5], [0x11; 32])],
+        Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            base_centroid: Some(vec![0.0, 0.0]),
+            rotation: EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: vec![1.0, 0.0, 0.0, 1.0],
+            },
+            quantization: Some(EbcpQuantization::Variable {
+                bit_widths: vec![32, 1],
+                scale_factors: vec![1.0, 1.0],
+            }),
+        })),
+    )
+    .unwrap_err();
+    assert!(matches!(variable_error, BlockError::NonConforming(_)));
 }
 
 fn sample_branch_block() -> Block {

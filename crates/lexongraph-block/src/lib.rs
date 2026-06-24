@@ -46,6 +46,7 @@ const EBCP_LOGICAL_ENCODING_F32LE: &str = "f32le";
 const EBCP_ROTATION_FORMAT_F32LE_ROW_MAJOR: &str = "f32le-row-major";
 const EBCP_QUANTIZATION_MODE_UNIFORM: u64 = 1;
 const EBCP_QUANTIZATION_MODE_VARIABLE: u64 = 2;
+const EBCP_MAX_SUPPORTED_BIT_WIDTH: u8 = 31;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockHash([u8; 32]);
@@ -757,6 +758,11 @@ fn parse_ebcp_quantization(
                     "uniform_bit_width must be at least 1",
                 ));
             }
+            if bit_width > EBCP_MAX_SUPPORTED_BIT_WIDTH {
+                return Err(BlockError::NonConforming(
+                    "uniform_bit_width must be at most 31",
+                ));
+            }
             if fields
                 .iter()
                 .any(|(key, _)| *key == EBCP_QUANTIZATION_BIT_WIDTHS_KEY)
@@ -795,6 +801,14 @@ fn parse_ebcp_quantization(
             if bit_widths.len() != dims || bit_widths.contains(&0) {
                 return Err(BlockError::NonConforming(
                     "EBCP variable bit widths must contain one nonzero byte per dimension",
+                ));
+            }
+            if bit_widths
+                .iter()
+                .any(|bit_width| *bit_width > EBCP_MAX_SUPPORTED_BIT_WIDTH)
+            {
+                return Err(BlockError::NonConforming(
+                    "EBCP variable bit widths must be at most 31",
                 ));
             }
             Ok(EbcpQuantization::Variable {

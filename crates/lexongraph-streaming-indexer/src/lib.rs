@@ -1644,6 +1644,7 @@ struct LayerBuildStatus<'a> {
     started: Instant,
     progress: &'a Arc<AtomicUsize>,
     legacy_item_count: usize,
+    is_global_root_partition: bool,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2453,6 +2454,7 @@ where
             &hierarchy.root_partition_id,
             &partitions,
             leaf_children,
+            true,
             materializability_bound,
             store,
             persisted_ids,
@@ -2465,6 +2467,7 @@ where
         partition_id: &str,
         partitions: &HashMap<String, FinalizedPartition>,
         leaf_children: &[IndexedChild],
+        is_global_root_partition: bool,
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
@@ -2496,6 +2499,7 @@ where
                         child_id,
                         partitions,
                         leaf_children,
+                        false,
                         materializability_bound,
                         store,
                         persisted_ids,
@@ -2504,12 +2508,19 @@ where
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        self.assemble_child_set(children, materializability_bound, store, persisted_ids)
+        self.assemble_child_set(
+            children,
+            is_global_root_partition,
+            materializability_bound,
+            store,
+            persisted_ids,
+        )
     }
 
     fn assemble_child_set(
         &self,
         children: Vec<IndexedChild>,
+        is_global_root_partition: bool,
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
@@ -2590,6 +2601,7 @@ where
                     started,
                     progress: &phase_progress,
                     legacy_item_count,
+                    is_global_root_partition,
                 },
                 store,
                 persisted_ids,
@@ -2680,7 +2692,7 @@ where
                 &self.embedding_spec,
                 entries.as_slice(),
                 parent_level,
-                groups.len() == 1,
+                uses_root_branch_budget(status.is_global_root_partition, groups.len()),
             )?;
 
             let branch = build_branch_block(
@@ -4939,6 +4951,10 @@ fn resolve_branch_bit_budget(
     }
 }
 
+fn uses_root_branch_budget(is_global_root_partition: bool, group_count: usize) -> bool {
+    is_global_root_partition && group_count == 1
+}
+
 fn fit_ebcp_rotation(
     embeddings: &[Vec<f32>],
 ) -> Result<(Vec<f32>, Vec<f32>), StreamingIndexerError> {
@@ -6389,7 +6405,8 @@ pub mod conformance {
 mod tests {
     use super::{
         ChildSummaryInput, DirectionalPcaAllocationPolicy, effective_directional_pca_cluster_count,
-        exact_centroid_child_summary, fit_ebcp_rotation, weighted_mean_f32_embeddings,
+        exact_centroid_child_summary, fit_ebcp_rotation, uses_root_branch_budget,
+        weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -6451,5 +6468,12 @@ mod tests {
             .expect("single-entry fallback should succeed");
         assert_eq!(rotation, vec![1.0, 0.0, 0.0, 1.0]);
         assert_eq!(explained_variance, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn root_branch_budget_applies_only_to_single_group_global_root() {
+        assert!(uses_root_branch_budget(true, 1));
+        assert!(!uses_root_branch_budget(false, 1));
+        assert!(!uses_root_branch_budget(true, 2));
     }
 }
