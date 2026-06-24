@@ -4192,6 +4192,48 @@ fn val_stream_indexer_088_published_profile_v0_5_0_preserves_v0_4_0_baseline_map
     );
 }
 
+#[test]
+fn val_stream_indexer_088b_published_profile_v0_5_0_keeps_non_f32_baseline_compatibility() {
+    let run = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_5_0,
+        embedding_spec(),
+        6000,
+    )
+    .unwrap();
+    drop(run);
+
+    let error = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        PUBLISHED_PROFILE_V0_5_1,
+        embedding_spec(),
+        6000,
+    );
+    let error = match error {
+        Ok(_) => panic!("expected 0.5.1 non-f32 configuration to be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("requires embedding_spec.encoding f32le")
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_089_published_profile_v0_5_1_emits_rotated_branch_entries() {
     assert_directional_pca_profile_branch_policy(

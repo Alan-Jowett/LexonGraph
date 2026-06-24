@@ -542,18 +542,20 @@ fn validate_branch_ebcp_payload_lengths(
     embedding_spec: &EmbeddingSpec,
     descriptor: &EbcpDescriptor,
 ) -> Result<(), BlockError> {
-    let expected_len = ebcp_payload_len(embedding_spec, descriptor)?;
+    let expected_bit_len = ebcp_payload_bit_len(embedding_spec, descriptor)?;
+    let expected_len = packed_bit_len_to_byte_len(expected_bit_len)?;
     for entry in entries {
         if entry.embedding.len() != expected_len {
             return Err(BlockError::NonConforming(
                 "branch payload bytes are inconsistent with the selected EBCP encoding and metadata",
             ));
         }
+        validate_zero_ebcp_padding_bits(entry.embedding.as_slice(), expected_bit_len)?;
     }
     Ok(())
 }
 
-fn ebcp_payload_len(
+fn ebcp_payload_bit_len(
     embedding_spec: &EmbeddingSpec,
     descriptor: &EbcpDescriptor,
 ) -> Result<usize, BlockError> {
@@ -562,6 +564,7 @@ fn ebcp_payload_len(
     match embedding_spec.encoding.as_str() {
         "pca-rot-f32le" | "pca-rot-delta-f32le" => dims
             .checked_mul(std::mem::size_of::<f32>())
+            .and_then(|bytes| bytes.checked_mul(8))
             .ok_or(BlockError::NonConforming("EBCP payload length overflowed")),
         "pca-rot-delta-uq" => {
             let EbcpQuantization::Uniform { bit_width, .. } = descriptor
@@ -575,9 +578,10 @@ fn ebcp_payload_len(
                     "EBCP quantization mode does not match the declared encoding",
                 ));
             };
-            packed_bit_len_to_byte_len(dims.checked_mul(usize::from(*bit_width)).ok_or(
-                BlockError::NonConforming("EBCP payload bit length overflowed"),
-            )?)
+            dims.checked_mul(usize::from(*bit_width))
+                .ok_or(BlockError::NonConforming(
+                    "EBCP payload bit length overflowed",
+                ))
         }
         "pca-rot-delta-vbq" => {
             let EbcpQuantization::Variable { bit_widths, .. } = descriptor
@@ -597,12 +601,29 @@ fn ebcp_payload_len(
                         "EBCP payload bit length overflowed",
                     ))
             })?;
-            packed_bit_len_to_byte_len(total_bits)
+            Ok(total_bits)
         }
         _ => Err(BlockError::NonConforming(
             "EBCP payload validation requires an EBCP embedding encoding",
         )),
     }
+}
+
+fn validate_zero_ebcp_padding_bits(
+    payload: &[u8],
+    payload_bit_len: usize,
+) -> Result<(), BlockError> {
+    let used_bits_in_last_byte = payload_bit_len % 8;
+    if used_bits_in_last_byte == 0 || payload.is_empty() {
+        return Ok(());
+    }
+    let used_mask = ((1u16 << used_bits_in_last_byte) - 1) as u8;
+    if payload[payload.len() - 1] & !used_mask != 0 {
+        return Err(BlockError::NonConforming(
+            "EBCP quantized payload padding bits must be zero",
+        ));
+    }
+    Ok(())
 }
 
 fn packed_bit_len_to_byte_len(bit_len: usize) -> Result<usize, BlockError> {

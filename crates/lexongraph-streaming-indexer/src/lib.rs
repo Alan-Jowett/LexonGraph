@@ -1765,7 +1765,9 @@ fn validate_published_profile_configuration(
     block_size_target: usize,
 ) -> Result<(), StreamingIndexerError> {
     let PublishedProfileVersion { major, minor, .. } = profile.version;
-    if (major, minor) == (0, 5) && embedding_spec.encoding != "f32le" {
+    if published_branch_policy_requires_f32le(&profile.branch_encoding_policy)
+        && embedding_spec.encoding != "f32le"
+    {
         return Err(map_clustering_configuration_error(format!(
             "published profile {} requires embedding_spec.encoding f32le so branch EBCP logical and leaf encodings remain compatible",
             profile.version
@@ -1788,6 +1790,10 @@ fn validate_published_profile_configuration(
         )));
     }
     Ok(())
+}
+
+fn published_branch_policy_requires_f32le(policy: &PublishedBranchEncodingPolicy) -> bool {
+    !matches!(policy, PublishedBranchEncodingPolicy::Ordinary)
 }
 
 impl<R, CR, EP, CEP, F> StreamingIndexingRun<R, CR, EP, CEP, FactoryHierarchicalPlanningPolicy<F>>
@@ -4875,7 +4881,6 @@ fn encode_branch_entries(
                 })
                 .collect::<Result<Vec<Vec<f32>>, StreamingIndexerError>>()?;
             let (rotation_matrix, explained_variance) = fit_ebcp_rotation(decoded.as_slice())?;
-            let centroid = exact_f32_centroid(decoded.as_slice())?;
             let encoded = match policy {
                 BranchEncodingPolicy::PcaRotF32Le => encode_pca_rot_f32le_entries(
                     entries,
@@ -4883,51 +4888,60 @@ fn encode_branch_entries(
                     logical_embedding_spec,
                     rotation_matrix.as_slice(),
                 ),
-                BranchEncodingPolicy::PcaRotDeltaF32Le => encode_pca_rot_delta_f32le_entries(
-                    entries,
-                    decoded.as_slice(),
-                    logical_embedding_spec,
-                    rotation_matrix.as_slice(),
-                    centroid.as_slice(),
-                ),
+                BranchEncodingPolicy::PcaRotDeltaF32Le => {
+                    let centroid = exact_f32_centroid(decoded.as_slice())?;
+                    encode_pca_rot_delta_f32le_entries(
+                        entries,
+                        decoded.as_slice(),
+                        logical_embedding_spec,
+                        rotation_matrix.as_slice(),
+                        centroid.as_slice(),
+                    )
+                }
                 BranchEncodingPolicy::PcaRotDeltaUniform {
                     root_bits,
                     interior_bits,
                     lowest_routing_bits,
-                } => encode_pca_rot_delta_quantized_entries(
-                    entries,
-                    decoded.as_slice(),
-                    logical_embedding_spec,
-                    rotation_matrix.as_slice(),
-                    centroid.as_slice(),
-                    QuantizedBranchEncoding::Uniform(resolve_branch_bit_budget(
-                        parent_level,
-                        is_root,
-                        root_bits,
-                        interior_bits,
-                        lowest_routing_bits,
-                    )),
-                    Some(explained_variance.as_slice()),
-                ),
+                } => {
+                    let centroid = exact_f32_centroid(decoded.as_slice())?;
+                    encode_pca_rot_delta_quantized_entries(
+                        entries,
+                        decoded.as_slice(),
+                        logical_embedding_spec,
+                        rotation_matrix.as_slice(),
+                        centroid.as_slice(),
+                        QuantizedBranchEncoding::Uniform(resolve_branch_bit_budget(
+                            parent_level,
+                            is_root,
+                            root_bits,
+                            interior_bits,
+                            lowest_routing_bits,
+                        )),
+                        Some(explained_variance.as_slice()),
+                    )
+                }
                 BranchEncodingPolicy::PcaRotDeltaVariable {
                     root_bits,
                     interior_bits,
                     lowest_routing_bits,
-                } => encode_pca_rot_delta_quantized_entries(
-                    entries,
-                    decoded.as_slice(),
-                    logical_embedding_spec,
-                    rotation_matrix.as_slice(),
-                    centroid.as_slice(),
-                    QuantizedBranchEncoding::Variable(resolve_branch_bit_budget(
-                        parent_level,
-                        is_root,
-                        root_bits,
-                        interior_bits,
-                        lowest_routing_bits,
-                    )),
-                    Some(explained_variance.as_slice()),
-                ),
+                } => {
+                    let centroid = exact_f32_centroid(decoded.as_slice())?;
+                    encode_pca_rot_delta_quantized_entries(
+                        entries,
+                        decoded.as_slice(),
+                        logical_embedding_spec,
+                        rotation_matrix.as_slice(),
+                        centroid.as_slice(),
+                        QuantizedBranchEncoding::Variable(resolve_branch_bit_budget(
+                            parent_level,
+                            is_root,
+                            root_bits,
+                            interior_bits,
+                            lowest_routing_bits,
+                        )),
+                        Some(explained_variance.as_slice()),
+                    )
+                }
                 BranchEncodingPolicy::Ordinary => unreachable!(),
             }?;
             Ok(encoded)
