@@ -985,6 +985,19 @@ dimensionality, redistributed across dimensions according to variance.
 
 ### REQ-STREAM-INDEXER-100
 
+Published indexing profile `0.5.5` shall preserve the `0.5.0` topology while
+authoring non-leaf branch-entry embeddings with the EBCP encoding
+`ambient-delta-uq`.
+
+For the `0.5.5` ladder rung, the uniform per-dimension quantization budget
+shall be:
+
+- `12` bits on the root non-leaf level
+- `8` bits on interior non-leaf levels above the lowest routing layer
+- `6` bits on the lowest routing non-leaf level whose children are leaf blocks
+
+### REQ-STREAM-INDEXER-101
+
 The `0.5.x` ladder applies only to stored non-leaf branch-entry embedding
 representations after tree construction.
 
@@ -994,7 +1007,7 @@ It shall not:
 - change the pre-compression partition hierarchy relative to `0.5.0`
 - require out-of-band search-side state to interpret authored blocks
 
-### REQ-STREAM-INDEXER-101
+### REQ-STREAM-INDEXER-102
 
 When a `0.5.x` profile emits an EBCP-encoded non-leaf block, the emitted block
 shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,

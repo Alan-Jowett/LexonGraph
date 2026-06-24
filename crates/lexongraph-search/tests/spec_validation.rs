@@ -1452,6 +1452,12 @@ fn val_search_037_variable_quantized_ebcp_branch_blocks_remain_searchable() {
 }
 
 #[test]
+fn val_search_037b_ambient_uniform_quantized_branch_blocks_remain_searchable() {
+    let result = run_single_result_search(|store| ebcp_fixture(store, "ambient-delta-uq")).unwrap();
+    assert_eq!(result.leaves[0].entry.content.body, b"left");
+}
+
+#[test]
 fn val_search_038_malformed_ebcp_blocks_fail_through_invalid_block_path() {
     let store = MemoryBlockStore::default();
     let (left_id, right_id) = put_leaf_fixture(&store);
@@ -1527,21 +1533,21 @@ fn ebcp_fixture(store: &MemoryBlockStore, encoding: &str) -> Block {
             version: 1,
             logical_embedding_spec: embedding_spec_f32(),
             base_centroid: None,
-            rotation,
+            rotation: Some(rotation.clone()),
             quantization: None,
         },
         "pca-rot-delta-f32le" => EbcpDescriptor {
             version: 1,
             logical_embedding_spec: embedding_spec_f32(),
             base_centroid: Some(vec![0.0, 0.0]),
-            rotation,
+            rotation: Some(rotation.clone()),
             quantization: None,
         },
         "pca-rot-delta-uq" => EbcpDescriptor {
             version: 1,
             logical_embedding_spec: embedding_spec_f32(),
             base_centroid: Some(vec![0.0, 0.0]),
-            rotation,
+            rotation: Some(rotation.clone()),
             quantization: Some(lexongraph_block::EbcpQuantization::Uniform {
                 bit_width: 12,
                 scale_factors: vec![1.0 / 2047.0, 1.0 / 2047.0],
@@ -1551,9 +1557,19 @@ fn ebcp_fixture(store: &MemoryBlockStore, encoding: &str) -> Block {
             version: 1,
             logical_embedding_spec: embedding_spec_f32(),
             base_centroid: Some(vec![0.0, 0.0]),
-            rotation,
+            rotation: Some(rotation),
             quantization: Some(lexongraph_block::EbcpQuantization::Variable {
                 bit_widths: vec![12, 12],
+                scale_factors: vec![1.0 / 2047.0, 1.0 / 2047.0],
+            }),
+        },
+        "ambient-delta-uq" => EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: embedding_spec_f32(),
+            base_centroid: Some(vec![0.0, 0.0]),
+            rotation: None,
+            quantization: Some(lexongraph_block::EbcpQuantization::Uniform {
+                bit_width: 12,
                 scale_factors: vec![1.0 / 2047.0, 1.0 / 2047.0],
             }),
         },
@@ -1563,7 +1579,7 @@ fn ebcp_fixture(store: &MemoryBlockStore, encoding: &str) -> Block {
     let (left_embedding, right_embedding) = match encoding {
         "pca-rot-f32le" => (f32_embedding([1.0, 0.0]), f32_embedding([0.0, 1.0])),
         "pca-rot-delta-f32le" => (f32_embedding([1.0, 0.0]), f32_embedding([0.0, 1.0])),
-        "pca-rot-delta-uq" | "pca-rot-delta-vbq" => (
+        "pca-rot-delta-uq" | "pca-rot-delta-vbq" | "ambient-delta-uq" => (
             pack_quantized_fixture([1.0, 0.0], [12, 12]),
             pack_quantized_fixture([0.0, 1.0], [12, 12]),
         ),

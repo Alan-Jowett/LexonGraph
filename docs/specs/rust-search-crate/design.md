@@ -412,10 +412,11 @@ allowing branch-entry storage to change.
 
 ### DSG-SEARCH-029 `Lossy EBCP isolation`
 
-For the lossy EBCP encodings `pca-rot-delta-uq` and `pca-rot-delta-vbq`, the
-only permitted behavioral difference relative to the same topology under
-uncompressed branch centroids is the score distortion introduced by the
-protocol-defined approximation of the branch embeddings themselves.
+For the lossy EBCP encodings `pca-rot-delta-uq`, `pca-rot-delta-vbq`, and
+`ambient-delta-uq`, the only permitted behavioral difference relative to the
+same topology under uncompressed branch centroids is the score distortion
+introduced by the protocol-defined approximation of the branch embeddings
+themselves.
 
 ## Traceability
 

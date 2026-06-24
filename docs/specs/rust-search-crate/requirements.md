@@ -335,8 +335,9 @@ ordered leaf results or the same explicit failure for identical search inputs.
 
 ### REQ-SEARCH-037
 
-When an index uses the lossy EBCP encodings `pca-rot-delta-uq` or
-`pca-rot-delta-vbq`, any observable recall difference relative to the same
+When an index uses the lossy EBCP encodings `pca-rot-delta-uq`,
+`pca-rot-delta-vbq`, or `ambient-delta-uq`, any observable recall difference
+relative to the same
 topology under uncompressed branch embeddings shall arise only from the encoded
 branch-vector approximation rather than from a change in search API shape,
 traversal rules, or termination rules.

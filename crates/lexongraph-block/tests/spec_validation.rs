@@ -488,10 +488,10 @@ fn val_021_ebcp_branch_blocks_round_trip_with_metadata_and_payloads() {
             encoding: "f32le".into(),
         },
         base_centroid: None,
-        rotation: EbcpRotation {
+        rotation: Some(EbcpRotation {
             matrix_format: "f32le-row-major".into(),
             matrix: vec![1.0, 0.0, 0.0, 1.0],
-        },
+        }),
         quantization: None,
     };
     let block = Block::Branch(
@@ -558,10 +558,10 @@ fn val_023_ebcp_blocks_reject_inconsistent_metadata_and_payload_lengths() {
             encoding: "f32le".into(),
         },
         base_centroid: Some(vec![0.0, 0.0]),
-        rotation: EbcpRotation {
+        rotation: Some(EbcpRotation {
             matrix_format: "f32le-row-major".into(),
             matrix: vec![1.0, 0.0, 0.0],
-        },
+        }),
         quantization: None,
     };
     let invalid_rotation_error = build_branch_block(
@@ -584,10 +584,10 @@ fn val_023_ebcp_blocks_reject_inconsistent_metadata_and_payload_lengths() {
             encoding: "f32le".into(),
         },
         base_centroid: Some(vec![0.0, 0.0]),
-        rotation: EbcpRotation {
+        rotation: Some(EbcpRotation {
             matrix_format: "f32le-row-major".into(),
             matrix: vec![1.0, 0.0, 0.0, 1.0],
-        },
+        }),
         quantization: None,
     };
     let invalid_payload_error = build_branch_block(
@@ -618,10 +618,10 @@ fn val_024_ebcp_quantization_rejects_bit_widths_above_31() {
                 encoding: "f32le".into(),
             },
             base_centroid: Some(vec![0.0, 0.0]),
-            rotation: EbcpRotation {
+            rotation: Some(EbcpRotation {
                 matrix_format: "f32le-row-major".into(),
                 matrix: vec![1.0, 0.0, 0.0, 1.0],
-            },
+            }),
             quantization: Some(EbcpQuantization::Uniform {
                 bit_width: 32,
                 scale_factors: vec![1.0, 1.0],
@@ -643,10 +643,10 @@ fn val_024_ebcp_quantization_rejects_bit_widths_above_31() {
                 encoding: "f32le".into(),
             },
             base_centroid: Some(vec![0.0, 0.0]),
-            rotation: EbcpRotation {
+            rotation: Some(EbcpRotation {
                 matrix_format: "f32le-row-major".into(),
                 matrix: vec![1.0, 0.0, 0.0, 1.0],
-            },
+            }),
             quantization: Some(EbcpQuantization::Variable {
                 bit_widths: vec![32, 1],
                 scale_factors: vec![1.0, 1.0],
@@ -666,10 +666,7 @@ fn val_025_ebcp_quantized_payload_padding_bits_must_be_zero() {
             encoding: "f32le".into(),
         },
         base_centroid: Some(vec![0.0]),
-        rotation: EbcpRotation {
-            matrix_format: "f32le-row-major".into(),
-            matrix: vec![1.0],
-        },
+        rotation: None,
         quantization: Some(EbcpQuantization::Uniform {
             bit_width: 1,
             scale_factors: vec![1.0],
@@ -680,13 +677,57 @@ fn val_025_ebcp_quantized_payload_padding_bits_must_be_zero() {
         1,
         EmbeddingSpec {
             dims: 1,
-            encoding: "pca-rot-delta-uq".into(),
+            encoding: "ambient-delta-uq".into(),
         },
         vec![branch_entry(vec![0b1000_0000], [0x11; 32])],
         Some(ebcp_extension_map(&descriptor)),
     )
     .unwrap_err();
     assert!(matches!(error, BlockError::NonConforming(_)));
+}
+
+#[test]
+fn val_027_ambient_delta_uq_round_trip_without_rotation_metadata() {
+    let descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        base_centroid: Some(vec![0.5, 0.5]),
+        rotation: None,
+        quantization: Some(EbcpQuantization::Uniform {
+            bit_width: 8,
+            scale_factors: vec![1.0 / 127.0, 1.0 / 127.0],
+        }),
+    };
+    let block = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            EmbeddingSpec {
+                dims: 2,
+                encoding: "ambient-delta-uq".into(),
+            },
+            vec![branch_entry(vec![0xFF, 0x80], [0x11; 32])],
+            Some(ebcp_extension_map(&descriptor)),
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&block).unwrap();
+    let validated = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    match into_entries(validated) {
+        TypedEntries::Branch(metadata, entries) => {
+            assert_eq!(metadata.embedding_spec.encoding, "ambient-delta-uq");
+            let parsed =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(parsed, descriptor);
+            assert_eq!(entries[0].embedding, vec![0xFF, 0x80]);
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch block"),
+    }
 }
 
 #[test]
@@ -703,10 +744,10 @@ fn val_026_ebcp_quantization_rejects_negative_scale_factors() {
                 encoding: "f32le".into(),
             },
             base_centroid: Some(vec![0.0]),
-            rotation: EbcpRotation {
+            rotation: Some(EbcpRotation {
                 matrix_format: "f32le-row-major".into(),
                 matrix: vec![1.0],
-            },
+            }),
             quantization: Some(EbcpQuantization::Uniform {
                 bit_width: 1,
                 scale_factors: vec![-1.0],

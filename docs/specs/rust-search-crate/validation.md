@@ -432,7 +432,7 @@ attributable only to the lossy branch-vector approximation.
 ### VAL-SEARCH-037
 
 Run search over a deterministic fixture whose visited non-leaf blocks use
-`pca-rot-delta-vbq`.
+`ambient-delta-uq`.
 
 **Pass condition:** search succeeds through the existing API shape, continues to
 apply the protocol-defined traversal and termination rules, and any observed
@@ -442,6 +442,18 @@ attributable only to the lossy branch-vector approximation.
 **Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-037
 
 ### VAL-SEARCH-038
+
+Run search over a deterministic fixture whose visited non-leaf blocks use
+`pca-rot-delta-vbq`.
+
+**Pass condition:** search succeeds through the existing API shape, continues to
+apply the protocol-defined traversal and termination rules, and any observed
+difference from the logically equivalent uncompressed-branch fixture is
+attributable only to the lossy branch-vector approximation.
+
+**Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-037
+
+### VAL-SEARCH-039
 
 Attempt search over a fixture containing a block that violates the EBCP branch
 encoding contract, such as an EBCP encoding on a leaf block or missing EBCP

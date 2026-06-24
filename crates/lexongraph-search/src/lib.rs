@@ -1162,7 +1162,7 @@ fn decode_ebcp_rotated_payload(
                 })
                 .collect()
         }
-        "pca-rot-delta-uq" => {
+        "pca-rot-delta-uq" | "ambient-delta-uq" => {
             let EbcpQuantization::Uniform {
                 bit_width,
                 scale_factors,
@@ -1170,7 +1170,9 @@ fn decode_ebcp_rotated_payload(
                 "quantized EBCP payloads require uniform quantization metadata".to_string()
             })?
             else {
-                return Err("EBCP quantization mode does not match pca-rot-delta-uq".into());
+                return Err(
+                    "EBCP quantization mode does not match uniform quantized encoding".into(),
+                );
             };
             unpack_quantized_payload_uniform(payload, *bit_width, scale_factors)
         }
@@ -1199,25 +1201,41 @@ fn reconstruct_ebcp_ambient_embedding(
     if rotated.len() != dims {
         return Err("rotated EBCP payload dimension does not match logical dims".into());
     }
-    if descriptor.rotation.matrix.len() != dims * dims {
-        return Err("EBCP rotation matrix length does not match logical dims".into());
-    }
-
     let mut ambient = vec![0.0f32; dims];
-    for ambient_index in 0..dims {
-        let mut value = descriptor
-            .base_centroid
-            .as_ref()
-            .map(|centroid| centroid[ambient_index])
-            .unwrap_or(0.0);
-        for (rotated_index, rotated_value) in rotated.iter().copied().enumerate() {
-            value +=
-                descriptor.rotation.matrix[rotated_index * dims + ambient_index] * rotated_value;
+    match &descriptor.rotation {
+        Some(rotation) => {
+            if rotation.matrix.len() != dims * dims {
+                return Err("EBCP rotation matrix length does not match logical dims".into());
+            }
+            for ambient_index in 0..dims {
+                let mut value = descriptor
+                    .base_centroid
+                    .as_ref()
+                    .map(|centroid| centroid[ambient_index])
+                    .unwrap_or(0.0);
+                for (rotated_index, rotated_value) in rotated.iter().copied().enumerate() {
+                    value += rotation.matrix[rotated_index * dims + ambient_index] * rotated_value;
+                }
+                if !value.is_finite() {
+                    return Err("EBCP reconstruction produced a non-finite ambient value".into());
+                }
+                ambient[ambient_index] = value;
+            }
         }
-        if !value.is_finite() {
-            return Err("EBCP reconstruction produced a non-finite ambient value".into());
+        None => {
+            for ambient_index in 0..dims {
+                let value = descriptor
+                    .base_centroid
+                    .as_ref()
+                    .map(|centroid| centroid[ambient_index])
+                    .unwrap_or(0.0)
+                    + rotated[ambient_index];
+                if !value.is_finite() {
+                    return Err("EBCP reconstruction produced a non-finite ambient value".into());
+                }
+                ambient[ambient_index] = value;
+            }
         }
-        ambient[ambient_index] = value;
     }
     Ok(ambient)
 }

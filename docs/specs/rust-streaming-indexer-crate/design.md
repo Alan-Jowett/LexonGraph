@@ -957,14 +957,24 @@ For each non-leaf block, the encoder preserves the total bit budget that
 `0.5.3` would have used at the same level and dimensionality while
 redistributing those bits across dimensions according to variance.
 
-### DSG-STREAM-INDEXER-094 `EBCP authoring contract`
+### DSG-STREAM-INDEXER-094 `Indexing profile 0.5.5 mapping`
+
+Published indexing profile `0.5.5` resolves to the `0.5.0` contract, except
+that authored non-leaf branch-entry embeddings use the EBCP encoding
+`ambient-delta-uq`.
+
+The encoder assigns uniform per-dimension quantization widths of `12`, `8`, and
+`6` bits on the root, interior, and lowest routing non-leaf levels
+respectively, without emitting rotation metadata.
+
+### DSG-STREAM-INDEXER-095 `EBCP authoring contract`
 
 When the selected published profile emits EBCP-encoded branch blocks, the
 indexer writes blocks that remain valid under `docs/protocol/blocks.md` and
 carry all protocol-required EBCP metadata in `ext` so a search reader can
 interpret the branch embeddings without out-of-band state.
 
-### DSG-STREAM-INDEXER-095 `Compression-ladder evaluation contract`
+### DSG-STREAM-INDEXER-096 `Compression-ladder evaluation contract`
 
 Each experimental `0.5.x` published profile is documented as a sequentially
 evaluable comparison point against `0.5.0`, not as an alias for "current best"
@@ -1050,12 +1060,13 @@ of `0.5.0`.
 | DSG-STREAM-INDEXER-085 | REQ-STREAM-INDEXER-093 |
 | DSG-STREAM-INDEXER-086 | REQ-STREAM-INDEXER-091 |
 | DSG-STREAM-INDEXER-087 | REQ-STREAM-INDEXER-094 |
-| DSG-STREAM-INDEXER-088 | REQ-STREAM-INDEXER-095, REQ-STREAM-INDEXER-100 |
+| DSG-STREAM-INDEXER-088 | REQ-STREAM-INDEXER-095, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-089 | REQ-STREAM-INDEXER-095 |
 | DSG-STREAM-INDEXER-090 | REQ-STREAM-INDEXER-096, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-091 | REQ-STREAM-INDEXER-097, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-092 | REQ-STREAM-INDEXER-098, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-093 | REQ-STREAM-INDEXER-099, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-094 | REQ-STREAM-INDEXER-100, REQ-STREAM-INDEXER-101 |
-| DSG-STREAM-INDEXER-095 | REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095 |
+| DSG-STREAM-INDEXER-095 | REQ-STREAM-INDEXER-101, REQ-STREAM-INDEXER-102 |
+| DSG-STREAM-INDEXER-096 | REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |

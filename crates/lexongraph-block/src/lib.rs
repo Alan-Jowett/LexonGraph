@@ -128,7 +128,7 @@ pub struct EbcpDescriptor {
     pub version: u64,
     pub logical_embedding_spec: EmbeddingSpec,
     pub base_centroid: Option<Vec<f32>>,
-    pub rotation: EbcpRotation,
+    pub rotation: Option<EbcpRotation>,
     pub quantization: Option<EbcpQuantization>,
 }
 
@@ -249,7 +249,11 @@ impl std::error::Error for BlockError {}
 pub fn is_ebcp_encoding(encoding: &str) -> bool {
     matches!(
         encoding,
-        "pca-rot-f32le" | "pca-rot-delta-f32le" | "pca-rot-delta-uq" | "pca-rot-delta-vbq"
+        "pca-rot-f32le"
+            | "pca-rot-delta-f32le"
+            | "pca-rot-delta-uq"
+            | "pca-rot-delta-vbq"
+            | "ambient-delta-uq"
     )
 }
 
@@ -566,7 +570,7 @@ fn ebcp_payload_bit_len(
             .checked_mul(std::mem::size_of::<f32>())
             .and_then(|bytes| bytes.checked_mul(8))
             .ok_or(BlockError::NonConforming("EBCP payload length overflowed")),
-        "pca-rot-delta-uq" => {
+        "pca-rot-delta-uq" | "ambient-delta-uq" => {
             let EbcpQuantization::Uniform { bit_width, .. } = descriptor
                 .quantization
                 .as_ref()
@@ -664,10 +668,10 @@ fn parse_ebcp_descriptor_fields(
         .remove(&EBCP_BASE_CENTROID_KEY)
         .map(|value| parse_f32_vector_bytes(value, dims, "ext[0].base_centroid"))
         .transpose()?;
-    let rotation = parse_ebcp_rotation(
-        required_field(&mut fields, EBCP_ROTATION_KEY, "ext[0]")?,
-        dims,
-    )?;
+    let rotation = fields
+        .remove(&EBCP_ROTATION_KEY)
+        .map(|value| parse_ebcp_rotation(value, dims))
+        .transpose()?;
     let quantization = fields
         .remove(&EBCP_QUANTIZATION_KEY)
         .map(|value| parse_ebcp_quantization(value, embedding_spec, dims))
@@ -675,25 +679,32 @@ fn parse_ebcp_descriptor_fields(
 
     match embedding_spec.encoding.as_str() {
         "pca-rot-f32le" => {
-            if base_centroid.is_some() || quantization.is_some() {
+            if rotation.is_none() || base_centroid.is_some() || quantization.is_some() {
                 return Err(BlockError::NonConforming(
-                    "pca-rot-f32le must not declare base_centroid or quantization metadata",
+                    "pca-rot-f32le requires rotation and must not declare base_centroid or quantization metadata",
                 ));
             }
         }
         "pca-rot-delta-f32le" => {
-            if base_centroid.is_none() || quantization.is_some() {
+            if rotation.is_none() || base_centroid.is_none() || quantization.is_some() {
                 return Err(BlockError::NonConforming(
-                    "pca-rot-delta-f32le requires base_centroid and forbids quantization metadata",
+                    "pca-rot-delta-f32le requires rotation, base_centroid, and forbids quantization metadata",
                 ));
             }
         }
         "pca-rot-delta-uq" | "pca-rot-delta-vbq"
-            if base_centroid.is_none() || quantization.is_none() =>
+            if rotation.is_none() || base_centroid.is_none() || quantization.is_none() =>
         {
             return Err(BlockError::NonConforming(
-                "quantized EBCP encodings require base_centroid and quantization metadata",
+                "rotated quantized EBCP encodings require rotation, base_centroid, and quantization metadata",
             ));
+        }
+        "ambient-delta-uq" => {
+            if rotation.is_some() || base_centroid.is_none() || quantization.is_none() {
+                return Err(BlockError::NonConforming(
+                    "ambient-delta-uq requires base_centroid and quantization metadata and forbids rotation metadata",
+                ));
+            }
         }
         _ => {}
     }
@@ -769,10 +780,10 @@ fn parse_ebcp_quantization(
         ));
     }
     match embedding_spec.encoding.as_str() {
-        "pca-rot-delta-uq" => {
+        "pca-rot-delta-uq" | "ambient-delta-uq" => {
             if mode != EBCP_QUANTIZATION_MODE_UNIFORM {
                 return Err(BlockError::NonConforming(
-                    "pca-rot-delta-uq requires quantization.mode = 1",
+                    "uniform quantized EBCP encodings require quantization.mode = 1",
                 ));
             }
             let bit_width = required_u64_field(
@@ -900,11 +911,13 @@ fn ebcp_descriptor_to_entries(descriptor: &EbcpDescriptor) -> Vec<(Value, Value)
             int_value(EBCP_ORIGINAL_DIMS_KEY),
             int_value(descriptor.logical_embedding_spec.dims),
         ),
-        (
-            int_value(EBCP_ROTATION_KEY),
-            Value::Map(ebcp_rotation_to_entries(&descriptor.rotation)),
-        ),
     ];
+    if let Some(rotation) = &descriptor.rotation {
+        fields.push((
+            int_value(EBCP_ROTATION_KEY),
+            Value::Map(ebcp_rotation_to_entries(rotation)),
+        ));
+    }
     if let Some(base_centroid) = &descriptor.base_centroid {
         fields.push((
             int_value(EBCP_BASE_CENTROID_KEY),

@@ -1038,8 +1038,8 @@ Resolve published indexing profile `0.5.1` through the convenience surface.
 `0.5.0` topology contract, and changes only the authored non-leaf branch-entry
 representation to EBCP `pca-rot-f32le`.
 
-**Traces to:** REQ-STREAM-INDEXER-096, REQ-STREAM-INDEXER-100,
-REQ-STREAM-INDEXER-101
+**Traces to:** REQ-STREAM-INDEXER-096, REQ-STREAM-INDEXER-101,
+REQ-STREAM-INDEXER-102
 
 ### VAL-STREAM-INDEXER-090
 
@@ -1049,8 +1049,8 @@ Resolve published indexing profile `0.5.2` through the convenience surface.
 `0.5.0` topology contract, and changes only the authored non-leaf branch-entry
 representation to EBCP `pca-rot-delta-f32le`.
 
-**Traces to:** REQ-STREAM-INDEXER-097, REQ-STREAM-INDEXER-100,
-REQ-STREAM-INDEXER-101
+**Traces to:** REQ-STREAM-INDEXER-097, REQ-STREAM-INDEXER-101,
+REQ-STREAM-INDEXER-102
 
 ### VAL-STREAM-INDEXER-091
 
@@ -1061,8 +1061,8 @@ Resolve published indexing profile `0.5.3` through the convenience surface.
 per-dimension bit widths of `12`, `8`, and `6` on the root, interior, and
 lowest routing non-leaf levels respectively.
 
-**Traces to:** REQ-STREAM-INDEXER-098, REQ-STREAM-INDEXER-100,
-REQ-STREAM-INDEXER-101
+**Traces to:** REQ-STREAM-INDEXER-098, REQ-STREAM-INDEXER-101,
+REQ-STREAM-INDEXER-102
 
 ### VAL-STREAM-INDEXER-092
 
@@ -1073,10 +1073,22 @@ Resolve published indexing profile `0.5.4` through the convenience surface.
 same total per-level bit budget that `0.5.3` would have used at the same level
 and dimensionality while redistributing those bits by variance.
 
-**Traces to:** REQ-STREAM-INDEXER-099, REQ-STREAM-INDEXER-100,
-REQ-STREAM-INDEXER-101
+**Traces to:** REQ-STREAM-INDEXER-099, REQ-STREAM-INDEXER-101,
+REQ-STREAM-INDEXER-102
 
 ### VAL-STREAM-INDEXER-093
+
+Resolve published indexing profile `0.5.5` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.5.0` topology contract, uses EBCP `ambient-delta-uq`, assigns uniform
+per-dimension bit widths of `12`, `8`, and `6` on the root, interior, and
+lowest routing non-leaf levels respectively, and emits no rotation metadata.
+
+**Traces to:** REQ-STREAM-INDEXER-100, REQ-STREAM-INDEXER-101,
+REQ-STREAM-INDEXER-102
+
+### VAL-STREAM-INDEXER-094
 
 Resolve the full published profile set, including the `0.4.x` and `0.5.x`
 ladders, more than once under identical conditions.
