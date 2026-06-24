@@ -1628,11 +1628,7 @@ fn pack_quantized_fixture(values: [f32; 2], bit_widths: [u8; 2]) -> Vec<u8> {
         .sum::<usize>();
     let mut bytes = vec![0u8; total_bits.div_ceil(8)];
     let mut offset = 0usize;
-    for ((value, bit_width), scale) in values
-        .into_iter()
-        .zip(bit_widths.into_iter())
-        .zip(scales.into_iter())
-    {
+    for ((value, bit_width), scale) in values.into_iter().zip(bit_widths).zip(scales) {
         let qmax = ((1_i32 << (bit_width - 1)) - 1) as f64;
         let centered = (f64::from(value) / scale)
             .round_ties_even()
