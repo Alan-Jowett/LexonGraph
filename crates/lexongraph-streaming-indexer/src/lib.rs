@@ -5380,6 +5380,7 @@ fn allocate_variable_bit_widths(
     explained_variance: &[f32],
     uniform_bit_width: u8,
 ) -> Result<Vec<u8>, StreamingIndexerError> {
+    const MAX_EBCP_BIT_WIDTH: u8 = 31;
     if explained_variance.is_empty() {
         return Err(StreamingIndexerError::TerminalPartitionMaterialization(
             "variable-bit EBCP encoding requires at least one explained-variance entry".into(),
@@ -5390,6 +5391,16 @@ fn allocate_variable_bit_widths(
         .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
             "variable-bit EBCP bit budget overflowed".into(),
         ))?;
+    let max_total_bits = usize::from(MAX_EBCP_BIT_WIDTH)
+        .checked_mul(explained_variance.len())
+        .ok_or(StreamingIndexerError::TerminalPartitionMaterialization(
+            "variable-bit EBCP maximum bit budget overflowed".into(),
+        ))?;
+    if total_bits > max_total_bits {
+        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+            "variable-bit EBCP budget exceeds the 31-bit per-dimension limit".into(),
+        ));
+    }
     let mut widths = vec![1u8; explained_variance.len()];
     let remaining = total_bits.saturating_sub(explained_variance.len());
     if remaining == 0 {
@@ -5414,13 +5425,17 @@ fn allocate_variable_bit_widths(
         .map(|value| value.floor() as usize)
         .collect::<Vec<_>>();
     for (width, addend) in widths.iter_mut().zip(base.iter().copied()) {
-        *width = width.saturating_add(u8::try_from(addend).map_err(|_| {
+        let capped_addend = addend.min(usize::from(MAX_EBCP_BIT_WIDTH - 1));
+        *width = width.saturating_add(u8::try_from(capped_addend).map_err(|_| {
             StreamingIndexerError::TerminalPartitionMaterialization(
                 "variable-bit EBCP bit width exceeded u8".into(),
             )
         })?);
     }
-    let used = base.iter().sum::<usize>();
+    let used = widths
+        .iter()
+        .map(|width| usize::from(*width) - 1)
+        .sum::<usize>();
     let mut leftovers = remaining - used;
     let mut remainders = desired
         .iter()
@@ -5433,16 +5448,29 @@ fn allocate_variable_bit_widths(
             .total_cmp(&left.1)
             .then_with(|| left.0.cmp(&right.0))
     });
-    for (index, _) in remainders {
-        if leftovers == 0 {
-            break;
+    while leftovers > 0 {
+        let mut progressed = false;
+        for (index, _) in remainders.iter().copied() {
+            if leftovers == 0 {
+                break;
+            }
+            if widths[index] >= MAX_EBCP_BIT_WIDTH {
+                continue;
+            }
+            widths[index] = widths[index].checked_add(1).ok_or(
+                StreamingIndexerError::TerminalPartitionMaterialization(
+                    "variable-bit EBCP bit width exceeded u8".into(),
+                ),
+            )?;
+            leftovers -= 1;
+            progressed = true;
         }
-        widths[index] = widths[index].checked_add(1).ok_or(
-            StreamingIndexerError::TerminalPartitionMaterialization(
-                "variable-bit EBCP bit width exceeded u8".into(),
-            ),
-        )?;
-        leftovers -= 1;
+        if !progressed {
+            return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                "variable-bit EBCP allocation could not satisfy the 31-bit per-dimension limit"
+                    .into(),
+            ));
+        }
     }
     Ok(widths)
 }
@@ -6418,9 +6446,9 @@ pub mod conformance {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildSummaryInput, DirectionalPcaAllocationPolicy, effective_directional_pca_cluster_count,
-        exact_centroid_child_summary, fit_ebcp_rotation, uses_root_branch_budget,
-        weighted_mean_f32_embeddings,
+        ChildSummaryInput, DirectionalPcaAllocationPolicy, allocate_variable_bit_widths,
+        effective_directional_pca_cluster_count, exact_centroid_child_summary, fit_ebcp_rotation,
+        uses_root_branch_budget, weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -6489,5 +6517,20 @@ mod tests {
         assert!(uses_root_branch_budget(true, 1));
         assert!(!uses_root_branch_budget(false, 1));
         assert!(!uses_root_branch_budget(true, 2));
+    }
+
+    #[test]
+    fn variable_bit_widths_respect_protocol_cap_and_preserve_budget() {
+        let widths = allocate_variable_bit_widths(&[1_000_000_000.0, 0.0, 0.0, 0.0], 12)
+            .expect("allocation should succeed");
+        assert_eq!(
+            widths
+                .iter()
+                .map(|width| usize::from(*width))
+                .sum::<usize>(),
+            48
+        );
+        assert!(widths.iter().all(|width| (1..=31).contains(width)));
+        assert_eq!(widths[0], 31);
     }
 }

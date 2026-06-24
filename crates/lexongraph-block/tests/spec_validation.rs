@@ -689,6 +689,34 @@ fn val_025_ebcp_quantized_payload_padding_bits_must_be_zero() {
     assert!(matches!(error, BlockError::NonConforming(_)));
 }
 
+#[test]
+fn val_026_ebcp_quantization_rejects_negative_scale_factors() {
+    let error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-delta-uq"),
+        vec![branch_entry(vec![0; 1], [0x11; 32])],
+        Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: EmbeddingSpec {
+                dims: 1,
+                encoding: "f32le".into(),
+            },
+            base_centroid: Some(vec![0.0]),
+            rotation: EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: vec![1.0],
+            },
+            quantization: Some(EbcpQuantization::Uniform {
+                bit_width: 1,
+                scale_factors: vec![-1.0],
+            }),
+        })),
+    )
+    .unwrap_err();
+    assert!(matches!(error, BlockError::NonConforming(_)));
+}
+
 fn sample_branch_block() -> Block {
     Block::Branch(
         build_branch_block(

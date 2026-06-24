@@ -760,6 +760,14 @@ fn parse_ebcp_quantization(
         dims,
         "ext[0].quantization.scale_factors",
     )?;
+    if scale_factors
+        .iter()
+        .any(|scale| !scale.is_finite() || *scale < 0.0)
+    {
+        return Err(BlockError::NonConforming(
+            "EBCP quantization scale factors must be finite and nonnegative",
+        ));
+    }
     match embedding_spec.encoding.as_str() {
         "pca-rot-delta-uq" => {
             if mode != EBCP_QUANTIZATION_MODE_UNIFORM {
