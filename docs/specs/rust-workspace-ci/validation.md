@@ -176,7 +176,7 @@ artifacts.
 distinguished from active maintenance surfaces and from supporting, reference,
 or future-facing material, and `docs/protocol/ebcp.md` is presented with the
 same active or non-active status that the governed protocol and specification
-surface currently gives it.
+surfaces currently give it.
 
 **Traces to:** REQ-CI-019
 

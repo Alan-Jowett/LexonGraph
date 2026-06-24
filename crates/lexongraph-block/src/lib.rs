@@ -666,12 +666,12 @@ fn parse_ebcp_descriptor_fields(
                 ));
             }
         }
-        "pca-rot-delta-uq" | "pca-rot-delta-vbq" => {
-            if base_centroid.is_none() || quantization.is_none() {
-                return Err(BlockError::NonConforming(
-                    "quantized EBCP encodings require base_centroid and quantization metadata",
-                ));
-            }
+        "pca-rot-delta-uq" | "pca-rot-delta-vbq"
+            if base_centroid.is_none() || quantization.is_none() =>
+        {
+            return Err(BlockError::NonConforming(
+                "quantized EBCP encodings require base_centroid and quantization metadata",
+            ));
         }
         _ => {}
     }

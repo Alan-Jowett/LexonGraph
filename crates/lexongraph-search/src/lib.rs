@@ -1222,11 +1222,32 @@ fn unpack_quantized_payload_uniform(
     bit_width: u8,
     scale_factors: &[f32],
 ) -> Result<Vec<f32>, String> {
-    unpack_quantized_payload(
-        payload,
-        &vec![bit_width; scale_factors.len()],
-        scale_factors,
-    )
+    let total_bits = scale_factors
+        .len()
+        .checked_mul(usize::from(bit_width))
+        .ok_or_else(|| "EBCP quantized payload bit length overflowed".to_string())?;
+    let expected_len = total_bits
+        .checked_add(7)
+        .map(|value| value / 8)
+        .ok_or_else(|| "EBCP quantized payload byte length overflowed".to_string())?;
+    if payload.len() != expected_len {
+        return Err("EBCP quantized payload length does not match metadata".into());
+    }
+
+    let mut rotated = Vec::with_capacity(scale_factors.len());
+    let mut bit_offset = 0usize;
+    for &scale in scale_factors {
+        if !scale.is_finite() || scale < 0.0 {
+            return Err("EBCP quantization scale factors must be finite and nonnegative".into());
+        }
+        let code = extract_lsb_first_bits(payload, bit_offset, bit_width)?;
+        bit_offset += usize::from(bit_width);
+        let centered = i32::try_from(code)
+            .map_err(|_| "EBCP quantized code does not fit in i32".to_string())?
+            - (1_i32 << (bit_width - 1));
+        rotated.push(centered as f32 * scale);
+    }
+    Ok(rotated)
 }
 
 fn unpack_quantized_payload_variable(
