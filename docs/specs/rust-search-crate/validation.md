@@ -269,11 +269,12 @@ REQ-SEARCH-021
 ### VAL-SEARCH-023
 
 Run the crate-provided default compatibility policy against visited blocks whose
-`embedding_spec` values alternately match and differ from the target
-embedding's specification.
+logical comparison representations alternately match and differ from the target
+embedding's specification, including EBCP-encoded non-leaf blocks whose
+ambient-space logical encoding either matches or differs from the target.
 
-**Pass condition:** matching encoding and dimensionality are accepted;
-mismatched encoding or dimensionality is rejected explicitly.
+**Pass condition:** matching logical encoding and dimensionality are accepted;
+mismatched logical encoding or dimensionality is rejected explicitly.
 
 **Traces to:** REQ-SEARCH-006, REQ-SEARCH-019, REQ-SEARCH-021
 
@@ -393,3 +394,61 @@ policy bundle and once through published search profile `0.1.0`.
 and the convenience path still requires explicit `w` and `n`.
 
 **Traces to:** REQ-SEARCH-029, REQ-SEARCH-030, REQ-SEARCH-031, REQ-SEARCH-032
+
+### VAL-SEARCH-034
+
+Run search over a deterministic fixture whose visited non-leaf blocks use the
+`pca-rot-f32le` EBCP encoding.
+
+**Pass condition:** search succeeds through the existing runtime surface,
+interprets the EBCP branch payloads according to `docs/protocol/ebcp.md`, and
+preserves the same ordered leaf result as the logically equivalent
+uncompressed-branch fixture.
+
+**Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-036
+
+### VAL-SEARCH-035
+
+Run the same deterministic fixture with EBCP branch blocks using
+`pca-rot-delta-f32le`.
+
+**Pass condition:** search succeeds and preserves the same ordered leaf result
+as the logically equivalent uncompressed-branch fixture.
+
+**Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-036
+
+### VAL-SEARCH-036
+
+Run search over a deterministic fixture whose visited non-leaf blocks use
+`pca-rot-delta-uq`.
+
+**Pass condition:** search succeeds through the existing API shape, continues to
+apply the protocol-defined traversal and termination rules, and any observed
+difference from the logically equivalent uncompressed-branch fixture is
+attributable only to the lossy branch-vector approximation.
+
+**Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-037
+
+### VAL-SEARCH-037
+
+Run search over a deterministic fixture whose visited non-leaf blocks use
+`pca-rot-delta-vbq`.
+
+**Pass condition:** search succeeds through the existing API shape, continues to
+apply the protocol-defined traversal and termination rules, and any observed
+difference from the logically equivalent uncompressed-branch fixture is
+attributable only to the lossy branch-vector approximation.
+
+**Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-037
+
+### VAL-SEARCH-038
+
+Attempt search over a fixture containing a block that violates the EBCP branch
+encoding contract, such as an EBCP encoding on a leaf block or missing EBCP
+metadata on a non-leaf block.
+
+**Pass condition:** search fails explicitly through the existing invalid-block
+path rather than silently treating the malformed payload as an ordinary
+uncompressed branch embedding.
+
+**Traces to:** REQ-SEARCH-006, REQ-SEARCH-033, REQ-SEARCH-035

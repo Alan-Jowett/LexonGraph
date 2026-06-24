@@ -142,10 +142,17 @@ The crate exposes a public default `EmbeddingCompatibility` implementation for
 
 That implementation accepts a visited block when:
 
-- the target and visited `embedding_spec.encoding` values are equal
-- the target and visited `embedding_spec.dims` values are equal
+- the target encoding equals the visited block's logical comparison encoding
+- the target dimensionality equals the visited block's logical comparison
+  dimensionality
 
 and rejects the block explicitly otherwise.
+
+For ordinary blocks, the logical comparison representation is the visited
+block's declared `embedding_spec`.
+
+For EBCP-encoded non-leaf blocks, the logical comparison representation is the
+ambient-space encoding declared by the block's EBCP metadata.
 
 ### DSG-SEARCH-019 `DefaultCandidateScorer`
 
@@ -155,7 +162,7 @@ The crate exposes a public default `CandidateScorer` implementation for
 That implementation:
 
 - validates that the candidate embedding bytes are well-formed for the visited
-  block's `EmbeddingSpec`
+  block's stored representation
 - validates that the target bytes are well-formed for the target
   `EmbeddingSpec`
 - requires the target and visited embedding specifications to be compatible
@@ -179,6 +186,10 @@ failure rather than converting it into an ordered score.
 
 For the supported default-scorer encodings, those checks apply consistently
 across each decoding path, including `f32le` and `f64le`.
+
+For supported EBCP branch encodings, those checks apply to the reconstructed or
+equivalently compared ambient-space branch vector rather than to the compressed
+payload bytes as though they were directly comparable numeric coordinates.
 
 ## API Surface
 
@@ -371,6 +382,41 @@ Published search profile `0.1.0` resolves to the crate-owned
 The convenience search façade still requires callers to supply traversal width
 `w` and final result count `n` explicitly.
 
+### DSG-SEARCH-026 `EBCP branch-candidate interpretation`
+
+When a visited non-leaf block uses one of the EBCP branch encodings, the
+searcher interprets branch-entry payload bytes through the protocol-owned EBCP
+metadata before those entries participate in ranking.
+
+The searcher may realize that interpretation either by reconstructing the
+logical ambient-space branch embeddings directly or by performing an equivalent
+comparison against the target embedding that yields the same deterministic
+ordering.
+
+### DSG-SEARCH-027 `EBCP support boundary`
+
+EBCP support is limited to non-leaf branch-entry embeddings.
+
+Leaf blocks continue to use the ordinary leaf payload shape from
+`docs/protocol/blocks.md`, and any block that violates the block or EBCP
+protocols still fails through the existing explicit-failure path.
+
+### DSG-SEARCH-028 `Lossless EBCP invariance`
+
+For the lossless EBCP encodings `pca-rot-f32le` and `pca-rot-delta-f32le`, the
+searcher's observable behavior is identical to the behavior over the same tree
+when the logical branch centroids are stored directly without EBCP.
+
+This preserves the existing search API and protocol orchestration while
+allowing branch-entry storage to change.
+
+### DSG-SEARCH-029 `Lossy EBCP isolation`
+
+For the lossy EBCP encodings `pca-rot-delta-uq` and `pca-rot-delta-vbq`, the
+only permitted behavioral difference relative to the same topology under
+uncompressed branch centroids is the score distortion introduced by the
+protocol-defined approximation of the branch embeddings themselves.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -394,3 +440,7 @@ The convenience search façade still requires callers to supply traversal width
 | DSG-SEARCH-019 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-012, REQ-SEARCH-020, REQ-SEARCH-021 |
 | DSG-SEARCH-020 | REQ-SEARCH-024 |
 | DSG-SEARCH-021..025 | REQ-SEARCH-027, REQ-SEARCH-028, REQ-SEARCH-029, REQ-SEARCH-030, REQ-SEARCH-031, REQ-SEARCH-032 |
+| DSG-SEARCH-026 | REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035 |
+| DSG-SEARCH-027 | REQ-SEARCH-033, REQ-SEARCH-035 |
+| DSG-SEARCH-028 | REQ-SEARCH-035, REQ-SEARCH-036 |
+| DSG-SEARCH-029 | REQ-SEARCH-035, REQ-SEARCH-037 |

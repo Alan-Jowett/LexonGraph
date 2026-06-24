@@ -931,6 +931,75 @@ Published profiles `0.1.x`, `0.2.x`, and `0.3.x` shall remain behaviorally
 unchanged and shall not inherit the `0.4.x` fail-fast rule for configured
 fanout conflicts.
 
+### REQ-STREAM-INDEXER-094
+
+The repository shall publish a parallel experimental `0.5.x` compression ladder
+alongside the existing published indexing profiles.
+
+Each `0.5.x` profile shall remain explicitly resolvable through the stable
+published-profile selector, shall remain compatible with the quality-report
+workflow, and shall not mutate the declared behavior of existing `0.1.x`,
+`0.2.x`, `0.3.x`, or `0.4.x` profiles.
+
+### REQ-STREAM-INDEXER-095
+
+Published indexing profile `0.5.0` shall define the baseline contract for the
+experimental `0.5.x` ladder and shall preserve the same tree-construction
+settings, emitted block topology, and ordinary uncompressed branch-entry
+representation as published indexing profile `0.4.0`.
+
+### REQ-STREAM-INDEXER-096
+
+Published indexing profile `0.5.1` shall preserve the `0.5.0` topology and
+logical branch centroids while authoring non-leaf branch-entry embeddings with
+the EBCP encoding `pca-rot-f32le`.
+
+### REQ-STREAM-INDEXER-097
+
+Published indexing profile `0.5.2` shall preserve the `0.5.0` topology and
+logical branch centroids while authoring non-leaf branch-entry embeddings with
+the EBCP encoding `pca-rot-delta-f32le`.
+
+### REQ-STREAM-INDEXER-098
+
+Published indexing profile `0.5.3` shall preserve the `0.5.0` topology while
+authoring non-leaf branch-entry embeddings with the EBCP encoding
+`pca-rot-delta-uq`.
+
+For the `0.5.3` ladder rung, the uniform per-dimension quantization budget
+shall be:
+
+- `12` bits on the root non-leaf level
+- `8` bits on interior non-leaf levels above the lowest routing layer
+- `6` bits on the lowest routing non-leaf level whose children are leaf blocks
+
+### REQ-STREAM-INDEXER-099
+
+Published indexing profile `0.5.4` shall preserve the `0.5.0` topology while
+authoring non-leaf branch-entry embeddings with the EBCP encoding
+`pca-rot-delta-vbq`.
+
+For the `0.5.4` ladder rung, each non-leaf block shall use the same total
+per-level bit budget that `0.5.3` would have used at that level and
+dimensionality, redistributed across dimensions according to variance.
+
+### REQ-STREAM-INDEXER-100
+
+The `0.5.x` ladder applies only to stored non-leaf branch-entry embedding
+representations after tree construction.
+
+It shall not:
+
+- alter leaf-block payload encodings
+- change the pre-compression partition hierarchy relative to `0.5.0`
+- require out-of-band search-side state to interpret authored blocks
+
+### REQ-STREAM-INDEXER-101
+
+When a `0.5.x` profile emits an EBCP-encoded non-leaf block, the emitted block
+shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,
+including the required `ext` metadata for the selected EBCP encoding.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -947,8 +1016,8 @@ This crate does not define or own:
 
 ## Relationship to Other Specifications
 
-This document is subordinate to `docs/protocol/indexing.md` and
-`docs/protocol/blocks.md`.
+This document is subordinate to `docs/protocol/indexing.md`,
+`docs/protocol/blocks.md`, and `docs/protocol/ebcp.md`.
 
 This document is also subordinate to the block crate, block-storage trait,
 embeddings-trait, streaming clustering, streaming DCBC, directional-PCA,

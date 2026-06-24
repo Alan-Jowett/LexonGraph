@@ -197,3 +197,33 @@ Attempt to accept a block whose top-level `level` field uses the legacy textual
 
 **Traces to:** REQ-BLOCK-CRATE-004, REQ-BLOCK-CRATE-005, REQ-BLOCK-CRATE-008,
 REQ-BLOCK-CRATE-014
+
+### VAL-021
+
+Round-trip a non-leaf block that uses one of the EBCP branch encodings together
+with the required EBCP `ext` metadata.
+
+**Pass condition:** serialization and hash-verified deserialization preserve the
+declared EBCP encoding, the EBCP metadata, and the raw branch payload bytes
+without embedding search or indexing policy logic in the block crate.
+
+**Traces to:** REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-018
+
+### VAL-022
+
+Attempt to accept a leaf block that declares an EBCP encoding, or a non-leaf
+block that declares an EBCP encoding but omits the required EBCP descriptor.
+
+**Pass condition:** both are rejected explicitly as non-conforming.
+
+**Traces to:** REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-016
+
+### VAL-023
+
+Attempt to accept an EBCP-encoded non-leaf block whose descriptor dimensionality,
+quantization metadata, or branch payload length is inconsistent with the
+enclosing block's declared dimensionality or encoding.
+
+**Pass condition:** rejected explicitly as non-conforming.
+
+**Traces to:** REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-017

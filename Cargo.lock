@@ -1786,6 +1786,7 @@ dependencies = [
 name = "lexongraph-search"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "lexongraph-block",
  "lexongraph-block-store",
 ]
@@ -1848,6 +1849,7 @@ dependencies = [
  "lexongraph-dcbc-streaming",
  "lexongraph-directional-pca",
  "lexongraph-embeddings-trait",
+ "lexongraph-pca",
  "lexongraph-spherical-kmeans",
  "lexongraph-streaming-clustering",
  "pollster",

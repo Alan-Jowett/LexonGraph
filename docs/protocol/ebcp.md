@@ -2,287 +2,260 @@
   Copyright (c) 2026 LexonGraph contributors -->
 # LexonGraph Embedding Block Compression Protocol (EBCP)
 
----
+## Status
 
-## 1. Scope
+This document is the canonical wire-format specification for compressed
+branch-entry embeddings carried inside LexonGraph non-leaf blocks.
 
-### 1.1 Standardized by EBCP
+## Scope
 
 EBCP defines:
 
-1. Binary block container format
-2. Transform metadata representation
-3. Embedding reconstruction semantics
-4. Block layout and parsing rules
+1. the branch-only `EmbeddingSpec.encoding` values used by compressed
+   non-leaf blocks
+2. the required `ext` metadata layout for those encodings
+3. the byte-level payload layout of branch-entry `embedding` values stored under
+   those encodings
+4. the reconstruction semantics that search and other readers use to interpret
+   those payloads
 
-EBCP is a **container + semantic reconstruction specification**, not a single codec.
+EBCP does **not** define a standalone block container. The enclosing block
+layout, canonical CBOR encoding, block validity rules, and block identifiers
+remain defined by `docs/protocol/blocks.md`.
 
-### 1.2 Out of Scope
+## Relationship to Other Protocols
 
-- Specific compression algorithms
-- Clustering
-- Retrieval
-- Transport
+- `docs/protocol/blocks.md` remains authoritative for block structure, field
+  keys, canonicalization, and hash identity.
+- `docs/protocol/indexing.md` owns indexing inputs and outputs, not compressed
+  branch payload layout.
+- `docs/protocol/search.md` owns traversal, ranking, and termination semantics,
+  not compressed branch payload layout.
 
----
+This document defines only how a non-leaf block's branch-entry `embedding`
+bytes and related `ext` metadata are interpreted when one of the EBCP
+encodings is selected.
 
-## 2. Observable Property
+## Branch-Only Scope
 
-EBCP imposes **no fixed embedding count per block**.
+EBCP applies only to `NonLeafBlock` branch-entry embeddings.
 
----
+It is invalid in this revision for a `LeafBlock` to use an EBCP encoding.
+Leaf-entry payloads continue to use the ordinary embedding encodings governed by
+`docs/protocol/blocks.md`.
 
-## 3. Reconstruction Semantics (Normative)
+## Encoding Registry
 
-`G` denotes an optional global transform. If no global transform is used, `G`
-is the identity transform and `G⁻¹` is also identity.
+The following `EmbeddingSpec.encoding` values are defined by this revision:
 
-For each embedding j:
+| Encoding value | Meaning | Loss model |
+| --- | --- | --- |
+| `pca-rot-f32le` | Orthogonally rotated full-precision branch embedding | lossless with respect to the stored `f32` rotated vector |
+| `pca-rot-delta-f32le` | Rotated `f32` delta from the enclosing block's base centroid | lossless with respect to the stored `f32` rotated delta |
+| `pca-rot-delta-uq` | Rotated delta encoded with one uniform per-level bit width across dimensions | lossy through quantization |
+| `pca-rot-delta-vbq` | Rotated delta encoded with per-dimension variable bit widths | lossy through quantization |
 
-x̂_j = G⁻¹(c + U z_j + r_j)
+In this document, the logical child-centroid embedding reconstructed for search
+or inspection is denoted `x`.
 
-Decoder MUST decode `c`, `U`, `z_j`, and `r_j`, form the local reconstruction
-`c + U z_j + r_j`, and then apply `G⁻¹` when a global transform is present.
+## Common EBCP `ext` Metadata
 
----
+When a non-leaf block uses any EBCP encoding, its top-level `ext` map shall
+contain one `ebcp` descriptor map under extension key `0`.
 
-## 4. Encoding Layer Model
+The `ebcp` descriptor uses the following integer wire keys:
 
-EBCP separates:
+- `0` -> `version`
+- `1` -> `logical_encoding`
+- `2` -> `original_dims`
+- `3` -> `base_centroid`
+- `4` -> `rotation`
+- `5` -> `quantization`
 
-Semantic layer:
-- centroid (c)
-- basis (U)
-- coefficients (z)
-- residuals (r)
+### `version`
 
-Encoding layer:
-- codec (per stream)
-- numeric format
+Unsigned integer. This revision defines `version = 1`.
 
-> EBCP defines semantics, while coefficient encoding is codec-dependent.
+### `logical_encoding`
 
----
+Text naming the logical ambient-space encoding reconstructed by EBCP. In this
+revision, it shall be `f32le`.
 
-## 5. Lossless vs Approximate
+### `original_dims`
 
-### 5.1 Lossless Mode
+Unsigned integer giving the dimensionality of the reconstructed ambient-space
+embedding. It shall equal the enclosing block's `embedding_spec.dims`.
 
-Lossless mode guarantees:
+### `base_centroid`
 
-After decoding, the following MUST be bitwise identical to encoder-produced values:
+Byte string containing `original_dims` little-endian `f32` values in ambient
+space.
 
-- centroid
-- basis
-- coefficients
-- residuals (if present)
+It is:
 
-No guarantee is made about reconstructing original input vectors.
+- absent for `pca-rot-f32le`
+- required for `pca-rot-delta-f32le`
+- required for `pca-rot-delta-uq`
+- required for `pca-rot-delta-vbq`
 
-### 5.2 Approximate Mode
+### `rotation`
 
-Quantization is permitted.
+Map describing the orthogonal ambient-space rotation used by the block:
 
-If specified:
+- `0` -> `matrix_format`
+- `1` -> `matrix_bytes`
 
-RMSE ≤ ε
+`matrix_format` shall be the text value `f32le-row-major`.
 
----
+`matrix_bytes` shall contain an `original_dims x original_dims` row-major
+little-endian `f32` matrix `R`.
 
-## 6. Endianness
+`R` maps ambient-space embeddings into the rotated space stored by the branch
+payloads. Because this revision uses orthogonal rotations, a conforming reader
+reconstructs ambient-space values using `R^-1`, which is equivalently `R^T`.
 
-All multibyte integers SHALL use little-endian encoding.
+`rotation` is required for every EBCP encoding in this revision.
 
----
+### `quantization`
 
-## 7. Alignment
+Map present only for quantized encodings:
 
-Streams MAY begin at any byte offset unless a future version specifies alignment constraints.
+- `0` -> `mode`
+- `1` -> `uniform_bit_width`
+- `2` -> `bit_widths`
+- `3` -> `scale_factors`
 
----
+`mode` shall be:
 
-## 8. Header
+- `1` for `pca-rot-delta-uq`
+- `2` for `pca-rot-delta-vbq`
 
-struct BlockHeader {
-    magic: u32
-    version_major: u8
-    version_minor: u8
-    flags: u16
+`uniform_bit_width` is:
 
-    block_size: u32
-    embedding_count: u32
+- required when `mode = 1`
+- absent when `mode = 2`
 
-    dimension: u32
-    k: u16
-    mode: u8
-    reserved: u8
+`bit_widths` is:
 
-    stream_count: u16
-}
+- absent when `mode = 1`
+- required when `mode = 2`
 
-`block_id` is not an encoded header field. EBCP defines a binary
-payload/container format only; it does not define or store a separate
-content-addressed identifier. If EBCP bytes are embedded inside a LexonGraph
-block, the enclosing LexonGraph block ID is derived from the canonical
-serialized block bytes rather than stored inside the EBCP payload.
+When present, `bit_widths` is a byte string containing one unsigned byte per
+dimension in rotated order.
 
----
+`scale_factors` is required for both quantized modes and is a byte string
+containing `original_dims` little-endian `f32` values. Each scale factor
+converts one signed quantized code into one rotated-space delta component.
 
-## 9. Stream Directory
+## Branch-Entry `embedding` Byte Layout
 
-struct StreamEntry {
-    stream_id: u16
-    offset: u32
-    length: u32
-    codec: u16
-    numeric_format: u16
-}
+The enclosing non-leaf block's `entries` array still uses ordinary branch-entry
+maps from `docs/protocol/blocks.md`. Only the interpretation of the `embedding`
+byte string changes.
 
----
+### `pca-rot-f32le`
 
-## 10. Codec Registry (Initial)
+The `embedding` byte string contains `original_dims` little-endian `f32`
+components representing one rotated ambient-space vector `y`.
 
-0 = raw
-1 = bitpack
-2 = ANS
-3 = Huffman
+Reconstruction:
 
----
+`x = R^-1 y`
 
-## 11. Numeric Formats
+### `pca-rot-delta-f32le`
 
-Each stream MUST declare numeric_format.
+The `embedding` byte string contains `original_dims` little-endian `f32`
+components representing one rotated delta vector `d`.
 
-Initial numeric format registry:
+Reconstruction:
 
-0 = float32
-1 = int8
+`x = base_centroid + R^-1 d`
 
-Implementations MUST support at least:
+### `pca-rot-delta-uq`
 
-- float32
-- int8
+The `embedding` byte string contains one signed integer code per dimension,
+packed in dimension order using the block's declared `uniform_bit_width`.
 
----
+Packing rules:
 
-## 12. Global Transform Registry
+1. codes are packed least-significant-bit first inside the byte stream
+2. no padding bits appear between dimensions
+3. trailing high bits in the final byte, if any, shall be zero
 
-struct GlobalTransform {
-    transform_id: u128
-    version: u32
-    input_dim: u32
-    output_dim: u32
+To decode one dimension `i`:
 
-    encoding_format: u16
-    checksum_sha256: byte[32]
-}
+1. read one unsigned code word `q_i`
+2. convert to a centered signed integer `s_i = q_i - 2^(b-1)`, where `b` is the
+   declared uniform bit width
+3. compute rotated-space delta component `d_i = s_i * scale_factors[i]`
 
-`checksum_sha256` MUST be the SHA-256 digest of the canonical serialization:
+After decoding all dimensions:
 
-- row-major
-- fixed precision
-- little-endian
+`x = base_centroid + R^-1 d`
 
-### 12.1 Transform Modes
+### `pca-rot-delta-vbq`
 
-Two modes are allowed:
+The `embedding` byte string contains one signed integer code per dimension,
+packed in dimension order using the per-dimension bit widths from
+`bit_widths`.
 
-Referenced Transform:
-- transform_id only
+Packing rules are the same as `pca-rot-delta-uq`, except each dimension uses
+its own declared width `b_i`.
 
-Embedded Transform:
-- transform bytes included in block
+To decode one dimension `i`:
 
----
+1. read one unsigned code word `q_i` using width `b_i`
+2. convert to a centered signed integer `s_i = q_i - 2^(b_i-1)`
+3. compute rotated-space delta component `d_i = s_i * scale_factors[i]`
 
-## 13. Basis
+After decoding all dimensions:
 
-Basis vectors MUST be explicitly stored.
+`x = base_centroid + R^-1 d`
 
-Encoder MUST normalize vectors.
+## Level-Budget Contract for the `0.5.x` Ladder
 
-Decoder MAY validate but MUST NOT reject on floating-point variance.
+This protocol document defines encodings generically. The published `0.5.x`
+indexing ladder uses them with the following declared budgets:
 
----
+- root non-leaf blocks: 12 bits per dimension for the uniform rung
+- interior non-leaf blocks above the lowest routing layer: 8 bits per dimension
+  for the uniform rung
+- lowest routing non-leaf blocks whose children are leaf blocks: 6 bits per
+  dimension for the uniform rung
 
-## 14. Deterministic Encoding Profile
+For the variable-bit-rate rung, the sum of per-dimension bit widths for a block
+shall equal the total bit budget that the uniform rung would have used at the
+same level and dimensionality.
 
-If enabled:
+## Validity Rules
 
-- centroid: float64 accumulation
+The following are invalid in this revision:
 
-- basis ordering:
-  descending variance
+- an EBCP encoding on a leaf block
+- an EBCP branch block without `ext[0]`
+- an EBCP descriptor whose `version` is unsupported
+- `original_dims` that disagrees with the enclosing `EmbeddingSpec.dims`
+- a missing `rotation` descriptor
+- a missing `base_centroid` for any delta encoding
+- a present `quantization` descriptor on `pca-rot-f32le` or
+  `pca-rot-delta-f32le`
+- a missing `quantization` descriptor on `pca-rot-delta-uq` or
+  `pca-rot-delta-vbq`
+- quantization metadata whose dimensions, scales, or bit widths do not match the
+  enclosing block dimensionality
+- branch payload bytes whose length is inconsistent with the selected EBCP
+  encoding and descriptor metadata
 
-- tie-breaking:
-  lexicographic comparison of normalized vectors
+## Reader Contract
 
-- sign normalization:
-  first nonzero element ≥ 0
+A conforming reader shall be able to recover the logical ambient-space branch
+embedding `x` for each entry, or an equivalent comparison result against a
+target embedding, using only:
 
-- zero vector handling:
-  unchanged
+- the enclosing block's canonical bytes
+- the enclosing block's `embedding_spec`
+- the enclosing block's EBCP `ext` metadata
+- the branch entry's `embedding` bytes
 
-Termination:
-
-Δgain = D(k) − D(k+1)
-Δcost = T(k+1) − T(k)
-
-Stop when:
-
-N·Δgain ≤ Δcost
-
----
-
-## 15. Block Invariants
-
-- EncodedSize ≤ block_size
-- embedding_count ≥ 1
-- k ≤ dimension
-- stream_count matches directory
-- stream_id values unique within block
-- stream bounds valid
-
----
-
-## 16. Versioning
-
-- Major mismatch: MUST reject
-- Minor mismatch: MAY accept
-
----
-
-## 17. Informative: Retrieval Metrics
-
-Useful metrics include:
-
-- Recall@K
-- cosine distortion
-- nearest-neighbor preservation
-
----
-
-## 18. Informative: Query Strategies
-
-Possible approaches:
-
-- decode + search
-- coefficient-space search
-- centroid + bound pruning
-
----
-
-## 19. Informative: Compressibility
-
-Block capacity varies based on compressibility.
-
-Relationship to intrinsic dimensionality is outside scope.
-
----
-
-## 20. Compliance Levels
-
-Level 0: parse + reconstruct
-Level 1: validate invariants
-Level 2: deterministic encoding
-Level 3: error-bounded approximate mode
+No out-of-band transform catalog, training artifact, or repository-local side
+channel is required for reconstruction.

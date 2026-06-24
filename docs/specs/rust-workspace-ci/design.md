@@ -208,8 +208,9 @@ implemented surface, it groups or labels them so readers can distinguish:
 - active repository maintenance surfaces
 - supporting, reference, or future-facing material
 
-This includes labeling `docs/protocol/ebcp.md` as reference or future-facing
-material unless a later governed surface makes it active.
+This includes labeling `docs/protocol/ebcp.md` according to its current
+governed status in the repository rather than treating it as permanently
+future-facing.
 
 ### DSG-CI-021 `README authority boundary`
 

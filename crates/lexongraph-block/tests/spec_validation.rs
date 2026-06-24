@@ -3,9 +3,10 @@
 use ciborium::ser::into_writer;
 use ciborium::value::{Integer, Value};
 use lexongraph_block::{
-    Block, BlockError, BlockHash, BranchEntry, Content, EmbeddingSpec, LeafEntry, TypedEntries,
-    VERSION_1, build_branch_block, build_leaf_block, compute_block_hash, deserialize_block,
-    into_entries, serialize_block,
+    Block, BlockError, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpRotation,
+    EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1, build_branch_block, build_leaf_block,
+    compute_block_hash, deserialize_block, ebcp_extension_map, into_entries,
+    parse_branch_ebcp_descriptor, serialize_block,
 };
 
 #[test]
@@ -478,6 +479,131 @@ fn val_019_invalid_level_encodings_and_level_shape_mismatches_are_rejected() {
     ));
 }
 
+#[test]
+fn val_021_ebcp_branch_blocks_round_trip_with_metadata_and_payloads() {
+    let descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        base_centroid: None,
+        rotation: EbcpRotation {
+            matrix_format: "f32le-row-major".into(),
+            matrix: vec![1.0, 0.0, 0.0, 1.0],
+        },
+        quantization: None,
+    };
+    let block = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            embedding_spec("pca-rot-f32le"),
+            vec![
+                branch_entry(f32_payload([1.0, 0.0]), [0x11; 32]),
+                branch_entry(f32_payload([0.0, 1.0]), [0x22; 32]),
+            ],
+            Some(ebcp_extension_map(&descriptor)),
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&block).unwrap();
+    let validated = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    match into_entries(validated) {
+        TypedEntries::Branch(metadata, entries) => {
+            assert_eq!(metadata.embedding_spec.encoding, "pca-rot-f32le");
+            let parsed =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(parsed, descriptor);
+            assert_eq!(entries[0].embedding.len(), 8);
+            assert_eq!(entries[1].embedding.len(), 8);
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch block"),
+    }
+}
+
+#[test]
+fn val_022_ebcp_leaf_or_missing_descriptor_blocks_are_rejected() {
+    let missing_descriptor_error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-f32le"),
+        vec![branch_entry(f32_payload([1.0, 0.0]), [0x11; 32])],
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_descriptor_error,
+        BlockError::NonConforming(_)
+    ));
+
+    let invalid_leaf_error = build_leaf_block(
+        VERSION_1,
+        embedding_spec("pca-rot-f32le"),
+        vec![leaf_entry(f32_payload([1.0, 0.0]), vec![])],
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(invalid_leaf_error, BlockError::NonConforming(_)));
+}
+
+#[test]
+fn val_023_ebcp_blocks_reject_inconsistent_metadata_and_payload_lengths() {
+    let invalid_descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        base_centroid: Some(vec![0.0, 0.0]),
+        rotation: EbcpRotation {
+            matrix_format: "f32le-row-major".into(),
+            matrix: vec![1.0, 0.0, 0.0],
+        },
+        quantization: None,
+    };
+    let invalid_rotation_error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-delta-f32le"),
+        vec![branch_entry(f32_payload([1.0, 0.0]), [0x11; 32])],
+        Some(ebcp_extension_map(&invalid_descriptor)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid_rotation_error,
+        BlockError::NonConforming(_)
+    ));
+
+    let valid_descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        base_centroid: Some(vec![0.0, 0.0]),
+        rotation: EbcpRotation {
+            matrix_format: "f32le-row-major".into(),
+            matrix: vec![1.0, 0.0, 0.0, 1.0],
+        },
+        quantization: None,
+    };
+    let invalid_payload_error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-delta-f32le"),
+        vec![branch_entry(vec![0x00, 0x01], [0x11; 32])],
+        Some(ebcp_extension_map(&valid_descriptor)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid_payload_error,
+        BlockError::NonConforming(_)
+    ));
+}
+
 fn sample_branch_block() -> Block {
     Block::Branch(
         build_branch_block(
@@ -527,6 +653,13 @@ fn branch_entry(embedding: Vec<u8>, child: [u8; 32]) -> BranchEntry {
         embedding,
         child: BlockHash::from_bytes(child),
     }
+}
+
+fn f32_payload(values: [f32; 2]) -> Vec<u8> {
+    values
+        .into_iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
 }
 
 fn leaf_entry(embedding: Vec<u8>, metadata: Vec<(Value, Value)>) -> LeafEntry {

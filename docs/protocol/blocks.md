@@ -130,6 +130,13 @@ Known `encoding` values in this revision:
 - `f16le`
 - `i8`
 - `pq4`
+- `pca-rot-f32le`
+- `pca-rot-delta-f32le`
+- `pca-rot-delta-uq`
+- `pca-rot-delta-vbq`
+
+The `pca-rot-*` encodings are defined by `docs/protocol/ebcp.md` and are valid
+only for non-leaf branch-entry embeddings.
 
 Future revisions may define additional encodings.
 
@@ -153,7 +160,9 @@ Field requirements:
 - `level` is required and is greater than zero for non-leaf blocks
 - `embedding_spec` is required and applies to every entry in the block
 - `entries` is required and contains child references keyed by embedding bytes
-- `ext` is optional and reserved for forward-compatible extensions
+- `ext` is optional and reserved for forward-compatible extensions, but it is
+  required when `embedding_spec.encoding` is one of the `pca-rot-*` encodings
+  defined by `docs/protocol/ebcp.md`
 
 Normatively, a non-leaf block defines the mapping:
 
@@ -163,6 +172,10 @@ where:
 
 - `embedding_bytes` are interpreted under the block's `embedding_spec`
 - `child_block_id` is the raw SHA-256 identifier of the referenced child block
+
+When `embedding_spec.encoding` is one of the `pca-rot-*` values, the branch
+entry `embedding` bytes are interpreted together with the block's `ext`
+metadata according to `docs/protocol/ebcp.md`.
 
 ### BranchEntry
 
@@ -194,6 +207,9 @@ LeafBlock {
 In version 1, `entries` for a leaf block must contain exactly one `LeafEntry`.
 The numeric `level` is semantic depth from leaves, so `level = 0` is terminal
 and any `level > 0` clusters children from the immediately lower level.
+
+Leaf blocks in this revision shall not use the `pca-rot-*` encodings defined by
+`docs/protocol/ebcp.md`.
 
 ### LeafEntry
 
@@ -247,6 +263,9 @@ The following are invalid:
 - non-leaf entries missing `child`
 - leaf entries missing `metadata` or `content`
 - leaf blocks whose `entries` array does not contain exactly one `LeafEntry`
+- non-leaf blocks that use a `pca-rot-*` encoding without the required EBCP
+  metadata in `ext`
+- leaf blocks that use a `pca-rot-*` encoding
 
 ## Merkle Tree Semantics
 
@@ -363,6 +382,8 @@ revision:
 10. Canonical on-wire encoding uses the versioned integer field-key registry.
 11. Legacy version-1 encodings that still use textual `kind` are invalid under
     this published revision.
+12. EBCP branch encodings are valid only on non-leaf blocks and require the
+    protocol-defined EBCP metadata in `ext`.
 
 ## Relationship to Higher-Level Indexing
 
