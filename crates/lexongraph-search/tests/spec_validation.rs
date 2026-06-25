@@ -14,9 +14,11 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
     CandidateScorer, DefaultCandidateScorer, DefaultEmbeddingCompatibility, DefaultPolicyError,
-    EmbeddingCompatibility, EncodedTargetEmbedding, PUBLISHED_PROFILE_V0_1_0, ProfiledSearcher,
-    PublishedProfileVersion, SearchError, SearchProfileError, SearchResult,
-    SearchTelemetryObserver, SearchTerminationKind, Searcher, published_search_profile,
+    DefaultTopWFrontierSelector, EmbeddingCompatibility, EncodedTargetEmbedding,
+    ExpandableFrontierCandidate, FrontierSelector, GeometryAwareFrontierSelector,
+    PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_2_0, ProfiledSearcher, PublishedProfileVersion,
+    SearchError, SearchProfileError, SearchResult, SearchTelemetryObserver, SearchTerminationKind,
+    Searcher, published_search_profile,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,6 +250,66 @@ impl CandidateScorer<()> for FailingScorer {
 
     fn score(&self, _: &(), _: &[u8], _: &EmbeddingSpec) -> Result<Self::Score, Self::Error> {
         Err(FixtureError("scorer offline".into()))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SelectorFixtureError(String);
+
+impl std::fmt::Display for SelectorFixtureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SelectorFixtureError {}
+
+#[derive(Clone, Debug)]
+struct FixedFrontierSelector {
+    selected: Vec<BlockHash>,
+}
+
+impl<Score> FrontierSelector<Score> for FixedFrontierSelector {
+    type Error = SelectorFixtureError;
+
+    fn select(
+        &self,
+        _: &[ExpandableFrontierCandidate<'_, Score>],
+        _: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error> {
+        Ok(self.selected.clone())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FailingFrontierSelector;
+
+impl<Score> FrontierSelector<Score> for FailingFrontierSelector {
+    type Error = SelectorFixtureError;
+
+    fn select(
+        &self,
+        _: &[ExpandableFrontierCandidate<'_, Score>],
+        _: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error> {
+        Err(SelectorFixtureError("beam planner unavailable".into()))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FirstF32ComponentScorer;
+
+impl CandidateScorer<()> for FirstF32ComponentScorer {
+    type Error = FixtureError;
+    type Score = i32;
+
+    fn score(
+        &self,
+        _: &(),
+        candidate_embedding: &[u8],
+        _: &EmbeddingSpec,
+    ) -> Result<Self::Score, Self::Error> {
+        Ok((decode_first_f32(candidate_embedding) * 1000.0).round() as i32)
     }
 }
 
@@ -1520,6 +1582,169 @@ fn val_search_039_public_block_reconstruction_matches_search_branch_ranking() {
     }
 }
 
+#[test]
+fn val_search_040_frontier_selection_is_a_separate_policy_boundary() {
+    let store = MemoryBlockStore::default();
+    let top_child = store.put(&leaf_block(i8_embedding([9, 0]), "top")).unwrap();
+    let alternate_child = store
+        .put(&leaf_block(i8_embedding([100, 0]), "alternate"))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![
+                branch_entry([9, 0], top_child),
+                branch_entry([8, 0], alternate_child),
+            ],
+        ))
+        .unwrap();
+
+    let searcher = Searcher::with_frontier_selector(
+        AcceptAllCompatibility,
+        FirstByteScorer,
+        FixedFrontierSelector {
+            selected: vec![alternate_child],
+        },
+    );
+    let result = searcher.search(&root_id, &(), 1, 1, &store).unwrap();
+
+    assert_eq!(result.leaves[0].entry.content.body, b"alternate".to_vec());
+}
+
+#[test]
+fn val_search_041_default_top_w_frontier_selector_matches_the_legacy_searcher() {
+    let store = MemoryBlockStore::default();
+    let left = store
+        .put(&leaf_block(i8_embedding([9, 0]), "left"))
+        .unwrap();
+    let right = store
+        .put(&leaf_block(i8_embedding([8, 0]), "right"))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([9, 0], left), branch_entry([8, 0], right)],
+        ))
+        .unwrap();
+
+    let legacy = Searcher::new(AcceptAllCompatibility, FirstByteScorer)
+        .search(&root_id, &(), 1, 1, &store)
+        .unwrap();
+    let explicit = Searcher::with_frontier_selector(
+        AcceptAllCompatibility,
+        FirstByteScorer,
+        DefaultTopWFrontierSelector,
+    )
+    .search(&root_id, &(), 1, 1, &store)
+    .unwrap();
+
+    assert_eq!(legacy, explicit);
+}
+
+#[test]
+fn val_search_042_geometry_aware_selector_is_deterministic() {
+    let store = MemoryBlockStore::default();
+    let root_id = fixed_width_recall_fixture(&store);
+    let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+    let searcher = Searcher::with_frontier_selector(
+        DefaultEmbeddingCompatibility,
+        DefaultCandidateScorer,
+        GeometryAwareFrontierSelector,
+    );
+
+    let first = searcher.search(&root_id, &target, 2, 1, &store).unwrap();
+    let second = searcher.search(&root_id, &target, 2, 1, &store).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first.leaves[0].entry.content.body, b"target".to_vec());
+}
+
+#[test]
+fn val_search_043_frontier_selection_can_use_frontier_geometry_not_just_rank() {
+    let fixture_a = geometry_order_fixture([0.99, 0.10], [0.98, 0.09], [0.97, 0.70]);
+    let fixture_b = geometry_order_fixture([0.99, 0.10], [0.98, 0.70], [0.97, 0.09]);
+
+    assert_eq!(fixture_a.branch_scores, fixture_b.branch_scores);
+
+    let geometry_result_a = run_geometry_order_fixture(&fixture_a);
+    let geometry_result_b = run_geometry_order_fixture(&fixture_b);
+
+    assert_eq!(
+        sorted_leaf_bodies(&geometry_result_a),
+        vec![b"a".to_vec(), b"c".to_vec()]
+    );
+    assert_eq!(
+        sorted_leaf_bodies(&geometry_result_b),
+        vec![b"a".to_vec(), b"b".to_vec()]
+    );
+}
+
+#[test]
+fn val_search_044_geometry_aware_profile_improves_fixed_width_recall_on_the_reference_fixture() {
+    let store = MemoryBlockStore::default();
+    let root_id = fixed_width_recall_fixture(&store);
+    let target_bytes = f32_embedding([1.0, 0.0]);
+    let target_spec = embedding_spec_f32();
+
+    let legacy = ProfiledSearcher::new(PUBLISHED_PROFILE_V0_1_0)
+        .unwrap()
+        .search(
+            &root_id,
+            target_bytes.clone(),
+            target_spec.clone(),
+            2,
+            1,
+            &store,
+        )
+        .unwrap();
+    let geometry = ProfiledSearcher::new(PUBLISHED_PROFILE_V0_2_0)
+        .unwrap()
+        .search(&root_id, target_bytes, target_spec, 2, 1, &store)
+        .unwrap();
+
+    assert_eq!(legacy.leaves[0].entry.content.body, b"decoy-a".to_vec());
+    assert_eq!(geometry.leaves[0].entry.content.body, b"target".to_vec());
+}
+
+#[test]
+fn val_search_045_published_search_profile_v0_2_0_is_declared_explicitly() {
+    let profile = published_search_profile(PUBLISHED_PROFILE_V0_2_0).unwrap();
+    assert_eq!(profile.version(), PublishedProfileVersion::new(0, 2, 0));
+}
+
+#[test]
+fn val_search_046_frontier_selector_failures_are_explicit() {
+    let store = MemoryBlockStore::default();
+    let child = store
+        .put(&leaf_block(i8_embedding([9, 0]), "child"))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block(
+            embedding_spec_i8(),
+            vec![branch_entry([9, 0], child)],
+        ))
+        .unwrap();
+    let searcher = Searcher::with_frontier_selector(
+        AcceptAllCompatibility,
+        FirstByteScorer,
+        FailingFrontierSelector,
+    );
+    let recorder = SummaryRecorder::default();
+
+    let error = searcher
+        .search_with_observer(&root_id, &(), 1, 1, &store, &recorder)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SearchError::FrontierSelectionFailure { .. }
+    ));
+    assert_eq!(
+        recorder.summaries()[0].termination,
+        SearchTerminationKind::FrontierSelectionFailure
+    );
+}
+
 fn run_single_result_search<F>(build_root: F) -> Result<SearchResult, SearchError>
 where
     F: FnOnce(&MemoryBlockStore) -> Block,
@@ -1530,6 +1755,137 @@ where
     let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
     searcher.search(&root_id, &target, 1, 1, &store)
+}
+
+struct GeometryOrderFixture {
+    store: MemoryBlockStore,
+    root_id: BlockHash,
+    branch_scores: [i32; 3],
+}
+
+fn fixed_width_recall_fixture(store: &MemoryBlockStore) -> BlockHash {
+    let target = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "target",
+        ))
+        .unwrap();
+    let decoy_a = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([0.95, 0.31]),
+            "decoy-a",
+        ))
+        .unwrap();
+    let decoy_b = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([0.94, 0.34]),
+            "decoy-b",
+        ))
+        .unwrap();
+    store
+        .put(&branch_block_with_ext(
+            1,
+            embedding_spec_f32(),
+            vec![
+                BranchEntry {
+                    embedding: f32_embedding([0.99, 0.10]),
+                    child: decoy_a,
+                },
+                BranchEntry {
+                    embedding: f32_embedding([0.98, 0.11]),
+                    child: decoy_b,
+                },
+                BranchEntry {
+                    embedding: f32_embedding([0.80, 0.60]),
+                    child: target,
+                },
+            ],
+            None,
+        ))
+        .unwrap()
+}
+
+fn geometry_order_fixture(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> GeometryOrderFixture {
+    let store = MemoryBlockStore::default();
+    let a_leaf = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "a",
+        ))
+        .unwrap();
+    let b_leaf = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "b",
+        ))
+        .unwrap();
+    let c_leaf = store
+        .put(&leaf_block_with_spec(
+            embedding_spec_f32(),
+            f32_embedding([1.0, 0.0]),
+            "c",
+        ))
+        .unwrap();
+    let root_id = store
+        .put(&branch_block_with_ext(
+            1,
+            embedding_spec_f32(),
+            vec![
+                BranchEntry {
+                    embedding: f32_embedding(a),
+                    child: a_leaf,
+                },
+                BranchEntry {
+                    embedding: f32_embedding(b),
+                    child: b_leaf,
+                },
+                BranchEntry {
+                    embedding: f32_embedding(c),
+                    child: c_leaf,
+                },
+            ],
+            None,
+        ))
+        .unwrap();
+
+    GeometryOrderFixture {
+        store,
+        root_id,
+        branch_scores: [
+            (a[0] * 1000.0).round() as i32,
+            (b[0] * 1000.0).round() as i32,
+            (c[0] * 1000.0).round() as i32,
+        ],
+    }
+}
+
+fn run_geometry_order_fixture(fixture: &GeometryOrderFixture) -> SearchResult {
+    Searcher::with_frontier_selector(
+        AcceptAllCompatibility,
+        FirstF32ComponentScorer,
+        GeometryAwareFrontierSelector,
+    )
+    .search(&fixture.root_id, &(), 2, 2, &fixture.store)
+    .unwrap()
+}
+
+fn leaf_bodies(result: &SearchResult) -> Vec<Vec<u8>> {
+    result
+        .leaves
+        .iter()
+        .map(|leaf| leaf.entry.content.body.clone())
+        .collect()
+}
+
+fn sorted_leaf_bodies(result: &SearchResult) -> Vec<Vec<u8>> {
+    let mut bodies = leaf_bodies(result);
+    bodies.sort();
+    bodies
 }
 
 fn put_leaf_fixture(store: &MemoryBlockStore) -> (BlockHash, BlockHash) {
@@ -1758,6 +2114,10 @@ fn f32_embedding(values: [f32; 2]) -> Vec<u8> {
         .into_iter()
         .flat_map(|value| value.to_le_bytes())
         .collect()
+}
+
+fn decode_first_f32(bytes: &[u8]) -> f32 {
+    f32::from_le_bytes(bytes[..4].try_into().unwrap())
 }
 
 fn embedding_spec_f64() -> EmbeddingSpec {

@@ -372,7 +372,7 @@ surface.
 **Pass condition:** the crate exposes a published profile version selector, the
 selected `0.1.0` profile resolves successfully, and the convenience surface
 binds the crate-owned encoded target representation plus the default
-compatibility and scoring policies.
+compatibility, scoring, and frontier-selection policies.
 
 **Traces to:** REQ-SEARCH-027, REQ-SEARCH-030
 
@@ -476,3 +476,72 @@ public surface induce the same winning branch choice that search uses through
 its existing runtime surface.
 
 **Traces to:** REQ-SEARCH-034, REQ-SEARCH-038
+
+### VAL-SEARCH-040
+
+Inspect the public search-construction surface.
+
+**Pass condition:** callers can configure frontier selection separately from
+candidate scoring, and the search crate does not require frontier-selection
+experiments to be encoded as scorer changes.
+
+**Traces to:** REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-025
+
+### VAL-SEARCH-041
+
+Run the same deterministic search fixture once through the legacy convenience
+constructor and once through an explicit top-`w` frontier selector.
+
+**Pass condition:** both paths produce the same ordered search behavior.
+
+**Traces to:** REQ-SEARCH-025, REQ-SEARCH-040
+
+### VAL-SEARCH-042
+
+Run the geometry-aware frontier selector twice on the same deterministic
+fixed-width fixture.
+
+**Pass condition:** both runs choose the same expansion behavior and return the
+same ordered leaf results.
+
+**Traces to:** REQ-SEARCH-011, REQ-SEARCH-025, REQ-SEARCH-041
+
+### VAL-SEARCH-043
+
+Construct two fixtures with the same branch-score ordering but different
+inter-branch geometry.
+
+**Pass condition:** the geometry-aware selector may produce different expansion
+choices across those fixtures while preserving deterministic behavior within
+each fixture.
+
+**Traces to:** REQ-SEARCH-025, REQ-SEARCH-026, REQ-SEARCH-041, REQ-SEARCH-042
+
+### VAL-SEARCH-044
+
+Compare published search profiles `0.1.0` and `0.2.0` on a fixed-width recall
+fixture where ranked top-`w` expansion misses a better reachable leaf.
+
+**Pass condition:** profile `0.2.0` improves the returned result at the same
+`w`, while profile `0.1.0` preserves the legacy ranked top-`w` behavior.
+
+**Traces to:** REQ-SEARCH-039, REQ-SEARCH-040, REQ-SEARCH-041, REQ-SEARCH-044
+
+### VAL-SEARCH-045
+
+Resolve published search profile `0.2.0` through the convenience surface.
+
+**Pass condition:** the profile resolves successfully and remains distinct from
+`0.1.0`.
+
+**Traces to:** REQ-SEARCH-029, REQ-SEARCH-039, REQ-SEARCH-044
+
+### VAL-SEARCH-046
+
+Force the configured frontier selector to fail after search has started.
+
+**Pass condition:** search surfaces an explicit frontier-selection failure and
+does not silently fall back to another selector or to ranked top-`w`
+expansion.
+
+**Traces to:** REQ-SEARCH-043

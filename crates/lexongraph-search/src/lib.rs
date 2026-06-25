@@ -35,6 +35,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::fmt;
 
 pub use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry};
@@ -89,6 +90,186 @@ pub trait CandidateScorer<Target> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DefaultCandidateScorer;
 
+#[derive(Clone, Copy, Debug)]
+pub struct ExpandableFrontierCandidate<'a, Score> {
+    pub child: BlockHash,
+    pub depth: usize,
+    pub level: u64,
+    pub score: &'a Score,
+    pub embedding: &'a [u8],
+    pub embedding_spec: &'a EmbeddingSpec,
+}
+
+pub trait FrontierSelector<Score> {
+    type Error: std::error::Error;
+
+    fn select(
+        &self,
+        frontier: &[ExpandableFrontierCandidate<'_, Score>],
+        w: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DefaultTopWFrontierSelector;
+
+impl<Score> FrontierSelector<Score> for DefaultTopWFrontierSelector {
+    type Error = Infallible;
+
+    fn select(
+        &self,
+        frontier: &[ExpandableFrontierCandidate<'_, Score>],
+        w: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error> {
+        Ok(frontier
+            .iter()
+            .take(w)
+            .map(|candidate| candidate.child)
+            .collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GeometryAwareFrontierSelector;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GeometryAwareFrontierSelectionError {
+    UnsupportedEncoding {
+        encoding: String,
+    },
+    InvalidByteLength {
+        child: BlockHash,
+        encoding: String,
+        dims: u64,
+        expected: usize,
+        actual: usize,
+    },
+    DimensionOverflow {
+        child: BlockHash,
+        encoding: String,
+        dims: u64,
+    },
+    ZeroMagnitude {
+        child: BlockHash,
+    },
+    NonFiniteValue {
+        child: BlockHash,
+        index: usize,
+    },
+}
+
+impl fmt::Display for GeometryAwareFrontierSelectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedEncoding { encoding } => {
+                write!(
+                    f,
+                    "geometry-aware frontier selection does not support encoding {encoding}"
+                )
+            }
+            Self::InvalidByteLength {
+                child,
+                encoding,
+                dims,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "child block {child} embedding length {actual} does not match encoding {encoding} with {dims} dims (expected {expected} bytes)"
+            ),
+            Self::DimensionOverflow {
+                child,
+                encoding,
+                dims,
+            } => write!(
+                f,
+                "child block {child} embedding spec with encoding {encoding} and {dims} dims is too large to validate"
+            ),
+            Self::ZeroMagnitude { child } => {
+                write!(
+                    f,
+                    "child block {child} embedding must not have zero magnitude"
+                )
+            }
+            Self::NonFiniteValue { child, index } => write!(
+                f,
+                "child block {child} embedding contains a non-finite value at index {index}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GeometryAwareFrontierSelectionError {}
+
+impl<Score> FrontierSelector<Score> for GeometryAwareFrontierSelector {
+    type Error = GeometryAwareFrontierSelectionError;
+
+    fn select(
+        &self,
+        frontier: &[ExpandableFrontierCandidate<'_, Score>],
+        w: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error> {
+        if frontier.is_empty() || w == 0 {
+            return Ok(Vec::new());
+        }
+
+        let window_len = frontier.len().min(w.saturating_mul(2).max(w));
+        let window = &frontier[..window_len];
+        let vectors = window
+            .iter()
+            .map(|candidate| decode_geometry_vector(candidate))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut selected = vec![0usize];
+        let mut remaining = (1..window.len()).collect::<Vec<_>>();
+
+        while selected.len() < window.len().min(w) && !remaining.is_empty() {
+            let mut best_index = remaining[0];
+            let mut best_distance = min_cosine_distance(&vectors[best_index], &selected, &vectors);
+
+            for &candidate_index in &remaining[1..] {
+                let distance = min_cosine_distance(&vectors[candidate_index], &selected, &vectors);
+                if distance.total_cmp(&best_distance).is_gt() {
+                    best_distance = distance;
+                    best_index = candidate_index;
+                }
+            }
+
+            selected.push(best_index);
+            remaining.retain(|index| *index != best_index);
+        }
+
+        Ok(selected
+            .into_iter()
+            .map(|index| window[index].child)
+            .collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublishedDefaultFrontierSelector {
+    TopW,
+    GeometryAware,
+}
+
+impl FrontierSelector<CosineScore> for PublishedDefaultFrontierSelector {
+    type Error = GeometryAwareFrontierSelectionError;
+
+    fn select(
+        &self,
+        frontier: &[ExpandableFrontierCandidate<'_, CosineScore>],
+        w: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error> {
+        match self {
+            Self::TopW => Ok(frontier
+                .iter()
+                .take(w)
+                .map(|candidate| candidate.child)
+                .collect()),
+            Self::GeometryAware => GeometryAwareFrontierSelector.select(frontier, w),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PublishedProfileVersion {
     pub major: u64,
@@ -113,6 +294,7 @@ impl fmt::Display for PublishedProfileVersion {
 }
 
 pub const PUBLISHED_PROFILE_V0_1_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 1, 0);
+pub const PUBLISHED_PROFILE_V0_2_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 2, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublishedSearchProfile {
@@ -132,8 +314,22 @@ impl PublishedSearchProfile {
         EncodedTargetEmbedding::new(bytes, embedding_spec)
     }
 
-    pub fn searcher(&self) -> Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer> {
-        Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer)
+    pub fn searcher(
+        &self,
+    ) -> Searcher<
+        DefaultEmbeddingCompatibility,
+        DefaultCandidateScorer,
+        PublishedDefaultFrontierSelector,
+    > {
+        Searcher::with_frontier_selector(
+            DefaultEmbeddingCompatibility,
+            DefaultCandidateScorer,
+            match self.version {
+                PUBLISHED_PROFILE_V0_1_0 => PublishedDefaultFrontierSelector::TopW,
+                PUBLISHED_PROFILE_V0_2_0 => PublishedDefaultFrontierSelector::GeometryAware,
+                _ => unreachable!("published profiles are validated before construction"),
+            },
+        )
     }
 }
 
@@ -141,7 +337,9 @@ pub fn published_search_profile(
     version: PublishedProfileVersion,
 ) -> Result<PublishedSearchProfile, SearchProfileError> {
     match version {
-        PUBLISHED_PROFILE_V0_1_0 => Ok(PublishedSearchProfile { version }),
+        PUBLISHED_PROFILE_V0_1_0 | PUBLISHED_PROFILE_V0_2_0 => {
+            Ok(PublishedSearchProfile { version })
+        }
         _ => Err(SearchProfileError::UnsupportedPublishedProfileVersion(
             version,
         )),
@@ -168,7 +366,11 @@ impl std::error::Error for SearchProfileError {}
 #[derive(Clone, Debug)]
 pub struct ProfiledSearcher {
     profile: PublishedSearchProfile,
-    inner: Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
+    inner: Searcher<
+        DefaultEmbeddingCompatibility,
+        DefaultCandidateScorer,
+        PublishedDefaultFrontierSelector,
+    >,
 }
 
 impl ProfiledSearcher {
@@ -364,6 +566,7 @@ pub enum SearchTerminationKind {
     MalformedBlock,
     IncompatibleEmbedding,
     ScoringFailure,
+    FrontierSelectionFailure,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -404,6 +607,9 @@ pub enum SearchError {
     },
     ScoringFailure {
         block_id: BlockHash,
+        message: String,
+    },
+    FrontierSelectionFailure {
         message: String,
     },
     Exhausted {
@@ -449,6 +655,9 @@ impl fmt::Display for SearchError {
                     "failed to score candidates from block {block_id}: {message}"
                 )
             }
+            Self::FrontierSelectionFailure { message } => {
+                write!(f, "failed to select frontier expansion targets: {message}")
+            }
             Self::Exhausted {
                 requested,
                 reachable_leaves,
@@ -471,27 +680,36 @@ impl std::error::Error for SearchError {
             | Self::MissingChildBlock { .. }
             | Self::IncompatibleEmbedding { .. }
             | Self::ScoringFailure { .. }
+            | Self::FrontierSelectionFailure { .. }
             | Self::Exhausted { .. } => None,
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Searcher<EC, CS> {
+pub struct Searcher<EC, CS, FS = DefaultTopWFrontierSelector> {
     compatibility: EC,
     scorer: CS,
+    frontier_selector: FS,
 }
 
-impl<EC, CS> Searcher<EC, CS> {
+impl<EC, CS> Searcher<EC, CS, DefaultTopWFrontierSelector> {
     pub fn new(compatibility: EC, scorer: CS) -> Self {
+        Self::with_frontier_selector(compatibility, scorer, DefaultTopWFrontierSelector)
+    }
+}
+
+impl<EC, CS, FS> Searcher<EC, CS, FS> {
+    pub fn with_frontier_selector(compatibility: EC, scorer: CS, frontier_selector: FS) -> Self {
         Self {
             compatibility,
             scorer,
+            frontier_selector,
         }
     }
 }
 
-impl<EC, CS> Searcher<EC, CS> {
+impl<EC, CS, FS> Searcher<EC, CS, FS> {
     pub fn search<Target>(
         &self,
         root_id: &BlockHash,
@@ -503,6 +721,7 @@ impl<EC, CS> Searcher<EC, CS> {
     where
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
+        FS: FrontierSelector<CS::Score>,
     {
         self.search_internal(root_id, target, w, n, store, TelemetryMode::Disabled)
             .map(|(result, _)| result)
@@ -519,6 +738,7 @@ impl<EC, CS> Searcher<EC, CS> {
     where
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
+        FS: FrontierSelector<CS::Score>,
     {
         self.search_internal(root_id, target, w, n, store, TelemetryMode::Enabled(None))
     }
@@ -535,6 +755,7 @@ impl<EC, CS> Searcher<EC, CS> {
     where
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
+        FS: FrontierSelector<CS::Score>,
         TO: SearchTelemetryObserver,
     {
         self.search_internal(
@@ -560,6 +781,7 @@ impl<EC, CS> Searcher<EC, CS> {
     where
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
+        FS: FrontierSelector<CS::Score>,
     {
         let mut telemetry = SearchTelemetryCollector::new(w, telemetry_mode.enabled());
 
@@ -613,7 +835,23 @@ impl<EC, CS> Searcher<EC, CS> {
                 return Ok((SearchResult { leaves }, telemetry.into_summary()));
             }
 
-            let current_round = select_children_to_expand(&frontier, &expanded_children, w);
+            let expandable_frontier =
+                deduplicated_expandable_frontier(&frontier, &expanded_children);
+            let current_round = match self
+                .frontier_selector
+                .select(&expandable_frontier, w)
+                .map_err(|error| SearchError::FrontierSelectionFailure {
+                    message: error.to_string(),
+                })
+                .and_then(|selected| validate_selected_children(&selected, &expandable_frontier, w))
+            {
+                Ok(selected) => selected,
+                Err(error) => {
+                    telemetry.finish_with_error(&error);
+                    emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                    return Err(error);
+                }
+            };
             if current_round.is_empty() {
                 let error = SearchError::Exhausted {
                     requested: n,
@@ -679,6 +917,7 @@ impl<EC, CS> Searcher<EC, CS> {
     where
         EC: EmbeddingCompatibility<Target>,
         CS: CandidateScorer<Target>,
+        FS: FrontierSelector<CS::Score>,
     {
         let validated = match store.get(block_id) {
             Ok(Some(validated)) => validated,
@@ -753,6 +992,8 @@ impl<EC, CS> Searcher<EC, CS> {
                             child: entry.child,
                             depth: depth + 1,
                             level: metadata.level,
+                            embedding: candidate_embedding.into_owned(),
+                            embedding_spec: comparison_spec.clone(),
                             score,
                         })
                         .map_err(|error| SearchError::ScoringFailure {
@@ -811,6 +1052,8 @@ enum SearchCandidate<Score> {
         child: BlockHash,
         depth: usize,
         level: u64,
+        embedding: Vec<u8>,
+        embedding_spec: EmbeddingSpec,
         score: Score,
     },
     Leaf {
@@ -919,6 +1162,9 @@ impl SearchTelemetryCollector {
                     SearchTerminationKind::IncompatibleEmbedding
                 }
                 SearchError::ScoringFailure { .. } => SearchTerminationKind::ScoringFailure,
+                SearchError::FrontierSelectionFailure { .. } => {
+                    SearchTerminationKind::FrontierSelectionFailure
+                }
                 SearchError::Exhausted { .. } => SearchTerminationKind::Exhausted,
             };
         }
@@ -942,16 +1188,23 @@ fn emit_search_telemetry(
     }
 }
 
-fn select_children_to_expand<Score: Ord>(
-    frontier: &[SearchCandidate<Score>],
+fn deduplicated_expandable_frontier<'a, Score: Ord>(
+    frontier: &'a [SearchCandidate<Score>],
     expanded_children: &HashSet<BlockHash>,
-    w: usize,
-) -> Vec<BlockHash> {
-    let mut selected = Vec::new();
+) -> Vec<ExpandableFrontierCandidate<'a, Score>> {
     let mut seen_children = HashSet::new();
+    let mut expandable = Vec::new();
 
     for candidate in frontier {
-        let SearchCandidate::Branch { child, .. } = candidate else {
+        let SearchCandidate::Branch {
+            child,
+            depth,
+            level,
+            embedding,
+            embedding_spec,
+            score,
+        } = candidate
+        else {
             continue;
         };
 
@@ -959,13 +1212,56 @@ fn select_children_to_expand<Score: Ord>(
             continue;
         }
 
-        selected.push(*child);
-        if selected.len() == w {
-            break;
+        expandable.push(ExpandableFrontierCandidate {
+            child: *child,
+            depth: *depth,
+            level: *level,
+            score,
+            embedding,
+            embedding_spec,
+        });
+    }
+
+    expandable
+}
+
+fn validate_selected_children<Score>(
+    selected: &[BlockHash],
+    frontier: &[ExpandableFrontierCandidate<'_, Score>],
+    w: usize,
+) -> Result<Vec<BlockHash>, SearchError> {
+    let expected_len = frontier.len().min(w);
+    if selected.len() != expected_len {
+        return Err(SearchError::FrontierSelectionFailure {
+            message: format!(
+                "frontier selector returned {} child blocks, expected {} for frontier size {} and width {}",
+                selected.len(),
+                expected_len,
+                frontier.len(),
+                w
+            ),
+        });
+    }
+
+    let allowed = frontier
+        .iter()
+        .map(|candidate| candidate.child)
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    for child in selected {
+        if !allowed.contains(child) {
+            return Err(SearchError::FrontierSelectionFailure {
+                message: format!("frontier selector returned unknown child block {child}"),
+            });
+        }
+        if !seen.insert(*child) {
+            return Err(SearchError::FrontierSelectionFailure {
+                message: format!("frontier selector returned duplicate child block {child}"),
+            });
         }
     }
 
-    selected
+    Ok(selected.to_vec())
 }
 
 fn ensure_matching_specs(
@@ -999,6 +1295,104 @@ fn validate_embedding_bytes(
         });
     }
     Ok(width)
+}
+
+fn decode_geometry_vector<Score>(
+    candidate: &ExpandableFrontierCandidate<'_, Score>,
+) -> Result<Vec<f64>, GeometryAwareFrontierSelectionError> {
+    let width = match candidate.embedding_spec.encoding.as_str() {
+        "f32le" => std::mem::size_of::<f32>(),
+        "f64le" => std::mem::size_of::<f64>(),
+        _ => {
+            return Err(GeometryAwareFrontierSelectionError::UnsupportedEncoding {
+                encoding: candidate.embedding_spec.encoding.clone(),
+            });
+        }
+    };
+    let expected = candidate
+        .embedding_spec
+        .dims
+        .checked_mul(width as u64)
+        .ok_or_else(|| GeometryAwareFrontierSelectionError::DimensionOverflow {
+            child: candidate.child,
+            encoding: candidate.embedding_spec.encoding.clone(),
+            dims: candidate.embedding_spec.dims,
+        })?;
+    let expected = usize::try_from(expected).map_err(|_| {
+        GeometryAwareFrontierSelectionError::DimensionOverflow {
+            child: candidate.child,
+            encoding: candidate.embedding_spec.encoding.clone(),
+            dims: candidate.embedding_spec.dims,
+        }
+    })?;
+    if candidate.embedding.len() != expected {
+        return Err(GeometryAwareFrontierSelectionError::InvalidByteLength {
+            child: candidate.child,
+            encoding: candidate.embedding_spec.encoding.clone(),
+            dims: candidate.embedding_spec.dims,
+            expected,
+            actual: candidate.embedding.len(),
+        });
+    }
+
+    let mut vector = Vec::with_capacity(candidate.embedding_spec.dims as usize);
+    let mut norm_sq = 0.0f64;
+    match candidate.embedding_spec.encoding.as_str() {
+        "f32le" => {
+            for (index, chunk) in candidate.embedding.chunks_exact(width).enumerate() {
+                let value = f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+                if !value.is_finite() {
+                    return Err(GeometryAwareFrontierSelectionError::NonFiniteValue {
+                        child: candidate.child,
+                        index,
+                    });
+                }
+                let value = value as f64;
+                norm_sq += value * value;
+                vector.push(value);
+            }
+        }
+        "f64le" => {
+            for (index, chunk) in candidate.embedding.chunks_exact(width).enumerate() {
+                let value = f64::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+                if !value.is_finite() {
+                    return Err(GeometryAwareFrontierSelectionError::NonFiniteValue {
+                        child: candidate.child,
+                        index,
+                    });
+                }
+                norm_sq += value * value;
+                vector.push(value);
+            }
+        }
+        _ => unreachable!("unsupported encodings return early"),
+    }
+
+    if norm_sq == 0.0 {
+        return Err(GeometryAwareFrontierSelectionError::ZeroMagnitude {
+            child: candidate.child,
+        });
+    }
+
+    let norm = norm_sq.sqrt();
+    for value in &mut vector {
+        *value /= norm;
+    }
+    Ok(vector)
+}
+
+fn min_cosine_distance(candidate: &[f64], selected: &[usize], vectors: &[Vec<f64>]) -> f64 {
+    selected
+        .iter()
+        .map(|index| 1.0 - dot(candidate, &vectors[*index]))
+        .fold(f64::INFINITY, f64::min)
+}
+
+fn dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| left * right)
+        .sum()
 }
 
 fn cosine_similarity_bytes(
