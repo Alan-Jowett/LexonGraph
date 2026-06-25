@@ -305,7 +305,7 @@ least:
   consuming referenced corpora
 - explicit zip-archive open or read failure encountered while consuming
   archive-backed referenced corpora
-- explicit temporary writable-layer creation failure encountered while resolving
+- explicit temporary cache-layer creation failure encountered while resolving
   archive-backed referenced corpora
 - candidate-reported shared-contract failure
 - evaluator-owned gate failure

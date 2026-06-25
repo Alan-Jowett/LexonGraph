@@ -348,7 +348,7 @@ Evaluator failures are reported through an evaluator-owned structured taxonomy
 that distinguishes invalid evaluator configuration, candidate-reported
 shared-contract failure, evaluator-owned gate failure, invalid corpus-source
 references, corpus-loading failures encountered through block-store-backed
-inputs, zip-archive open/read failures, temporary writable-layer creation
+inputs, zip-archive open/read failures, temporary cache-layer creation
 failures, and incomplete or unsupported measurement due to a deferred research
 requirement.
 

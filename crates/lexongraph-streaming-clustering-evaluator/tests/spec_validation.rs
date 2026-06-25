@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lexongraph_block::{
     Block, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_branch_block,
-    build_leaf_block,
+    build_leaf_block, serialize_block,
 };
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -1331,18 +1331,26 @@ fn val_stream_eval_024_overlay_helper_refills_the_mutable_fs_cache_without_mutat
         )
         .unwrap(),
     );
+    let new_block_id = serialize_block(&new_block).unwrap().hash;
 
     assert!(store.put(&new_block).is_err());
     assert!(
-        FilesystemBlockStore::new(store.writable_layer_path())
+        FilesystemBlockStore::new(store.cache_layer_path())
             .unwrap()
-            .get(&block_id)
+            .get(&new_block_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ZipBlockStore::new(archive_path)
+            .unwrap()
+            .get(&new_block_id)
             .unwrap()
             .is_none()
     );
     assert!(store.get(&block_id).unwrap().is_some());
     assert!(
-        FilesystemBlockStore::new(store.writable_layer_path())
+        FilesystemBlockStore::new(store.cache_layer_path())
             .unwrap()
             .get(&block_id)
             .unwrap()
