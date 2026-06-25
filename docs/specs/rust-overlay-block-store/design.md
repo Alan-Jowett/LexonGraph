@@ -14,6 +14,7 @@ The overlay design is intended to be:
 - subordinate to the parent block-storage trait
 - explicit about priority and fallthrough semantics
 - reusable with heterogeneous store implementations
+- reusable from concurrent callers through a thread-safe composition surface
 - strict about inherited integrity and failure rules
 - minimal at the public boundary
 
@@ -30,7 +31,7 @@ The crate does not own:
 - block canonicalization or validation
 - production backend implementations
 - changes to the parent `BlockStore` trait
-- write replication to all layers
+- durability policy beyond attempting the configured writable layers
 - store-specific notification hooks or callbacks
 
 ## Core Types
@@ -56,6 +57,9 @@ that let the caller classify each participating `BlockStore` as:
 - a read-only layer that participates in reads and enumeration only
 
 Custom layer types may implement the overlay-specific layer trait directly.
+
+The public layer-composition surface is overlay-owned so downstream crates can
+reuse the overlay crate's dispatch logic instead of recreating it.
 
 ### DSG-OVERLAY-004 `Construction guard`
 
@@ -83,6 +87,8 @@ only layers classified as writable.
 - cache layers are skipped
 - read-only layers are skipped
 - each writable layer is attempted in order
+- any writable layer that reports a non-canonical block ID is treated as an
+  explicit write failure
 - success is reported only if every writable layer succeeds with the
   content-addressed block ID for the stored block
 
@@ -127,6 +133,21 @@ The overlay reuses the parent trait's `ValidatedBlock`, `BlockHash`, and
 It does not weaken the parent trait's integrity validation, explicit-failure
 semantics, or backend-neutral API boundary.
 
+### DSG-OVERLAY-012 `Thread-safe composition boundary`
+
+`OverlayBlockStore` and the overlay-owned public layer abstractions used for
+composition are `Send + Sync`.
+
+This lets concurrent callers share one overlay instance without widening the
+parent `BlockStore` trait.
+
+### DSG-OVERLAY-013 `Heterogeneous backend composition`
+
+The generic role adapters and overlay construction path accept existing
+repository `BlockStore` implementations, including `MemoryBlockStore`,
+`FilesystemBlockStore`, and `AzureBlobBlockStore`, without requiring downstream
+crates to duplicate overlay dispatch behavior.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -137,3 +158,5 @@ semantics, or backend-neutral API boundary.
 | DSG-OVERLAY-007..008 | REQ-OVERLAY-STORE-007, REQ-OVERLAY-STORE-008, REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-009..010 | REQ-OVERLAY-STORE-010 |
 | DSG-OVERLAY-011 | REQ-OVERLAY-STORE-011 |
+| DSG-OVERLAY-012 | REQ-OVERLAY-STORE-012 |
+| DSG-OVERLAY-013 | REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-013 |

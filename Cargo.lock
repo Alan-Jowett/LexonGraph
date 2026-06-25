@@ -1682,6 +1682,10 @@ version = "0.1.0"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
+ "lexongraph-block-store-azure",
+ "lexongraph-block-store-fs",
+ "lexongraph-block-store-memory",
+ "tempfile",
 ]
 
 [[package]]
