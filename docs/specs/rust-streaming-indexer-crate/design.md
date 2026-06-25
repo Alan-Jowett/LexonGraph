@@ -983,6 +983,20 @@ behavior.
 Resolving any experimental `0.5.x` profile does not mutate the declared mapping
 of `0.5.0`.
 
+### DSG-STREAM-INDEXER-097 `Planning fanout versus emitted branch fanout`
+
+The indexer's requested cluster count governs how many groups a clustering or
+partition-planning step asks the planner to realize for the current partition.
+
+After planning, final materialization replays leaf payloads one item per leaf
+block and then packs those persisted children into branch blocks according to
+the configured materializability bound. The same bound-driven packing rule is
+used for later bottom-up assembly layers.
+
+As a result, a non-root branch block may contain more children than the
+requested planning cluster count when a finalized terminal partition or
+intermediate child set remains materializable as one protocol-conforming block.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1069,4 +1083,5 @@ of `0.5.0`.
 | DSG-STREAM-INDEXER-094 | REQ-STREAM-INDEXER-100, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-095 | REQ-STREAM-INDEXER-101, REQ-STREAM-INDEXER-102 |
 | DSG-STREAM-INDEXER-096 | REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095 |
+| DSG-STREAM-INDEXER-097 | REQ-STREAM-INDEXER-103 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |

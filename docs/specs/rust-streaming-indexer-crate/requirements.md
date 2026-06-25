@@ -1013,6 +1013,18 @@ When a `0.5.x` profile emits an EBCP-encoded non-leaf block, the emitted block
 shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,
 including the required `ext` metadata for the selected EBCP encoding.
 
+### REQ-STREAM-INDEXER-103
+
+The requested cluster count reported or pinned by a planning configuration or
+published profile shall constrain clustering and hierarchy-planning decisions,
+not act as a universal maximum child count for every emitted branch block.
+
+During terminal-partition materialization and later bottom-up assembly, the
+crate may emit non-root branch blocks whose child counts exceed the requested
+planning cluster count, provided those blocks remain protocol-conforming and do
+not exceed the configured materializability bound derived from block-size and
+embedding constraints.
+
 ## Out of Scope
 
 This crate does not define or own:

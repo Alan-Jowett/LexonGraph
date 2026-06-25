@@ -40,6 +40,10 @@ fn val_inspect_001_and_012_repository_includes_crate_and_verification_artifacts(
 fn val_inspect_002_cli_help_exposes_backend_selector_and_filesystem_inputs() {
     let top_level_output = inspect_command().arg("--help").output().unwrap();
     let fs_output = inspect_command().args(["fs", "--help"]).output().unwrap();
+    let fs_tree_output = inspect_command()
+        .args(["fs-tree", "--help"])
+        .output()
+        .unwrap();
 
     assert!(
         top_level_output.status.success(),
@@ -47,12 +51,21 @@ fn val_inspect_002_cli_help_exposes_backend_selector_and_filesystem_inputs() {
         command_debug(&top_level_output)
     );
     assert!(fs_output.status.success(), "{}", command_debug(&fs_output));
+    assert!(
+        fs_tree_output.status.success(),
+        "{}",
+        command_debug(&fs_tree_output)
+    );
 
     let top_level_stdout = String::from_utf8(top_level_output.stdout).unwrap();
     let fs_stdout = String::from_utf8(fs_output.stdout).unwrap();
+    let fs_tree_stdout = String::from_utf8(fs_tree_output.stdout).unwrap();
     assert!(top_level_stdout.contains("fs"));
+    assert!(top_level_stdout.contains("fs-tree"));
     assert!(fs_stdout.contains("--store-root"));
     assert!(fs_stdout.contains("BLOCK_HASH"));
+    assert!(fs_tree_stdout.contains("--expected-max-children"));
+    assert!(fs_tree_stdout.contains("ROOT_HASH"));
 }
 
 #[test]
@@ -281,6 +294,121 @@ fn val_inspect_013_source_uses_blockstore_boundary() {
     assert!(!source.contains(".cbor"));
 }
 
+#[test]
+fn val_inspect_016_fs_tree_reports_child_cap_and_level_statistics() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+
+    let leaf_a_hash = store.put(&sample_simple_leaf_block("leaf-a")).unwrap();
+    let leaf_b_hash = store.put(&sample_simple_leaf_block("leaf-b")).unwrap();
+    let leaf_c_hash = store.put(&sample_simple_leaf_block("leaf-c")).unwrap();
+    let leaf_d_hash = store.put(&sample_simple_leaf_block("leaf-d")).unwrap();
+
+    let compliant_branch = build_branch_block(
+        VERSION_1,
+        1,
+        EmbeddingSpec {
+            dims: 4,
+            encoding: "f32le".to_owned(),
+        },
+        vec![BranchEntry {
+            embedding: vec![0x01, 0x00, 0x00, 0x00],
+            child: leaf_a_hash,
+        }],
+        None,
+    )
+    .unwrap();
+    let compliant_branch_hash = store
+        .put(&lexongraph_block::Block::Branch(compliant_branch))
+        .unwrap();
+
+    let overflowing_branch = build_branch_block(
+        VERSION_1,
+        1,
+        EmbeddingSpec {
+            dims: 4,
+            encoding: "f32le".to_owned(),
+        },
+        vec![
+            BranchEntry {
+                embedding: vec![0x02, 0x00, 0x00, 0x00],
+                child: leaf_b_hash,
+            },
+            BranchEntry {
+                embedding: vec![0x03, 0x00, 0x00, 0x00],
+                child: leaf_c_hash,
+            },
+            BranchEntry {
+                embedding: vec![0x04, 0x00, 0x00, 0x00],
+                child: leaf_d_hash,
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    let overflowing_branch_hash = store
+        .put(&lexongraph_block::Block::Branch(overflowing_branch))
+        .unwrap();
+
+    let root = build_branch_block(
+        VERSION_1,
+        2,
+        EmbeddingSpec {
+            dims: 4,
+            encoding: "f32le".to_owned(),
+        },
+        vec![
+            BranchEntry {
+                embedding: vec![0x10, 0x00, 0x00, 0x00],
+                child: compliant_branch_hash,
+            },
+            BranchEntry {
+                embedding: vec![0x20, 0x00, 0x00, 0x00],
+                child: overflowing_branch_hash,
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    let root_hash = store.put(&lexongraph_block::Block::Branch(root)).unwrap();
+
+    let output = run_fs_tree(temp_dir.path(), &root_hash.to_string(), 2);
+    let json = successful_json(output);
+
+    assert_eq!(json["root_hash"], root_hash.to_string());
+    assert_eq!(json["root_level"], 2);
+    assert_eq!(json["expected_max_children"], 2);
+    assert_eq!(json["unique_block_count"], 7);
+    assert_eq!(json["branch_block_count"], 3);
+    assert_eq!(json["leaf_block_count"], 4);
+    assert_eq!(json["repeated_reference_count"], 0);
+    assert_eq!(json["max_children_in_block"], 3);
+    assert_eq!(json["blocks_exceeding_child_cap_count"], 1);
+    assert_eq!(
+        json["block_with_max_children"]["hash"],
+        overflowing_branch_hash.to_string()
+    );
+    assert_eq!(json["block_with_max_children"]["level"], 1);
+    assert_eq!(json["block_with_max_children"]["child_count"], 3);
+
+    let levels = json["levels"].as_array().unwrap();
+    assert_eq!(levels.len(), 3);
+    assert_eq!(levels[0]["level"], 0);
+    assert_eq!(levels[0]["block_count"], 4);
+    assert_eq!(levels[0]["leaf_block_count"], 4);
+    assert_eq!(levels[1]["level"], 1);
+    assert_eq!(levels[1]["branch_block_count"], 2);
+    assert_eq!(levels[1]["max_children_per_branch"], 3);
+    assert_eq!(levels[2]["level"], 2);
+    assert_eq!(levels[2]["branch_block_count"], 1);
+    assert_eq!(levels[2]["max_children_per_branch"], 2);
+
+    let violations = json["blocks_exceeding_child_cap"].as_array().unwrap();
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0]["hash"], overflowing_branch_hash.to_string());
+    assert_eq!(violations[0]["child_count"], 3);
+}
+
 fn sample_simple_leaf_block(body: &str) -> lexongraph_block::Block {
     lexongraph_block::Block::Leaf(
         build_leaf_block(
@@ -361,6 +489,18 @@ fn run_fs_inspect(store_root: &Path, block_hash: &str) -> Output {
         .arg("fs")
         .arg("--store-root")
         .arg(store_root)
+        .arg(block_hash)
+        .output()
+        .unwrap()
+}
+
+fn run_fs_tree(store_root: &Path, block_hash: &str, expected_max_children: usize) -> Output {
+    inspect_command()
+        .arg("fs-tree")
+        .arg("--store-root")
+        .arg(store_root)
+        .arg("--expected-max-children")
+        .arg(expected_max_children.to_string())
         .arg(block_hash)
         .output()
         .unwrap()

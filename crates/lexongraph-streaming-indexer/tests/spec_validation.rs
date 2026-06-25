@@ -10,8 +10,8 @@ use std::thread;
 use std::time::Duration;
 
 use lexongraph_block::{
-    BlockError, BlockHash, BranchBlock, Content, EbcpQuantization, EmbeddingSpec, TypedEntries,
-    into_entries, parse_branch_ebcp_descriptor,
+    Block, BlockError, BlockHash, BranchBlock, Content, EbcpQuantization, EmbeddingSpec,
+    TypedEntries, into_entries, parse_branch_ebcp_descriptor,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
@@ -4411,6 +4411,56 @@ fn val_stream_indexer_093_all_profiles_resolve_deterministically_with_0_5_ladder
             published_indexing_profile(version).unwrap()
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_094_requested_cluster_count_is_not_a_universal_branch_child_cap() {
+    let items = [
+        item("alpha"),
+        item("bravo"),
+        item("charlie"),
+        item("delta"),
+        item("echo"),
+        item("foxtrot"),
+        item("golf"),
+        item("hotel"),
+        item("india"),
+        item("juliet"),
+        item("kilo"),
+        item("lima"),
+    ];
+    let mut run = run_with_builtin(
+        directional_pca_planning(BuiltInPlanningDirection::Divisive),
+        180,
+    );
+    run.ingest_batch(&items).await.unwrap();
+
+    let report = run.finish_pass().unwrap();
+    assert_eq!(report.requested_planning_cluster_count, Some(2));
+    assert_eq!(report.realized_planning_cluster_count, Some(2));
+
+    run.mark_planning_complete().unwrap();
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    let Block::Branch(root_block) = root.block else {
+        panic!("expected a branch root")
+    };
+    assert_eq!(root_block.entries.len(), 2);
+
+    let oversized_non_root_branch = result.block_ids.iter().find_map(|block_id| {
+        let block = store.get(block_id).unwrap().unwrap();
+        match block.block {
+            Block::Branch(branch) if *block_id != result.root_id && branch.entries.len() > 2 => {
+                Some(branch.entries.len())
+            }
+            _ => None,
+        }
+    });
+    assert!(oversized_non_root_branch.is_some());
 }
 
 #[tokio::test(flavor = "current_thread")]
