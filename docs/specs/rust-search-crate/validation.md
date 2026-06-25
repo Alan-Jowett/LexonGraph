@@ -464,3 +464,15 @@ path rather than silently treating the malformed payload as an ordinary
 uncompressed branch embedding.
 
 **Traces to:** REQ-SEARCH-006, REQ-SEARCH-033, REQ-SEARCH-035
+
+### VAL-SEARCH-039
+
+For supported EBCP branch encodings, compare the public logical-branch
+reconstruction results from `lexongraph-block` against the branch ordering
+observed through search on the same deterministic fixtures.
+
+**Pass condition:** the logical vectors reconstructed through the block crate's
+public surface induce the same winning branch choice that search uses through
+its existing runtime surface.
+
+**Traces to:** REQ-SEARCH-034, REQ-SEARCH-038

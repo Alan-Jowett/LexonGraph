@@ -227,3 +227,25 @@ enclosing block's declared dimensionality or encoding.
 **Pass condition:** rejected explicitly as non-conforming.
 
 **Traces to:** REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-017
+
+### VAL-024
+
+Reconstruct logical branch embedding vectors through the crate's public
+reconstruction helper for supported stored branch encodings, including ordinary
+branch encodings and EBCP branch encodings.
+
+**Pass condition:** the helper returns the protocol-defined logical ambient-space
+`f32` vector for each supported fixture without re-parsing block bytes outside
+the block crate.
+
+**Traces to:** REQ-BLOCK-CRATE-018, REQ-BLOCK-CRATE-019
+
+### VAL-025
+
+Attempt public logical-branch reconstruction with an unsupported stored branch
+encoding, a malformed payload length, or missing required EBCP metadata.
+
+**Pass condition:** the helper fails explicitly rather than silently returning a
+plausible vector.
+
+**Traces to:** REQ-BLOCK-CRATE-019

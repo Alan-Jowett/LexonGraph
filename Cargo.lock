@@ -1650,6 +1650,7 @@ name = "lexongraph-block"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "half",
  "sha2",
 ]
 

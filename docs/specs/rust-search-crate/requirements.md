@@ -342,6 +342,16 @@ topology under uncompressed branch embeddings shall arise only from the encoded
 branch-vector approximation rather than from a change in search API shape,
 traversal rules, or termination rules.
 
+### REQ-SEARCH-038
+
+For supported EBCP branch encodings, the search crate shall realize its
+candidate interpretation through the canonical logical-branch reconstruction
+semantics exposed by `lexongraph-block` rather than maintaining an independent
+private reconstruction path.
+
+This preserves one protocol-owned interpretation of stored branch embeddings
+across search and downstream diagnostics consumers.
+
 ## Out of Scope
 
 This crate does not define or own:

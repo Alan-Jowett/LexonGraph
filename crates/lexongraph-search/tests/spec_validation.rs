@@ -9,6 +9,7 @@ use ciborium::value::{Integer, Value};
 use lexongraph_block::{
     Block, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpRotation, EmbeddingSpec, LeafEntry,
     VERSION_1, build_branch_block, build_leaf_block, compute_block_hash, ebcp_extension_map,
+    parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
@@ -1471,6 +1472,52 @@ fn val_search_038_malformed_ebcp_blocks_fail_through_invalid_block_path() {
         .search(&root_hash, &target, 1, 1, &store)
         .unwrap_err();
     assert!(matches!(error, SearchError::MalformedBlock { .. }));
+}
+
+#[test]
+fn val_search_039_public_block_reconstruction_matches_search_branch_ranking() {
+    for encoding in [
+        "pca-rot-f32le",
+        "pca-rot-delta-f32le",
+        "pca-rot-delta-uq",
+        "pca-rot-delta-vbq",
+        "ambient-delta-uq",
+    ] {
+        let store = MemoryBlockStore::default();
+        let root = ebcp_fixture(&store, encoding);
+        let Block::Branch(root_branch) = &root else {
+            panic!("expected EBCP fixture root to be a branch block");
+        };
+        let descriptor =
+            parse_branch_ebcp_descriptor(&root_branch.embedding_spec, root_branch.ext.as_ref())
+                .unwrap()
+                .unwrap();
+        let best_child = root_branch
+            .entries
+            .iter()
+            .map(|entry| {
+                let reconstructed = reconstruct_logical_branch_embedding_f32(
+                    &entry.embedding,
+                    &root_branch.embedding_spec,
+                    Some(&descriptor),
+                )
+                .unwrap();
+                (entry.child, reconstructed[0])
+            })
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .unwrap()
+            .0;
+
+        let root_id = store.put(&root).unwrap();
+        let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+        let target = EncodedTargetEmbedding::new(
+            f32_embedding([1.0, 0.0]),
+            descriptor.logical_embedding_spec,
+        );
+        let result = searcher.search(&root_id, &target, 1, 1, &store).unwrap();
+        assert_eq!(result.leaves[0].leaf_block_id, best_child, "{encoding}");
+        assert_eq!(result.leaves[0].entry.content.body, b"left", "{encoding}");
+    }
 }
 
 fn run_single_result_search<F>(build_root: F) -> Result<SearchResult, SearchError>

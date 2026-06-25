@@ -121,6 +121,22 @@ The crate shall preserve and expose EBCP branch-encoding metadata and raw branch
 payload bytes to downstream indexing and search consumers without embedding
 indexing or search policy decisions into the block crate itself.
 
+The crate shall also expose a canonical public helper that reconstructs the
+logical branch embedding values for each supported stored branch-embedding
+encoding without requiring downstream consumers to duplicate encoding-specific
+decode logic.
+
+### REQ-BLOCK-CRATE-019
+
+For a supported stored branch embedding, the crate shall provide a stable public
+reconstruction surface that accepts the stored `EmbeddingSpec`, the stored
+payload bytes, and any required parsed EBCP descriptor metadata and returns the
+logical ambient-space `f32` vector used for comparison.
+
+That surface shall fail explicitly when the stored encoding is unsupported for
+logical `f32` reconstruction or when the stored payload bytes or EBCP metadata
+are malformed or inconsistent.
+
 ## Out of Scope
 
 This crate does not define or own:

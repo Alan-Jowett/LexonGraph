@@ -6,7 +6,7 @@ use lexongraph_block::{
     Block, BlockError, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpQuantization,
     EbcpRotation, EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1, build_branch_block,
     build_leaf_block, compute_block_hash, deserialize_block, ebcp_extension_map, into_entries,
-    parse_branch_ebcp_descriptor, serialize_block,
+    parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32, serialize_block,
 };
 
 #[test]
@@ -728,6 +728,87 @@ fn val_027_ambient_delta_uq_round_trip_without_rotation_metadata() {
         }
         TypedEntries::Leaf(_, _) => panic!("expected a branch block"),
     }
+}
+
+#[test]
+fn val_028_branch_embedding_reconstruction_returns_logical_f32_vectors() {
+    let f16_values = reconstruct_logical_branch_embedding_f32(
+        &[0x00, 0x3C, 0x00, 0xC0],
+        &embedding_spec("f16le"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(f16_values, vec![1.0, -2.0]);
+
+    let i8_values =
+        reconstruct_logical_branch_embedding_f32(&[0x7F, 0x80], &embedding_spec("i8"), None)
+            .unwrap();
+    assert_eq!(i8_values, vec![127.0, -128.0]);
+
+    let rotated_descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        base_centroid: Some(vec![0.5, 0.5]),
+        rotation: Some(EbcpRotation {
+            matrix_format: "f32le-row-major".into(),
+            matrix: vec![1.0, 0.0, 0.0, 1.0],
+        }),
+        quantization: None,
+    };
+    let rotated_values = reconstruct_logical_branch_embedding_f32(
+        &[0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0xBF],
+        &embedding_spec("pca-rot-delta-f32le"),
+        Some(&rotated_descriptor),
+    )
+    .unwrap();
+    assert_eq!(rotated_values, vec![1.0, 0.0]);
+
+    let ambient_descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        base_centroid: Some(vec![0.5, 0.5]),
+        rotation: None,
+        quantization: Some(EbcpQuantization::Uniform {
+            bit_width: 8,
+            scale_factors: vec![1.0 / 127.0, 1.0 / 127.0],
+        }),
+    };
+    let ambient_values = reconstruct_logical_branch_embedding_f32(
+        &[0xFF, 0x01],
+        &embedding_spec("ambient-delta-uq"),
+        Some(&ambient_descriptor),
+    )
+    .unwrap();
+    assert_eq!(ambient_values, vec![1.5, -0.5]);
+}
+
+#[test]
+fn val_029_branch_embedding_reconstruction_fails_explicitly_for_unsupported_or_malformed_inputs() {
+    let missing_descriptor = reconstruct_logical_branch_embedding_f32(
+        &[0x00, 0x00, 0x80, 0x3F],
+        &embedding_spec("pca-rot-f32le"),
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(missing_descriptor, BlockError::NonConforming(_)));
+
+    let bad_f32_payload = reconstruct_logical_branch_embedding_f32(
+        &[0x00, 0x00, 0x80],
+        &embedding_spec("f32le"),
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(bad_f32_payload, BlockError::InvalidEntryShape(_)));
+
+    let pq4 = reconstruct_logical_branch_embedding_f32(&[0xAB], &embedding_spec("pq4"), None)
+        .unwrap_err();
+    assert!(matches!(pq4, BlockError::UnsupportedValue(_)));
 }
 
 #[test]

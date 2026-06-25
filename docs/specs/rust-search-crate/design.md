@@ -388,10 +388,10 @@ When a visited non-leaf block uses one of the EBCP branch encodings, the
 searcher interprets branch-entry payload bytes through the protocol-owned EBCP
 metadata before those entries participate in ranking.
 
-The searcher may realize that interpretation either by reconstructing the
-logical ambient-space branch embeddings directly or by performing an equivalent
-comparison against the target embedding that yields the same deterministic
-ordering.
+The searcher realizes that interpretation through the canonical logical-branch
+reconstruction surface exposed by `lexongraph-block`, then compares those
+logical ambient-space branch embeddings against the target embedding in a way
+that yields the required deterministic ordering.
 
 ### DSG-SEARCH-027 `EBCP support boundary`
 
@@ -417,6 +417,15 @@ For the lossy EBCP encodings `pca-rot-delta-uq`, `pca-rot-delta-vbq`, and
 same topology under uncompressed branch centroids is the score distortion
 introduced by the protocol-defined approximation of the branch embeddings
 themselves.
+
+### DSG-SEARCH-030 `Reconstruction ownership boundary`
+
+`lexongraph-block` owns stored branch-embedding reconstruction semantics, while
+the search crate owns ranking, traversal, deduplication, and termination.
+
+Search therefore depends on the block crate's public reconstruction surface for
+supported EBCP branch encodings rather than re-implementing those protocol
+semantics privately.
 
 ## Traceability
 
@@ -445,3 +454,4 @@ themselves.
 | DSG-SEARCH-027 | REQ-SEARCH-033, REQ-SEARCH-035 |
 | DSG-SEARCH-028 | REQ-SEARCH-035, REQ-SEARCH-036 |
 | DSG-SEARCH-029 | REQ-SEARCH-035, REQ-SEARCH-037 |
+| DSG-SEARCH-030 | REQ-SEARCH-038 |
