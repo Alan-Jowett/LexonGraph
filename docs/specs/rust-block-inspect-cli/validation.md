@@ -5,7 +5,8 @@
 ## Status
 
 Draft validation specification for a Rust workspace binary crate that inspects
-one LexonGraph block and renders a JSON debug view.
+stored LexonGraph blocks and renders JSON debug views for either one-block
+inspection or rooted tree analysis.
 
 ## Validation Scope
 

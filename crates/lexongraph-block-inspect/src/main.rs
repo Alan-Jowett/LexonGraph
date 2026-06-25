@@ -40,7 +40,7 @@ enum BackendCommand {
         #[arg(long, default_value_t = 64, value_name = "COUNT")]
         expected_max_children: usize,
         #[arg(value_name = "ROOT_HASH")]
-        block_hash: String,
+        root_hash: String,
     },
 }
 
@@ -104,11 +104,11 @@ fn run(cli: Cli) -> Result<String, InspectError> {
         BackendCommand::FsTree {
             store_root,
             expected_max_children,
-            block_hash,
+            root_hash,
         } => {
-            let block_hash = parse_block_hash(&block_hash)?;
+            let root_hash = parse_block_hash(&root_hash)?;
             let store = open_filesystem_store(&store_root)?;
-            analyze_tree(&store, &block_hash, expected_max_children)?
+            analyze_tree(&store, &root_hash, expected_max_children)?
         }
     };
 
