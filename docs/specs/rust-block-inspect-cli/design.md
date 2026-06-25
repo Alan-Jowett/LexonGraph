@@ -134,7 +134,8 @@ The fixed inspection flow is:
 6. map `validated_block` into the inspection document
 7. serialize the inspection document as JSON
 
-The CLI does not recursively inspect referenced child blocks in this revision.
+The single-block inspection command does not recursively inspect referenced
+child blocks in this revision.
 
 ### DSG-INSPECT-009 `Failure mapping`
 

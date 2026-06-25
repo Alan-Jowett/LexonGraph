@@ -706,7 +706,7 @@ fn insert_largest_block(largest_blocks: &mut Vec<LargestBlock>, block: LargestBl
             .serialized_bytes
             .cmp(&left.serialized_bytes)
             .then_with(|| right.level.cmp(&left.level))
-            .then_with(|| left.hash.to_string().cmp(&right.hash.to_string()))
+            .then_with(|| left.hash.as_bytes().cmp(right.hash.as_bytes()))
     });
     largest_blocks.truncate(16);
 }
