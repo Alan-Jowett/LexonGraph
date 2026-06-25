@@ -1585,6 +1585,7 @@ fn termination_label(kind: SearchTerminationKind) -> String {
         SearchTerminationKind::MalformedBlock => "malformed-block",
         SearchTerminationKind::IncompatibleEmbedding => "incompatible-embedding",
         SearchTerminationKind::ScoringFailure => "scoring-failure",
+        SearchTerminationKind::FrontierSelectionFailure => "frontier-selection-failure",
     }
     .into()
 }
