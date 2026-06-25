@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value as CborValue;
 use clap::{Parser, Subcommand};
 use lexongraph_block::{
     Block, BlockHash, BranchBlock, BranchEntry, Content, EmbeddingSpec, ExtensionMap, LeafBlock,
-    LeafEntry, Metadata, ValidatedBlock,
+    LeafEntry, Metadata, ValidatedBlock, serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -15,7 +16,7 @@ use serde_json::{Map, Number, Value};
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about = "Inspect one stored LexonGraph block and emit a JSON debug view"
+    about = "Inspect stored LexonGraph blocks or analyze a rooted block tree"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -30,6 +31,16 @@ enum BackendCommand {
         store_root: PathBuf,
         #[arg(value_name = "BLOCK_HASH")]
         block_hash: String,
+    },
+    /// Traverse a stored block tree and emit structural and size statistics as JSON.
+    #[command(name = "fs-tree")]
+    FsTree {
+        #[arg(long, value_name = "PATH")]
+        store_root: PathBuf,
+        #[arg(long, default_value_t = 64, value_name = "COUNT")]
+        expected_max_children: usize,
+        #[arg(value_name = "ROOT_HASH")]
+        root_hash: String,
     },
 }
 
@@ -89,6 +100,15 @@ fn run(cli: Cli) -> Result<String, InspectError> {
             let block_hash = parse_block_hash(&block_hash)?;
             let store = open_filesystem_store(&store_root)?;
             inspect_store(&store, &block_hash)?
+        }
+        BackendCommand::FsTree {
+            store_root,
+            expected_max_children,
+            root_hash,
+        } => {
+            let root_hash = parse_block_hash(&root_hash)?;
+            let store = open_filesystem_store(&store_root)?;
+            analyze_tree(&store, &root_hash, expected_max_children)?
         }
     };
 
@@ -154,8 +174,15 @@ fn open_filesystem_store(store_root: &Path) -> Result<FilesystemBlockStore, Insp
 }
 
 fn inspect_store(store: &impl BlockStore, block_hash: &BlockHash) -> Result<Value, InspectError> {
+    load_validated_block(store, block_hash).and_then(render_inspection_document)
+}
+
+fn load_validated_block(
+    store: &impl BlockStore,
+    block_hash: &BlockHash,
+) -> Result<ValidatedBlock, InspectError> {
     match store.get(block_hash) {
-        Ok(Some(validated_block)) => render_inspection_document(validated_block),
+        Ok(Some(validated_block)) => Ok(validated_block),
         Ok(None) => Err(InspectError::BlockAbsence(*block_hash)),
         Err(BlockStoreError::BackendFailure(message)) => {
             Err(InspectError::BackendRetrieval(message))
@@ -170,6 +197,199 @@ fn inspect_store(store: &impl BlockStore, block_hash: &BlockHash) -> Result<Valu
             format!("unexpected block store contract violation: {error}"),
         )),
     }
+}
+
+fn analyze_tree(
+    store: &impl BlockStore,
+    root_hash: &BlockHash,
+    expected_max_children: usize,
+) -> Result<Value, InspectError> {
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::from([*root_hash]);
+    let mut repeated_reference_count = 0_usize;
+    let mut branch_block_count = 0_usize;
+    let mut leaf_block_count = 0_usize;
+    let mut level_stats = BTreeMap::<u64, LevelStats>::new();
+    let mut max_children_in_block = 0_u64;
+    let mut max_serialized_bytes = 0_u64;
+    let mut max_child_count_block = None::<BranchChildCountSummary>;
+    let mut largest_blocks = Vec::<LargestBlock>::new();
+    let mut child_cap_violations = Vec::<BranchChildCountSummary>::new();
+    let mut root_level = None::<u64>;
+
+    while let Some(block_hash) = queue.pop_front() {
+        if !visited.insert(block_hash) {
+            repeated_reference_count += 1;
+            continue;
+        }
+
+        let validated = load_validated_block(store, &block_hash)?;
+        let serialized = serialize_block(&validated.block)
+            .map_err(|error| InspectError::InspectionBoundary(error.to_string()))?;
+        let serialized_bytes = u64::try_from(serialized.bytes.len()).map_err(|_| {
+            InspectError::InspectionBoundary("serialized block is too large".to_owned())
+        })?;
+
+        max_serialized_bytes = max_serialized_bytes.max(serialized_bytes);
+        insert_largest_block(
+            &mut largest_blocks,
+            LargestBlock {
+                hash: validated.hash,
+                level: block_level(&validated.block),
+                serialized_bytes,
+                child_count: branch_child_count(&validated.block)?,
+                kind: block_kind(&validated.block),
+            },
+        );
+
+        match validated.block {
+            Block::Branch(branch) => {
+                if root_level.is_none() {
+                    root_level = Some(branch.level);
+                }
+                branch_block_count += 1;
+                let child_count = u64::try_from(branch.entries.len()).map_err(|_| {
+                    InspectError::InspectionBoundary(
+                        "branch child count does not fit in u64".to_owned(),
+                    )
+                })?;
+                max_children_in_block = max_children_in_block.max(child_count);
+
+                if max_child_count_block
+                    .as_ref()
+                    .is_none_or(|current| child_count > current.child_count)
+                {
+                    max_child_count_block = Some(BranchChildCountSummary {
+                        hash: validated.hash,
+                        level: branch.level,
+                        child_count,
+                        serialized_bytes,
+                    });
+                }
+
+                if branch.entries.len() > expected_max_children {
+                    child_cap_violations.push(BranchChildCountSummary {
+                        hash: validated.hash,
+                        level: branch.level,
+                        child_count,
+                        serialized_bytes,
+                    });
+                }
+
+                level_stats
+                    .entry(branch.level)
+                    .or_default()
+                    .observe_branch(child_count, serialized_bytes);
+
+                for entry in branch.entries {
+                    queue.push_back(entry.child);
+                }
+            }
+            Block::Leaf(leaf) => {
+                if root_level.is_none() {
+                    root_level = Some(leaf.level);
+                }
+                leaf_block_count += 1;
+                level_stats
+                    .entry(leaf.level)
+                    .or_default()
+                    .observe_leaf(serialized_bytes);
+            }
+        }
+    }
+
+    let unique_block_count = branch_block_count + leaf_block_count;
+    let root_level = root_level.ok_or_else(|| {
+        InspectError::InspectionBoundary("rooted tree analysis produced no root level".to_owned())
+    })?;
+
+    Ok(object([
+        ("root_hash", Value::String(root_hash.to_string())),
+        ("root_level", Value::Number(Number::from(root_level))),
+        (
+            "expected_max_children",
+            Value::Number(Number::from(u64::try_from(expected_max_children).map_err(
+                |_| InspectError::InspectionBoundary("child cap does not fit in u64".to_owned()),
+            )?)),
+        ),
+        (
+            "unique_block_count",
+            Value::Number(Number::from(u64::try_from(unique_block_count).map_err(
+                |_| InspectError::InspectionBoundary("block count does not fit in u64".to_owned()),
+            )?)),
+        ),
+        (
+            "branch_block_count",
+            Value::Number(Number::from(u64::try_from(branch_block_count).map_err(
+                |_| InspectError::InspectionBoundary("branch count does not fit in u64".to_owned()),
+            )?)),
+        ),
+        (
+            "leaf_block_count",
+            Value::Number(Number::from(u64::try_from(leaf_block_count).map_err(
+                |_| InspectError::InspectionBoundary("leaf count does not fit in u64".to_owned()),
+            )?)),
+        ),
+        (
+            "repeated_reference_count",
+            Value::Number(Number::from(
+                u64::try_from(repeated_reference_count).map_err(|_| {
+                    InspectError::InspectionBoundary(
+                        "repeated reference count does not fit in u64".to_owned(),
+                    )
+                })?,
+            )),
+        ),
+        (
+            "max_children_in_block",
+            Value::Number(Number::from(max_children_in_block)),
+        ),
+        (
+            "blocks_exceeding_child_cap_count",
+            Value::Number(Number::from(
+                u64::try_from(child_cap_violations.len()).map_err(|_| {
+                    InspectError::InspectionBoundary(
+                        "child-cap violation count does not fit in u64".to_owned(),
+                    )
+                })?,
+            )),
+        ),
+        (
+            "largest_serialized_block_bytes",
+            Value::Number(Number::from(max_serialized_bytes)),
+        ),
+        (
+            "block_with_max_children",
+            render_optional_child_count_summary(max_child_count_block),
+        ),
+        (
+            "levels",
+            Value::Array(
+                level_stats
+                    .into_iter()
+                    .map(|(level, stats)| stats.render(level))
+                    .collect(),
+            ),
+        ),
+        (
+            "blocks_exceeding_child_cap",
+            Value::Array(
+                child_cap_violations
+                    .into_iter()
+                    .map(render_child_count_violation)
+                    .collect(),
+            ),
+        ),
+        (
+            "largest_blocks",
+            Value::Array(
+                largest_blocks
+                    .into_iter()
+                    .map(render_largest_block)
+                    .collect(),
+            ),
+        ),
+    ]))
 }
 
 fn render_inspection_document(validated_block: ValidatedBlock) -> Result<Value, InspectError> {
@@ -336,4 +556,178 @@ fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
         object.insert(key.to_owned(), value);
     }
     Value::Object(object)
+}
+
+#[derive(Default)]
+struct LevelStats {
+    block_count: u64,
+    branch_block_count: u64,
+    leaf_block_count: u64,
+    total_children: u64,
+    min_children: Option<u64>,
+    max_children: u64,
+    total_serialized_bytes: u64,
+    max_serialized_bytes: u64,
+}
+
+impl LevelStats {
+    fn observe_branch(&mut self, child_count: u64, serialized_bytes: u64) {
+        self.block_count = self.block_count.saturating_add(1);
+        self.branch_block_count = self.branch_block_count.saturating_add(1);
+        self.total_children = self.total_children.saturating_add(child_count);
+        self.min_children = Some(
+            self.min_children
+                .map_or(child_count, |current| current.min(child_count)),
+        );
+        self.max_children = self.max_children.max(child_count);
+        self.total_serialized_bytes = self.total_serialized_bytes.saturating_add(serialized_bytes);
+        self.max_serialized_bytes = self.max_serialized_bytes.max(serialized_bytes);
+    }
+
+    fn observe_leaf(&mut self, serialized_bytes: u64) {
+        self.block_count = self.block_count.saturating_add(1);
+        self.leaf_block_count = self.leaf_block_count.saturating_add(1);
+        self.total_serialized_bytes = self.total_serialized_bytes.saturating_add(serialized_bytes);
+        self.max_serialized_bytes = self.max_serialized_bytes.max(serialized_bytes);
+    }
+
+    fn render(self, level: u64) -> Value {
+        object([
+            ("level", Value::Number(Number::from(level))),
+            ("block_count", Value::Number(Number::from(self.block_count))),
+            (
+                "branch_block_count",
+                Value::Number(Number::from(self.branch_block_count)),
+            ),
+            (
+                "leaf_block_count",
+                Value::Number(Number::from(self.leaf_block_count)),
+            ),
+            (
+                "total_children",
+                Value::Number(Number::from(self.total_children)),
+            ),
+            (
+                "min_children_per_branch",
+                self.min_children
+                    .map_or(Value::Null, |value| Value::Number(Number::from(value))),
+            ),
+            (
+                "max_children_per_branch",
+                if self.branch_block_count == 0 {
+                    Value::Null
+                } else {
+                    Value::Number(Number::from(self.max_children))
+                },
+            ),
+            (
+                "mean_children_per_branch",
+                if self.branch_block_count == 0 {
+                    Value::Null
+                } else {
+                    Value::Number(
+                        Number::from_f64(
+                            self.total_children as f64 / self.branch_block_count as f64,
+                        )
+                        .expect("finite branch mean"),
+                    )
+                },
+            ),
+            (
+                "total_serialized_bytes",
+                Value::Number(Number::from(self.total_serialized_bytes)),
+            ),
+            (
+                "max_serialized_bytes",
+                Value::Number(Number::from(self.max_serialized_bytes)),
+            ),
+        ])
+    }
+}
+
+struct BranchChildCountSummary {
+    hash: BlockHash,
+    level: u64,
+    child_count: u64,
+    serialized_bytes: u64,
+}
+
+struct LargestBlock {
+    hash: BlockHash,
+    level: u64,
+    serialized_bytes: u64,
+    child_count: Option<u64>,
+    kind: &'static str,
+}
+
+fn block_level(block: &Block) -> u64 {
+    match block {
+        Block::Branch(branch) => branch.level,
+        Block::Leaf(leaf) => leaf.level,
+    }
+}
+
+fn branch_child_count(block: &Block) -> Result<Option<u64>, InspectError> {
+    match block {
+        Block::Branch(branch) => u64::try_from(branch.entries.len()).map(Some).map_err(|_| {
+            InspectError::InspectionBoundary("branch child count does not fit in u64".to_owned())
+        }),
+        Block::Leaf(_) => Ok(None),
+    }
+}
+
+fn block_kind(block: &Block) -> &'static str {
+    match block {
+        Block::Branch(_) => "branch",
+        Block::Leaf(_) => "leaf",
+    }
+}
+
+fn render_optional_child_count_summary(summary: Option<BranchChildCountSummary>) -> Value {
+    summary.map_or(Value::Null, render_child_count_violation)
+}
+
+fn render_child_count_violation(violation: BranchChildCountSummary) -> Value {
+    object([
+        ("hash", Value::String(violation.hash.to_string())),
+        ("level", Value::Number(Number::from(violation.level))),
+        (
+            "child_count",
+            Value::Number(Number::from(violation.child_count)),
+        ),
+        (
+            "serialized_bytes",
+            Value::Number(Number::from(violation.serialized_bytes)),
+        ),
+    ])
+}
+
+fn insert_largest_block(largest_blocks: &mut Vec<LargestBlock>, block: LargestBlock) {
+    largest_blocks.push(block);
+    largest_blocks.sort_by(|left, right| {
+        right
+            .serialized_bytes
+            .cmp(&left.serialized_bytes)
+            .then_with(|| right.level.cmp(&left.level))
+            .then_with(|| left.hash.as_bytes().cmp(right.hash.as_bytes()))
+    });
+    largest_blocks.truncate(16);
+}
+
+fn render_largest_block(block: LargestBlock) -> Value {
+    object([
+        ("hash", Value::String(block.hash.to_string())),
+        ("kind", Value::String(block.kind.to_owned())),
+        ("level", Value::Number(Number::from(block.level))),
+        (
+            "serialized_bytes",
+            Value::Number(Number::from(block.serialized_bytes)),
+        ),
+        (
+            "child_count",
+            block
+                .child_count
+                .map_or(Value::Null, |value| Value::Number(Number::from(value))),
+        ),
+    ])
 }

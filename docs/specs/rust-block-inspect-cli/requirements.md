@@ -110,10 +110,33 @@ filesystem backend.
 
 ### REQ-INSPECT-011
 
-This revision shall remain read-only and single-block in scope.
+This revision shall remain read-only.
 
-This crate shall not add recursive traversal, search behavior, block mutation,
-backend enumeration, listing, or deletion behavior.
+This crate shall not add block mutation, backend enumeration, unrestricted
+store listing, or deletion behavior.
+
+### REQ-INSPECT-013
+
+The CLI shall support a rooted tree-analysis mode for the filesystem-backed
+store that starts from a caller-supplied root block hash and traverses child
+references through the verified `BlockStore` retrieval path.
+
+### REQ-INSPECT-014
+
+The rooted tree-analysis mode shall emit JSON reporting at least:
+
+- the requested root hash
+- the decoded root level
+- total unique block count
+- branch and leaf block counts
+- per-level child-count and serialized-size summaries
+- the largest serialized blocks encountered during traversal
+
+### REQ-INSPECT-015
+
+The rooted tree-analysis mode shall accept a caller-supplied expected maximum
+child count and shall report any traversed branch blocks whose realized child
+count exceeds that threshold.
 
 ### REQ-INSPECT-012
 
@@ -124,11 +147,10 @@ validation surface defined in `docs/specs/rust-block-inspect-cli/validation.md`.
 
 This crate does not define or own:
 
-- recursive tree walking
-- search traversal or ranking
 - block mutation or repair
 - block-store trait changes
-- backend enumeration or listing
+- search traversal or ranking without an explicit root block
+- backend enumeration or unrestricted listing
 - a protocol-stable interchange format distinct from the documented debug JSON
   encoding
 
