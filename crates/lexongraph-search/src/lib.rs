@@ -32,11 +32,11 @@
 //! let _ = std::any::type_name::<conformance::ConformanceError>();
 //! ```
 
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
+use std::sync::Arc;
 
 pub use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry};
 
@@ -251,25 +251,6 @@ pub enum PublishedDefaultFrontierSelector {
     GeometryAware,
 }
 
-impl FrontierSelector<CosineScore> for PublishedDefaultFrontierSelector {
-    type Error = GeometryAwareFrontierSelectionError;
-
-    fn select(
-        &self,
-        frontier: &[ExpandableFrontierCandidate<'_, CosineScore>],
-        w: usize,
-    ) -> Result<Vec<BlockHash>, Self::Error> {
-        match self {
-            Self::TopW => Ok(frontier
-                .iter()
-                .take(w)
-                .map(|candidate| candidate.child)
-                .collect()),
-            Self::GeometryAware => GeometryAwareFrontierSelector.select(frontier, w),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PublishedProfileVersion {
     pub major: u64,
@@ -314,13 +295,7 @@ impl PublishedSearchProfile {
         EncodedTargetEmbedding::new(bytes, embedding_spec)
     }
 
-    pub fn searcher(
-        &self,
-    ) -> Searcher<
-        DefaultEmbeddingCompatibility,
-        DefaultCandidateScorer,
-        PublishedDefaultFrontierSelector,
-    > {
+    pub fn searcher(&self) -> Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer> {
         Searcher::with_frontier_selector(
             DefaultEmbeddingCompatibility,
             DefaultCandidateScorer,
@@ -366,11 +341,7 @@ impl std::error::Error for SearchProfileError {}
 #[derive(Clone, Debug)]
 pub struct ProfiledSearcher {
     profile: PublishedSearchProfile,
-    inner: Searcher<
-        DefaultEmbeddingCompatibility,
-        DefaultCandidateScorer,
-        PublishedDefaultFrontierSelector,
-    >,
+    inner: Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
 }
 
 impl ProfiledSearcher {
@@ -686,16 +657,39 @@ impl std::error::Error for SearchError {
     }
 }
 
+impl<Score> FrontierSelector<Score> for PublishedDefaultFrontierSelector {
+    type Error = GeometryAwareFrontierSelectionError;
+
+    fn select(
+        &self,
+        frontier: &[ExpandableFrontierCandidate<'_, Score>],
+        w: usize,
+    ) -> Result<Vec<BlockHash>, Self::Error> {
+        match self {
+            Self::TopW => Ok(frontier
+                .iter()
+                .take(w)
+                .map(|candidate| candidate.child)
+                .collect()),
+            Self::GeometryAware => GeometryAwareFrontierSelector.select(frontier, w),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct Searcher<EC, CS, FS = DefaultTopWFrontierSelector> {
+pub struct Searcher<EC, CS, FS = PublishedDefaultFrontierSelector> {
     compatibility: EC,
     scorer: CS,
     frontier_selector: FS,
 }
 
-impl<EC, CS> Searcher<EC, CS, DefaultTopWFrontierSelector> {
+impl<EC, CS> Searcher<EC, CS> {
     pub fn new(compatibility: EC, scorer: CS) -> Self {
-        Self::with_frontier_selector(compatibility, scorer, DefaultTopWFrontierSelector)
+        Self::with_frontier_selector(
+            compatibility,
+            scorer,
+            PublishedDefaultFrontierSelector::TopW,
+        )
     }
 }
 
@@ -962,46 +956,60 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
             })?;
 
         match entries {
-            LoadedEntries::Branch(entries) => entries
-                .into_iter()
-                .map(|entry| {
-                    let candidate_embedding =
-                        match branch_ebcp.as_ref() {
-                            Some(descriptor) => {
-                                let reconstructed = reconstruct_logical_branch_embedding_f32(
-                                    &entry.embedding,
-                                    &metadata.embedding_spec,
-                                    Some(descriptor),
-                                )
+            LoadedEntries::Branch(entries) => {
+                let geometry_spec = Arc::new(comparison_spec.clone());
+                entries
+                    .into_iter()
+                    .map(|entry| match branch_ebcp.as_ref() {
+                        Some(descriptor) => {
+                            let reconstructed = reconstruct_logical_branch_embedding_f32(
+                                &entry.embedding,
+                                &metadata.embedding_spec,
+                                Some(descriptor),
+                            )
+                            .map_err(|error| {
+                                SearchError::ScoringFailure {
+                                    block_id: *block_id,
+                                    message: error.to_string(),
+                                }
+                            })?;
+                            let embedding = reconstructed
+                                .iter()
+                                .flat_map(|value| value.to_le_bytes())
+                                .collect::<Vec<_>>();
+                            self.scorer
+                                .score(target, &embedding, comparison_spec)
+                                .map(|score| SearchCandidate::Branch {
+                                    child: entry.child,
+                                    depth: depth + 1,
+                                    level: metadata.level,
+                                    embedding,
+                                    embedding_spec: Arc::clone(&geometry_spec),
+                                    score,
+                                })
                                 .map_err(|error| SearchError::ScoringFailure {
                                     block_id: *block_id,
                                     message: error.to_string(),
-                                })?;
-                                Cow::Owned(
-                                    reconstructed
-                                        .iter()
-                                        .flat_map(|value| value.to_le_bytes())
-                                        .collect::<Vec<_>>(),
-                                )
-                            }
-                            None => Cow::Borrowed(entry.embedding.as_slice()),
-                        };
-                    self.scorer
-                        .score(target, &candidate_embedding, comparison_spec)
-                        .map(|score| SearchCandidate::Branch {
-                            child: entry.child,
-                            depth: depth + 1,
-                            level: metadata.level,
-                            embedding: candidate_embedding.into_owned(),
-                            embedding_spec: comparison_spec.clone(),
-                            score,
-                        })
-                        .map_err(|error| SearchError::ScoringFailure {
-                            block_id: *block_id,
-                            message: error.to_string(),
-                        })
-                })
-                .collect(),
+                                })
+                        }
+                        None => self
+                            .scorer
+                            .score(target, &entry.embedding, comparison_spec)
+                            .map(|score| SearchCandidate::Branch {
+                                child: entry.child,
+                                depth: depth + 1,
+                                level: metadata.level,
+                                embedding: entry.embedding,
+                                embedding_spec: Arc::clone(&geometry_spec),
+                                score,
+                            })
+                            .map_err(|error| SearchError::ScoringFailure {
+                                block_id: *block_id,
+                                message: error.to_string(),
+                            }),
+                    })
+                    .collect()
+            }
             LoadedEntries::Leaf(entries) => entries
                 .into_iter()
                 .map(|entry| {
@@ -1053,7 +1061,7 @@ enum SearchCandidate<Score> {
         depth: usize,
         level: u64,
         embedding: Vec<u8>,
-        embedding_spec: EmbeddingSpec,
+        embedding_spec: Arc<EmbeddingSpec>,
         score: Score,
     },
     Leaf {
@@ -1218,7 +1226,7 @@ fn deduplicated_expandable_frontier<'a, Score: Ord>(
             level: *level,
             score,
             embedding,
-            embedding_spec,
+            embedding_spec: embedding_spec.as_ref(),
         });
     }
 
