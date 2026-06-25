@@ -10,7 +10,7 @@ one LexonGraph block and renders a JSON debug view.
 ## Validation Scope
 
 These validation entries define the expected conformance surface for the inspect
-CLI crate.
+CLI crate, including both one-block inspection and rooted tree analysis.
 
 Block-validity, block-identity, and backend-neutral retrieval expectations
 remain normatively defined by `docs/protocol/blocks.md`,
@@ -33,10 +33,13 @@ artifact for this specification package.
 Inspect the CLI help or argument surface for the inspect binary.
 
 **Pass condition:** the CLI requires a backend selector and a target block hash,
-accepts backend-specific parameters outside the `BlockStore` trait boundary, and
-exposes the filesystem backend's store-root input in this revision.
+accepts backend-specific parameters outside the `BlockStore` trait boundary,
+exposes the filesystem backend's store-root input in this revision, and
+surfaces the rooted tree-analysis command together with its expected child-cap
+parameter.
 
-**Traces to:** REQ-INSPECT-003, REQ-INSPECT-004, REQ-INSPECT-010
+**Traces to:** REQ-INSPECT-003, REQ-INSPECT-004, REQ-INSPECT-010,
+REQ-INSPECT-013, REQ-INSPECT-015
 
 ### VAL-INSPECT-003
 
@@ -170,3 +173,26 @@ value for that block.
 
 **Traces to:** REQ-INSPECT-004, REQ-INSPECT-005, REQ-INSPECT-006,
 REQ-INSPECT-007
+
+### VAL-INSPECT-016
+
+Run the rooted tree-analysis command against a filesystem-backed store
+containing a small multi-level block tree.
+
+**Pass condition:** the CLI succeeds and emits one JSON document containing the
+requested root hash, decoded root level, unique block counts, and per-level
+child-count summaries for the traversed tree.
+
+**Traces to:** REQ-INSPECT-013, REQ-INSPECT-014
+
+### VAL-INSPECT-017
+
+Run the rooted tree-analysis command against a filesystem-backed store
+containing at least one branch block whose realized child count exceeds a
+caller-supplied expected maximum child count.
+
+**Pass condition:** the CLI succeeds and reports the violating branch block in
+its child-cap findings rather than silently normalizing or omitting the
+observed realized child count.
+
+**Traces to:** REQ-INSPECT-014, REQ-INSPECT-015

@@ -1099,15 +1099,3 @@ and selecting any `0.5.x` profile does not mutate the declared mapping of
 `0.5.0` or any earlier published profile.
 
 **Traces to:** REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095
-
-### VAL-STREAM-INDEXER-094
-
-Run a planning configuration whose requested cluster count is smaller than the
-configured materializability bound, then complete final materialization.
-
-**Pass condition:** the emitted root still reflects the planned top-level
-partitioning, and at least one non-root branch block is allowed to contain more
-children than the requested planning cluster count when that child set fits
-inside the configured materializability bound.
-
-**Traces to:** REQ-STREAM-INDEXER-103

@@ -26,13 +26,14 @@ The crate owns:
 - backend selection and backend-specific store construction
 - inspection-oriented success and failure reporting
 - debug JSON rendering of typed block values
+- rooted tree-analysis reporting
 
 The crate does not own:
 
 - block wire encoding or block-ID derivation
 - block validation rules beyond invoking subordinate crates
 - storage backend implementations
-- search or recursive traversal behavior
+
 
 ## External Dependencies
 
@@ -157,9 +158,50 @@ terminates successfully.
 Failure writes a human-readable error to standard error and terminates with a
 non-zero exit status.
 
+### DSG-INSPECT-011 `Rooted tree-analysis CLI shape`
+
+The runtime boundary also includes an explicit rooted tree-analysis command for
+the filesystem backend.
+
+That command accepts:
+
+- a filesystem store-root path
+- a required root block hash
+- a caller-supplied expected maximum child count used only for analysis
+
+### DSG-INSPECT-012 `Verified traversal boundary`
+
+Rooted tree analysis traverses child references only by repeatedly issuing
+verified `get` calls through the `BlockStore` contract.
+
+The CLI does not decode backend files directly, infer missing blocks, or bypass
+subordinate validation logic while walking the tree.
+
+### DSG-INSPECT-013 `Tree-analysis reporting contract`
+
+The rooted tree-analysis success document reports aggregate structure rather
+than a full recursive block dump.
+
+At minimum it includes:
+
+- the requested root hash and decoded root level
+- unique block, branch-block, and leaf-block counts
+- per-level summaries of branch child counts and serialized block sizes
+- a list of the largest traversed blocks
+- a list of branch blocks whose realized child count exceeds the caller's
+  expected maximum child count
+
+### DSG-INSPECT-014 `Read-only analysis scope`
+
+The rooted tree-analysis command remains read-only and explicitly rooted.
+
+It may traverse descendants reachable from the requested root block, but it
+does not add mutation, repair, unrestricted store enumeration, or search
+behavior outside that rooted traversal.
+
 ## JSON Rendering
 
-### DSG-INSPECT-011 `Typed block rendering`
+### DSG-INSPECT-015 `Typed block rendering`
 
 The `block` field renders the typed block content in a shape that preserves the
 distinction between child-bearing and leaf blocks while keeping common block
@@ -176,12 +218,12 @@ At minimum:
 All byte-bearing fields use the debug JSON mapping rather than raw JSON
 strings.
 
-### DSG-INSPECT-012 `Implementation realization`
+### DSG-INSPECT-016 `Implementation realization`
 
 This specification package shall be realized as a Rust workspace binary crate
 named `lexongraph-block-inspect` in the repository.
 
-### DSG-INSPECT-013 `Verification realization`
+### DSG-INSPECT-017 `Verification realization`
 
 The repository shall include automated verification artifacts that realize the
 validation entries in `docs/specs/rust-block-inspect-cli/validation.md`.
@@ -197,6 +239,9 @@ validation entries in `docs/specs/rust-block-inspect-cli/validation.md`.
 | DSG-INSPECT-006..007 | REQ-INSPECT-003, REQ-INSPECT-004, REQ-INSPECT-005, REQ-INSPECT-010 |
 | DSG-INSPECT-008 | REQ-INSPECT-005, REQ-INSPECT-006, REQ-INSPECT-011 |
 | DSG-INSPECT-009..010 | REQ-INSPECT-009 |
-| DSG-INSPECT-011 | REQ-INSPECT-007, REQ-INSPECT-008 |
-| DSG-INSPECT-012 | REQ-INSPECT-001 |
-| DSG-INSPECT-013 | REQ-INSPECT-012 |
+| DSG-INSPECT-011 | REQ-INSPECT-003, REQ-INSPECT-004, REQ-INSPECT-010, REQ-INSPECT-013, REQ-INSPECT-015 |
+| DSG-INSPECT-012 | REQ-INSPECT-005, REQ-INSPECT-006, REQ-INSPECT-013 |
+| DSG-INSPECT-013..014 | REQ-INSPECT-011, REQ-INSPECT-014, REQ-INSPECT-015 |
+| DSG-INSPECT-015 | REQ-INSPECT-007, REQ-INSPECT-008 |
+| DSG-INSPECT-016 | REQ-INSPECT-001 |
+| DSG-INSPECT-017 | REQ-INSPECT-012 |
