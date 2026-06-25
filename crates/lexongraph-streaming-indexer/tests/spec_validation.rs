@@ -44,12 +44,12 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_4_6, PUBLISHED_PROFILE_V0_4_7, PUBLISHED_PROFILE_V0_4_8,
     PUBLISHED_PROFILE_V0_4_9, PUBLISHED_PROFILE_V0_5_0, PUBLISHED_PROFILE_V0_5_1,
     PUBLISHED_PROFILE_V0_5_2, PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4,
-    PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy, PublishedHierarchyMetric,
-    PublishedPlanningStrategy, PublishedProfilePlanningPolicy, PublishedProfileVersion,
-    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
-    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
-    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
-    published_indexing_profile,
+    PUBLISHED_PROFILE_V0_5_5, PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy,
+    PublishedHierarchyMetric, PublishedPlanningStrategy, PublishedProfilePlanningPolicy,
+    PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
+    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingStatusState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -4343,6 +4343,36 @@ async fn val_stream_indexer_092_published_profile_v0_5_4_uses_root_variable_quan
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_092b_published_profile_v0_5_5_uses_ambient_uniform_quantization_budget()
+{
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_5_5,
+        PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+            root_bits: 12,
+            interior_bits: 8,
+            lowest_routing_bits: 6,
+        },
+    );
+    let (store, result) = materialize_profile_root(PUBLISHED_PROFILE_V0_5_5).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "ambient-delta-uq");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert!(descriptor.rotation.is_none());
+            match descriptor.quantization.unwrap() {
+                EbcpQuantization::Uniform { bit_width, .. } => assert_eq!(bit_width, 12),
+                other => panic!("unexpected quantization: {other:?}"),
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
 #[test]
 fn val_stream_indexer_093_all_profiles_resolve_deterministically_with_0_5_ladder_included() {
     for version in [
@@ -4374,6 +4404,7 @@ fn val_stream_indexer_093_all_profiles_resolve_deterministically_with_0_5_ladder
         PUBLISHED_PROFILE_V0_5_2,
         PUBLISHED_PROFILE_V0_5_3,
         PUBLISHED_PROFILE_V0_5_4,
+        PUBLISHED_PROFILE_V0_5_5,
     ] {
         assert_eq!(
             published_indexing_profile(version).unwrap(),

@@ -7,6 +7,7 @@ use std::io::Cursor;
 use ciborium::de::from_reader;
 use ciborium::ser::into_writer;
 use ciborium::value::{Integer, Value};
+use half::f16;
 use sha2::{Digest, Sha256};
 
 pub const VERSION_1: u64 = 1;
@@ -128,7 +129,7 @@ pub struct EbcpDescriptor {
     pub version: u64,
     pub logical_embedding_spec: EmbeddingSpec,
     pub base_centroid: Option<Vec<f32>>,
-    pub rotation: EbcpRotation,
+    pub rotation: Option<EbcpRotation>,
     pub quantization: Option<EbcpQuantization>,
 }
 
@@ -249,7 +250,11 @@ impl std::error::Error for BlockError {}
 pub fn is_ebcp_encoding(encoding: &str) -> bool {
     matches!(
         encoding,
-        "pca-rot-f32le" | "pca-rot-delta-f32le" | "pca-rot-delta-uq" | "pca-rot-delta-vbq"
+        "pca-rot-f32le"
+            | "pca-rot-delta-f32le"
+            | "pca-rot-delta-uq"
+            | "pca-rot-delta-vbq"
+            | "ambient-delta-uq"
     )
 }
 
@@ -273,6 +278,41 @@ pub fn parse_branch_ebcp_descriptor(
         embedding_spec,
         descriptor,
     )?))
+}
+
+/// Reconstructs the logical branch embedding values used for comparison.
+///
+/// For ordinary branch encodings, this decodes the stored payload directly into
+/// `f32` values. For EBCP encodings, this interprets the payload together with
+/// the parsed EBCP descriptor and returns the logical ambient-space `f32`
+/// vector defined by `docs/protocol/ebcp.md`.
+pub fn reconstruct_logical_branch_embedding_f32(
+    payload: &[u8],
+    stored_spec: &EmbeddingSpec,
+    descriptor: Option<&EbcpDescriptor>,
+) -> Result<Vec<f32>, BlockError> {
+    match stored_spec.encoding.as_str() {
+        "f32le" => decode_f32le_embedding(payload, stored_spec.dims),
+        "f16le" => decode_f16le_embedding(payload, stored_spec.dims),
+        "i8" => decode_i8_embedding(payload, stored_spec.dims),
+        "pq4" => Err(BlockError::UnsupportedValue(
+            "pq4 branch embeddings cannot be reconstructed as logical f32 vectors",
+        )),
+        encoding if is_ebcp_encoding(encoding) => {
+            let descriptor = descriptor.ok_or(BlockError::NonConforming(
+                "EBCP branch reconstruction requires a parsed EBCP descriptor",
+            ))?;
+            if descriptor.logical_embedding_spec.dims != stored_spec.dims {
+                return Err(BlockError::NonConforming(
+                    "EBCP descriptor logical dims must match the stored embedding dims",
+                ));
+            }
+            reconstruct_ebcp_logical_embedding(payload, stored_spec, descriptor)
+        }
+        _ => Err(BlockError::UnsupportedValue(
+            "branch embedding reconstruction does not support this encoding",
+        )),
+    }
 }
 
 pub fn ebcp_extension_map(descriptor: &EbcpDescriptor) -> ExtensionMap {
@@ -555,6 +595,321 @@ fn validate_branch_ebcp_payload_lengths(
     Ok(())
 }
 
+fn decode_f32le_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockError> {
+    let expected_len =
+        checked_embedding_byte_len(dims, std::mem::size_of::<f32>(), "f32le branch embeddings")?;
+    if payload.len() != expected_len {
+        return Err(BlockError::InvalidEntryShape(
+            "f32le branch payload length does not match embedding dims",
+        ));
+    }
+    payload
+        .chunks_exact(4)
+        .map(|chunk| {
+            let value = f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+            if !value.is_finite() {
+                return Err(BlockError::InvalidEntryShape(
+                    "f32le branch payload must contain only finite values",
+                ));
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
+fn decode_f16le_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockError> {
+    let expected_len = checked_embedding_byte_len(dims, 2, "f16le branch embeddings")?;
+    if payload.len() != expected_len {
+        return Err(BlockError::InvalidEntryShape(
+            "f16le branch payload length does not match embedding dims",
+        ));
+    }
+    payload
+        .chunks_exact(2)
+        .map(|chunk| {
+            let value =
+                f16::from_le_bytes(chunk.try_into().expect("chunk size is validated")).to_f32();
+            if !value.is_finite() {
+                return Err(BlockError::InvalidEntryShape(
+                    "f16le branch payload must contain only finite values",
+                ));
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn decode_i8_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockError> {
+    let expected_len = checked_embedding_byte_len(dims, 1, "i8 branch embeddings")?;
+    if payload.len() != expected_len {
+        return Err(BlockError::InvalidEntryShape(
+            "i8 branch payload length does not match embedding dims",
+        ));
+    }
+    Ok(payload
+        .iter()
+        .map(|byte| i8::from_le_bytes([*byte]) as f32)
+        .collect())
+}
+
+fn checked_embedding_byte_len(
+    dims: u64,
+    element_width: usize,
+    overflow_context: &'static str,
+) -> Result<usize, BlockError> {
+    let expected = dims
+        .checked_mul(element_width as u64)
+        .ok_or(BlockError::InvalidEntryShape(overflow_context))?;
+    usize::try_from(expected).map_err(|_| BlockError::InvalidEntryShape(overflow_context))
+}
+
+fn reconstruct_ebcp_logical_embedding(
+    payload: &[u8],
+    stored_spec: &EmbeddingSpec,
+    descriptor: &EbcpDescriptor,
+) -> Result<Vec<f32>, BlockError> {
+    let rotated_or_delta = decode_ebcp_payload_components(payload, stored_spec, descriptor)?;
+    reconstruct_ebcp_ambient_embedding(descriptor, rotated_or_delta.as_slice())
+}
+
+fn decode_ebcp_payload_components(
+    payload: &[u8],
+    stored_spec: &EmbeddingSpec,
+    descriptor: &EbcpDescriptor,
+) -> Result<Vec<f32>, BlockError> {
+    let dims = usize::try_from(descriptor.logical_embedding_spec.dims)
+        .map_err(|_| BlockError::InvalidEntryShape("EBCP logical dims do not fit in usize"))?;
+    match stored_spec.encoding.as_str() {
+        "pca-rot-f32le" | "pca-rot-delta-f32le" => {
+            let expected = dims.checked_mul(std::mem::size_of::<f32>()).ok_or(
+                BlockError::InvalidEntryShape("EBCP float payload length overflowed"),
+            )?;
+            if payload.len() != expected {
+                return Err(BlockError::InvalidEntryShape(
+                    "EBCP float payload length does not match logical dims",
+                ));
+            }
+            payload
+                .chunks_exact(4)
+                .map(|chunk| {
+                    let value =
+                        f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+                    if !value.is_finite() {
+                        return Err(BlockError::InvalidEntryShape(
+                            "EBCP float payload must contain only finite values",
+                        ));
+                    }
+                    Ok(value)
+                })
+                .collect()
+        }
+        "pca-rot-delta-uq" | "ambient-delta-uq" => {
+            let EbcpQuantization::Uniform {
+                bit_width,
+                scale_factors,
+            } = descriptor
+                .quantization
+                .as_ref()
+                .ok_or(BlockError::NonConforming(
+                    "quantized EBCP payloads require uniform quantization metadata",
+                ))?
+            else {
+                return Err(BlockError::NonConforming(
+                    "EBCP quantization mode does not match uniform quantized encoding",
+                ));
+            };
+            unpack_quantized_payload_uniform(payload, *bit_width, scale_factors)
+        }
+        "pca-rot-delta-vbq" => {
+            let EbcpQuantization::Variable {
+                bit_widths,
+                scale_factors,
+            } = descriptor
+                .quantization
+                .as_ref()
+                .ok_or(BlockError::NonConforming(
+                    "quantized EBCP payloads require per-dimension quantization metadata",
+                ))?
+            else {
+                return Err(BlockError::NonConforming(
+                    "EBCP quantization mode does not match pca-rot-delta-vbq",
+                ));
+            };
+            unpack_quantized_payload(payload, bit_widths, scale_factors)
+        }
+        _ => Err(BlockError::UnsupportedValue(
+            "EBCP reconstruction requires a supported EBCP branch encoding",
+        )),
+    }
+}
+
+fn reconstruct_ebcp_ambient_embedding(
+    descriptor: &EbcpDescriptor,
+    rotated_or_delta: &[f32],
+) -> Result<Vec<f32>, BlockError> {
+    let dims = usize::try_from(descriptor.logical_embedding_spec.dims)
+        .map_err(|_| BlockError::InvalidEntryShape("EBCP logical dims do not fit in usize"))?;
+    if rotated_or_delta.len() != dims {
+        return Err(BlockError::InvalidEntryShape(
+            "EBCP payload dimension does not match logical dims",
+        ));
+    }
+    let mut ambient = vec![0.0f32; dims];
+    match &descriptor.rotation {
+        Some(rotation) => {
+            if rotation.matrix.len() != dims * dims {
+                return Err(BlockError::NonConforming(
+                    "EBCP rotation matrix length does not match logical dims",
+                ));
+            }
+            for ambient_index in 0..dims {
+                let mut value = descriptor
+                    .base_centroid
+                    .as_ref()
+                    .map(|centroid| centroid[ambient_index])
+                    .unwrap_or(0.0);
+                for (rotated_index, rotated_value) in rotated_or_delta.iter().copied().enumerate() {
+                    value += rotation.matrix[rotated_index * dims + ambient_index] * rotated_value;
+                }
+                if !value.is_finite() {
+                    return Err(BlockError::InvalidEntryShape(
+                        "EBCP reconstruction produced a non-finite ambient value",
+                    ));
+                }
+                ambient[ambient_index] = value;
+            }
+        }
+        None => {
+            for ambient_index in 0..dims {
+                let value = descriptor
+                    .base_centroid
+                    .as_ref()
+                    .map(|centroid| centroid[ambient_index])
+                    .unwrap_or(0.0)
+                    + rotated_or_delta[ambient_index];
+                if !value.is_finite() {
+                    return Err(BlockError::InvalidEntryShape(
+                        "EBCP reconstruction produced a non-finite ambient value",
+                    ));
+                }
+                ambient[ambient_index] = value;
+            }
+        }
+    }
+    Ok(ambient)
+}
+
+fn unpack_quantized_payload_uniform(
+    payload: &[u8],
+    bit_width: u8,
+    scale_factors: &[f32],
+) -> Result<Vec<f32>, BlockError> {
+    let total_bits = scale_factors
+        .len()
+        .checked_mul(usize::from(bit_width))
+        .ok_or(BlockError::InvalidEntryShape(
+            "EBCP quantized payload bit length overflowed",
+        ))?;
+    let expected_len =
+        total_bits
+            .checked_add(7)
+            .map(|value| value / 8)
+            .ok_or(BlockError::InvalidEntryShape(
+                "EBCP quantized payload byte length overflowed",
+            ))?;
+    if payload.len() != expected_len {
+        return Err(BlockError::InvalidEntryShape(
+            "EBCP quantized payload length does not match metadata",
+        ));
+    }
+
+    let mut values = Vec::with_capacity(scale_factors.len());
+    let mut bit_offset = 0usize;
+    for &scale in scale_factors {
+        if !scale.is_finite() || scale < 0.0 {
+            return Err(BlockError::NonConforming(
+                "EBCP quantization scale factors must be finite and nonnegative",
+            ));
+        }
+        let code = extract_lsb_first_bits(payload, bit_offset, bit_width)?;
+        bit_offset += usize::from(bit_width);
+        let centered = i32::try_from(code).map_err(|_| {
+            BlockError::InvalidEntryShape("EBCP quantized code does not fit in i32")
+        })? - (1_i32 << (bit_width - 1));
+        values.push(centered as f32 * scale);
+    }
+    Ok(values)
+}
+
+fn unpack_quantized_payload(
+    payload: &[u8],
+    bit_widths: &[u8],
+    scale_factors: &[f32],
+) -> Result<Vec<f32>, BlockError> {
+    if bit_widths.len() != scale_factors.len() {
+        return Err(BlockError::NonConforming(
+            "EBCP quantization metadata dimension mismatch",
+        ));
+    }
+    let total_bits = bit_widths.iter().try_fold(0usize, |sum, width| {
+        sum.checked_add(usize::from(*width))
+            .ok_or(BlockError::InvalidEntryShape(
+                "EBCP quantized payload bit length overflowed",
+            ))
+    })?;
+    let expected_len =
+        total_bits
+            .checked_add(7)
+            .map(|value| value / 8)
+            .ok_or(BlockError::InvalidEntryShape(
+                "EBCP quantized payload byte length overflowed",
+            ))?;
+    if payload.len() != expected_len {
+        return Err(BlockError::InvalidEntryShape(
+            "EBCP quantized payload length does not match metadata",
+        ));
+    }
+
+    let mut values = Vec::with_capacity(bit_widths.len());
+    let mut bit_offset = 0usize;
+    for (&bit_width, &scale) in bit_widths.iter().zip(scale_factors.iter()) {
+        if bit_width == 0 {
+            return Err(BlockError::NonConforming(
+                "EBCP quantization bit widths must be nonzero",
+            ));
+        }
+        if !scale.is_finite() || scale < 0.0 {
+            return Err(BlockError::NonConforming(
+                "EBCP quantization scale factors must be finite and nonnegative",
+            ));
+        }
+        let code = extract_lsb_first_bits(payload, bit_offset, bit_width)?;
+        bit_offset += usize::from(bit_width);
+        let centered = i32::try_from(code).map_err(|_| {
+            BlockError::InvalidEntryShape("EBCP quantized code does not fit in i32")
+        })? - (1_i32 << (bit_width - 1));
+        values.push(centered as f32 * scale);
+    }
+    Ok(values)
+}
+
+fn extract_lsb_first_bits(
+    payload: &[u8],
+    start_bit: usize,
+    bit_width: u8,
+) -> Result<u32, BlockError> {
+    let width = usize::from(bit_width);
+    let mut value = 0u32;
+    for bit_index in 0..width {
+        let absolute_bit = start_bit + bit_index;
+        let byte_index = absolute_bit / 8;
+        let intra_byte = absolute_bit % 8;
+        let bit = (payload[byte_index] >> intra_byte) & 1;
+        value |= u32::from(bit) << bit_index;
+    }
+    Ok(value)
+}
+
 fn ebcp_payload_bit_len(
     embedding_spec: &EmbeddingSpec,
     descriptor: &EbcpDescriptor,
@@ -566,7 +921,7 @@ fn ebcp_payload_bit_len(
             .checked_mul(std::mem::size_of::<f32>())
             .and_then(|bytes| bytes.checked_mul(8))
             .ok_or(BlockError::NonConforming("EBCP payload length overflowed")),
-        "pca-rot-delta-uq" => {
+        "pca-rot-delta-uq" | "ambient-delta-uq" => {
             let EbcpQuantization::Uniform { bit_width, .. } = descriptor
                 .quantization
                 .as_ref()
@@ -664,10 +1019,10 @@ fn parse_ebcp_descriptor_fields(
         .remove(&EBCP_BASE_CENTROID_KEY)
         .map(|value| parse_f32_vector_bytes(value, dims, "ext[0].base_centroid"))
         .transpose()?;
-    let rotation = parse_ebcp_rotation(
-        required_field(&mut fields, EBCP_ROTATION_KEY, "ext[0]")?,
-        dims,
-    )?;
+    let rotation = fields
+        .remove(&EBCP_ROTATION_KEY)
+        .map(|value| parse_ebcp_rotation(value, dims))
+        .transpose()?;
     let quantization = fields
         .remove(&EBCP_QUANTIZATION_KEY)
         .map(|value| parse_ebcp_quantization(value, embedding_spec, dims))
@@ -675,24 +1030,31 @@ fn parse_ebcp_descriptor_fields(
 
     match embedding_spec.encoding.as_str() {
         "pca-rot-f32le" => {
-            if base_centroid.is_some() || quantization.is_some() {
+            if rotation.is_none() || base_centroid.is_some() || quantization.is_some() {
                 return Err(BlockError::NonConforming(
-                    "pca-rot-f32le must not declare base_centroid or quantization metadata",
+                    "pca-rot-f32le requires rotation and must not declare base_centroid or quantization metadata",
                 ));
             }
         }
         "pca-rot-delta-f32le" => {
-            if base_centroid.is_none() || quantization.is_some() {
+            if rotation.is_none() || base_centroid.is_none() || quantization.is_some() {
                 return Err(BlockError::NonConforming(
-                    "pca-rot-delta-f32le requires base_centroid and forbids quantization metadata",
+                    "pca-rot-delta-f32le requires rotation, base_centroid, and forbids quantization metadata",
                 ));
             }
         }
         "pca-rot-delta-uq" | "pca-rot-delta-vbq"
-            if base_centroid.is_none() || quantization.is_none() =>
+            if rotation.is_none() || base_centroid.is_none() || quantization.is_none() =>
         {
             return Err(BlockError::NonConforming(
-                "quantized EBCP encodings require base_centroid and quantization metadata",
+                "rotated quantized EBCP encodings require rotation, base_centroid, and quantization metadata",
+            ));
+        }
+        "ambient-delta-uq"
+            if rotation.is_some() || base_centroid.is_none() || quantization.is_none() =>
+        {
+            return Err(BlockError::NonConforming(
+                "ambient-delta-uq requires base_centroid and quantization metadata and forbids rotation metadata",
             ));
         }
         _ => {}
@@ -769,10 +1131,10 @@ fn parse_ebcp_quantization(
         ));
     }
     match embedding_spec.encoding.as_str() {
-        "pca-rot-delta-uq" => {
+        "pca-rot-delta-uq" | "ambient-delta-uq" => {
             if mode != EBCP_QUANTIZATION_MODE_UNIFORM {
                 return Err(BlockError::NonConforming(
-                    "pca-rot-delta-uq requires quantization.mode = 1",
+                    "uniform quantized EBCP encodings require quantization.mode = 1",
                 ));
             }
             let bit_width = required_u64_field(
@@ -900,11 +1262,13 @@ fn ebcp_descriptor_to_entries(descriptor: &EbcpDescriptor) -> Vec<(Value, Value)
             int_value(EBCP_ORIGINAL_DIMS_KEY),
             int_value(descriptor.logical_embedding_spec.dims),
         ),
-        (
-            int_value(EBCP_ROTATION_KEY),
-            Value::Map(ebcp_rotation_to_entries(&descriptor.rotation)),
-        ),
     ];
+    if let Some(rotation) = &descriptor.rotation {
+        fields.push((
+            int_value(EBCP_ROTATION_KEY),
+            Value::Map(ebcp_rotation_to_entries(rotation)),
+        ));
+    }
     if let Some(base_centroid) = &descriptor.base_centroid {
         fields.push((
             int_value(EBCP_BASE_CENTROID_KEY),

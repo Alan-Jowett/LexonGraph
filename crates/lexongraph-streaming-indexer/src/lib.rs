@@ -616,6 +616,7 @@ pub const PUBLISHED_PROFILE_V0_5_1: PublishedProfileVersion = PublishedProfileVe
 pub const PUBLISHED_PROFILE_V0_5_2: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 2);
 pub const PUBLISHED_PROFILE_V0_5_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 3);
 pub const PUBLISHED_PROFILE_V0_5_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 4);
+pub const PUBLISHED_PROFILE_V0_5_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -658,6 +659,11 @@ pub enum PublishedBranchEncodingPolicy {
         interior_bits: u8,
         lowest_routing_bits: u8,
     },
+    AmbientDeltaUniform {
+        root_bits: u8,
+        interior_bits: u8,
+        lowest_routing_bits: u8,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -687,6 +693,11 @@ enum BranchEncodingPolicy {
         interior_bits: u8,
         lowest_routing_bits: u8,
     },
+    AmbientDeltaUniform {
+        root_bits: u8,
+        interior_bits: u8,
+        lowest_routing_bits: u8,
+    },
 }
 
 fn branch_encoding_policy_for_profile(profile: &PublishedIndexingProfile) -> BranchEncodingPolicy {
@@ -708,6 +719,15 @@ fn branch_encoding_policy_for_profile(profile: &PublishedIndexingProfile) -> Bra
             interior_bits,
             lowest_routing_bits,
         } => BranchEncodingPolicy::PcaRotDeltaVariable {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        },
+        PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        } => BranchEncodingPolicy::AmbientDeltaUniform {
             root_bits,
             interior_bits,
             lowest_routing_bits,
@@ -1140,6 +1160,23 @@ pub fn published_indexing_profile(
                 0.0,
             ),
             PublishedBranchEncodingPolicy::PcaRotDeltaVariable {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
+        PUBLISHED_PROFILE_V0_5_5 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::AmbientDeltaUniform {
                 root_bits: 12,
                 interior_bits: 8,
                 lowest_routing_bits: 6,
@@ -4855,6 +4892,48 @@ fn encode_branch_entries(
             entries: entries.to_vec(),
             ext: None,
         }),
+        BranchEncodingPolicy::AmbientDeltaUniform {
+            root_bits,
+            interior_bits,
+            lowest_routing_bits,
+        } => {
+            if logical_embedding_spec.encoding != "f32le" {
+                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                    "ambient delta branch authoring currently requires f32le logical embeddings"
+                        .into(),
+                ));
+            }
+            let decoded = entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    decode_f32_embedding_exact(
+                        &entry.embedding,
+                        logical_embedding_spec,
+                        "ambient delta branch authoring",
+                    )
+                    .map_err(|error| {
+                        StreamingIndexerError::TerminalPartitionMaterialization(format!(
+                            "failed to decode logical branch entry {index}: {error}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<Vec<f32>>, StreamingIndexerError>>()?;
+            let centroid = exact_f32_centroid(decoded.as_slice())?;
+            encode_ambient_delta_quantized_entries(
+                entries,
+                decoded.as_slice(),
+                logical_embedding_spec,
+                centroid.as_slice(),
+                resolve_branch_bit_budget(
+                    parent_level,
+                    is_root,
+                    root_bits,
+                    interior_bits,
+                    lowest_routing_bits,
+                ),
+            )
+        }
         BranchEncodingPolicy::PcaRotF32Le
         | BranchEncodingPolicy::PcaRotDeltaF32Le
         | BranchEncodingPolicy::PcaRotDeltaUniform { .. }
@@ -4942,6 +5021,7 @@ fn encode_branch_entries(
                         Some(explained_variance.as_slice()),
                     )
                 }
+                BranchEncodingPolicy::AmbientDeltaUniform { .. } => unreachable!(),
                 BranchEncodingPolicy::Ordinary => unreachable!(),
             }?;
             Ok(encoded)
@@ -5094,10 +5174,10 @@ fn encode_pca_rot_f32le_entries(
             version: 1,
             logical_embedding_spec: logical_embedding_spec.clone(),
             base_centroid: None,
-            rotation: EbcpRotation {
+            rotation: Some(EbcpRotation {
                 matrix_format: "f32le-row-major".into(),
                 matrix: rotation_matrix.to_vec(),
-            },
+            }),
             quantization: None,
         })),
     })
@@ -5132,10 +5212,10 @@ fn encode_pca_rot_delta_f32le_entries(
             version: 1,
             logical_embedding_spec: logical_embedding_spec.clone(),
             base_centroid: Some(centroid.to_vec()),
-            rotation: EbcpRotation {
+            rotation: Some(EbcpRotation {
                 matrix_format: "f32le-row-major".into(),
                 matrix: rotation_matrix.to_vec(),
-            },
+            }),
             quantization: None,
         })),
     })
@@ -5177,7 +5257,7 @@ fn encode_pca_rot_delta_quantized_entries(
         .iter()
         .zip(rotated_deltas.iter())
         .map(|(entry, rotated)| {
-            let embedding = pack_quantized_rotated_delta(
+            let embedding = pack_quantized_delta_vector(
                 rotated,
                 bit_widths.as_slice(),
                 scale_factors.as_slice(),
@@ -5214,11 +5294,59 @@ fn encode_pca_rot_delta_quantized_entries(
             version: 1,
             logical_embedding_spec: logical_embedding_spec.clone(),
             base_centroid: Some(centroid.to_vec()),
-            rotation: EbcpRotation {
+            rotation: Some(EbcpRotation {
                 matrix_format: "f32le-row-major".into(),
                 matrix: rotation_matrix.to_vec(),
-            },
+            }),
             quantization: Some(quantization),
+        })),
+    })
+}
+
+fn encode_ambient_delta_quantized_entries(
+    original_entries: &[BranchEntry],
+    decoded: &[Vec<f32>],
+    logical_embedding_spec: &EmbeddingSpec,
+    centroid: &[f32],
+    bit_width: u8,
+) -> Result<EncodedBranchEntries, StreamingIndexerError> {
+    let ambient_deltas = decoded
+        .iter()
+        .map(|vector| subtract_f32_vectors(vector, centroid))
+        .collect::<Result<Vec<_>, _>>()?;
+    let bit_widths = vec![bit_width; centroid.len()];
+    let scale_factors =
+        compute_quantization_scales(ambient_deltas.as_slice(), bit_widths.as_slice())?;
+    let encoded_entries = original_entries
+        .iter()
+        .zip(ambient_deltas.iter())
+        .map(|(entry, ambient_delta)| {
+            let embedding = pack_quantized_delta_vector(
+                ambient_delta,
+                bit_widths.as_slice(),
+                scale_factors.as_slice(),
+            )?;
+            Ok(BranchEntry {
+                embedding,
+                child: entry.child,
+            })
+        })
+        .collect::<Result<Vec<BranchEntry>, StreamingIndexerError>>()?;
+    Ok(EncodedBranchEntries {
+        embedding_spec: EmbeddingSpec {
+            dims: logical_embedding_spec.dims,
+            encoding: "ambient-delta-uq".into(),
+        },
+        entries: encoded_entries,
+        ext: Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: logical_embedding_spec.clone(),
+            base_centroid: Some(centroid.to_vec()),
+            rotation: None,
+            quantization: Some(EbcpQuantization::Uniform {
+                bit_width,
+                scale_factors,
+            }),
         })),
     })
 }
@@ -5278,18 +5406,18 @@ fn encode_f32_vec(values: &[f32]) -> Vec<u8> {
 }
 
 fn compute_quantization_scales(
-    rotated_deltas: &[Vec<f32>],
+    delta_vectors: &[Vec<f32>],
     bit_widths: &[u8],
 ) -> Result<Vec<f32>, StreamingIndexerError> {
     let dims = bit_widths.len();
     let mut max_abs = vec![0.0f32; dims];
-    for rotated in rotated_deltas {
-        if rotated.len() != dims {
+    for vector in delta_vectors {
+        if vector.len() != dims {
             return Err(StreamingIndexerError::TerminalPartitionMaterialization(
-                "EBCP rotated deltas disagree on dimensionality".into(),
+                "EBCP delta vectors disagree on dimensionality".into(),
             ));
         }
-        for (index, value) in rotated.iter().copied().enumerate() {
+        for (index, value) in vector.iter().copied().enumerate() {
             max_abs[index] = max_abs[index].max(value.abs());
         }
     }
@@ -5318,12 +5446,12 @@ fn compute_quantization_scales(
         .collect()
 }
 
-fn pack_quantized_rotated_delta(
-    rotated: &[f32],
+fn pack_quantized_delta_vector(
+    values: &[f32],
     bit_widths: &[u8],
     scale_factors: &[f32],
 ) -> Result<Vec<u8>, StreamingIndexerError> {
-    if rotated.len() != bit_widths.len() || rotated.len() != scale_factors.len() {
+    if values.len() != bit_widths.len() || values.len() != scale_factors.len() {
         return Err(StreamingIndexerError::TerminalPartitionMaterialization(
             "EBCP quantization metadata dimension mismatch".into(),
         ));
@@ -5337,7 +5465,7 @@ fn pack_quantized_rotated_delta(
     })?;
     let mut bytes = vec![0u8; total_bits.div_ceil(8)];
     let mut bit_offset = 0usize;
-    for ((&value, &bit_width), &scale) in rotated
+    for ((&value, &bit_width), &scale) in values
         .iter()
         .zip(bit_widths.iter())
         .zip(scale_factors.iter())

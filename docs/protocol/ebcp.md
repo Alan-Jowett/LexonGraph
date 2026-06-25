@@ -54,6 +54,7 @@ The following `EmbeddingSpec.encoding` values are defined by this revision:
 | `pca-rot-delta-f32le` | Rotated `f32` delta from the enclosing block's base centroid | lossless with respect to the stored `f32` rotated delta |
 | `pca-rot-delta-uq` | Rotated delta encoded with one uniform per-level bit width across dimensions | lossy through quantization |
 | `pca-rot-delta-vbq` | Rotated delta encoded with per-dimension variable bit widths | lossy through quantization |
+| `ambient-delta-uq` | Ambient-space delta from the enclosing block's base centroid encoded with one uniform per-level bit width across dimensions | lossy through quantization |
 
 In this document, the logical child-centroid embedding reconstructed for search
 or inspection is denoted `x`.
@@ -97,6 +98,7 @@ It is:
 - required for `pca-rot-delta-f32le`
 - required for `pca-rot-delta-uq`
 - required for `pca-rot-delta-vbq`
+- required for `ambient-delta-uq`
 
 ### `rotation`
 
@@ -114,7 +116,8 @@ little-endian `f32` matrix `R`.
 payloads. Because this revision uses orthogonal rotations, a conforming reader
 reconstructs ambient-space values using `R^-1`, which is equivalently `R^T`.
 
-`rotation` is required for every EBCP encoding in this revision.
+`rotation` is required for the `pca-rot-*` encodings in this revision and shall
+be absent for `ambient-delta-uq`.
 
 ### `quantization`
 
@@ -128,6 +131,7 @@ Map present only for quantized encodings:
 `mode` shall be:
 
 - `1` for `pca-rot-delta-uq`
+- `1` for `ambient-delta-uq`
 - `2` for `pca-rot-delta-vbq`
 
 `uniform_bit_width` is:
@@ -212,6 +216,29 @@ After decoding all dimensions:
 
 `x = base_centroid + R^-1 d`
 
+### `ambient-delta-uq`
+
+The `embedding` byte string contains one signed integer code per dimension,
+packed in ambient dimension order using the block's declared
+`uniform_bit_width`.
+
+Packing rules:
+
+1. codes are packed least-significant-bit first inside the byte stream
+2. no padding bits appear between dimensions
+3. trailing high bits in the final byte, if any, shall be zero
+
+To decode one dimension `i`:
+
+1. read one unsigned code word `q_i`
+2. convert to a centered signed integer `s_i = q_i - 2^(b-1)`, where `b` is the
+   declared uniform bit width
+3. compute ambient-space delta component `d_i = s_i * scale_factors[i]`
+
+After decoding all dimensions:
+
+`x = base_centroid + d`
+
 ## Level-Budget Contract for the `0.5.x` Ladder
 
 This protocol document defines encodings generically. The published `0.5.x`
@@ -235,12 +262,13 @@ The following are invalid in this revision:
 - an EBCP branch block without `ext[0]`
 - an EBCP descriptor whose `version` is unsupported
 - `original_dims` that disagrees with the enclosing `EmbeddingSpec.dims`
-- a missing `rotation` descriptor
+- a missing `rotation` descriptor on a `pca-rot-*` encoding
+- a present `rotation` descriptor on `ambient-delta-uq`
 - a missing `base_centroid` for any delta encoding
 - a present `quantization` descriptor on `pca-rot-f32le` or
   `pca-rot-delta-f32le`
 - a missing `quantization` descriptor on `pca-rot-delta-uq` or
-  `pca-rot-delta-vbq`
+  `pca-rot-delta-vbq` or `ambient-delta-uq`
 - quantization metadata whose dimensions, scales, or bit widths do not match the
   enclosing block dimensionality
 - branch payload bytes whose length is inconsistent with the selected EBCP

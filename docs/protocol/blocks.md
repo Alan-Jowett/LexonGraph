@@ -134,8 +134,10 @@ Known `encoding` values in this revision:
 - `pca-rot-delta-f32le`
 - `pca-rot-delta-uq`
 - `pca-rot-delta-vbq`
+- `ambient-delta-uq`
 
-The `pca-rot-*` encodings are defined by `docs/protocol/ebcp.md` and are valid
+The `pca-rot-*` and `ambient-delta-uq` encodings are defined by
+`docs/protocol/ebcp.md` and are valid
 only for non-leaf branch-entry embeddings.
 
 Future revisions may define additional encodings.
@@ -161,7 +163,8 @@ Field requirements:
 - `embedding_spec` is required and applies to every entry in the block
 - `entries` is required and contains child references keyed by embedding bytes
 - `ext` is optional and reserved for forward-compatible extensions, but it is
-  required when `embedding_spec.encoding` is one of the `pca-rot-*` encodings
+  required when `embedding_spec.encoding` is one of the `pca-rot-*` or
+  `ambient-delta-uq` encodings
   defined by `docs/protocol/ebcp.md`
 
 Normatively, a non-leaf block defines the mapping:
@@ -173,7 +176,8 @@ where:
 - `embedding_bytes` are interpreted under the block's `embedding_spec`
 - `child_block_id` is the raw SHA-256 identifier of the referenced child block
 
-When `embedding_spec.encoding` is one of the `pca-rot-*` values, the branch
+When `embedding_spec.encoding` is one of the `pca-rot-*` or `ambient-delta-uq`
+values, the branch
 entry `embedding` bytes are interpreted together with the block's `ext`
 metadata according to `docs/protocol/ebcp.md`.
 
@@ -208,8 +212,8 @@ In version 1, `entries` for a leaf block must contain exactly one `LeafEntry`.
 The numeric `level` is semantic depth from leaves, so `level = 0` is terminal
 and any `level > 0` clusters children from the immediately lower level.
 
-Leaf blocks in this revision shall not use the `pca-rot-*` encodings defined by
-`docs/protocol/ebcp.md`.
+Leaf blocks in this revision shall not use the `pca-rot-*` or
+`ambient-delta-uq` encodings defined by `docs/protocol/ebcp.md`.
 
 ### LeafEntry
 

@@ -441,6 +441,18 @@ attributable only to the lossy branch-vector approximation.
 
 **Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-037
 
+### VAL-SEARCH-037b
+
+Run search over a deterministic fixture whose visited non-leaf blocks use
+`ambient-delta-uq`.
+
+**Pass condition:** search succeeds through the existing API shape, continues to
+apply the protocol-defined traversal and termination rules, and any observed
+difference from the logically equivalent uncompressed-branch fixture is
+attributable only to the lossy branch-vector approximation.
+
+**Traces to:** REQ-SEARCH-033, REQ-SEARCH-034, REQ-SEARCH-035, REQ-SEARCH-037
+
 ### VAL-SEARCH-038
 
 Attempt search over a fixture containing a block that violates the EBCP branch
@@ -452,3 +464,15 @@ path rather than silently treating the malformed payload as an ordinary
 uncompressed branch embedding.
 
 **Traces to:** REQ-SEARCH-006, REQ-SEARCH-033, REQ-SEARCH-035
+
+### VAL-SEARCH-039
+
+For supported EBCP branch encodings, compare the public logical-branch
+reconstruction results from `lexongraph-block` against the branch ordering
+observed through search on the same deterministic fixtures.
+
+**Pass condition:** the logical vectors reconstructed through the block crate's
+public surface induce the same winning branch choice that search uses through
+its existing runtime surface.
+
+**Traces to:** REQ-SEARCH-034, REQ-SEARCH-038

@@ -167,6 +167,37 @@ form. Search or indexing layers may then reconstruct or compare embeddings
 according to their own subordinate specifications without re-parsing canonical
 CBOR or bypassing block-level validation.
 
+The same public surface also exposes a canonical branch-embedding
+reconstruction helper so downstream consumers do not need to duplicate
+encoding-specific decode logic outside the block crate.
+
+### DSG-021 `Canonical logical branch reconstruction`
+
+The block crate owns the canonical reconstruction semantics for supported stored
+branch embeddings that can be interpreted as logical `f32` vectors.
+
+That surface:
+
+- accepts the stored branch `EmbeddingSpec`
+- accepts the stored branch payload bytes
+- accepts a previously parsed EBCP descriptor when the stored encoding is an
+  EBCP branch encoding
+- returns the logical ambient-space `f32` vector used for comparison
+
+Ordinary branch encodings and EBCP branch encodings both flow through this
+surface, but the helper remains policy-neutral: it reconstructs logical vectors
+only and does not choose ranking, traversal, or indexing behavior.
+
+### DSG-022 `Explicit reconstruction failure surface`
+
+The public reconstruction helper fails explicitly when:
+
+- the stored encoding is unsupported for logical `f32` reconstruction
+- the stored payload length is inconsistent with the declared encoding or dims
+- stored floating-point components are non-finite
+- the required EBCP descriptor is missing
+- the EBCP metadata or payload bytes are malformed or inconsistent
+
 ## Decode and Verification Flow
 
 The deserialize path is:
@@ -220,3 +251,5 @@ Both consumers use the same typed model and protocol-conformance logic.
 | DSG-018 | REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-018 |
 | DSG-019 | REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-016, REQ-BLOCK-CRATE-017 |
 | DSG-020 | REQ-BLOCK-CRATE-006, REQ-BLOCK-CRATE-018 |
+| DSG-021 | REQ-BLOCK-CRATE-018, REQ-BLOCK-CRATE-019 |
+| DSG-022 | REQ-BLOCK-CRATE-019 |
