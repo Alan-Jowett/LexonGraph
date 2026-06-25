@@ -983,6 +983,89 @@ behavior.
 Resolving any experimental `0.5.x` profile does not mutate the declared mapping
 of `0.5.0`.
 
+### DSG-STREAM-INDEXER-097 `Experimental 0.6.x profile ladder catalog`
+
+Published indexing profiles `0.6.0` through `0.6.5` are added alongside the
+existing ladders rather than replacing them.
+
+The published-profile resolver therefore remains an explicit exact-match catalog
+whose `0.6.x` entries are independently addressable opt-in behavioral
+contracts.
+
+### DSG-STREAM-INDEXER-098 `Fanout-capped ladder boundary`
+
+The `0.6.x` ladder keeps the `0.5.x` branch-encoding experiment structure but
+changes the topology contract.
+
+For selected `0.6.x` profiles, the planning path substitutes an effective
+partition bound of `min(materializability_bound, cluster_count)` so recursion
+continues until every emitted non-leaf block satisfies the configured fanout
+cap without mutating any earlier ladder.
+
+### DSG-STREAM-INDEXER-099 `Indexing profile 0.6.0 mapping`
+
+Published indexing profile `0.6.0` resolves to the same directional-PCA
+planning parameters and ordinary uncompressed branch-entry representation as
+`0.5.0`, while opting into the fanout-capped planning boundary defined by
+`DSG-STREAM-INDEXER-098`.
+
+### DSG-STREAM-INDEXER-100 `Indexing profile 0.6.1 mapping`
+
+Published indexing profile `0.6.1` resolves to the `0.6.0` contract, except
+that authored non-leaf branch-entry embeddings use the EBCP encoding
+`pca-rot-f32le` together with the required EBCP metadata.
+
+### DSG-STREAM-INDEXER-101 `Indexing profile 0.6.2 mapping`
+
+Published indexing profile `0.6.2` resolves to the `0.6.0` contract, except
+that authored non-leaf branch-entry embeddings use the EBCP encoding
+`pca-rot-delta-f32le` together with the required EBCP metadata.
+
+### DSG-STREAM-INDEXER-102 `Indexing profile 0.6.3 mapping`
+
+Published indexing profile `0.6.3` resolves to the `0.6.0` contract, except
+that authored non-leaf branch-entry embeddings use the EBCP encoding
+`pca-rot-delta-uq`.
+
+The encoder assigns uniform per-dimension quantization widths of `12`, `8`, and
+`6` bits on the root, interior, and lowest routing non-leaf levels
+respectively.
+
+### DSG-STREAM-INDEXER-103 `Indexing profile 0.6.4 mapping`
+
+Published indexing profile `0.6.4` resolves to the `0.6.0` contract, except
+that authored non-leaf branch-entry embeddings use the EBCP encoding
+`pca-rot-delta-vbq`.
+
+For each non-leaf block, the encoder preserves the total bit budget that
+`0.6.3` would have used at the same level and dimensionality while
+redistributing those bits across dimensions according to variance.
+
+### DSG-STREAM-INDEXER-104 `Indexing profile 0.6.5 mapping`
+
+Published indexing profile `0.6.5` resolves to the `0.6.0` contract, except
+that authored non-leaf branch-entry embeddings use the EBCP encoding
+`ambient-delta-uq`.
+
+The encoder assigns uniform per-dimension quantization widths of `12`, `8`, and
+`6` bits on the root, interior, and lowest routing non-leaf levels
+respectively, without emitting rotation metadata.
+
+### DSG-STREAM-INDEXER-105 `0.6.x opt-in isolation`
+
+The fanout-capped rule applies only to selected published profiles in the
+`0.6.x` ladder.
+
+Resolving any experimental `0.6.x` profile does not mutate the declared mapping
+or emitted topology contract of `0.5.0` or any earlier published profile.
+
+### DSG-STREAM-INDEXER-106 `0.6.x EBCP authoring contract`
+
+When the selected `0.6.x` published profile emits EBCP-encoded branch blocks,
+the indexer writes blocks that remain valid under `docs/protocol/blocks.md` and
+carry all protocol-required EBCP metadata in `ext` so a search reader can
+interpret the branch embeddings without out-of-band state.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1069,4 +1152,14 @@ of `0.5.0`.
 | DSG-STREAM-INDEXER-094 | REQ-STREAM-INDEXER-100, REQ-STREAM-INDEXER-101 |
 | DSG-STREAM-INDEXER-095 | REQ-STREAM-INDEXER-101, REQ-STREAM-INDEXER-102 |
 | DSG-STREAM-INDEXER-096 | REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095 |
+| DSG-STREAM-INDEXER-097 | REQ-STREAM-INDEXER-103 |
+| DSG-STREAM-INDEXER-098 | REQ-STREAM-INDEXER-104, REQ-STREAM-INDEXER-110, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-099 | REQ-STREAM-INDEXER-104, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-100 | REQ-STREAM-INDEXER-105, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-101 | REQ-STREAM-INDEXER-106, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-102 | REQ-STREAM-INDEXER-107, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-103 | REQ-STREAM-INDEXER-108, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-104 | REQ-STREAM-INDEXER-109, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-105 | REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-111 |
+| DSG-STREAM-INDEXER-106 | REQ-STREAM-INDEXER-111, REQ-STREAM-INDEXER-112 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |

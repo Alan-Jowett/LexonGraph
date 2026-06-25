@@ -617,6 +617,12 @@ pub const PUBLISHED_PROFILE_V0_5_2: PublishedProfileVersion = PublishedProfileVe
 pub const PUBLISHED_PROFILE_V0_5_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 3);
 pub const PUBLISHED_PROFILE_V0_5_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 4);
 pub const PUBLISHED_PROFILE_V0_5_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 5, 5);
+pub const PUBLISHED_PROFILE_V0_6_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 0);
+pub const PUBLISHED_PROFILE_V0_6_1: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 1);
+pub const PUBLISHED_PROFILE_V0_6_2: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 2);
+pub const PUBLISHED_PROFILE_V0_6_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 3);
+pub const PUBLISHED_PROFILE_V0_6_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 4);
+pub const PUBLISHED_PROFILE_V0_6_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -1166,6 +1172,96 @@ pub fn published_indexing_profile(
             },
         )),
         PUBLISHED_PROFILE_V0_5_5 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
+        PUBLISHED_PROFILE_V0_6_0 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::Ordinary,
+        )),
+        PUBLISHED_PROFILE_V0_6_1 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotF32Le,
+        )),
+        PUBLISHED_PROFILE_V0_6_2 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotDeltaF32Le,
+        )),
+        PUBLISHED_PROFILE_V0_6_3 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotDeltaUniform {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
+        PUBLISHED_PROFILE_V0_6_4 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::PcaRotDeltaVariable {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
+        PUBLISHED_PROFILE_V0_6_5 => Ok(directional_pca_published_profile(
             version,
             64,
             directional_pca_published_profile_params(
@@ -3150,12 +3246,14 @@ fn derive_hierarchy_from_published_profile(
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    let effective_partition_bound =
+        published_profile_partition_bound(profile, materializability_bound)?;
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
             derive_hierarchy_from_published_spherical_kmeans_profile(
                 settings,
                 embeddings,
-                materializability_bound,
+                effective_partition_bound,
                 stage_observer,
             )
         }
@@ -3169,11 +3267,30 @@ fn derive_hierarchy_from_published_profile(
                 }),
                 embeddings,
                 embedding_spec,
-                materializability_bound,
+                effective_partition_bound,
                 stage_observer,
             )
         }
     }
+}
+
+fn published_profile_partition_bound(
+    profile: &PublishedIndexingProfile,
+    materializability_bound: usize,
+) -> Result<usize, StreamingIndexerError> {
+    let PublishedProfileVersion { major, minor, .. } = profile.version;
+    if !matches!((major, minor), (0, 6)) {
+        return Ok(materializability_bound);
+    }
+
+    let PublishedPlanningStrategy::DirectionalPcaDivisive(settings) = &profile.planning_strategy
+    else {
+        return Ok(materializability_bound);
+    };
+    let cluster_count = usize::try_from(settings.cluster_count).map_err(|_| {
+        map_clustering_configuration_error("published profile cluster_count exceeds usize".into())
+    })?;
+    Ok(materializability_bound.min(cluster_count.max(2)))
 }
 
 fn derive_hierarchy_from_published_spherical_kmeans_profile(
