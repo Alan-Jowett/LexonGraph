@@ -687,7 +687,66 @@ fn val_025_ebcp_quantized_payload_padding_bits_must_be_zero() {
 }
 
 #[test]
-fn val_027_ambient_delta_uq_round_trip_without_rotation_metadata() {
+fn val_026_ebcp_quantization_rejects_negative_scale_factors() {
+    let error = build_branch_block(
+        VERSION_1,
+        1,
+        embedding_spec("pca-rot-delta-uq"),
+        vec![branch_entry(vec![0; 1], [0x11; 32])],
+        Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: EmbeddingSpec {
+                dims: 1,
+                encoding: "f32le".into(),
+            },
+            base_centroid: Some(vec![0.0]),
+            rotation: Some(EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: vec![1.0],
+            }),
+            quantization: Some(EbcpQuantization::Uniform {
+                bit_width: 1,
+                scale_factors: vec![-1.0],
+            }),
+        })),
+    )
+    .unwrap_err();
+    assert!(matches!(error, BlockError::NonConforming(_)));
+}
+
+#[test]
+fn val_027_ambient_delta_uq_rejects_rotation_metadata() {
+    let error = build_branch_block(
+        VERSION_1,
+        1,
+        EmbeddingSpec {
+            dims: 1,
+            encoding: "ambient-delta-uq".into(),
+        },
+        vec![branch_entry(vec![0x80], [0x11; 32])],
+        Some(ebcp_extension_map(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: EmbeddingSpec {
+                dims: 1,
+                encoding: "f32le".into(),
+            },
+            base_centroid: Some(vec![0.0]),
+            rotation: Some(EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: vec![1.0],
+            }),
+            quantization: Some(EbcpQuantization::Uniform {
+                bit_width: 8,
+                scale_factors: vec![1.0 / 127.0],
+            }),
+        })),
+    )
+    .unwrap_err();
+    assert!(matches!(error, BlockError::NonConforming(_)));
+}
+
+#[test]
+fn val_027b_ambient_delta_uq_round_trip_without_rotation_metadata() {
     let descriptor = EbcpDescriptor {
         version: 1,
         logical_embedding_spec: EmbeddingSpec {
@@ -809,34 +868,6 @@ fn val_029_branch_embedding_reconstruction_fails_explicitly_for_unsupported_or_m
     let pq4 = reconstruct_logical_branch_embedding_f32(&[0xAB], &embedding_spec("pq4"), None)
         .unwrap_err();
     assert!(matches!(pq4, BlockError::UnsupportedValue(_)));
-}
-
-#[test]
-fn val_026_ebcp_quantization_rejects_negative_scale_factors() {
-    let error = build_branch_block(
-        VERSION_1,
-        1,
-        embedding_spec("pca-rot-delta-uq"),
-        vec![branch_entry(vec![0; 1], [0x11; 32])],
-        Some(ebcp_extension_map(&EbcpDescriptor {
-            version: 1,
-            logical_embedding_spec: EmbeddingSpec {
-                dims: 1,
-                encoding: "f32le".into(),
-            },
-            base_centroid: Some(vec![0.0]),
-            rotation: Some(EbcpRotation {
-                matrix_format: "f32le-row-major".into(),
-                matrix: vec![1.0],
-            }),
-            quantization: Some(EbcpQuantization::Uniform {
-                bit_width: 1,
-                scale_factors: vec![-1.0],
-            }),
-        })),
-    )
-    .unwrap_err();
-    assert!(matches!(error, BlockError::NonConforming(_)));
 }
 
 fn sample_branch_block() -> Block {
