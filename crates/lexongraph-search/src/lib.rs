@@ -726,11 +726,10 @@ impl<EC, CS> Searcher<EC, CS> {
             LoadedEntries::Branch(entries) => entries
                 .into_iter()
                 .map(|entry| {
-                    let reconstructed;
                     let candidate_embedding =
                         match branch_ebcp.as_ref() {
                             Some(descriptor) => {
-                                reconstructed = reconstruct_logical_branch_embedding_f32(
+                                let reconstructed = reconstruct_logical_branch_embedding_f32(
                                     &entry.embedding,
                                     &metadata.embedding_spec,
                                     Some(descriptor),

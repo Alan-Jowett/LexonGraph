@@ -228,7 +228,7 @@ enclosing block's declared dimensionality or encoding.
 
 **Traces to:** REQ-BLOCK-CRATE-015, REQ-BLOCK-CRATE-017
 
-### VAL-024
+### VAL-028
 
 Reconstruct logical branch embedding vectors through the crate's public
 reconstruction helper for supported stored branch encodings, including ordinary
@@ -240,7 +240,7 @@ the block crate.
 
 **Traces to:** REQ-BLOCK-CRATE-018, REQ-BLOCK-CRATE-019
 
-### VAL-025
+### VAL-029
 
 Attempt public logical-branch reconstruction with an unsupported stored branch
 encoding, a malformed payload length, or missing required EBCP metadata.

@@ -870,6 +870,32 @@ fn val_029_branch_embedding_reconstruction_fails_explicitly_for_unsupported_or_m
             .unwrap_err();
     assert!(matches!(non_finite_f16, BlockError::InvalidEntryShape(_)));
 
+    let inconsistent_descriptor = reconstruct_logical_branch_embedding_f32(
+        &[0x00, 0x00, 0x80, 0x3F],
+        &EmbeddingSpec {
+            dims: 1,
+            encoding: "pca-rot-f32le".into(),
+        },
+        Some(&EbcpDescriptor {
+            version: 1,
+            logical_embedding_spec: EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            base_centroid: None,
+            rotation: Some(EbcpRotation {
+                matrix_format: "f32le-row-major".into(),
+                matrix: vec![1.0, 0.0, 0.0, 1.0],
+            }),
+            quantization: None,
+        }),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        inconsistent_descriptor,
+        BlockError::NonConforming(_)
+    ));
+
     let pq4 = reconstruct_logical_branch_embedding_f32(&[0xAB], &embedding_spec("pq4"), None)
         .unwrap_err();
     assert!(matches!(pq4, BlockError::UnsupportedValue(_)));

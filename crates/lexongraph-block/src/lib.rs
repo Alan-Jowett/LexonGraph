@@ -302,6 +302,11 @@ pub fn reconstruct_logical_branch_embedding_f32(
             let descriptor = descriptor.ok_or(BlockError::NonConforming(
                 "EBCP branch reconstruction requires a parsed EBCP descriptor",
             ))?;
+            if descriptor.logical_embedding_spec.dims != stored_spec.dims {
+                return Err(BlockError::NonConforming(
+                    "EBCP descriptor logical dims must match the stored embedding dims",
+                ));
+            }
             reconstruct_ebcp_logical_embedding(payload, stored_spec, descriptor)
         }
         _ => Err(BlockError::UnsupportedValue(
