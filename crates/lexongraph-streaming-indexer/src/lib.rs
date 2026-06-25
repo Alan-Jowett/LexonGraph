@@ -3015,10 +3015,29 @@ fn derive_hierarchy_for_single_built_in_phase(
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
+        phase,
+        embeddings,
+        embedding_spec,
+        materializability_bound,
+        None,
+        stage_observer,
+    )
+}
+
+fn derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
+    phase: BuiltInPlanningPhase,
+    embeddings: &[Vec<f32>],
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    fallback_group_cap: Option<usize>,
+    stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
+) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match phase.direction() {
-        BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder(
+        BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder_and_fallback_group_cap(
             embeddings,
             materializability_bound,
+            fallback_group_cap,
             stage_observer,
             |partition_embeddings| {
                 Ok(PartitionPlanner::new(
@@ -3258,7 +3277,7 @@ fn derive_hierarchy_from_published_profile(
             )
         }
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
-            derive_hierarchy_for_single_built_in_phase(
+            derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
                 BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
                     direction: BuiltInPlanningDirection::Divisive,
                     cluster_count: settings.cluster_count,
@@ -3268,6 +3287,7 @@ fn derive_hierarchy_from_published_profile(
                 embeddings,
                 embedding_spec,
                 effective_partition_bound,
+                published_profile_fallback_group_cap(profile, effective_partition_bound),
                 stage_observer,
             )
         }
@@ -3291,6 +3311,14 @@ fn published_profile_partition_bound(
         map_clustering_configuration_error("published profile cluster_count exceeds usize".into())
     })?;
     Ok(materializability_bound.min(cluster_count))
+}
+
+fn published_profile_fallback_group_cap(
+    profile: &PublishedIndexingProfile,
+    effective_partition_bound: usize,
+) -> Option<usize> {
+    let PublishedProfileVersion { major, minor, .. } = profile.version;
+    matches!((major, minor), (0, 6)).then_some(effective_partition_bound)
 }
 
 fn derive_hierarchy_from_published_spherical_kmeans_profile(
@@ -3571,6 +3599,28 @@ fn derive_hierarchy_with_builder<E, B, P, SO>(
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
     stage_observer: &mut SO,
+    planner_builder: B,
+) -> Result<PlanningPassOutcome, E>
+where
+    E: From<StreamingClusteringError>,
+    B: FnMut(&[Vec<f32>]) -> Result<P, E>,
+    P: PartitionPlannerRunner,
+    SO: FnMut(HierarchyPlanningStatusEvent),
+{
+    derive_hierarchy_with_builder_and_fallback_group_cap(
+        embeddings,
+        materializability_bound,
+        None,
+        stage_observer,
+        planner_builder,
+    )
+}
+
+fn derive_hierarchy_with_builder_and_fallback_group_cap<E, B, P, SO>(
+    embeddings: &[Vec<f32>],
+    materializability_bound: usize,
+    fallback_group_cap: Option<usize>,
+    stage_observer: &mut SO,
     mut planner_builder: B,
 ) -> Result<PlanningPassOutcome, E>
 where
@@ -3606,6 +3656,7 @@ where
         None,
         embeddings,
         materializability_bound,
+        fallback_group_cap,
         stage_observer,
         &mut telemetry,
         &mut planner_builder,
@@ -3840,6 +3891,7 @@ fn derive_partition_recursive<E, B, P, SO>(
     stage_hint: Option<PlanningStage>,
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
+    fallback_group_cap: Option<usize>,
     stage_observer: &mut SO,
     telemetry: &mut RecursivePlanningTelemetry,
     planner_builder: &mut B,
@@ -3927,10 +3979,12 @@ where
             &partition_id,
             StreamingIndexingStatusState::InProgress,
         ));
-        groups = balanced_groups(indices.len(), materializability_bound).map_err(|error| {
-            telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
-            E::from(invalid_config(error))
-        })?;
+        groups =
+            fallback_partition_groups(indices.len(), materializability_bound, fallback_group_cap)
+                .map_err(|error| {
+                telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+                E::from(invalid_config(error))
+            })?;
     }
 
     let child_ids = (0..groups.len())
@@ -3966,6 +4020,7 @@ where
             Some(stage),
             embeddings,
             materializability_bound,
+            fallback_group_cap,
             stage_observer,
             telemetry,
             planner_builder,
@@ -6199,6 +6254,37 @@ fn balanced_groups(len: usize, materializability_bound: usize) -> Result<Vec<Vec
     Ok(groups)
 }
 
+fn fallback_partition_groups(
+    len: usize,
+    materializability_bound: usize,
+    fallback_group_cap: Option<usize>,
+) -> Result<Vec<Vec<usize>>, String> {
+    let groups = balanced_groups(len, materializability_bound)?;
+    let Some(group_cap) = fallback_group_cap else {
+        return Ok(groups);
+    };
+    if groups.len() <= group_cap {
+        return Ok(groups);
+    }
+    if group_cap < 2 {
+        return Err(format!(
+            "cannot split {len} items under fallback fanout cap {group_cap}"
+        ));
+    }
+
+    let group_count = group_cap.min(len);
+    let base = len / group_count;
+    let remainder = len % group_count;
+    let mut capped_groups = Vec::with_capacity(group_count);
+    let mut next = 0usize;
+    for group_index in 0..group_count {
+        let size = base + usize::from(group_index < remainder);
+        capped_groups.push((next..next + size).collect());
+        next += size;
+    }
+    Ok(capped_groups)
+}
+
 fn verify_persisted_block_id(
     actual: BlockHash,
     expected: BlockHash,
@@ -6692,8 +6778,9 @@ pub mod conformance {
 mod tests {
     use super::{
         ChildSummaryInput, DirectionalPcaAllocationPolicy, allocate_variable_bit_widths,
-        effective_directional_pca_cluster_count, exact_centroid_child_summary, fit_ebcp_rotation,
-        uses_root_branch_budget, weighted_mean_f32_embeddings,
+        effective_directional_pca_cluster_count, exact_centroid_child_summary,
+        fallback_partition_groups, fit_ebcp_rotation, uses_root_branch_budget,
+        weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -6702,6 +6789,15 @@ mod tests {
         let mean = weighted_mean_f32_embeddings([(&[0.0f32, 2.0][..], 1), (&[6.0f32, 8.0][..], 3)])
             .expect("weighted mean should succeed");
         assert_eq!(mean, vec![4.5, 6.5]);
+    }
+
+    #[test]
+    fn fallback_partition_groups_caps_fanout_for_large_v0_6_degenerate_partitions() {
+        let groups = fallback_partition_groups(5_000, 64, Some(64))
+            .expect("capped fallback groups should succeed");
+        assert_eq!(groups.len(), 64);
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 5_000);
+        assert!(groups.iter().all(|group| !group.is_empty()));
     }
 
     #[test]
