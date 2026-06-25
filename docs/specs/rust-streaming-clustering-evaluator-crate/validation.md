@@ -301,7 +301,7 @@ Run one campaign whose training passes, evaluation replay entities, and probe
 workloads are supplied through zip-archive-backed corpus references.
 
 **Pass condition:** the evaluator resolves each referenced archive through a
-higher-priority temporary writable filesystem layer over a lower-priority
+higher-priority temporary filesystem cache layer over a lower-priority
 immutable zip layer and successfully consumes the resulting overlay-backed
 block-store view.
 
@@ -311,9 +311,9 @@ block-store view.
 
 Exercise the reusable filesystem-over-zip overlay helper, if present.
 
-**Pass condition:** new block creation through the helper lands in the mutable
-filesystem layer without mutating the underlying zip archive and without
-widening the parent `BlockStore` API.
+**Pass condition:** a successful read of a zip-resident block through the
+helper may refill the temporary filesystem cache layer without mutating the
+underlying zip archive and without widening the parent `BlockStore` API.
 
 **Traces to:** REQ-STREAM-EVAL-030
 

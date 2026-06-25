@@ -386,7 +386,6 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
 
 pub struct FsOverlayZipBlockStore {
     writable_layer: TempDir,
-    writable_store: FilesystemBlockStore,
     store: OverlayBlockStore,
 }
 
@@ -444,8 +443,8 @@ impl FsOverlayZipBlockStore {
                 }
             })?;
         let store = OverlayBlockStore::new(vec![
-            Box::new(PassiveLayer::new(writable_store.clone())) as Box<dyn OverlayStoreLayer>,
-            Box::new(PassiveLayer::new(zip_store)) as Box<dyn OverlayStoreLayer>,
+            Box::new(PassiveLayer::cache(writable_store.clone())) as Box<dyn OverlayStoreLayer>,
+            Box::new(PassiveLayer::read_only(zip_store)) as Box<dyn OverlayStoreLayer>,
         ])
         .map_err(|error| {
             ArchiveOverlayStoreError::TemporaryLayer(format!(
@@ -455,7 +454,6 @@ impl FsOverlayZipBlockStore {
 
         Ok(Self {
             writable_layer,
-            writable_store,
             store,
         })
     }
@@ -480,7 +478,7 @@ impl BlockStore for FsOverlayZipBlockStore {
         &self,
         block: &lexongraph_block::Block,
     ) -> Result<BlockHash, lexongraph_block_store::BlockStoreError> {
-        self.writable_store.put(block)
+        self.store.put(block)
     }
 
     fn get(

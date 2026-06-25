@@ -211,13 +211,13 @@ block-store-backed source.
 When the evaluator resolves an archive-backed corpus reference, it:
 
 1. opens the declared archive through the zip block-store implementation
-2. creates a temporary writable filesystem block-store layer
-3. composes the writable filesystem layer above the immutable zip layer through
-   the overlay block-store implementation
+2. creates a temporary filesystem-backed cache layer
+3. composes the cache filesystem layer above the immutable zip layer through the
+   overlay block-store implementation
 4. traverses the declared root block ID through the resulting overlay-backed
    block-store view
 
-The writable filesystem layer is evaluator-managed lifecycle state and is not a
+The filesystem cache layer is evaluator-managed lifecycle state and is not a
 required user-supplied benchmark-profile input.
 
 ### DSG-STREAM-EVAL-008E `Reusable overlay helper`
@@ -498,8 +498,9 @@ The checked-in harvested benchmark corpus asset required by this revision uses
 that same zip-native direct-consumption path.
 
 The user workflow therefore does not require a manual pre-decompression step.
-Any writable layer needed for block-store semantics remains evaluator-managed
-temporary state provided by the existing filesystem-over-zip overlay design.
+Any temporary cache layer needed for block-store semantics remains
+evaluator-managed state provided by the existing filesystem-over-zip overlay
+design.
 
 ### DSG-STREAM-EVAL-025 `Section-4 screening workflow`
 

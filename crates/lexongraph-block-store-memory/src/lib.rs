@@ -10,7 +10,6 @@ use lexongraph_block::{
     Block, BlockError, BlockHash, ValidatedBlock, deserialize_block, serialize_block,
 };
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
-use lexongraph_block_store_overlay::{OverlayGetOutcome, OverlayLayerNotifier, OverlayPutOutcome};
 
 #[derive(Clone)]
 pub struct MemoryBlockStore {
@@ -83,21 +82,6 @@ impl MemoryBlockStore {
         let mut state = self.state.lock().unwrap();
         state.insert_or_refresh(serialized.hash, serialized.bytes);
         Ok(serialized.hash)
-    }
-
-    fn refresh_residency_from_validated_block(
-        &self,
-        notified_block_id: &BlockHash,
-        block: &ValidatedBlock,
-    ) {
-        let Ok(serialized) = serialize_block(&block.block) else {
-            return;
-        };
-        if serialized.hash != block.hash || &block.hash != notified_block_id {
-            return;
-        }
-        let mut state = self.state.lock().unwrap();
-        state.insert_or_refresh(block.hash, serialized.bytes);
     }
 }
 
@@ -172,16 +156,6 @@ impl BlockStore for MemoryBlockStore {
             .collect::<Vec<_>>();
         Ok(Box::new(block_ids.into_iter().map(Ok)))
     }
-}
-
-impl OverlayLayerNotifier for MemoryBlockStore {
-    fn on_get_result(&self, block_id: &BlockHash, outcome: OverlayGetOutcome<'_>) {
-        if let OverlayGetOutcome::Hit(block) = outcome {
-            self.refresh_residency_from_validated_block(block_id, block);
-        }
-    }
-
-    fn on_put_result(&self, _block: &Block, _outcome: OverlayPutOutcome<'_>) {}
 }
 
 fn map_deserialize_error(error: BlockError) -> BlockStoreError {

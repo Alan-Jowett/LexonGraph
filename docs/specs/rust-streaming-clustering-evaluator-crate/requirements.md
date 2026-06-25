@@ -488,15 +488,14 @@ inputs, evaluation replay entities, and classifier-side probe workloads.
 For zip-archive-backed corpus sources, the benchmark profile shall not require
 the user to provide a writable overlay directory.
 
-The evaluator shall create and manage the temporary writable filesystem layer
-needed by the overlay for the duration of source resolution and any block
-creation performed through that overlay-backed view.
+The evaluator shall create and manage the temporary filesystem-backed cache
+layer needed by the overlay for the duration of source resolution.
 
 ### REQ-STREAM-EVAL-030
 
 If doing so reduces implementation duplication without widening the parent
 `BlockStore` API, the repository may expose a reusable helper or constructor for
-the mutable-filesystem-over-immutable-zip overlay used by the evaluator.
+the filesystem-cache-over-immutable-zip overlay used by the evaluator.
 
 ### REQ-STREAM-EVAL-031
 

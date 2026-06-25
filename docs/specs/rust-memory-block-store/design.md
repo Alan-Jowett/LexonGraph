@@ -15,7 +15,7 @@ The crate design is intended to be:
 - explicit about its volatile durability boundary
 - bounded by caller-supplied resident capacity
 - strict about inherited integrity and failure rules
-- reusable as a standalone backend or overlay-integrated read cache
+- reusable as a standalone backend or as an overlay-managed layer
 
 ## Crate Boundary
 
@@ -24,7 +24,7 @@ The crate owns:
 - memory-specific realization of `put`, `get`, and identifier enumeration
 - resident-capacity construction behavior
 - in-memory least-recently-used tracking and eviction
-- optional overlay read-population behavior via completed `get` notifications
+- no overlay-specific callback or notification surface
 
 The crate does not own:
 
@@ -43,8 +43,6 @@ The memory block-store crate depends on:
   validated decoding
 - the block-storage trait crate for the `BlockStore` trait and shared error
   taxonomy
-- the overlay block-store crate for the optional completed-operation
-  notification trait
 
 The memory block-store crate does not redefine those behaviors.
 
@@ -121,14 +119,11 @@ successful overlay-notified `get` hit promotion.
 
 ### DSG-MEM-STORE-009 `Overlay notification integration`
 
-The crate may implement `OverlayLayerNotifier`.
+Overlay compositions interact with this crate through ordinary `put`, `get`,
+and `iter_block_ids` only.
 
-On completed `get` hit notifications, the crate serializes the returned block,
-inserts or refreshes it in resident state, and applies the same LRU eviction
-rule used by direct `put`.
-
-Completed `get` miss and `get` error notifications are ignored. All completed
-`put` notifications are ignored in this revision.
+If an overlay chooses to refill a higher-level cache after a lower-layer read
+hit, it does so by calling the ordinary `put` contract owned by this crate.
 
 ### DSG-MEM-STORE-010 `Durability boundary`
 
@@ -145,13 +140,12 @@ guarantees remain owned by overlay composition choices outside this crate.
 The crate reuses the parent block-store conformance helpers to verify the shared
 `put`, `get`, and identifier-enumeration contract.
 
-The crate adds cache-specific tests for:
+The crate adds backend-specific tests for:
 
 - zero-capacity constructor failure
 - resident enumeration
 - least-recently-used eviction under direct access
-- notification-driven read population
-- absence of notification-driven writes
+- absence of any overlay-specific callback surface on the store itself
 
 ## Traceability
 
@@ -163,6 +157,6 @@ The crate adds cache-specific tests for:
 | DSG-MEM-STORE-006 | REQ-MEM-STORE-006, REQ-MEM-STORE-008 |
 | DSG-MEM-STORE-007 | REQ-MEM-STORE-007 |
 | DSG-MEM-STORE-008 | REQ-MEM-STORE-008, REQ-MEM-STORE-009 |
-| DSG-MEM-STORE-009 | REQ-MEM-STORE-009, REQ-MEM-STORE-010, REQ-MEM-STORE-011 |
+| DSG-MEM-STORE-009 | REQ-MEM-STORE-010, REQ-MEM-STORE-011 |
 | DSG-MEM-STORE-010 | REQ-MEM-STORE-004, REQ-MEM-STORE-010 |
 | DSG-MEM-STORE-011 | REQ-MEM-STORE-012 |

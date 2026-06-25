@@ -44,8 +44,8 @@ impl BlockStoreFactory for OverlayHarness {
         let high = SharedMemoryBlockStore::default();
         let low = SharedMemoryBlockStore::default();
         let overlay = OverlayBlockStore::new(vec![
-            Box::new(PassiveLayer::new(high)),
-            Box::new(PassiveLayer::new(low.clone())),
+            Box::new(PassiveLayer::cache(high)),
+            Box::new(PassiveLayer::writable(low.clone())),
         ])
         .unwrap();
 

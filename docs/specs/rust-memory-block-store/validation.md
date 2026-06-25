@@ -11,8 +11,7 @@ block-storage contract using volatile in-memory residency.
 
 These validation entries define the expected verification surface for the
 memory-backed implementation in addition to the parent protocol, block, and
-block-store trait requirements it depends on, including the overlay
-notification semantics layered in from `docs/specs/rust-overlay-block-store/`.
+block-store trait requirements it depends on.
 
 ## Validation Entries
 
@@ -86,41 +85,15 @@ reported.
 
 ### VAL-MEM-STORE-009
 
-Deliver a completed overlay `get` hit notification to an empty store.
+Inspect the store boundary when composing it with higher-level overlay policy.
 
-**Pass condition:** the returned block becomes resident and is subsequently
-retrievable by direct `get`.
+**Pass condition:** the memory store remains usable through the ordinary
+`BlockStore` contract without requiring overlay-specific notification or
+callback surfaces.
 
 **Traces to:** REQ-MEM-STORE-010, REQ-MEM-STORE-011
 
 ### VAL-MEM-STORE-010
-
-Deliver a completed overlay `get` hit notification for an already resident
-block, then force capacity pressure.
-
-**Pass condition:** the notified block's recency is refreshed and a different
-least-recently-used block is evicted.
-
-**Traces to:** REQ-MEM-STORE-008, REQ-MEM-STORE-009, REQ-MEM-STORE-010,
-REQ-MEM-STORE-011
-
-### VAL-MEM-STORE-011
-
-Deliver completed overlay `get` miss and `get` error notifications.
-
-**Pass condition:** neither notification creates resident state.
-
-**Traces to:** REQ-MEM-STORE-011
-
-### VAL-MEM-STORE-012
-
-Deliver completed overlay `put` success and `put` error notifications.
-
-**Pass condition:** neither notification creates or refreshes resident state.
-
-**Traces to:** REQ-MEM-STORE-011
-
-### VAL-MEM-STORE-013
 
 Run the parent block-store conformance suite against the memory-backed
 implementation.
@@ -130,16 +103,15 @@ contract.
 
 **Traces to:** REQ-MEM-STORE-012
 
-### VAL-MEM-STORE-014
+### VAL-MEM-STORE-011
 
 Inspect the implementation's public and behavioral boundary.
 
-**Pass condition:** the crate exposes a standalone volatile backend with
-optional overlay read-population support, remains subordinate to
-`docs/protocol/blocks.md`, `docs/specs/rust-block-crate/`,
-`docs/specs/rust-block-storage-trait/`, and
-`docs/specs/rust-overlay-block-store/` for their owned concerns, and does not
-claim durable lower-layer write propagation.
+**Pass condition:** the crate exposes a standalone volatile bounded backend,
+remains subordinate to `docs/protocol/blocks.md`,
+`docs/specs/rust-block-crate/`, and `docs/specs/rust-block-storage-trait/` for
+their owned concerns, and does not claim overlay-managed cache refill policy as
+part of its own API boundary.
 
 **Traces to:** REQ-MEM-STORE-002, REQ-MEM-STORE-004, REQ-MEM-STORE-010,
 REQ-MEM-STORE-011, REQ-MEM-STORE-012

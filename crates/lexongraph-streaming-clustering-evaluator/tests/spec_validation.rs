@@ -1297,7 +1297,8 @@ fn val_stream_eval_023_archive_backed_sources_cover_training_replay_and_probes()
 }
 
 #[test]
-fn val_stream_eval_024_overlay_helper_writes_new_blocks_only_to_the_mutable_fs_layer() {
+fn val_stream_eval_024_overlay_helper_refills_the_mutable_fs_cache_without_mutating_the_zip_archive()
+ {
     let profile = archive_backed_profile();
     let TrainingPassSource::BlockStore { corpus, .. } = &profile.training_passes[0] else {
         panic!("archive-backed fixture should use a block-store training pass");
@@ -1306,8 +1307,9 @@ fn val_stream_eval_024_overlay_helper_writes_new_blocks_only_to_the_mutable_fs_l
         panic!("archive-backed fixture should use zip archive corpus references");
     };
     let store = FsOverlayZipBlockStore::new(archive_path).unwrap();
-
-    let block = Block::Leaf(
+    let mut iter = store.iter_block_ids().unwrap();
+    let block_id = iter.next().unwrap().unwrap();
+    let new_block = Block::Leaf(
         build_leaf_block(
             VERSION_1,
             EmbeddingSpec {
@@ -1330,7 +1332,14 @@ fn val_stream_eval_024_overlay_helper_writes_new_blocks_only_to_the_mutable_fs_l
         .unwrap(),
     );
 
-    let block_id = store.put(&block).unwrap();
+    assert!(store.put(&new_block).is_err());
+    assert!(
+        FilesystemBlockStore::new(store.writable_layer_path())
+            .unwrap()
+            .get(&block_id)
+            .unwrap()
+            .is_none()
+    );
     assert!(store.get(&block_id).unwrap().is_some());
     assert!(
         FilesystemBlockStore::new(store.writable_layer_path())
@@ -1344,7 +1353,7 @@ fn val_stream_eval_024_overlay_helper_writes_new_blocks_only_to_the_mutable_fs_l
             .unwrap()
             .get(&block_id)
             .unwrap()
-            .is_none()
+            .is_some()
     );
 }
 

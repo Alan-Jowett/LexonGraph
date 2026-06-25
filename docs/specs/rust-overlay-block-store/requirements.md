@@ -61,16 +61,26 @@ encountered.
 
 ### REQ-OVERLAY-STORE-005
 
-`put` shall attempt layers in descending priority order and shall stop at the
-first layer that returns success.
+`put` shall attempt each direct-write-capable layer in descending priority
+order.
+
+Cache layers shall not participate in direct writes.
+
+Direct-write-capable layers that succeed shall return the content-addressed
+block ID for the block being stored.
 
 ### REQ-OVERLAY-STORE-006
 
-During `put`, the overlay shall continue to lower-priority layers when a
-higher-priority layer returns an explicit `BlockStoreError`.
+During `put`, the overlay shall skip layers designated as cache-only or
+read-only.
 
-If no layer accepts the write, the overlay shall return the last explicit error
-encountered.
+The overlay shall report success only when every direct-write-capable layer
+succeeds.
+
+If any direct-write-capable layer fails, the overlay shall return an explicit
+error.
+
+If no layer accepts direct writes, the overlay shall fail explicitly.
 
 ### REQ-OVERLAY-STORE-007
 
@@ -85,18 +95,16 @@ precedence rather than per-layer duplication.
 
 ### REQ-OVERLAY-STORE-009
 
-The overlay crate shall define an optional overlay-specific notification trait,
-separate from the parent `BlockStore` trait, that a layer may opt into to
-observe completed `get` and `put` outcomes.
-
-Layers that do not opt into this trait shall remain valid overlay
-participants.
+The overlay crate shall let callers classify each layer as cache, writable, or
+read-only without widening the parent `BlockStore` trait.
 
 ### REQ-OVERLAY-STORE-010
 
-After a `get` or `put` completes, the overlay shall notify participating layers
-in ascending order from lowest layer to highest layer using the completed
-operation result.
+After a `get` completes from a lower-priority layer, the overlay may write the
+retrieved block back into higher-priority cache layers.
+
+Write-back failure to one or more cache layers shall be non-fatal and shall not
+change the `get` result returned to the caller.
 
 ### REQ-OVERLAY-STORE-011
 
@@ -111,7 +119,7 @@ This crate does not define or own:
 - production backend implementations
 - write-through replication to all layers
 - cache eviction policy or persistence policy
-- notification behavior for identifier enumeration in this revision
+- store-specific notification hooks or callbacks
 
 ## Relationship to Other Specifications
 
