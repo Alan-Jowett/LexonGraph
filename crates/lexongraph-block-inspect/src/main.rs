@@ -574,23 +574,23 @@ struct LevelStats {
 
 impl LevelStats {
     fn observe_branch(&mut self, child_count: usize, serialized_bytes: u64) {
-        let child_count = u64::try_from(child_count).expect("usize child counts always fit in u64");
-        self.block_count += 1;
-        self.branch_block_count += 1;
-        self.total_children += child_count;
+        let child_count = lossless_child_count(child_count);
+        self.block_count = self.block_count.saturating_add(1);
+        self.branch_block_count = self.branch_block_count.saturating_add(1);
+        self.total_children = self.total_children.saturating_add(child_count);
         self.min_children = Some(
             self.min_children
                 .map_or(child_count, |current| current.min(child_count)),
         );
         self.max_children = self.max_children.max(child_count);
-        self.total_serialized_bytes += serialized_bytes;
+        self.total_serialized_bytes = self.total_serialized_bytes.saturating_add(serialized_bytes);
         self.max_serialized_bytes = self.max_serialized_bytes.max(serialized_bytes);
     }
 
     fn observe_leaf(&mut self, serialized_bytes: u64) {
-        self.block_count += 1;
-        self.leaf_block_count += 1;
-        self.total_serialized_bytes += serialized_bytes;
+        self.block_count = self.block_count.saturating_add(1);
+        self.leaf_block_count = self.leaf_block_count.saturating_add(1);
+        self.total_serialized_bytes = self.total_serialized_bytes.saturating_add(serialized_bytes);
         self.max_serialized_bytes = self.max_serialized_bytes.max(serialized_bytes);
     }
 
@@ -690,9 +690,7 @@ fn render_child_count_violation(violation: ChildCountViolation) -> Value {
         ("level", Value::Number(Number::from(violation.level))),
         (
             "child_count",
-            Value::Number(Number::from(
-                u64::try_from(violation.child_count).expect("usize child counts always fit in u64"),
-            )),
+            Value::Number(Number::from(lossless_child_count(violation.child_count))),
         ),
         (
             "serialized_bytes",
@@ -725,10 +723,12 @@ fn render_largest_block(block: LargestBlock) -> Value {
         (
             "child_count",
             block.child_count.map_or(Value::Null, |value| {
-                Value::Number(Number::from(
-                    u64::try_from(value).expect("usize child counts always fit in u64"),
-                ))
+                Value::Number(Number::from(lossless_child_count(value)))
             }),
         ),
     ])
+}
+
+fn lossless_child_count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
