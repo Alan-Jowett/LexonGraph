@@ -23,7 +23,7 @@ The crate owns:
 
 - overlay-specific construction and layer-adapter types
 - ordered dispatch for `get`, `put`, and `iter_block_ids`
-- optional outcome-notification hooks for `get` and `put`
+- overlay-owned layer roles and cache refill behavior
 
 The crate does not own:
 
@@ -31,7 +31,7 @@ The crate does not own:
 - production backend implementations
 - changes to the parent `BlockStore` trait
 - write replication to all layers
-- notification hooks for enumeration in this revision
+- store-specific notification hooks or callbacks
 
 ## Core Types
 
@@ -45,13 +45,15 @@ owns an ordered stack of two or more overlay layers.
 The dispatch order is descending priority: layer index 0 is the highest
 priority and the final layer is the lowest priority.
 
-### DSG-OVERLAY-003 `Layer adapters`
+### DSG-OVERLAY-003 `Layer adapters and roles`
 
 The crate defines an overlay-specific layer trait plus reusable adapter types
-for:
+that let the caller classify each participating `BlockStore` as:
 
-- passive participation by plain `BlockStore` implementations
-- participation with an optional outcome observer
+- a writable layer that accepts direct overlay `put`
+- a cache layer that is skipped for direct overlay `put` but may receive
+  overlay-managed write-back after a lower-layer `get` hit
+- a read-only layer that participates in reads and enumeration only
 
 Custom layer types may implement the overlay-specific layer trait directly.
 
@@ -75,12 +77,19 @@ absent; otherwise it returns the last recorded error.
 
 ### DSG-OVERLAY-006 `Write dispatch`
 
-`put(block)` walks layers from highest priority to lowest priority.
+`put(block)` walks layers from highest priority to lowest priority, attempting
+only layers classified as writable.
 
-- the first `Ok(block_id)` terminates successfully
-- `Err(error)` is recorded and falls through
+- cache layers are skipped
+- read-only layers are skipped
+- each writable layer is attempted in order
+- success is reported only if every writable layer succeeds with the
+  content-addressed block ID for the stored block
 
-If no layer succeeds, the overlay returns the last recorded error.
+If no writable layer exists, the overlay fails explicitly.
+
+If one or more writable layers fail, the overlay returns an explicit error
+after attempting all writable layers.
 
 ### DSG-OVERLAY-007 `Enumeration dispatch`
 
@@ -98,22 +107,17 @@ The overlay does not silently skip a layer whose enumeration cannot be started
 or continued, because the parent trait requires enumeration failures to be
 surfaced rather than omitted.
 
-### DSG-OVERLAY-009 `Notification trait`
+### DSG-OVERLAY-009 `Read-through cache refill`
 
-The crate defines an optional trait, separate from `BlockStore`, that a layer
-may expose to receive the completed outcome of `get` and `put`.
+When `get` succeeds from a lower-priority layer, the overlay may write the
+resolved block back into any higher-priority layers classified as caches.
 
-The notification surface carries the final operation result observed by the
-overlay, including successful block hits, misses, stored block IDs, and
-explicit failures.
+### DSG-OVERLAY-010 `Non-fatal cache refill`
 
-### DSG-OVERLAY-010 `Notification order`
+Cache-refill attempts are best-effort in this revision.
 
-After `get` or `put` completes, the overlay notifies participating layers from
-lowest priority to highest priority.
-
-Notification is observational in this revision: it must not alter the already
-determined result returned to the caller.
+Failure to refill one or more higher-priority cache layers does not alter the
+successful `get` result returned to the caller.
 
 ### DSG-OVERLAY-011 `Inherited integrity boundary`
 
@@ -127,9 +131,9 @@ semantics, or backend-neutral API boundary.
 
 | Design ID | Satisfies |
 |---|---|
-| DSG-OVERLAY-001..004 | REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-002 |
+| DSG-OVERLAY-001..004 | REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-002, REQ-OVERLAY-STORE-009 |
 | DSG-OVERLAY-005 | REQ-OVERLAY-STORE-003, REQ-OVERLAY-STORE-004, REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-006 | REQ-OVERLAY-STORE-005, REQ-OVERLAY-STORE-006, REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-007..008 | REQ-OVERLAY-STORE-007, REQ-OVERLAY-STORE-008, REQ-OVERLAY-STORE-011 |
-| DSG-OVERLAY-009..010 | REQ-OVERLAY-STORE-009, REQ-OVERLAY-STORE-010 |
+| DSG-OVERLAY-009..010 | REQ-OVERLAY-STORE-010 |
 | DSG-OVERLAY-011 | REQ-OVERLAY-STORE-011 |

@@ -56,18 +56,20 @@ absence; otherwise the overlay returns the last explicit error.
 
 ### VAL-OVERLAY-006
 
-Make a higher-priority layer reject `put` and a lower-priority layer accept it.
+Use an overlay with writable, cache, and read-only layers.
 
-**Pass condition:** `put` returns success from the first accepting layer and
-does not continue below that layer.
+**Pass condition:** `put` attempts every writable layer in order and skips
+cache and read-only layers.
 
 **Traces to:** REQ-OVERLAY-STORE-005, REQ-OVERLAY-STORE-006
 
 ### VAL-OVERLAY-007
 
-Make all layers fail `put`.
+Make one writable layer fail while other writable layers still exist later in
+priority order.
 
-**Pass condition:** the overlay returns the last explicit error.
+**Pass condition:** the overlay still attempts the later writable layers and
+returns an explicit error rather than reporting success.
 
 **Traces to:** REQ-OVERLAY-STORE-006
 
@@ -101,29 +103,28 @@ skipped.
 
 ### VAL-OVERLAY-011
 
-Use layers where some opt into notifications and some do not.
+Construct an overlay with no layer that accepts direct writes.
 
-**Pass condition:** operations complete normally and only opted-in layers are
-notified.
+**Pass condition:** `put` fails explicitly.
 
 **Traces to:** REQ-OVERLAY-STORE-009
 
 ### VAL-OVERLAY-012
 
-Complete a `get` via a lower-priority layer while higher-priority notification
-participants sit above it.
+Complete a `get` via a lower-priority layer while a higher-priority cache layer
+sits above it.
 
-**Pass condition:** notifications run from low priority to high priority and
-expose the final `get` result.
+**Pass condition:** the retrieved block is written back into the higher cache
+layer without widening the parent `BlockStore` trait.
 
 **Traces to:** REQ-OVERLAY-STORE-010
 
 ### VAL-OVERLAY-013
 
-Complete a `put` via a lower-priority layer after higher-priority failures.
+Cause cache write-back after a successful lower-layer `get` to fail.
 
-**Pass condition:** notifications run from low priority to high priority and
-expose the final `put` result.
+**Pass condition:** `get` still succeeds with the lower-layer block and the
+cache write-back failure remains non-fatal.
 
 **Traces to:** REQ-OVERLAY-STORE-010
 
@@ -131,7 +132,7 @@ expose the final `put` result.
 
 Inspect the public API surface.
 
-**Pass condition:** notification support is additive and optional, and the
-parent `BlockStore` trait remains unchanged.
+**Pass condition:** role-based layering is additive, and the parent
+`BlockStore` trait remains unchanged.
 
 **Traces to:** REQ-OVERLAY-STORE-009, REQ-OVERLAY-STORE-011

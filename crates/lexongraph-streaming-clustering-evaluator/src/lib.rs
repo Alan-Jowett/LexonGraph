@@ -385,8 +385,7 @@ impl<'de> Deserialize<'de> for BlockStoreReferenceStore {
 }
 
 pub struct FsOverlayZipBlockStore {
-    writable_layer: TempDir,
-    writable_store: FilesystemBlockStore,
+    cache_layer: TempDir,
     store: OverlayBlockStore,
 }
 
@@ -418,19 +417,19 @@ impl FsOverlayZipBlockStore {
     pub fn new(archive_path: impl AsRef<Path>) -> Result<Self, ArchiveOverlayStoreError> {
         if should_force_temp_layer_failure_for_tests() {
             return Err(ArchiveOverlayStoreError::TemporaryLayer(
-                "forced temporary writable-layer failure for tests".into(),
+                "forced temporary cache-layer failure for tests".into(),
             ));
         }
 
-        let writable_layer = tempfile::tempdir().map_err(|error| {
+        let cache_layer = tempfile::tempdir().map_err(|error| {
             ArchiveOverlayStoreError::TemporaryLayer(format!(
-                "failed to create temporary writable block-store layer for archive {}: {error}",
+                "failed to create temporary filesystem cache layer for archive {}: {error}",
                 archive_path.as_ref().display()
             ))
         })?;
-        let writable_store = FilesystemBlockStore::new(writable_layer.path()).map_err(|error| {
+        let cache_store = FilesystemBlockStore::new(cache_layer.path()).map_err(|error| {
             ArchiveOverlayStoreError::TemporaryLayer(format!(
-                "failed to open temporary writable block-store layer for archive {}: {error}",
+                "failed to open temporary filesystem cache layer for archive {}: {error}",
                 archive_path.as_ref().display()
             ))
         })?;
@@ -444,8 +443,8 @@ impl FsOverlayZipBlockStore {
                 }
             })?;
         let store = OverlayBlockStore::new(vec![
-            Box::new(PassiveLayer::new(writable_store.clone())) as Box<dyn OverlayStoreLayer>,
-            Box::new(PassiveLayer::new(zip_store)) as Box<dyn OverlayStoreLayer>,
+            Box::new(PassiveLayer::cache(cache_store)) as Box<dyn OverlayStoreLayer>,
+            Box::new(PassiveLayer::read_only(zip_store)) as Box<dyn OverlayStoreLayer>,
         ])
         .map_err(|error| {
             ArchiveOverlayStoreError::TemporaryLayer(format!(
@@ -453,15 +452,11 @@ impl FsOverlayZipBlockStore {
             ))
         })?;
 
-        Ok(Self {
-            writable_layer,
-            writable_store,
-            store,
-        })
+        Ok(Self { cache_layer, store })
     }
 
-    pub fn writable_layer_path(&self) -> &Path {
-        self.writable_layer.path()
+    pub fn cache_layer_path(&self) -> &Path {
+        self.cache_layer.path()
     }
 }
 
@@ -480,7 +475,7 @@ impl BlockStore for FsOverlayZipBlockStore {
         &self,
         block: &lexongraph_block::Block,
     ) -> Result<BlockHash, lexongraph_block_store::BlockStoreError> {
-        self.writable_store.put(block)
+        self.store.put(block)
     }
 
     fn get(

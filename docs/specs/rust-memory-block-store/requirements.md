@@ -18,11 +18,10 @@ This document is layered on top of:
 - `docs/protocol/blocks.md`
 - `docs/specs/rust-block-crate/`
 - `docs/specs/rust-block-storage-trait/`
-- `docs/specs/rust-overlay-block-store/`
 
 This document does not redefine the parent `BlockStore` contract. It adds only
-memory-backend-specific requirements needed to realize a volatile cache-oriented
-store in this repository.
+memory-backend-specific requirements needed to realize a volatile bounded store
+in this repository.
 
 ## Terminology
 
@@ -43,10 +42,9 @@ contract using volatile in-memory residency.
 ### REQ-MEM-STORE-002
 
 The memory block-store crate shall remain subordinate to
-`docs/protocol/blocks.md`, `docs/specs/rust-block-crate/`,
-`docs/specs/rust-block-storage-trait/`, and
-`docs/specs/rust-overlay-block-store/` for block identity, validation, the
-backend-neutral `BlockStore` contract, and overlay notification semantics.
+`docs/protocol/blocks.md`, `docs/specs/rust-block-crate/`, and
+`docs/specs/rust-block-storage-trait/` for block identity, validation, and the
+backend-neutral `BlockStore` contract.
 
 ### REQ-MEM-STORE-003
 
@@ -91,15 +89,17 @@ reporting success.
 
 ### REQ-MEM-STORE-010
 
-The memory block-store crate may implement the overlay crate's optional
-notification trait so it can populate or refresh cache residency after a
-completed overlay `get` returns `Ok(Some(validated_block))`.
+The memory block-store crate shall remain usable as either a writable layer or
+cache layer when composed by the overlay crate, without requiring any
+store-specific interface beyond the parent `BlockStore` contract.
 
 ### REQ-MEM-STORE-011
 
-Notification-driven cache population in this revision shall occur only for
-successful completed `get` outcomes and shall not occur for `get` miss, `get`
-error, or any `put` outcome.
+Overlay-managed cache refill, direct-write routing, and write-back policy shall
+remain outside this crate.
+
+This crate shall not expose notification or callback surfaces beyond the parent
+`BlockStore` contract.
 
 ### REQ-MEM-STORE-012
 
@@ -117,16 +117,15 @@ This crate does not define or own:
 - cross-process or shared-memory cache coherence
 - background refresh or prefetch behavior
 - changes to the parent `BlockStore` trait
-- changes to overlay `put` dispatch semantics
+- overlay-managed cache refill or direct-write policy
 
 ## Relationship to Other Specifications
 
 This document is subordinate to `docs/protocol/blocks.md`.
 
 This document is also subordinate to the `docs/specs/rust-block-crate/`,
-`docs/specs/rust-block-storage-trait/`, and
-`docs/specs/rust-overlay-block-store/` specification packages for their
-respective concerns.
+`docs/specs/rust-block-storage-trait/` specification package for its owned
+concerns.
 
 If this document appears to conflict with those authorities, they are
 authoritative for their owned concerns.

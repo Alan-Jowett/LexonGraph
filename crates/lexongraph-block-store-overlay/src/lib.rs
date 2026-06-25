@@ -3,57 +3,86 @@
 //! Overlay `BlockStore` implementation for LexonGraph blocks.
 //!
 //! The overlay presents a single `BlockStore` over an ordered stack of layers:
-//! reads and writes walk layers from highest priority to lowest priority, while
-//! optional outcome notifications flow from lowest priority to highest priority.
+//! reads walk layers from highest priority to lowest priority, direct writes
+//! target only writable layers, and successful lower-layer reads may refill
+//! higher-priority cache layers.
 
 use std::collections::HashSet;
 use std::fmt;
 
-use lexongraph_block::{Block, BlockHash, ValidatedBlock};
+use lexongraph_block::{Block, BlockHash, ValidatedBlock, serialize_block};
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 
-pub trait OverlayLayerNotifier {
-    fn on_get_result(&self, block_id: &BlockHash, outcome: OverlayGetOutcome<'_>);
-
-    fn on_put_result(&self, block: &Block, outcome: OverlayPutOutcome<'_>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlayLayerRole {
+    Cache,
+    Writable,
+    ReadOnly,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum OverlayGetOutcome<'a> {
-    Hit(&'a ValidatedBlock),
-    Miss,
-    Error(&'a BlockStoreError),
+impl OverlayLayerRole {
+    fn accepts_direct_writes(self) -> bool {
+        matches!(self, Self::Writable)
+    }
+
+    fn accepts_refill(self) -> bool {
+        matches!(self, Self::Cache)
+    }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum OverlayPutOutcome<'a> {
-    Stored {
-        block: &'a Block,
-        block_id: BlockHash,
-    },
-    Error {
-        block: &'a Block,
-        error: &'a BlockStoreError,
-    },
+impl fmt::Display for OverlayLayerRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cache => f.write_str("cache"),
+            Self::Writable => f.write_str("writable"),
+            Self::ReadOnly => f.write_str("read-only"),
+        }
+    }
 }
 
 pub trait OverlayStoreLayer: BlockStore {
-    fn notifier(&self) -> Option<&dyn OverlayLayerNotifier> {
-        None
+    fn role(&self) -> OverlayLayerRole {
+        OverlayLayerRole::Writable
     }
 }
 
 pub struct PassiveLayer<S> {
     store: S,
+    role: OverlayLayerRole,
 }
 
 impl<S> PassiveLayer<S> {
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self::writable(store)
+    }
+
+    pub fn cache(store: S) -> Self {
+        Self {
+            store,
+            role: OverlayLayerRole::Cache,
+        }
+    }
+
+    pub fn writable(store: S) -> Self {
+        Self {
+            store,
+            role: OverlayLayerRole::Writable,
+        }
+    }
+
+    pub fn read_only(store: S) -> Self {
+        Self {
+            store,
+            role: OverlayLayerRole::ReadOnly,
+        }
     }
 
     pub fn into_inner(self) -> S {
         self.store
+    }
+
+    pub fn role(&self) -> OverlayLayerRole {
+        self.role
     }
 }
 
@@ -71,44 +100,9 @@ impl<S: BlockStore> BlockStore for PassiveLayer<S> {
     }
 }
 
-impl<S: BlockStore> OverlayStoreLayer for PassiveLayer<S> {}
-
-pub struct ObservedLayer<S, O> {
-    store: S,
-    observer: O,
-}
-
-impl<S, O> ObservedLayer<S, O> {
-    pub fn new(store: S, observer: O) -> Self {
-        Self { store, observer }
-    }
-
-    pub fn into_parts(self) -> (S, O) {
-        (self.store, self.observer)
-    }
-}
-
-impl<S: BlockStore, O> BlockStore for ObservedLayer<S, O> {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.store.put(block)
-    }
-
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-        self.store.get(block_id)
-    }
-
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        self.store.iter_block_ids()
-    }
-}
-
-impl<S, O> OverlayStoreLayer for ObservedLayer<S, O>
-where
-    S: BlockStore,
-    O: OverlayLayerNotifier,
-{
-    fn notifier(&self) -> Option<&dyn OverlayLayerNotifier> {
-        Some(&self.observer)
+impl<S: BlockStore> OverlayStoreLayer for PassiveLayer<S> {
+    fn role(&self) -> OverlayLayerRole {
+        self.role
     }
 }
 
@@ -166,36 +160,10 @@ impl OverlayBlockStore {
         self.layers.len()
     }
 
-    fn notify_get(
-        &self,
-        block_id: &BlockHash,
-        result: &Result<Option<ValidatedBlock>, BlockStoreError>,
-    ) {
-        let outcome = match result {
-            Ok(Some(block)) => OverlayGetOutcome::Hit(block),
-            Ok(None) => OverlayGetOutcome::Miss,
-            Err(error) => OverlayGetOutcome::Error(error),
-        };
-
-        for layer in self.layers.iter().rev() {
-            if let Some(notifier) = layer.notifier() {
-                notifier.on_get_result(block_id, outcome);
-            }
-        }
-    }
-
-    fn notify_put(&self, block: &Block, result: &Result<BlockHash, BlockStoreError>) {
-        let outcome = match result {
-            Ok(block_id) => OverlayPutOutcome::Stored {
-                block,
-                block_id: *block_id,
-            },
-            Err(error) => OverlayPutOutcome::Error { block, error },
-        };
-
-        for layer in self.layers.iter().rev() {
-            if let Some(notifier) = layer.notifier() {
-                notifier.on_put_result(block, outcome);
+    fn refill_cache_layers(&self, hit_index: usize, block: &Block) {
+        for layer in &self.layers[..hit_index] {
+            if layer.role().accepts_refill() {
+                let _ = layer.put(block);
             }
         }
     }
@@ -211,47 +179,58 @@ impl fmt::Debug for OverlayBlockStore {
 
 impl BlockStore for OverlayBlockStore {
     fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+        let expected_id = serialize_block(block)
+            .map_err(BlockStoreError::ContractViolation)?
+            .hash;
+        let mut attempted_write = false;
         let mut last_error = None;
 
         for layer in &self.layers {
+            if !layer.role().accepts_direct_writes() {
+                continue;
+            }
+            attempted_write = true;
             match layer.put(block) {
+                Ok(block_id) if block_id == expected_id => {}
                 Ok(block_id) => {
-                    let result = Ok(block_id);
-                    self.notify_put(block, &result);
-                    return result;
+                    last_error = Some(backend_failure(format!(
+                        "overlay layer returned unexpected block ID {block_id} for block {expected_id}"
+                    )));
                 }
                 Err(error) => last_error = Some(error),
             }
         }
 
-        let result =
-            Err(last_error
-                .expect("overlay block store construction guarantees at least two layers"));
-        self.notify_put(block, &result);
-        result
+        if !attempted_write {
+            return Err(backend_failure(
+                "overlay block store has no layers that accept direct writes".into(),
+            ));
+        }
+
+        match last_error {
+            Some(error) => Err(error),
+            None => Ok(expected_id),
+        }
     }
 
     fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
         let mut last_error = None;
 
-        for layer in &self.layers {
+        for (index, layer) in self.layers.iter().enumerate() {
             match layer.get(block_id) {
                 Ok(Some(block)) => {
-                    let result = Ok(Some(block));
-                    self.notify_get(block_id, &result);
-                    return result;
+                    self.refill_cache_layers(index, &block.block);
+                    return Ok(Some(block));
                 }
                 Ok(None) => {}
                 Err(error) => last_error = Some(error),
             }
         }
 
-        let result = match last_error {
+        match last_error {
             Some(error) => Err(error),
             None => Ok(None),
-        };
-        self.notify_get(block_id, &result);
-        result
+        }
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
@@ -329,4 +308,8 @@ impl Iterator for OverlayBlockIdIterator<'_> {
             }
         }
     }
+}
+
+fn backend_failure(message: String) -> BlockStoreError {
+    BlockStoreError::BackendFailure(message)
 }
