@@ -1906,7 +1906,7 @@ fn validate_published_profile_configuration(
             profile.version
         )));
     }
-    if !matches!((major, minor), (0, 4) | (0, 5)) {
+    if !matches!((major, minor), (0, 4) | (0, 5) | (0, 6)) {
         return Ok(());
     }
 
@@ -3290,7 +3290,7 @@ fn published_profile_partition_bound(
     let cluster_count = usize::try_from(settings.cluster_count).map_err(|_| {
         map_clustering_configuration_error("published profile cluster_count exceeds usize".into())
     })?;
-    Ok(materializability_bound.min(cluster_count.max(2)))
+    Ok(materializability_bound.min(cluster_count))
 }
 
 fn derive_hierarchy_from_published_spherical_kmeans_profile(

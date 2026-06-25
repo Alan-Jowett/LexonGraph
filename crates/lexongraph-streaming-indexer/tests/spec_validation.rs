@@ -4509,6 +4509,40 @@ fn val_stream_indexer_094_published_profile_v0_6_0_preserves_v0_5_0_baseline_set
     );
 }
 
+#[test]
+fn val_stream_indexer_094b_v0_6_profiles_fail_when_materializability_conflicts_with_requested_fanout()
+ {
+    let result = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_6_1,
+        embedding_spec_f32(),
+        128,
+    );
+    let error: StreamingIndexerError = match result {
+        Ok(_) => {
+            panic!("v0.6.1 should fail when materializability conflicts with requested fanout")
+        }
+        Err(error) => error,
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("published profile 0.6.1 requires cluster_count 64"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("block-size/materializability bound"),
+        "unexpected error: {message}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_095_published_profile_v0_6_0_caps_branch_fanout_without_mutating_v0_5_0()
  {
