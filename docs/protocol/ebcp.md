@@ -239,10 +239,10 @@ After decoding all dimensions:
 
 `x = base_centroid + d`
 
-## Level-Budget Contract for the `0.5.x` Ladder
+## Level-Budget Contract for the `0.5.x` and `0.6.x` Ladders
 
 This protocol document defines encodings generically. The published `0.5.x`
-indexing ladder uses them with the following declared budgets:
+and `0.6.x` indexing ladders use them with the following declared budgets:
 
 - root non-leaf blocks: 12 bits per dimension for the uniform rung
 - interior non-leaf blocks above the lowest routing layer: 8 bits per dimension

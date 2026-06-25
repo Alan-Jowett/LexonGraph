@@ -1013,6 +1013,102 @@ When a `0.5.x` profile emits an EBCP-encoded non-leaf block, the emitted block
 shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,
 including the required `ext` metadata for the selected EBCP encoding.
 
+### REQ-STREAM-INDEXER-103
+
+The repository shall publish a parallel experimental `0.6.x` compression ladder
+alongside the existing published indexing profiles.
+
+Each `0.6.x` profile shall remain explicitly resolvable through the stable
+published-profile selector, shall remain compatible with the quality-report
+workflow, and shall not mutate the declared behavior of existing `0.1.x`,
+`0.2.x`, `0.3.x`, `0.4.x`, or `0.5.x` profiles.
+
+### REQ-STREAM-INDEXER-104
+
+Published indexing profile `0.6.0` shall define the baseline contract for the
+experimental `0.6.x` ladder.
+
+It shall preserve the same directional-PCA planning parameters and ordinary
+uncompressed non-leaf branch-entry representation as published indexing profile
+`0.5.0`, except that the configured `cluster_count` becomes an opt-in hard
+maximum child count for every emitted non-leaf block.
+
+### REQ-STREAM-INDEXER-105
+
+Published indexing profile `0.6.1` shall preserve the `0.6.0` fanout-capped
+topology and logical branch centroids while authoring non-leaf branch-entry
+embeddings with the EBCP encoding `pca-rot-f32le`.
+
+### REQ-STREAM-INDEXER-106
+
+Published indexing profile `0.6.2` shall preserve the `0.6.0` fanout-capped
+topology and logical branch centroids while authoring non-leaf branch-entry
+embeddings with the EBCP encoding `pca-rot-delta-f32le`.
+
+### REQ-STREAM-INDEXER-107
+
+Published indexing profile `0.6.3` shall preserve the `0.6.0` fanout-capped
+topology while authoring non-leaf branch-entry embeddings with the EBCP
+encoding `pca-rot-delta-uq`.
+
+For the `0.6.3` ladder rung, the uniform per-dimension quantization budget
+shall be:
+
+- `12` bits on the root non-leaf level
+- `8` bits on interior non-leaf levels above the lowest routing layer
+- `6` bits on the lowest routing non-leaf level whose children are leaf blocks
+
+### REQ-STREAM-INDEXER-108
+
+Published indexing profile `0.6.4` shall preserve the `0.6.0` fanout-capped
+topology while authoring non-leaf branch-entry embeddings with the EBCP
+encoding `pca-rot-delta-vbq`.
+
+For the `0.6.4` ladder rung, each non-leaf block shall use the same total
+per-level bit budget that `0.6.3` would have used at that level and
+dimensionality, redistributed across dimensions according to variance.
+
+### REQ-STREAM-INDEXER-109
+
+Published indexing profile `0.6.5` shall preserve the `0.6.0` fanout-capped
+topology while authoring non-leaf branch-entry embeddings with the EBCP
+encoding `ambient-delta-uq`.
+
+For the `0.6.5` ladder rung, the uniform per-dimension quantization budget
+shall be:
+
+- `12` bits on the root non-leaf level
+- `8` bits on interior non-leaf levels above the lowest routing layer
+- `6` bits on the lowest routing non-leaf level whose children are leaf blocks
+
+### REQ-STREAM-INDEXER-110
+
+The `0.6.x` ladder shall apply the published directional-PCA `cluster_count` as
+an opt-in hard maximum child count for every non-leaf block by continuing to
+subdivide partitions until they satisfy both that cap and the configured branch
+materializability limit.
+
+This rule applies only to the selected `0.6.x` profile and shall not
+retroactively change the emitted topology of any earlier published ladder.
+
+### REQ-STREAM-INDEXER-111
+
+The `0.6.x` ladder applies only to selected opt-in profiles and to stored
+non-leaf branch-entry representations plus the associated fanout-capped
+partition hierarchy.
+
+It shall not:
+
+- alter leaf-block payload encodings
+- require out-of-band search-side state to interpret authored blocks
+- mutate the declared mapping of any `0.1.x` through `0.5.x` published profile
+
+### REQ-STREAM-INDEXER-112
+
+When a `0.6.x` profile emits an EBCP-encoded non-leaf block, the emitted block
+shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,
+including the required `ext` metadata for the selected EBCP encoding.
+
 ## Out of Scope
 
 This crate does not define or own:

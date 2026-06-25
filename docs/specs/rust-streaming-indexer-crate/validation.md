@@ -1099,3 +1099,98 @@ and selecting any `0.5.x` profile does not mutate the declared mapping of
 `0.5.0` or any earlier published profile.
 
 **Traces to:** REQ-STREAM-INDEXER-094, REQ-STREAM-INDEXER-095
+
+### VAL-STREAM-INDEXER-094
+
+Resolve published indexing profile `0.6.0` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+same directional-PCA planning parameters and ordinary uncompressed non-leaf
+branch-entry representation as `0.5.0`, and advertises the new opt-in
+fanout-capped topology contract.
+
+**Traces to:** REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-104
+
+### VAL-STREAM-INDEXER-095
+
+Run published indexing profiles `0.5.0` and `0.6.0` under the same large
+block-size target on a dataset whose first `64`-way split leaves child
+partitions larger than `64` items.
+
+**Pass condition:** `0.5.0` preserves its earlier uncapped fanout behavior,
+while `0.6.0` recursively subdivides until every emitted non-leaf block has at
+most `cluster_count` children.
+
+**Traces to:** REQ-STREAM-INDEXER-104, REQ-STREAM-INDEXER-110,
+REQ-STREAM-INDEXER-111
+
+### VAL-STREAM-INDEXER-096
+
+Resolve published indexing profile `0.6.1` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.6.0` fanout-capped topology contract, and changes only the authored non-leaf
+branch-entry representation to EBCP `pca-rot-f32le`.
+
+**Traces to:** REQ-STREAM-INDEXER-105, REQ-STREAM-INDEXER-111,
+REQ-STREAM-INDEXER-112
+
+### VAL-STREAM-INDEXER-097
+
+Resolve published indexing profile `0.6.2` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.6.0` fanout-capped topology contract, and changes only the authored non-leaf
+branch-entry representation to EBCP `pca-rot-delta-f32le`.
+
+**Traces to:** REQ-STREAM-INDEXER-106, REQ-STREAM-INDEXER-111,
+REQ-STREAM-INDEXER-112
+
+### VAL-STREAM-INDEXER-098
+
+Resolve published indexing profile `0.6.3` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.6.0` fanout-capped topology contract, uses EBCP `pca-rot-delta-uq`, and
+assigns uniform per-dimension bit widths of `12`, `8`, and `6` on the root,
+interior, and lowest routing non-leaf levels respectively.
+
+**Traces to:** REQ-STREAM-INDEXER-107, REQ-STREAM-INDEXER-111,
+REQ-STREAM-INDEXER-112
+
+### VAL-STREAM-INDEXER-099
+
+Resolve published indexing profile `0.6.4` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.6.0` fanout-capped topology contract, uses EBCP `pca-rot-delta-vbq`, and
+preserves the same total per-level bit budget that `0.6.3` would have used at
+the same level and dimensionality while redistributing those bits by variance.
+
+**Traces to:** REQ-STREAM-INDEXER-108, REQ-STREAM-INDEXER-111,
+REQ-STREAM-INDEXER-112
+
+### VAL-STREAM-INDEXER-099b
+
+Resolve published indexing profile `0.6.5` through the convenience surface.
+
+**Pass condition:** the selected profile resolves successfully, preserves the
+`0.6.0` fanout-capped topology contract, uses EBCP `ambient-delta-uq`, assigns
+uniform per-dimension bit widths of `12`, `8`, and `6` on the root, interior,
+and lowest routing non-leaf levels respectively, and emits no rotation
+metadata.
+
+**Traces to:** REQ-STREAM-INDEXER-109, REQ-STREAM-INDEXER-111,
+REQ-STREAM-INDEXER-112
+
+### VAL-STREAM-INDEXER-100
+
+Resolve the full published profile set, including the `0.4.x`, `0.5.x`, and
+`0.6.x` ladders, more than once under identical conditions.
+
+**Pass condition:** profile resolution remains deterministic for each version,
+the `0.6.x` ladder remains explicitly addressable alongside earlier ladders,
+and selecting any `0.6.x` profile does not mutate the declared mapping of
+`0.5.0` or any earlier published profile.
+
+**Traces to:** REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-111
