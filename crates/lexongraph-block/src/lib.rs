@@ -619,12 +619,19 @@ fn decode_f16le_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockEr
             "f16le branch payload length does not match embedding dims",
         ));
     }
-    Ok(payload
+    payload
         .chunks_exact(2)
         .map(|chunk| {
-            f16::from_le_bytes(chunk.try_into().expect("chunk size is validated")).to_f32()
+            let value =
+                f16::from_le_bytes(chunk.try_into().expect("chunk size is validated")).to_f32();
+            if !value.is_finite() {
+                return Err(BlockError::InvalidEntryShape(
+                    "f16le branch payload must contain only finite values",
+                ));
+            }
+            Ok(value)
         })
-        .collect())
+        .collect::<Result<Vec<_>, _>>()
 }
 
 fn decode_i8_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockError> {

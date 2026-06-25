@@ -32,6 +32,7 @@
 //! let _ = std::any::type_name::<conformance::ConformanceError>();
 //! ```
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
@@ -738,15 +739,17 @@ impl<EC, CS> Searcher<EC, CS> {
                                     block_id: *block_id,
                                     message: error.to_string(),
                                 })?;
-                                reconstructed
-                                    .iter()
-                                    .flat_map(|value| value.to_le_bytes())
-                                    .collect::<Vec<_>>()
+                                Cow::Owned(
+                                    reconstructed
+                                        .iter()
+                                        .flat_map(|value| value.to_le_bytes())
+                                        .collect::<Vec<_>>(),
+                                )
                             }
-                            None => entry.embedding.clone(),
+                            None => Cow::Borrowed(entry.embedding.as_slice()),
                         };
                     self.scorer
-                        .score(target, candidate_embedding.as_slice(), comparison_spec)
+                        .score(target, &candidate_embedding, comparison_spec)
                         .map(|score| SearchCandidate::Branch {
                             child: entry.child,
                             depth: depth + 1,

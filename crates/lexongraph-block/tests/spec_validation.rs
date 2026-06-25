@@ -865,6 +865,11 @@ fn val_029_branch_embedding_reconstruction_fails_explicitly_for_unsupported_or_m
     .unwrap_err();
     assert!(matches!(bad_f32_payload, BlockError::InvalidEntryShape(_)));
 
+    let non_finite_f16 =
+        reconstruct_logical_branch_embedding_f32(&[0x00, 0x7C], &embedding_spec("f16le"), None)
+            .unwrap_err();
+    assert!(matches!(non_finite_f16, BlockError::InvalidEntryShape(_)));
+
     let pq4 = reconstruct_logical_branch_embedding_f32(&[0xAB], &embedding_spec("pq4"), None)
         .unwrap_err();
     assert!(matches!(pq4, BlockError::UnsupportedValue(_)));
