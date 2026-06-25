@@ -210,7 +210,7 @@ fn analyze_tree(
     let mut branch_block_count = 0_usize;
     let mut leaf_block_count = 0_usize;
     let mut level_stats = BTreeMap::<u64, LevelStats>::new();
-    let mut max_children_in_block = 0_usize;
+    let mut max_children_in_block = 0_u64;
     let mut max_serialized_bytes = 0_u64;
     let mut max_child_count_block = None::<ChildCountViolation>;
     let mut largest_blocks = Vec::<LargestBlock>::new();
@@ -237,7 +237,7 @@ fn analyze_tree(
                 hash: validated.hash,
                 level: block_level(&validated.block),
                 serialized_bytes,
-                child_count: branch_child_count(&validated.block),
+                child_count: branch_child_count(&validated.block)?,
                 kind: block_kind(&validated.block),
             },
         );
@@ -248,7 +248,11 @@ fn analyze_tree(
                     root_level = Some(branch.level);
                 }
                 branch_block_count += 1;
-                let child_count = branch.entries.len();
+                let child_count = u64::try_from(branch.entries.len()).map_err(|_| {
+                    InspectError::InspectionBoundary(
+                        "branch child count does not fit in u64".to_owned(),
+                    )
+                })?;
                 max_children_in_block = max_children_in_block.max(child_count);
 
                 if max_child_count_block
@@ -263,7 +267,7 @@ fn analyze_tree(
                     });
                 }
 
-                if child_count > expected_max_children {
+                if branch.entries.len() > expected_max_children {
                     child_cap_violations.push(ChildCountViolation {
                         hash: validated.hash,
                         level: branch.level,
@@ -338,13 +342,7 @@ fn analyze_tree(
         ),
         (
             "max_children_in_block",
-            Value::Number(Number::from(u64::try_from(max_children_in_block).map_err(
-                |_| {
-                    InspectError::InspectionBoundary(
-                        "max child count does not fit in u64".to_owned(),
-                    )
-                },
-            )?)),
+            Value::Number(Number::from(max_children_in_block)),
         ),
         (
             "blocks_exceeding_child_cap_count",
@@ -573,8 +571,7 @@ struct LevelStats {
 }
 
 impl LevelStats {
-    fn observe_branch(&mut self, child_count: usize, serialized_bytes: u64) {
-        let child_count = lossless_child_count(child_count);
+    fn observe_branch(&mut self, child_count: u64, serialized_bytes: u64) {
         self.block_count = self.block_count.saturating_add(1);
         self.branch_block_count = self.branch_block_count.saturating_add(1);
         self.total_children = self.total_children.saturating_add(child_count);
@@ -651,7 +648,7 @@ impl LevelStats {
 struct ChildCountViolation {
     hash: BlockHash,
     level: u64,
-    child_count: usize,
+    child_count: u64,
     serialized_bytes: u64,
 }
 
@@ -659,7 +656,7 @@ struct LargestBlock {
     hash: BlockHash,
     level: u64,
     serialized_bytes: u64,
-    child_count: Option<usize>,
+    child_count: Option<u64>,
     kind: &'static str,
 }
 
@@ -670,10 +667,12 @@ fn block_level(block: &Block) -> u64 {
     }
 }
 
-fn branch_child_count(block: &Block) -> Option<usize> {
+fn branch_child_count(block: &Block) -> Result<Option<u64>, InspectError> {
     match block {
-        Block::Branch(branch) => Some(branch.entries.len()),
-        Block::Leaf(_) => None,
+        Block::Branch(branch) => u64::try_from(branch.entries.len()).map(Some).map_err(|_| {
+            InspectError::InspectionBoundary("branch child count does not fit in u64".to_owned())
+        }),
+        Block::Leaf(_) => Ok(None),
     }
 }
 
@@ -694,7 +693,7 @@ fn render_child_count_violation(violation: ChildCountViolation) -> Value {
         ("level", Value::Number(Number::from(violation.level))),
         (
             "child_count",
-            Value::Number(Number::from(lossless_child_count(violation.child_count))),
+            Value::Number(Number::from(violation.child_count)),
         ),
         (
             "serialized_bytes",
@@ -726,13 +725,9 @@ fn render_largest_block(block: LargestBlock) -> Value {
         ),
         (
             "child_count",
-            block.child_count.map_or(Value::Null, |value| {
-                Value::Number(Number::from(lossless_child_count(value)))
-            }),
+            block
+                .child_count
+                .map_or(Value::Null, |value| Value::Number(Number::from(value))),
         ),
     ])
-}
-
-fn lossless_child_count(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
