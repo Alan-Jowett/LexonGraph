@@ -136,3 +136,35 @@ Inspect the public API surface.
 `BlockStore` trait remains unchanged.
 
 **Traces to:** REQ-OVERLAY-STORE-009, REQ-OVERLAY-STORE-011
+
+### VAL-OVERLAY-015
+
+Make a writable layer report success with a block ID that does not match the
+canonical content-addressed ID for the input block.
+
+**Pass condition:** `put` fails explicitly rather than reporting success with an
+incorrect block ID.
+
+**Traces to:** REQ-OVERLAY-STORE-005, REQ-OVERLAY-STORE-006
+
+### VAL-OVERLAY-016
+
+Type-check the overlay public composition surface in a compile-time assertion
+context.
+
+**Pass condition:** `OverlayBlockStore` and the overlay-owned public layer
+abstractions used for composition satisfy `Send + Sync`.
+
+**Traces to:** REQ-OVERLAY-STORE-012
+
+### VAL-OVERLAY-017
+
+Construct one overlay from the repository's `MemoryBlockStore`,
+`FilesystemBlockStore`, and `AzureBlobBlockStore` using only overlay-owned role
+adapters and construction entry points.
+
+**Pass condition:** the heterogeneous composition succeeds without downstream
+code reimplementing overlay read ordering, write ordering, or enumeration
+de-duplication behavior.
+
+**Traces to:** REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-009, REQ-OVERLAY-STORE-013

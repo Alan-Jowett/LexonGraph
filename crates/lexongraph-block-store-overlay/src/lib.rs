@@ -40,7 +40,7 @@ impl fmt::Display for OverlayLayerRole {
     }
 }
 
-pub trait OverlayStoreLayer: BlockStore {
+pub trait OverlayStoreLayer: BlockStore + Send + Sync {
     fn role(&self) -> OverlayLayerRole {
         OverlayLayerRole::Writable
     }
@@ -100,7 +100,7 @@ impl<S: BlockStore> BlockStore for PassiveLayer<S> {
     }
 }
 
-impl<S: BlockStore> OverlayStoreLayer for PassiveLayer<S> {
+impl<S: BlockStore + Send + Sync> OverlayStoreLayer for PassiveLayer<S> {
     fn role(&self) -> OverlayLayerRole {
         self.role
     }

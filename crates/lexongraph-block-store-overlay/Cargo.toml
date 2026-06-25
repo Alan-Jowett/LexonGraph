@@ -10,4 +10,8 @@ lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
 
 [dev-dependencies]
+lexongraph-block-store-azure = { path = "../lexongraph-block-store-azure" }
+lexongraph-block-store-fs = { path = "../lexongraph-block-store-fs" }
+lexongraph-block-store-memory = { path = "../lexongraph-block-store-memory" }
 lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }
+tempfile = "3"

@@ -8,9 +8,13 @@ use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_full_suite,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store_azure::AzureBlobBlockStore;
+use lexongraph_block_store_fs::FilesystemBlockStore;
+use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{
     OverlayBlockStore, OverlayBuildError, OverlayLayerRole, OverlayStoreLayer, PassiveLayer,
 };
+use tempfile::TempDir;
 
 mod support;
 
@@ -270,6 +274,58 @@ fn val_overlay_store_014_public_surface_keeps_role_based_layering_additive() {
     .unwrap();
 
     assert_eq!(custom_overlay.layer_count(), 2);
+}
+
+#[test]
+fn val_overlay_store_015_put_fails_if_a_writable_layer_returns_a_non_canonical_block_id() {
+    let block = sample_leaf_block("mismatch");
+    let block_id = serialize_block(&block).unwrap().hash;
+    let wrong_id = validated_block("wrong").hash;
+    let first = MockStore::for_put(Ok(wrong_id));
+    let second = MockStore::for_put(Ok(block_id));
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::writable(first.clone())),
+        Box::new(PassiveLayer::writable(second.clone())),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        overlay.put(&block).unwrap_err(),
+        backend_failure(&format!(
+            "overlay layer returned unexpected block ID {wrong_id} for block {block_id}"
+        ))
+    );
+    assert_eq!(first.put_calls(), 1);
+    assert_eq!(second.put_calls(), 1);
+}
+
+#[test]
+fn val_overlay_store_016_overlay_public_composition_surface_is_send_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<OverlayBlockStore>();
+    assert_send_sync::<PassiveLayer<MockStore>>();
+    assert_send_sync::<Box<dyn OverlayStoreLayer>>();
+}
+
+#[test]
+fn val_overlay_store_017_memory_filesystem_and_azure_backends_compose_without_duplicate_logic() {
+    let cache = MemoryBlockStore::new(4).unwrap();
+    let temp_dir = TempDir::new().unwrap();
+    let filesystem = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let azure = AzureBlobBlockStore::new("https://example.invalid/archive?sig=test").unwrap();
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::cache(cache.clone())),
+        Box::new(PassiveLayer::writable(filesystem)),
+        Box::new(PassiveLayer::read_only(azure)),
+    ])
+    .unwrap();
+    let block = sample_leaf_block("heterogeneous");
+    let block_id = serialize_block(&block).unwrap().hash;
+
+    assert_eq!(overlay.put(&block).unwrap(), block_id);
+    assert_eq!(overlay.get(&block_id).unwrap().unwrap().hash, block_id);
+    assert_eq!(cache.get(&block_id).unwrap().unwrap().hash, block_id);
 }
 
 struct OverlayHarness;

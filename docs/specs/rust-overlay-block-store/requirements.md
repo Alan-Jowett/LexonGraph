@@ -39,6 +39,9 @@ The repository shall include a Rust crate, separate from
 `crates/lexongraph-block-store`, that implements the parent `BlockStore`
 contract by composing two or more ordered layers.
 
+The overlay crate shall own the layer-composition logic so downstream crates do
+not need to reimplement overlay dispatch semantics.
+
 ### REQ-OVERLAY-STORE-002
 
 The overlay crate shall define a deterministic priority order from highest
@@ -68,6 +71,10 @@ Cache layers shall not participate in direct writes.
 
 Direct-write-capable layers that succeed shall return the content-addressed
 block ID for the block being stored.
+
+If a direct-write-capable layer reports success with a block ID different from
+the canonical content-addressed ID for the input block, the overlay shall fail
+explicitly rather than reporting success.
 
 ### REQ-OVERLAY-STORE-006
 
@@ -110,6 +117,20 @@ change the `get` result returned to the caller.
 
 The overlay crate shall preserve the parent trait's integrity, explicit failure,
 streaming enumeration, and backend neutrality rules.
+
+### REQ-OVERLAY-STORE-012
+
+`OverlayBlockStore` and the overlay-owned public layer abstractions used to
+compose layers shall be `Send + Sync`.
+
+### REQ-OVERLAY-STORE-013
+
+The overlay crate shall provide a reusable, generic composition surface that can
+combine the repository's memory, filesystem, and Azure/blob `BlockStore`
+implementations into one overlay `BlockStore`.
+
+Downstream crates shall not need to duplicate overlay read ordering, write
+ordering, or de-duplication logic to use that heterogeneous composition.
 
 ## Out of Scope
 
