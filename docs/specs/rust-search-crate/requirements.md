@@ -83,7 +83,8 @@ The crate shall surface explicit failure when the root block cannot be loaded,
 when a selected child block cannot be loaded, when a visited block is malformed,
 when a visited block is incompatible with the target embedding, when candidate
 scoring fails for candidates loaded from a visited block regardless of candidate
-level, or when the search cannot produce `n` reachable leaf candidates.
+level, when frontier selection fails, or when the search cannot produce `n`
+reachable leaf candidates.
 
 ### REQ-SEARCH-007
 
@@ -102,6 +103,7 @@ At minimum, the crate shall expose trait-governed policy boundaries for:
   block's `embedding_spec`
 - candidate scoring inputs derived from the target embedding and candidate
   embedding
+- frontier selection over the ranked, de-duplicated expandable frontier
 
 The crate shall also expose public default implementations for those policy
 boundaries.
@@ -109,8 +111,9 @@ boundaries.
 ### REQ-SEARCH-009
 
 The core search engine shall own the protocol-required orchestration, candidate
-accumulation, deterministic ordering, branch-child deduplication, width-limited
-expansion, visited-child tracking, and termination decisions.
+accumulation, deterministic ordering, branch-child deduplication, invocation of
+the configured frontier-selection policy, width-limited expansion,
+visited-child tracking, and termination decisions.
 
 ### REQ-SEARCH-010
 
@@ -127,8 +130,8 @@ crate shall return the same ordered leaf results or the same explicit failure.
 ### REQ-SEARCH-012
 
 The crate shall not require any specific embedding model, similarity metric, or
-ranking heuristic beyond the deterministic ordering and tie-break behavior
-mandated by `docs/protocol/search.md`.
+frontier-selection heuristic beyond the deterministic ordering, tie-break
+behavior, and traversal invariants mandated by `docs/protocol/search.md`.
 
 If the crate provides a default similarity metric, that metric is an optional
 crate convenience rather than a mandatory protocol requirement.
@@ -263,6 +266,19 @@ failure semantics:
 - the maximum routing depth reached during the invocation
 - the terminal outcome classification for the invocation
 
+### REQ-SEARCH-025
+
+The crate shall expose a trait-governed frontier-selection policy boundary that
+selects the ordered child block IDs to expand from the ranked, de-duplicated
+expandable frontier for one round.
+
+### REQ-SEARCH-026
+
+The frontier-selection policy boundary shall receive the expandable frontier as
+a set of child-bearing candidates, rather than only one candidate at a time, so
+that implementations may use geometry or other frontier-relative information
+when allocating beam width.
+
 ### REQ-SEARCH-027
 
 The crate shall expose a higher-level convenience search surface whose shape
@@ -291,7 +307,8 @@ The repository shall publish search profile `0.1.0`.
 
 For the crate-owned runtime knobs in this revision, that published profile
 shall resolve to the crate-owned encoded target representation together with the
-crate-provided default embedding-compatibility and candidate-scoring policies.
+crate-provided default embedding-compatibility, candidate-scoring, and
+frontier-selection policies.
 
 ### REQ-SEARCH-031
 
@@ -351,6 +368,42 @@ private reconstruction path.
 
 This preserves one protocol-owned interpretation of stored branch embeddings
 across search and downstream diagnostics consumers.
+
+### REQ-SEARCH-039
+
+The repository shall publish search profile `0.2.0`.
+
+That published profile shall preserve the `0.1.0` compatibility and scoring
+bundle while selecting a different crate-owned frontier-selection policy.
+
+### REQ-SEARCH-040
+
+Search profile `0.1.0` shall continue to reproduce the legacy ranked top-`w`
+frontier expansion behavior.
+
+### REQ-SEARCH-041
+
+The repository shall provide one crate-owned frontier-selection policy intended
+to improve TNN or recall at unchanged `w` relative to the legacy ranked top-`w`
+behavior.
+
+### REQ-SEARCH-042
+
+For this revision, that recall-oriented frontier-selection policy shall use only
+search-time information already available from the ranked frontier and loaded
+blocks. It shall not require new block or indexing metadata.
+
+### REQ-SEARCH-043
+
+If a frontier-selection policy fails, the crate shall surface that failure
+explicitly rather than silently substituting another policy or falling back to
+ranked top-`w` expansion.
+
+### REQ-SEARCH-044
+
+When a published profile changes frontier-selection behavior, that behavior
+change shall be exposed through a new published profile version rather than
+changing the meaning of an existing published profile version.
 
 ## Out of Scope
 

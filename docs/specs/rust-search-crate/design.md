@@ -122,6 +122,54 @@ replace the protocol-defined tie-break rules.
 The crate provides public default implementations of this trait, but callers
 remain free to supply their own implementations.
 
+### DSG-SEARCH-031 `FrontierSelector`
+
+A trait that accepts the ranked, de-duplicated expandable frontier for one
+round together with traversal width `w`, and returns the ordered child block IDs
+to expand in that round.
+
+The search crate owns when frontier selection is invoked, what candidate set is
+presented to it, and which protocol invariants the returned child set must
+respect.
+
+This trait is distinct from `CandidateScorer`: scoring remains per-candidate,
+while frontier selection may consider relationships among multiple candidates in
+the same frontier.
+
+### DSG-SEARCH-032 `DefaultTopWFrontierSelector`
+
+The crate exposes a public frontier selector that reproduces the legacy behavior
+of selecting the highest-ranked `w` unique child block IDs from the
+de-duplicated expandable frontier.
+
+### DSG-SEARCH-033 `GeometryAwareFrontierSelector`
+
+The crate exposes a public frontier selector intended to improve fixed-width
+recall by reallocating beam width across the frontier using geometry available
+from the frontier's branch embeddings.
+
+In this revision, that selector uses only existing search-time information from
+the frontier and loaded blocks and does not require new block or indexing
+metadata.
+
+### DSG-SEARCH-034 `Published frontier-selector mapping`
+
+Published search profile `0.1.0` resolves to the legacy ranked top-`w` frontier
+selector.
+
+Published search profile `0.2.0` preserves the same default compatibility and
+scoring policies while resolving to the crate-owned geometry-aware frontier
+selector.
+
+### DSG-SEARCH-035 `Selector invariant enforcement`
+
+The search engine validates frontier-selector outputs before expansion.
+
+If a selector returns duplicate children, child IDs not present in the
+de-duplicated expandable frontier, or the wrong number of children for the
+frontier size and `w`, search fails explicitly through the frontier-selection
+failure path.
+
 ### DSG-SEARCH-017 `EncodedTargetEmbedding`
 
 The crate defines a public target-embedding representation used by the
@@ -210,6 +258,10 @@ The crate's runtime API also exposes the public default policy types and the
 crate-owned encoded target-embedding representation needed to use them, without
 removing the existing ability to pass caller-defined policy implementations.
 
+The API preserves a convenience constructor for the legacy ranked top-`w`
+frontier selector and also exposes an explicit constructor or equivalent wiring
+surface for supplying a caller-defined frontier selector.
+
 ## Orchestration Flow
 
 ### DSG-SEARCH-009 `Core search pipeline`
@@ -232,22 +284,24 @@ The fixed orchestration flow is:
    expanded in the invocation
 9. de-duplicate those expandable candidates by child block ID, keeping the
    highest-ranked occurrence as the effective rank for that child
-10. select the top `w` unique child block IDs from that de-duplicated expandable set
-11. load the selected child blocks and mark their block IDs as expanded
-12. remove from the current candidate set the expandable candidates whose child
+10. invoke the configured frontier selector over that de-duplicated expandable set
+11. validate the selector's returned child block IDs against the protocol
+    invariants for width, membership, and uniqueness
+12. load the selected child blocks and mark their block IDs as expanded
+13. remove from the current candidate set the expandable candidates whose child
     blocks were expanded
-13. retain all remaining candidates and add the entries from the newly loaded
+14. retain all remaining candidates and add the entries from the newly loaded
     child blocks to form the next candidate set
-14. fail explicitly if no expandable candidates remain before successful
+15. fail explicitly if no expandable candidates remain before successful
     termination
 
 The core search engine owns this flow even when policy traits participate in
 individual steps.
 
 Within one invocation, a child block ID becomes permanently ineligible for
-later expansion once step 11 loads it.
+later expansion once step 12 loads it.
 
-Step 12, together with the per-invocation expanded-child tracking, removes
+Step 13, together with the per-invocation expanded-child tracking, removes
 expandable candidates that target child block IDs already expanded in the
 invocation so stale branch entries do not survive into later frontier rankings.
 
@@ -436,8 +490,8 @@ semantics privately.
 | DSG-SEARCH-003..005 | REQ-SEARCH-001, REQ-SEARCH-006, REQ-SEARCH-009, REQ-SEARCH-010 |
 | DSG-SEARCH-006 | REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-011 |
 | DSG-SEARCH-007 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-011, REQ-SEARCH-012 |
-| DSG-SEARCH-008 | REQ-SEARCH-001, REQ-SEARCH-004, REQ-SEARCH-005, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-019, REQ-SEARCH-020, REQ-SEARCH-021 |
-| DSG-SEARCH-009 | REQ-SEARCH-002, REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-012, REQ-SEARCH-022, REQ-SEARCH-023 |
+| DSG-SEARCH-008 | REQ-SEARCH-001, REQ-SEARCH-004, REQ-SEARCH-005, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-019, REQ-SEARCH-020, REQ-SEARCH-021, REQ-SEARCH-025 |
+| DSG-SEARCH-009 | REQ-SEARCH-002, REQ-SEARCH-006, REQ-SEARCH-007, REQ-SEARCH-009, REQ-SEARCH-010, REQ-SEARCH-012, REQ-SEARCH-022, REQ-SEARCH-023, REQ-SEARCH-025, REQ-SEARCH-026, REQ-SEARCH-043 |
 | DSG-SEARCH-010 | REQ-SEARCH-011 |
 | DSG-SEARCH-011 | REQ-SEARCH-002, REQ-SEARCH-010 |
 | DSG-SEARCH-012 | REQ-SEARCH-013 |
@@ -455,3 +509,8 @@ semantics privately.
 | DSG-SEARCH-028 | REQ-SEARCH-035, REQ-SEARCH-036 |
 | DSG-SEARCH-029 | REQ-SEARCH-035, REQ-SEARCH-037 |
 | DSG-SEARCH-030 | REQ-SEARCH-038 |
+| DSG-SEARCH-031 | REQ-SEARCH-007, REQ-SEARCH-008, REQ-SEARCH-025, REQ-SEARCH-026 |
+| DSG-SEARCH-032 | REQ-SEARCH-025, REQ-SEARCH-040 |
+| DSG-SEARCH-033 | REQ-SEARCH-041, REQ-SEARCH-042 |
+| DSG-SEARCH-034 | REQ-SEARCH-029, REQ-SEARCH-039, REQ-SEARCH-040, REQ-SEARCH-044 |
+| DSG-SEARCH-035 | REQ-SEARCH-006, REQ-SEARCH-025, REQ-SEARCH-043 |

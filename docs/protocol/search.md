@@ -112,30 +112,37 @@ The client performs the following steps:
    whose target `child` block IDs have not already been expanded in this search.
 7. De-duplicate those expandable candidates by target `child` block ID, keeping the
    highest-ranked occurrence of each child block as that block's effective rank.
-8. Select the top `W` unique child blocks from that de-duplicated expandable set.
-9. Load the selected child blocks and mark their block IDs as expanded.
-10. Remove from the current candidate set the expandable candidates whose target
-    child blocks were expanded in step 9.
-11. Retain all remaining candidates and add the entries from the newly loaded
+8. Apply a deterministic frontier-selection policy to that de-duplicated
+   expandable set.
+9. Select exactly the `W` unique child blocks chosen by that frontier-selection
+   policy, or all remaining unique child blocks if fewer than `W` exist.
+10. Load the selected child blocks and mark their block IDs as expanded.
+11. Remove from the current candidate set the expandable candidates whose target
+    child blocks were expanded in step 10.
+12. Retain all remaining candidates and add the entries from the newly loaded
     child blocks to form the next candidate set.
-12. Go to step 3.
+13. Go to step 3.
 
 If step 6 yields no expandable candidates and step 5 did not terminate
 the search, the client must fail because the search cannot produce `N`
 reachable leaf candidates.
 
-`W` is applied after expandable-candidate deduplication. If one occurrence of a
-child block ranks within raw top `W` expandable candidates and another occurrence of
-the same child block ranks outside it, that child block is still treated as
-within `W` because selection uses its best-ranked occurrence.
+`W` is applied after expandable-candidate deduplication. The
+frontier-selection policy operates on unique child blocks, not raw branch-entry
+occurrences.
+
+The canonical ranking order remains the deterministic substrate for frontier
+selection. A policy may choose the highest-ranked `W` unique child blocks, or
+another deterministic subset, provided it operates over the de-duplicated
+expandable frontier and preserves the other protocol invariants.
 
 ## Duplicate Embeddings and Repeated Targets
 
 Repeated embeddings are legal.
 
 If more than `W` expandable candidates with identical embedding values survive to
-the expansion cutoff, the client includes only the top `W` unique child blocks
-according to the full deterministic ranking order after child-block
+frontier selection, the client includes only `W` unique child blocks according
+to the selected deterministic frontier-selection policy after child-block
 deduplication.
 
 Repeated references to the same child block are legal. They do not cause that
@@ -186,10 +193,12 @@ revision:
    independently before child-block deduplication.
 6. Child-block deduplication keeps the highest-ranked occurrence of each target
    block and expands that block at most once per round.
-7. Top `W` expansion targets are computed over unique child block IDs, not raw
-   branch entries.
+7. Frontier selection is applied over unique child block IDs after branch-child
+   deduplication, not raw branch entries.
 8. Leaf candidates remain eligible across rounds until termination.
 9. Search terminates when the top `N` ranked candidates are all leaves.
 10. Incompatible `embedding_spec`, missing blocks, and malformed blocks produce
     explicit failure.
 11. Equal embeddings in different leaf blocks remain distinct leaf candidates.
+12. Deterministic frontier-selection policies produce deterministic expansion
+    choices for identical ranked frontiers.
