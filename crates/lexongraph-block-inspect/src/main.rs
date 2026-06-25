@@ -617,7 +617,11 @@ impl LevelStats {
             ),
             (
                 "max_children_per_branch",
-                Value::Number(Number::from(self.max_children)),
+                if self.branch_block_count == 0 {
+                    Value::Null
+                } else {
+                    Value::Number(Number::from(self.max_children))
+                },
             ),
             (
                 "mean_children_per_branch",

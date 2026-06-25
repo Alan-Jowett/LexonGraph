@@ -396,6 +396,9 @@ fn val_inspect_016_fs_tree_reports_child_cap_and_level_statistics() {
     assert_eq!(levels[0]["level"], 0);
     assert_eq!(levels[0]["block_count"], 4);
     assert_eq!(levels[0]["leaf_block_count"], 4);
+    assert_eq!(levels[0]["min_children_per_branch"], Value::Null);
+    assert_eq!(levels[0]["max_children_per_branch"], Value::Null);
+    assert_eq!(levels[0]["mean_children_per_branch"], Value::Null);
     assert_eq!(levels[1]["level"], 1);
     assert_eq!(levels[1]["branch_block_count"], 2);
     assert_eq!(levels[1]["max_children_per_branch"], 3);
