@@ -16,7 +16,7 @@ use serde_json::{Map, Number, Value};
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about = "Inspect one stored LexonGraph block and emit a JSON debug view"
+    about = "Inspect stored LexonGraph blocks or analyze a rooted block tree"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -212,9 +212,9 @@ fn analyze_tree(
     let mut level_stats = BTreeMap::<u64, LevelStats>::new();
     let mut max_children_in_block = 0_u64;
     let mut max_serialized_bytes = 0_u64;
-    let mut max_child_count_block = None::<ChildCountViolation>;
+    let mut max_child_count_block = None::<BranchChildCountSummary>;
     let mut largest_blocks = Vec::<LargestBlock>::new();
-    let mut child_cap_violations = Vec::<ChildCountViolation>::new();
+    let mut child_cap_violations = Vec::<BranchChildCountSummary>::new();
     let mut root_level = None::<u64>;
 
     while let Some(block_hash) = queue.pop_front() {
@@ -259,7 +259,7 @@ fn analyze_tree(
                     .as_ref()
                     .is_none_or(|current| child_count > current.child_count)
                 {
-                    max_child_count_block = Some(ChildCountViolation {
+                    max_child_count_block = Some(BranchChildCountSummary {
                         hash: validated.hash,
                         level: branch.level,
                         child_count,
@@ -268,7 +268,7 @@ fn analyze_tree(
                 }
 
                 if branch.entries.len() > expected_max_children {
-                    child_cap_violations.push(ChildCountViolation {
+                    child_cap_violations.push(BranchChildCountSummary {
                         hash: validated.hash,
                         level: branch.level,
                         child_count,
@@ -299,13 +299,13 @@ fn analyze_tree(
     }
 
     let unique_block_count = branch_block_count + leaf_block_count;
+    let root_level = root_level.ok_or_else(|| {
+        InspectError::InspectionBoundary("rooted tree analysis produced no root level".to_owned())
+    })?;
 
     Ok(object([
         ("root_hash", Value::String(root_hash.to_string())),
-        (
-            "root_level",
-            Value::Number(Number::from(root_level.unwrap_or_default())),
-        ),
+        ("root_level", Value::Number(Number::from(root_level))),
         (
             "expected_max_children",
             Value::Number(Number::from(u64::try_from(expected_max_children).map_err(
@@ -360,7 +360,7 @@ fn analyze_tree(
         ),
         (
             "block_with_max_children",
-            render_optional_child_count_violation(max_child_count_block),
+            render_optional_child_count_summary(max_child_count_block),
         ),
         (
             "levels",
@@ -645,7 +645,7 @@ impl LevelStats {
     }
 }
 
-struct ChildCountViolation {
+struct BranchChildCountSummary {
     hash: BlockHash,
     level: u64,
     child_count: u64,
@@ -683,11 +683,11 @@ fn block_kind(block: &Block) -> &'static str {
     }
 }
 
-fn render_optional_child_count_violation(violation: Option<ChildCountViolation>) -> Value {
-    violation.map_or(Value::Null, render_child_count_violation)
+fn render_optional_child_count_summary(summary: Option<BranchChildCountSummary>) -> Value {
+    summary.map_or(Value::Null, render_child_count_violation)
 }
 
-fn render_child_count_violation(violation: ChildCountViolation) -> Value {
+fn render_child_count_violation(violation: BranchChildCountSummary) -> Value {
     object([
         ("hash", Value::String(violation.hash.to_string())),
         ("level", Value::Number(Number::from(violation.level))),

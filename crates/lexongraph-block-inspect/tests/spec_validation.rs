@@ -385,6 +385,10 @@ fn val_inspect_016_fs_tree_reports_child_cap_and_level_statistics() {
     assert_eq!(json["max_children_in_block"], 3);
     assert_eq!(json["blocks_exceeding_child_cap_count"], 1);
     assert_eq!(
+        json["largest_serialized_block_bytes"],
+        json["largest_blocks"][0]["serialized_bytes"]
+    );
+    assert_eq!(
         json["block_with_max_children"]["hash"],
         overflowing_branch_hash.to_string()
     );
@@ -410,6 +414,14 @@ fn val_inspect_016_fs_tree_reports_child_cap_and_level_statistics() {
     assert_eq!(violations.len(), 1);
     assert_eq!(violations[0]["hash"], overflowing_branch_hash.to_string());
     assert_eq!(violations[0]["child_count"], 3);
+
+    let largest_blocks = json["largest_blocks"].as_array().unwrap();
+    assert!(!largest_blocks.is_empty());
+    assert_eq!(
+        largest_blocks[0]["hash"],
+        overflowing_branch_hash.to_string()
+    );
+    assert_eq!(largest_blocks[0]["kind"], "branch");
 }
 
 fn sample_simple_leaf_block(body: &str) -> lexongraph_block::Block {
@@ -497,14 +509,14 @@ fn run_fs_inspect(store_root: &Path, block_hash: &str) -> Output {
         .unwrap()
 }
 
-fn run_fs_tree(store_root: &Path, block_hash: &str, expected_max_children: usize) -> Output {
+fn run_fs_tree(store_root: &Path, root_hash: &str, expected_max_children: usize) -> Output {
     inspect_command()
         .arg("fs-tree")
         .arg("--store-root")
         .arg(store_root)
         .arg("--expected-max-children")
         .arg(expected_max_children.to_string())
-        .arg(block_hash)
+        .arg(root_hash)
         .output()
         .unwrap()
 }
