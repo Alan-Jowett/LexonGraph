@@ -400,8 +400,7 @@ fn write_zip64_archive_with_comment(path: &Path, entries: &[(String, Vec<u8>)], 
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .large_file(true);
-    archive.set_comment(comment);
-    archive.set_zip64_comment(Some("zip64"));
+    archive.set_comment(comment).unwrap();
 
     for (name, bytes) in entries {
         archive.start_file(name, options).unwrap();
