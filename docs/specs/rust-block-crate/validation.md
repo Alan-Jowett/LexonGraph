@@ -13,7 +13,8 @@ These validation entries define the expected conformance surface for a crate
 that implements the requirements and design in this spec package.
 
 Protocol-validity expectations referenced here are defined normatively by
-`docs/protocol/blocks.md`.
+`docs/protocol/blocks.md`, `docs/protocol/blocks-v2.md`, and
+`docs/protocol/ebcp.md`.
 
 ## Validation Entries
 
@@ -256,7 +257,8 @@ Serialize and hash-verify deserialize a version-2 reserved `leaf` or `branch`
 block through the crate's version-aware dispatch surface.
 
 **Pass condition:** the decoded block preserves version `2`, the reserved type,
-and the canonical nested content structure.
+the exact top-level `0`/`1`/`2` envelope, and the canonical nested content
+structure.
 
 **Traces to:** REQ-BLOCK-CRATE-020, REQ-BLOCK-CRATE-021
 
@@ -266,7 +268,8 @@ Serialize and hash-verify deserialize a version-2 custom block with
 application-defined `type` and canonical CBOR content.
 
 **Pass condition:** the crate preserves the custom `type` string and canonical
-content value without imposing reserved-type interpretation on that content.
+content value without imposing reserved-type interpretation or traversal
+semantics on that content.
 
 **Traces to:** REQ-BLOCK-CRATE-020, REQ-BLOCK-CRATE-021, REQ-BLOCK-CRATE-022
 

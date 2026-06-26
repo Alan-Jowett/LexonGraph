@@ -207,6 +207,10 @@ boundary for common version-1 and version-aware decode/encode flows.
 Those helpers centralize codec dispatch so concrete backends remain
 protocol-agnostic while higher-level callers retain a convenient typed surface.
 
+When helpers decode stored bytes, they determine the block version from the
+top-level canonical CBOR envelope and then apply the corresponding versioned
+block protocol rules from the block crate.
+
 ## Consumer Usage Model
 
 ### Indexing

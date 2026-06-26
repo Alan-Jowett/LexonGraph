@@ -10,11 +10,11 @@ LexonGraph block protocol for both indexing and search components.
 ## Scope
 
 This document specifies the crate-level requirements for a Rust crate that
-implements `docs/protocol/blocks.md`.
+implements `docs/protocol/blocks.md` and `docs/protocol/blocks-v2.md`.
 
 This document does not define canonicalization or wire-format rules. Those
-remain normative in `docs/protocol/blocks.md`. This document defines what the
-crate must do in order to conform to that protocol.
+remain normative in the block protocol documents. This document defines what
+the crate must do in order to conform to those protocols.
 
 ## Terminology
 
@@ -146,8 +146,9 @@ version into the other.
 ### REQ-BLOCK-CRATE-021
 
 Version 2 shall use a unified top-level `version + type + content` envelope,
-with reserved protocol-defined `branch` and `leaf` types and support for
-application-defined custom type strings.
+with reserved protocol-defined `branch` and `leaf` types, exact top-level field
+keys `0`, `1`, and `2`, and support for application-defined non-empty UTF-8
+custom type strings.
 
 ### REQ-BLOCK-CRATE-022
 
@@ -159,6 +160,9 @@ the reserved protocol-defined types.
 
 The crate shall keep version-1 support available without mutating the
 version-1 protocol authority in `docs/protocol/blocks.md`.
+
+Version-aware decode shall determine the block version from the decoded
+top-level envelope and shall not silently convert one version into the other.
 
 ### REQ-BLOCK-CRATE-024
 
@@ -179,7 +183,7 @@ This crate does not define or own:
 ## Relationship to the Protocol
 
 This document is subordinate to `docs/protocol/blocks.md` and
-`docs/protocol/ebcp.md`.
+`docs/protocol/blocks-v2.md` together with `docs/protocol/ebcp.md`.
 
 If this document appears to conflict with the protocol document, the protocol
 document is authoritative for wire format, canonicalization, and validity

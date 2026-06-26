@@ -13,8 +13,8 @@ These validation entries define the minimum conformance surface for a crate that
 implements the requirements and design in this spec package.
 
 Protocol-validity and block-identity expectations referenced here remain
-normatively defined by `docs/protocol/blocks.md` and the
-`docs/specs/rust-block-crate/` specification package.
+normatively defined by `docs/protocol/blocks.md`, `docs/protocol/blocks-v2.md`,
+and the `docs/specs/rust-block-crate/` specification package.
 
 ## Validation Entries
 

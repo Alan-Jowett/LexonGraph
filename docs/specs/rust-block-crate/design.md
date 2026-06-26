@@ -37,7 +37,8 @@ The crate does not own:
 ## Protocol Conformance Boundary
 
 Canonicalization, field-key semantics, and validity rules are defined
-normatively by `docs/protocol/blocks.md`.
+normatively by `docs/protocol/blocks.md`, `docs/protocol/blocks-v2.md`, and
+`docs/protocol/ebcp.md`.
 
 This crate implements those rules; it does not redefine them.
 
@@ -215,11 +216,20 @@ invariants inside the nested `content` map, while custom non-reserved types keep
 their `content` opaque to the shared protocol layer beyond canonical CBOR
 validation.
 
+The version-2 envelope admits only top-level field keys `0`, `1`, and `2`,
+with `version = 2` and a non-empty UTF-8 `type` string. When decoding,
+version-aware dispatch determines the active protocol version from that
+top-level envelope rather than from caller-side heuristics.
+
 ### DSG-025 `Frozen version-1 path`
 
 The existing version-1 implementation remains intact as a distinct codec path.
 The crate does not auto-upgrade version-1 data into version-2 shapes during
 decode or encode.
+
+Reserved version-2 `branch` and `leaf` blocks preserve the same traversal-facing
+branch/leaf meaning as version 1, while custom block content remains opaque to
+the shared protocol layer and does not gain traversal semantics.
 
 ### DSG-026 `Custom block handling`
 

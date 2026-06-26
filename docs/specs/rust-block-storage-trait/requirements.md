@@ -13,8 +13,9 @@ This document specifies the crate-level requirements for a Rust crate that
 defines the contract between LexonGraph consumers and block-storage
 implementations.
 
-This crate is layered on top of `docs/protocol/blocks.md` and the
-`docs/specs/rust-block-crate/` specification package.
+This crate is layered on top of `docs/protocol/blocks.md`,
+`docs/protocol/blocks-v2.md`, and the `docs/specs/rust-block-crate/`
+specification package.
 
 This document does not define block canonicalization, block validation, or
 block-ID derivation rules. Those remain owned by the block protocol and block
@@ -169,7 +170,8 @@ This crate does not define or own:
 ## Relationship to Other Specifications
 
 This document is subordinate to `docs/protocol/blocks.md` for block identity,
-wire format, canonicalization, and validity rules.
+wire format, canonicalization, and validity rules, together with
+`docs/protocol/blocks-v2.md` for the version-2 envelope.
 
 This document is also subordinate to the `docs/specs/rust-block-crate/`
 specification package for typed block modeling and block verification behavior.
