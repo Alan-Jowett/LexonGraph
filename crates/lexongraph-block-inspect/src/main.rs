@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value as CborValue;
 use clap::{Parser, Subcommand};
 use lexongraph_block::{
-    Block, BlockHash, BranchBlock, BranchEntry, Content, EmbeddingSpec, ExtensionMap, LeafBlock,
-    LeafEntry, Metadata, ValidatedBlock, serialize_block,
+    Block, BlockHash, BranchBlock, BranchEntry, Content, DecodedBlock, EmbeddingSpec, ExtensionMap,
+    LeafBlock, LeafEntry, Metadata, ValidatedBlock, serialize_block, v2,
 };
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use serde_json::{Map, Number, Value};
 
@@ -159,13 +159,8 @@ fn decode_hex_nibble(byte: u8) -> Option<u8> {
 fn open_filesystem_store(store_root: &Path) -> Result<FilesystemBlockStore, InspectError> {
     FilesystemBlockStore::new(store_root).map_err(|error| match error {
         BlockStoreError::BackendFailure(message) => InspectError::StoreConstruction(message),
-        BlockStoreError::MalformedContent(inner) => {
+        BlockStoreError::DecodeFailure(inner) => {
             InspectError::StoreConstruction(format!("unexpected malformed content: {inner}"))
-        }
-        BlockStoreError::IntegrityMismatch { expected, actual } => {
-            InspectError::StoreConstruction(format!(
-                "unexpected integrity mismatch while opening store: expected {expected}, got {actual}"
-            ))
         }
         BlockStoreError::ContractViolation(inner) => {
             InspectError::StoreConstruction(format!("unexpected contract violation: {inner}"))
@@ -174,7 +169,29 @@ fn open_filesystem_store(store_root: &Path) -> Result<FilesystemBlockStore, Insp
 }
 
 fn inspect_store(store: &impl BlockStore, block_hash: &BlockHash) -> Result<Value, InspectError> {
-    load_validated_block(store, block_hash).and_then(render_inspection_document)
+    load_decoded_block(store, block_hash).and_then(render_inspection_document)
+}
+
+fn load_decoded_block(
+    store: &impl BlockStore,
+    block_hash: &BlockHash,
+) -> Result<DecodedBlock, InspectError> {
+    match store.get_decoded(block_hash) {
+        Ok(Some(decoded_block)) => Ok(decoded_block),
+        Ok(None) => Err(InspectError::BlockAbsence(*block_hash)),
+        Err(BlockStoreError::BackendFailure(message)) => {
+            Err(InspectError::BackendRetrieval(message))
+        }
+        Err(BlockStoreError::DecodeFailure(error)) => match error {
+            lexongraph_block::BlockError::HashMismatch { expected, actual } => {
+                Err(InspectError::IntegrityMismatch { expected, actual })
+            }
+            other => Err(InspectError::MalformedContent(other.to_string())),
+        },
+        Err(BlockStoreError::ContractViolation(error)) => Err(InspectError::InspectionBoundary(
+            format!("unexpected block store contract violation: {error}"),
+        )),
+    }
 }
 
 fn load_validated_block(
@@ -187,12 +204,12 @@ fn load_validated_block(
         Err(BlockStoreError::BackendFailure(message)) => {
             Err(InspectError::BackendRetrieval(message))
         }
-        Err(BlockStoreError::MalformedContent(error)) => {
-            Err(InspectError::MalformedContent(error.to_string()))
-        }
-        Err(BlockStoreError::IntegrityMismatch { expected, actual }) => {
-            Err(InspectError::IntegrityMismatch { expected, actual })
-        }
+        Err(BlockStoreError::DecodeFailure(error)) => match error {
+            lexongraph_block::BlockError::HashMismatch { expected, actual } => {
+                Err(InspectError::IntegrityMismatch { expected, actual })
+            }
+            other => Err(InspectError::MalformedContent(other.to_string())),
+        },
         Err(BlockStoreError::ContractViolation(error)) => Err(InspectError::InspectionBoundary(
             format!("unexpected block store contract violation: {error}"),
         )),
@@ -392,11 +409,27 @@ fn analyze_tree(
     ]))
 }
 
-fn render_inspection_document(validated_block: ValidatedBlock) -> Result<Value, InspectError> {
-    let hash = validated_block.hash.to_string();
-    let (level, block) = match validated_block.block {
-        Block::Branch(block) => (block.level, render_branch_block(block)?),
-        Block::Leaf(block) => (block.level, render_leaf_block(block)?),
+fn render_inspection_document(decoded_block: DecodedBlock) -> Result<Value, InspectError> {
+    let (hash, level, block) = match decoded_block {
+        DecodedBlock::V1(validated_block) => {
+            let hash = validated_block.hash.to_string();
+            let (level, block) = match validated_block.block {
+                Block::Branch(block) => (block.level, render_branch_block(block)?),
+                Block::Leaf(block) => (block.level, render_leaf_block(block)?),
+            };
+            (hash, level, block)
+        }
+        DecodedBlock::V2(validated_block) => {
+            let hash = validated_block.hash.to_string();
+            let (level, block) = match v2::into_typed_block(validated_block)
+                .map_err(|error| InspectError::InspectionBoundary(error.to_string()))?
+            {
+                v2::TypedBlock::Branch(block) => (block.level, render_v2_branch_block(block)?),
+                v2::TypedBlock::Leaf(block) => (0, render_v2_leaf_block(block)?),
+                v2::TypedBlock::Custom(block) => (0, render_v2_custom_block(block)?),
+            };
+            (hash, level, block)
+        }
     };
 
     Ok(object([
@@ -442,6 +475,54 @@ fn render_leaf_block(block: LeafBlock) -> Result<Value, InspectError> {
         ),
         ("entries", Value::Array(entries)),
         ("ext", render_optional_map(block.ext.as_ref())?),
+    ]))
+}
+
+fn render_v2_branch_block(block: v2::BranchBlock) -> Result<Value, InspectError> {
+    Ok(object([
+        ("version", Value::Number(Number::from(block.version))),
+        ("type", Value::String(block.type_name)),
+        ("level", Value::Number(Number::from(block.level))),
+        (
+            "embedding_spec",
+            render_embedding_spec(block.embedding_spec),
+        ),
+        (
+            "entries",
+            Value::Array(block.entries.into_iter().map(render_branch_entry).collect()),
+        ),
+        ("ext", render_optional_map(block.ext.as_ref())?),
+    ]))
+}
+
+fn render_v2_leaf_block(block: v2::LeafBlock) -> Result<Value, InspectError> {
+    Ok(object([
+        ("version", Value::Number(Number::from(block.version))),
+        ("type", Value::String(block.type_name)),
+        ("level", Value::Number(Number::from(0))),
+        (
+            "embedding_spec",
+            render_embedding_spec(block.embedding_spec),
+        ),
+        (
+            "entries",
+            Value::Array(
+                block
+                    .entries
+                    .into_iter()
+                    .map(render_leaf_entry)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+        ("ext", render_optional_map(block.ext.as_ref())?),
+    ]))
+}
+
+fn render_v2_custom_block(block: v2::CustomBlock) -> Result<Value, InspectError> {
+    Ok(object([
+        ("version", Value::Number(Number::from(block.version))),
+        ("type", Value::String(block.type_name)),
+        ("content", render_cbor_value(&block.content)?),
     ]))
 }
 

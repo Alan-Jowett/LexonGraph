@@ -1672,6 +1672,7 @@ dependencies = [
 name = "lexongraph-block-store-memory"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "lexongraph-block",
  "lexongraph-block-store",
 ]

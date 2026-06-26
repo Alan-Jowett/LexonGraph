@@ -73,10 +73,10 @@ fn val_fs_store_004_and_005_get_reports_integrity_and_malformed_content_explicit
 
     assert_eq!(
         store.get(&second.hash).unwrap_err(),
-        BlockStoreError::IntegrityMismatch {
+        BlockStoreError::DecodeFailure(BlockError::HashMismatch {
             expected: second.hash,
             actual: first.hash,
-        }
+        })
     );
 
     let malformed_bytes = [0xff, 0xff, 0x00];
@@ -87,7 +87,7 @@ fn val_fs_store_004_and_005_get_reports_integrity_and_malformed_content_explicit
 
     assert!(matches!(
         store.get(&malformed_hash).unwrap_err(),
-        BlockStoreError::MalformedContent(BlockError::MalformedCbor(_))
+        BlockStoreError::DecodeFailure(BlockError::MalformedCbor(_))
     ));
 }
 

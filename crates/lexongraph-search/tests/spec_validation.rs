@@ -2085,9 +2085,12 @@ fn int_value(value: u64) -> Value {
 fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {
     match error {
         lexongraph_block::BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
+            BlockStoreError::DecodeFailure(lexongraph_block::BlockError::HashMismatch {
+                expected,
+                actual,
+            })
         }
-        other => BlockStoreError::MalformedContent(other),
+        other => BlockStoreError::DecodeFailure(other),
     }
 }
 

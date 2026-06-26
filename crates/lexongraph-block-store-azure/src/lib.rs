@@ -5,9 +5,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use lexongraph_block::{
-    Block, BlockError, BlockHash, ValidatedBlock, deserialize_block, serialize_block,
-};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use quick_xml::de::from_str;
 use reqwest::StatusCode;
@@ -170,16 +168,18 @@ impl AzureBlobBlockStore {
 }
 
 impl BlockStore for AzureBlobBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        let block_id = serialized.hash;
-        let blob_name = Self::block_blob_name(&block_id);
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        let blob_name = Self::block_blob_name(block_id);
         let response = self
             .request(Method::PUT, self.build_blob_url(&blob_name))
             .header("x-ms-blob-type", "BlockBlob")
             .header(IF_NONE_MATCH, "*")
             .header(CONTENT_TYPE, "application/octet-stream")
-            .body(serialized.bytes)
+            .body(block_bytes.to_vec())
             .send()
             .map_err(|error| {
                 backend_failure(format!(
@@ -195,18 +195,17 @@ impl BlockStore for AzureBlobBlockStore {
         let _ = response.bytes();
 
         if status.is_success() {
-            return Ok(block_id);
+            return Ok(());
         }
 
         if matches!(
             status,
             StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
         ) {
-            let canonical = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
             return self.read_existing_or_map_publish_error(
                 &blob_name,
-                &block_id,
-                &canonical.bytes,
+                block_id,
+                block_bytes,
                 status,
             );
         }
@@ -220,7 +219,7 @@ impl BlockStore for AzureBlobBlockStore {
         )))
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
         let bytes = self.fetch_blob_bytes(&blob_name).map_err(|error| {
             backend_failure(format!(
@@ -232,9 +231,7 @@ impl BlockStore for AzureBlobBlockStore {
             return Ok(None);
         };
 
-        deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(map_get_error)
+        Ok(Some(bytes))
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
@@ -249,9 +246,9 @@ impl AzureBlobBlockStore {
         block_id: &BlockHash,
         canonical_bytes: &[u8],
         status: StatusCode,
-    ) -> Result<BlockHash, BlockStoreError> {
+    ) -> Result<(), BlockStoreError> {
         match self.fetch_blob_bytes(blob_name) {
-            Ok(Some(existing_bytes)) if existing_bytes == canonical_bytes => Ok(*block_id),
+            Ok(Some(existing_bytes)) if existing_bytes == canonical_bytes => Ok(()),
             Ok(Some(_)) => Err(backend_failure(format!(
                 "integrity conflict at blob {} in container {} for block {} after publish error {}",
                 blob_name,
@@ -324,15 +321,6 @@ fn redact_url(url: &Url) -> String {
 
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
-}
-
-fn map_get_error(error: BlockError) -> BlockStoreError {
-    match error {
-        BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
-        }
-        other => BlockStoreError::MalformedContent(other),
-    }
 }
 
 fn decode_recognized_block_blob_name(value: &str) -> Result<Option<BlockHash>, String> {

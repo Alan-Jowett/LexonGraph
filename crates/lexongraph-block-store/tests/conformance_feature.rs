@@ -88,8 +88,11 @@ fn downstream_crates_can_run_the_full_suite() {
 fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {
     match error {
         lexongraph_block::BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
+            BlockStoreError::DecodeFailure(lexongraph_block::BlockError::HashMismatch {
+                expected,
+                actual,
+            })
         }
-        other => BlockStoreError::MalformedContent(other),
+        other => BlockStoreError::DecodeFailure(other),
     }
 }

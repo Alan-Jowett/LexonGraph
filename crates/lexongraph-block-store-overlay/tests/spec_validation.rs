@@ -291,9 +291,10 @@ fn val_overlay_store_015_put_fails_if_a_writable_layer_returns_a_non_canonical_b
 
     assert_eq!(
         overlay.put(&block).unwrap_err(),
-        backend_failure(&format!(
-            "overlay layer returned unexpected block ID {wrong_id} for block {block_id}"
-        ))
+        BlockStoreError::ContractViolation(lexongraph_block::BlockError::HashMismatch {
+            expected: block_id,
+            actual: wrong_id,
+        })
     );
     assert_eq!(first.put_calls(), 1);
     assert_eq!(second.put_calls(), 1);

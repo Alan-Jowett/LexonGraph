@@ -6293,7 +6293,7 @@ fn verify_persisted_block_id(
         Ok(())
     } else {
         Err(StreamingIndexerError::Storage(
-            BlockStoreError::IntegrityMismatch { expected, actual },
+            BlockStoreError::ContractViolation(BlockError::HashMismatch { expected, actual }),
         ))
     }
 }

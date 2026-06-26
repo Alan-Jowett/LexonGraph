@@ -137,6 +137,35 @@ That surface shall fail explicitly when the stored encoding is unsupported for
 logical `f32` reconstruction or when the stored payload bytes or EBCP metadata
 are malformed or inconsistent.
 
+### REQ-BLOCK-CRATE-020
+
+The crate shall expose a version-aware encode/decode surface that can round-trip
+both version-1 blocks and version-2 blocks without silently upgrading one
+version into the other.
+
+### REQ-BLOCK-CRATE-021
+
+Version 2 shall use a unified top-level `version + type + content` envelope,
+with reserved protocol-defined `branch` and `leaf` types and support for
+application-defined custom type strings.
+
+### REQ-BLOCK-CRATE-022
+
+For a version-2 custom type, the crate shall validate only that `content` is
+canonical CBOR and shall not impose additional shared-schema semantics beyond
+the reserved protocol-defined types.
+
+### REQ-BLOCK-CRATE-023
+
+The crate shall keep version-1 support available without mutating the
+version-1 protocol authority in `docs/protocol/blocks.md`.
+
+### REQ-BLOCK-CRATE-024
+
+The repository shall introduce a separate version-2 protocol authority in
+`docs/protocol/blocks-v2.md`, and the crate's version-2 implementation shall be
+subordinate to that document.
+
 ## Out of Scope
 
 This crate does not define or own:

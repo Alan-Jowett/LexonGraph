@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use lexongraph_block::{Block, BlockHash, ValidatedBlock, serialize_block};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,12 +87,16 @@ impl<S> PassiveLayer<S> {
 }
 
 impl<S: BlockStore> BlockStore for PassiveLayer<S> {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.store.put(block)
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.store.put_block_bytes(block_id, block_bytes)
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-        self.store.get(block_id)
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.store.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
@@ -160,10 +164,10 @@ impl OverlayBlockStore {
         self.layers.len()
     }
 
-    fn refill_cache_layers(&self, hit_index: usize, block: &Block) {
+    fn refill_cache_layers(&self, hit_index: usize, block_id: &BlockHash, block_bytes: &[u8]) {
         for layer in &self.layers[..hit_index] {
             if layer.role().accepts_refill() {
-                let _ = layer.put(block);
+                let _ = layer.put_block_bytes(block_id, block_bytes);
             }
         }
     }
@@ -178,10 +182,11 @@ impl fmt::Debug for OverlayBlockStore {
 }
 
 impl BlockStore for OverlayBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        let expected_id = serialize_block(block)
-            .map_err(BlockStoreError::ContractViolation)?
-            .hash;
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
         let mut attempted_write = false;
         let mut last_error = None;
 
@@ -190,14 +195,8 @@ impl BlockStore for OverlayBlockStore {
                 continue;
             }
             attempted_write = true;
-            match layer.put(block) {
-                Ok(block_id) if block_id == expected_id => {}
-                Ok(block_id) => {
-                    last_error = Some(backend_failure(format!(
-                        "overlay layer returned unexpected block ID {block_id} for block {expected_id}"
-                    )));
-                }
-                Err(error) => last_error = Some(error),
+            if let Err(error) = layer.put_block_bytes(block_id, block_bytes) {
+                last_error = Some(error);
             }
         }
 
@@ -209,18 +208,18 @@ impl BlockStore for OverlayBlockStore {
 
         match last_error {
             Some(error) => Err(error),
-            None => Ok(expected_id),
+            None => Ok(()),
         }
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let mut last_error = None;
 
         for (index, layer) in self.layers.iter().enumerate() {
-            match layer.get(block_id) {
-                Ok(Some(block)) => {
-                    self.refill_cache_layers(index, &block.block);
-                    return Ok(Some(block));
+            match layer.get_block_bytes(block_id) {
+                Ok(Some(bytes)) => {
+                    self.refill_cache_layers(index, block_id, &bytes);
+                    return Ok(Some(bytes));
                 }
                 Ok(None) => {}
                 Err(error) => last_error = Some(error),

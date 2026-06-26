@@ -81,10 +81,10 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
 
     assert_eq!(
         store.get(&second.hash).unwrap_err(),
-        BlockStoreError::IntegrityMismatch {
+        BlockStoreError::DecodeFailure(BlockError::HashMismatch {
             expected: second.hash,
             actual: first.hash,
-        }
+        })
     );
 
     let malformed_bytes = [0xff, 0xff, 0x00];
@@ -94,7 +94,7 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
 
     assert!(matches!(
         store.get(&malformed_hash).unwrap_err(),
-        BlockStoreError::MalformedContent(BlockError::MalformedCbor(_))
+        BlockStoreError::DecodeFailure(BlockError::MalformedCbor(_))
     ));
 
     let unreadable = serialize_block(&sample_leaf_block("forbidden")).unwrap();

@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use lexongraph_block::{
-    Block, BlockError, BlockHash, ValidatedBlock, deserialize_block, serialize_block,
-};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 
 #[derive(Clone)]
@@ -77,11 +75,9 @@ impl MemoryBlockStore {
         state.insert_or_refresh(block_id, bytes);
     }
 
-    fn insert_block(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+    fn insert_block_bytes(&self, block_id: &BlockHash, block_bytes: &[u8]) {
         let mut state = self.state.lock().unwrap();
-        state.insert_or_refresh(serialized.hash, serialized.bytes);
-        Ok(serialized.hash)
+        state.insert_or_refresh(*block_id, block_bytes.to_vec());
     }
 }
 
@@ -127,11 +123,16 @@ impl State {
 }
 
 impl BlockStore for MemoryBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.insert_block(block)
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.insert_block_bytes(block_id, block_bytes);
+        Ok(())
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let bytes = {
             let state = self.state.lock().unwrap();
             let Some(entry) = state.entries.get(block_id) else {
@@ -140,9 +141,8 @@ impl BlockStore for MemoryBlockStore {
             entry.bytes.clone()
         };
 
-        let validated = deserialize_block(&bytes, block_id).map_err(map_deserialize_error)?;
         self.state.lock().unwrap().refresh(block_id);
-        Ok(Some(validated))
+        Ok(Some(bytes))
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
@@ -155,14 +155,5 @@ impl BlockStore for MemoryBlockStore {
             .copied()
             .collect::<Vec<_>>();
         Ok(Box::new(block_ids.into_iter().map(Ok)))
-    }
-}
-
-fn map_deserialize_error(error: BlockError) -> BlockStoreError {
-    match error {
-        BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
-        }
-        other => BlockStoreError::MalformedContent(other),
     }
 }

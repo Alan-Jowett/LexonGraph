@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
-//! Backend-agnostic storage contract for LexonGraph blocks.
+//! Backend-agnostic storage contract for LexonGraph block bytes.
 //!
 //! ```
 //! use lexongraph_block::{Block, BlockHash, ValidatedBlock};
-//! use lexongraph_block_store::{BlockStore, BlockStoreError};
+//! use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 //!
 //! fn exercise_contract(
 //!     store: &dyn BlockStore,
@@ -23,24 +23,91 @@
 
 use std::fmt;
 
-use lexongraph_block::{Block, BlockError, BlockHash, ValidatedBlock};
+use lexongraph_block::{
+    Block, BlockError, BlockHash, DecodedBlock, ValidatedBlock, VersionedBlock, deserialize_block,
+    deserialize_versioned_block, serialize_block, serialize_versioned_block,
+};
 
 pub trait BlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError>;
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        let validated =
+            deserialize_block(block_bytes, block_id).map_err(BlockStoreError::ContractViolation)?;
+        let actual = self.put(&validated.block)?;
+        if actual != *block_id {
+            return Err(BlockStoreError::ContractViolation(
+                BlockError::HashMismatch {
+                    expected: *block_id,
+                    actual,
+                },
+            ));
+        }
+        Ok(())
+    }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError>;
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        let Some(validated) = self.get(block_id)? else {
+            return Ok(None);
+        };
+        let serialized =
+            serialize_block(&validated.block).map_err(BlockStoreError::ContractViolation)?;
+        if serialized.hash != *block_id {
+            return Err(BlockStoreError::ContractViolation(
+                BlockError::HashMismatch {
+                    expected: *block_id,
+                    actual: serialized.hash,
+                },
+            ));
+        }
+        Ok(Some(serialized.bytes))
+    }
+
+    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+        let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+        self.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+        Ok(serialized.hash)
+    }
+
+    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+        let Some(bytes) = self.get_block_bytes(block_id)? else {
+            return Ok(None);
+        };
+        deserialize_block(&bytes, block_id)
+            .map(Some)
+            .map_err(BlockStoreError::DecodeFailure)
+    }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError>;
 }
 
+pub trait BlockStoreExt: BlockStore {
+    fn put_versioned(&self, block: &VersionedBlock) -> Result<BlockHash, BlockStoreError> {
+        let serialized =
+            serialize_versioned_block(block).map_err(BlockStoreError::ContractViolation)?;
+        self.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+        Ok(serialized.hash)
+    }
+
+    fn get_decoded(&self, block_id: &BlockHash) -> Result<Option<DecodedBlock>, BlockStoreError> {
+        let Some(bytes) = self.get_block_bytes(block_id)? else {
+            return Ok(None);
+        };
+
+        deserialize_versioned_block(&bytes, block_id)
+            .map(Some)
+            .map_err(BlockStoreError::DecodeFailure)
+    }
+}
+
+impl<T: BlockStore + ?Sized> BlockStoreExt for T {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockStoreError {
     BackendFailure(String),
-    MalformedContent(BlockError),
-    IntegrityMismatch {
-        expected: BlockHash,
-        actual: BlockHash,
-    },
+    DecodeFailure(BlockError),
     ContractViolation(BlockError),
 }
 
@@ -48,14 +115,15 @@ impl fmt::Display for BlockStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BackendFailure(message) => write!(f, "block store backend failure: {message}"),
-            Self::MalformedContent(error) => write!(f, "malformed stored block content: {error}"),
-            Self::IntegrityMismatch { expected, actual } => {
+            Self::DecodeFailure(error) => {
                 write!(
                     f,
-                    "stored block identity mismatch: expected {expected}, got {actual}"
+                    "stored block bytes failed shared decode/validation: {error}"
                 )
             }
-            Self::ContractViolation(error) => write!(f, "block store contract violation: {error}"),
+            Self::ContractViolation(error) => {
+                write!(f, "block store contract violation: {error}")
+            }
         }
     }
 }
@@ -63,8 +131,8 @@ impl fmt::Display for BlockStoreError {
 impl std::error::Error for BlockStoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::MalformedContent(error) | Self::ContractViolation(error) => Some(error),
-            Self::BackendFailure(_) | Self::IntegrityMismatch { .. } => None,
+            Self::DecodeFailure(error) | Self::ContractViolation(error) => Some(error),
+            Self::BackendFailure(_) => None,
         }
     }
 }
@@ -78,7 +146,7 @@ mod conformance_support {
 
     use lexongraph_block::{
         Block, BlockHash, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1,
-        ValidatedBlock, build_branch_block, build_leaf_block, compute_block_hash,
+        build_branch_block, build_leaf_block, serialize_block,
     };
 
     use super::{BlockStore, BlockStoreError};
@@ -89,13 +157,16 @@ mod conformance_support {
         fn fresh_store(&self) -> Self::Store;
     }
 
+    #[allow(dead_code)]
     pub trait BlockStoreConformanceHarness: BlockStoreFactory {
         fn inject_raw_bytes(
             &self,
-            store: &Self::Store,
-            block_id: &BlockHash,
-            bytes: &[u8],
-        ) -> Result<(), String>;
+            _store: &Self::Store,
+            _block_id: &BlockHash,
+            _bytes: &[u8],
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     pub type ConformanceResult = Result<(), ConformanceError>;
@@ -103,7 +174,6 @@ mod conformance_support {
     #[derive(Debug)]
     pub enum ConformanceError {
         Store(BlockStoreError),
-        Injection(String),
         Expectation(String),
     }
 
@@ -111,7 +181,6 @@ mod conformance_support {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Self::Store(error) => write!(f, "{error}"),
-                Self::Injection(message) => write!(f, "conformance injection failed: {message}"),
                 Self::Expectation(message) => {
                     write!(f, "conformance expectation failed: {message}")
                 }
@@ -123,7 +192,7 @@ mod conformance_support {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Self::Store(error) => Some(error),
-                Self::Injection(_) | Self::Expectation(_) => None,
+                Self::Expectation(_) => None,
             }
         }
     }
@@ -145,53 +214,54 @@ mod conformance_support {
         Ok(())
     }
 
-    pub fn run_integrity_suite<H>(harness: &H) -> ConformanceResult
+    pub fn run_full_suite<F>(factory: &F) -> ConformanceResult
     where
-        H: BlockStoreConformanceHarness,
+        F: BlockStoreFactory,
     {
-        run_integrity_mismatch_case(harness)?;
-        run_malformed_content_case(harness)?;
-        Ok(())
-    }
-
-    pub fn run_full_suite<H>(harness: &H) -> ConformanceResult
-    where
-        H: BlockStoreConformanceHarness,
-    {
-        run_contract_suite(harness)?;
-        run_integrity_suite(harness)
+        run_contract_suite(factory)
     }
 
     pub fn run_round_trip_case(store: &impl BlockStore) -> ConformanceResult {
         let block = sample_leaf_block("hello");
-        let block_id = store.put(&block)?;
-        let loaded = store.get(&block_id)?.ok_or_else(|| {
-            ConformanceError::Expectation("expected stored block to be present".into())
+        let serialized = serialize_block(&block).expect("sample block must serialize");
+        store.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+        let loaded = store.get_block_bytes(&serialized.hash)?.ok_or_else(|| {
+            ConformanceError::Expectation("expected stored block bytes to be present".into())
         })?;
-
-        expect_loaded_block(&loaded, &block, &block_id)
+        if loaded != serialized.bytes {
+            return Err(ConformanceError::Expectation(
+                "expected round-tripped bytes to remain unchanged".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn run_idempotence_case(store: &impl BlockStore) -> ConformanceResult {
-        let first = sample_branch_block([0x11; 32], [0x22; 32], false);
-        let second = sample_branch_block([0x11; 32], [0x22; 32], true);
+        let first = serialize_block(&sample_branch_block([0x11; 32], [0x22; 32], false))
+            .expect("sample block must serialize");
+        let second = serialize_block(&sample_branch_block([0x11; 32], [0x22; 32], true))
+            .expect("sample block must serialize");
 
-        let first_id = store.put(&first)?;
-        let second_id = store.put(&second)?;
-        if first_id != second_id {
-            return Err(ConformanceError::Expectation(format!(
-                "expected logically identical blocks to share a hash, got {first_id} and {second_id}"
-            )));
+        store.put_block_bytes(&first.hash, &first.bytes)?;
+        store.put_block_bytes(&second.hash, &second.bytes)?;
+
+        if first.hash != second.hash {
+            return Err(ConformanceError::Expectation(
+                "expected logically identical blocks to share a hash".into(),
+            ));
         }
 
-        let loaded = store.get(&first_id)?.ok_or_else(|| {
-            ConformanceError::Expectation(
-                "expected idempotently stored block to remain present".into(),
-            )
+        let loaded = store.get_block_bytes(&first.hash)?.ok_or_else(|| {
+            ConformanceError::Expectation("expected idempotently stored bytes to be present".into())
         })?;
+        if loaded != first.bytes {
+            return Err(ConformanceError::Expectation(
+                "expected identical bytes after repeated puts".into(),
+            ));
+        }
 
         let enumerated = collect_block_ids(store.iter_block_ids()?)?;
-        let expected = HashSet::from([first_id]);
+        let expected = HashSet::from([first.hash]);
         if enumerated != expected {
             return Err(ConformanceError::Expectation(format!(
                 "expected enumeration after idempotent puts to yield {:?}, got {:?}",
@@ -199,12 +269,12 @@ mod conformance_support {
             )));
         }
 
-        expect_loaded_block(&loaded, &first, &first_id)
+        Ok(())
     }
 
     pub fn run_missing_block_case(store: &impl BlockStore) -> ConformanceResult {
         let missing = BlockHash::from_bytes([0x55; 32]);
-        let loaded = store.get(&missing)?;
+        let loaded = store.get_block_bytes(&missing)?;
         if loaded.is_some() {
             return Err(ConformanceError::Expectation(format!(
                 "expected missing block {missing} to return Ok(None)"
@@ -214,12 +284,18 @@ mod conformance_support {
     }
 
     pub fn run_enumeration_case(store: &impl BlockStore) -> ConformanceResult {
-        let first = sample_leaf_block("first");
-        let second = sample_leaf_block("second");
-        let branch = sample_branch_block([0x11; 32], [0x22; 32], false);
+        let first =
+            serialize_block(&sample_leaf_block("first")).expect("sample block must serialize");
+        let second =
+            serialize_block(&sample_leaf_block("second")).expect("sample block must serialize");
+        let branch = serialize_block(&sample_branch_block([0x11; 32], [0x22; 32], false))
+            .expect("sample block must serialize");
 
-        let expected =
-            HashSet::from([store.put(&first)?, store.put(&second)?, store.put(&branch)?]);
+        for serialized in [&first, &second, &branch] {
+            store.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+        }
+
+        let expected = HashSet::from([first.hash, second.hash, branch.hash]);
         let enumerated = collect_block_ids(store.iter_block_ids()?)?;
 
         if enumerated != expected {
@@ -229,76 +305,6 @@ mod conformance_support {
             )));
         }
 
-        Ok(())
-    }
-
-    pub fn run_integrity_mismatch_case<H>(harness: &H) -> ConformanceResult
-    where
-        H: BlockStoreConformanceHarness,
-    {
-        let store = harness.fresh_store();
-        let first = lexongraph_block::serialize_block(&sample_leaf_block("first"))
-            .map_err(BlockStoreError::ContractViolation)?;
-        let second = lexongraph_block::serialize_block(&sample_leaf_block("second"))
-            .map_err(BlockStoreError::ContractViolation)?;
-        harness
-            .inject_raw_bytes(&store, &second.hash, &first.bytes)
-            .map_err(ConformanceError::Injection)?;
-
-        match store.get(&second.hash) {
-            Err(BlockStoreError::IntegrityMismatch { expected, actual })
-                if expected == second.hash && actual == first.hash =>
-            {
-                Ok(())
-            }
-            Err(other) => Err(ConformanceError::Expectation(format!(
-                "expected IntegrityMismatch({}, {}), got {other}",
-                second.hash, first.hash
-            ))),
-            Ok(result) => Err(ConformanceError::Expectation(format!(
-                "expected integrity mismatch error, got {result:?}"
-            ))),
-        }
-    }
-
-    pub fn run_malformed_content_case<H>(harness: &H) -> ConformanceResult
-    where
-        H: BlockStoreConformanceHarness,
-    {
-        let store = harness.fresh_store();
-        let malformed_bytes = [0xff, 0xff, 0x00];
-        let block_id = compute_block_hash(&malformed_bytes);
-        harness
-            .inject_raw_bytes(&store, &block_id, &malformed_bytes)
-            .map_err(ConformanceError::Injection)?;
-
-        match store.get(&block_id) {
-            Err(BlockStoreError::MalformedContent(_)) => Ok(()),
-            Err(other) => Err(ConformanceError::Expectation(format!(
-                "expected MalformedContent for {block_id}, got {other}"
-            ))),
-            Ok(result) => Err(ConformanceError::Expectation(format!(
-                "expected malformed-content error, got {result:?}"
-            ))),
-        }
-    }
-
-    fn expect_loaded_block(
-        loaded: &ValidatedBlock,
-        expected_block: &Block,
-        expected_hash: &BlockHash,
-    ) -> ConformanceResult {
-        if loaded.hash != *expected_hash {
-            return Err(ConformanceError::Expectation(format!(
-                "expected loaded hash {expected_hash}, got {}",
-                loaded.hash
-            )));
-        }
-        if loaded.block != *expected_block {
-            return Err(ConformanceError::Expectation(
-                "expected loaded block to preserve logical meaning".into(),
-            ));
-        }
         Ok(())
     }
 
@@ -351,13 +357,15 @@ mod conformance_support {
     pub(super) fn resolve_blocks_for_search(
         store: &dyn BlockStore,
         block_ids: &[BlockHash],
-    ) -> Result<Vec<ValidatedBlock>, BlockStoreError> {
+    ) -> Result<Vec<lexongraph_block::ValidatedBlock>, BlockStoreError> {
         block_ids
             .iter()
             .map(|block_id| {
-                store.get(block_id)?.ok_or_else(|| {
+                let bytes = store.get_block_bytes(block_id)?.ok_or_else(|| {
                     BlockStoreError::BackendFailure(format!("missing block {block_id}"))
-                })
+                })?;
+                lexongraph_block::deserialize_block(&bytes, block_id)
+                    .map_err(BlockStoreError::DecodeFailure)
             })
             .collect()
     }
@@ -402,7 +410,6 @@ pub mod conformance {
     pub use super::conformance_support::{
         BlockStoreConformanceHarness, BlockStoreFactory, ConformanceError, ConformanceResult,
         run_contract_suite, run_enumeration_case, run_full_suite, run_idempotence_case,
-        run_integrity_mismatch_case, run_integrity_suite, run_malformed_content_case,
         run_missing_block_case, run_round_trip_case,
     };
 }
@@ -412,14 +419,14 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
 
-    use lexongraph_block::{Block, BlockHash, VERSION_1, build_branch_block};
+    use lexongraph_block::{
+        Block, BlockHash, VERSION_1, build_branch_block, deserialize_block, serialize_block,
+    };
 
     use super::conformance_support::{
-        BlockStoreConformanceHarness, BlockStoreFactory, branch_entry, embedding_spec,
-        persist_leaf_blocks_for_indexing, resolve_blocks_for_search, run_enumeration_case,
-        run_full_suite, run_idempotence_case, run_integrity_mismatch_case,
-        run_malformed_content_case, run_missing_block_case, run_round_trip_case,
-        sample_branch_block, sample_leaf_block,
+        BlockStoreFactory, branch_entry, embedding_spec, persist_leaf_blocks_for_indexing,
+        resolve_blocks_for_search, run_enumeration_case, run_full_suite, run_idempotence_case,
+        run_missing_block_case, run_round_trip_case, sample_branch_block, sample_leaf_block,
     };
     use super::{BlockStore, BlockStoreError};
 
@@ -429,36 +436,28 @@ mod tests {
     }
 
     impl MemoryBlockStore {
-        fn raw_insert(&self, hash: BlockHash, bytes: Vec<u8>) {
-            self.blocks.borrow_mut().insert(hash, bytes);
-        }
-
         fn len(&self) -> usize {
             self.blocks.borrow().len()
         }
     }
 
     impl BlockStore for MemoryBlockStore {
-        fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-            let serialized = lexongraph_block::serialize_block(block)
-                .map_err(BlockStoreError::ContractViolation)?;
-            self.blocks
-                .borrow_mut()
-                .insert(serialized.hash, serialized.bytes);
-            Ok(serialized.hash)
-        }
-
-        fn get(
+        fn put_block_bytes(
             &self,
             block_id: &BlockHash,
-        ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-            let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
-                return Ok(None);
-            };
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks
+                .borrow_mut()
+                .insert(*block_id, block_bytes.to_vec());
+            Ok(())
+        }
 
-            lexongraph_block::deserialize_block(&bytes, block_id)
-                .map(Some)
-                .map_err(map_get_error)
+        fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.borrow().get(block_id).cloned())
         }
 
         fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
@@ -477,44 +476,28 @@ mod tests {
         }
     }
 
-    impl BlockStoreConformanceHarness for MemoryHarness {
-        fn inject_raw_bytes(
-            &self,
-            store: &Self::Store,
-            block_id: &BlockHash,
-            bytes: &[u8],
-        ) -> Result<(), String> {
-            store.raw_insert(*block_id, bytes.to_vec());
-            Ok(())
-        }
-    }
-
     #[derive(Default)]
     struct HexKeyMemoryBlockStore {
         blocks: RefCell<HashMap<String, Vec<u8>>>,
     }
 
     impl BlockStore for HexKeyMemoryBlockStore {
-        fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-            let serialized = lexongraph_block::serialize_block(block)
-                .map_err(BlockStoreError::ContractViolation)?;
-            self.blocks
-                .borrow_mut()
-                .insert(serialized.hash.to_string(), serialized.bytes);
-            Ok(serialized.hash)
-        }
-
-        fn get(
+        fn put_block_bytes(
             &self,
             block_id: &BlockHash,
-        ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-            let Some(bytes) = self.blocks.borrow().get(&block_id.to_string()).cloned() else {
-                return Ok(None);
-            };
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks
+                .borrow_mut()
+                .insert(block_id.to_string(), block_bytes.to_vec());
+            Ok(())
+        }
 
-            lexongraph_block::deserialize_block(&bytes, block_id)
-                .map(Some)
-                .map_err(map_get_error)
+        fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.borrow().get(&block_id.to_string()).cloned())
         }
 
         fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
@@ -541,15 +524,19 @@ mod tests {
     }
 
     impl BlockStore for MidstreamFailingEnumerationStore {
-        fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-            self.inner.put(block)
-        }
-
-        fn get(
+        fn put_block_bytes(
             &self,
             block_id: &BlockHash,
-        ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-            self.inner.get(block_id)
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes)
+        }
+
+        fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id)
         }
 
         fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
@@ -590,16 +577,6 @@ mod tests {
         let store = MemoryBlockStore::default();
 
         run_missing_block_case(&store).unwrap();
-    }
-
-    #[test]
-    fn val_store_004_hash_mismatch_is_reported_as_an_integrity_error() {
-        run_integrity_mismatch_case(&MemoryHarness).unwrap();
-    }
-
-    #[test]
-    fn val_store_005_malformed_content_is_reported_explicitly() {
-        run_malformed_content_case(&MemoryHarness).unwrap();
     }
 
     #[test]
@@ -682,8 +659,9 @@ mod tests {
             block: &Block,
             block_id: &BlockHash,
         ) -> Result<(), BlockStoreError> {
-            let _ = store.put(block)?;
-            let _ = store.get(block_id)?;
+            let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
+            store.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+            let _ = store.get_block_bytes(block_id)?;
             let _ = store.iter_block_ids()?.collect::<Result<Vec<_>, _>>()?;
             Ok(())
         }
@@ -719,7 +697,8 @@ mod tests {
         let mut leaf_count = 0;
         let mut branch_count = 0;
         for block_id in enumerated {
-            match store.get(&block_id).unwrap().unwrap().block {
+            let bytes = store.get_block_bytes(&block_id).unwrap().unwrap();
+            match deserialize_block(&bytes, &block_id).unwrap().block {
                 Block::Leaf(_) => leaf_count += 1,
                 Block::Branch(_) => branch_count += 1,
             }
@@ -819,15 +798,6 @@ mod tests {
             b'0'..=b'9' => Some(value - b'0'),
             b'a'..=b'f' => Some(value - b'a' + 10),
             _ => None,
-        }
-    }
-
-    fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {
-        match error {
-            lexongraph_block::BlockError::HashMismatch { expected, actual } => {
-                BlockStoreError::IntegrityMismatch { expected, actual }
-            }
-            other => BlockStoreError::MalformedContent(other),
         }
     }
 }

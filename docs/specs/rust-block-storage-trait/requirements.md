@@ -131,6 +131,29 @@ This revision shall not require enumeration ordering, snapshot isolation,
 reachability filtering, root detection, leaf or branch classification, or
 traversal semantics.
 
+### REQ-BLOCK-STORE-019
+
+The production storage trait boundary shall be protocol-agnostic and shall
+persist canonical block bytes keyed by a caller-supplied block identifier.
+
+### REQ-BLOCK-STORE-020
+
+The production storage trait shall provide raw-byte retrieval by block
+identifier and shall not require concrete backends to parse or validate a block
+protocol version.
+
+### REQ-BLOCK-STORE-021
+
+Shared typed and version-aware block helpers may be layered above the raw-byte
+storage trait so callers can store and load version-1 or version-2 blocks
+without duplicating codec-selection logic in each backend implementation.
+
+### REQ-BLOCK-STORE-022
+
+Concrete block-store backends should remain unaware of whether stored bytes
+encode a version-1 branch block, a version-2 reserved block, or a version-2
+custom block.
+
 ## Out of Scope
 
 This crate does not define or own:

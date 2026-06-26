@@ -83,8 +83,8 @@ pub fn sample_leaf_block(body: &str) -> Block {
 fn map_get_error(error: BlockError) -> BlockStoreError {
     match error {
         BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
+            BlockStoreError::DecodeFailure(BlockError::HashMismatch { expected, actual })
         }
-        other => BlockStoreError::MalformedContent(other),
+        other => BlockStoreError::DecodeFailure(other),
     }
 }

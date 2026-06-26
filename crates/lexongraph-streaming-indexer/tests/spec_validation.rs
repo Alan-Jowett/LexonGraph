@@ -91,9 +91,9 @@ impl BlockStore for SlowBranchStore {
             .map(Some)
             .map_err(|error| match error {
                 BlockError::HashMismatch { expected, actual } => {
-                    BlockStoreError::IntegrityMismatch { expected, actual }
+                    BlockStoreError::DecodeFailure(BlockError::HashMismatch { expected, actual })
                 }
-                other => BlockStoreError::MalformedContent(other),
+                other => BlockStoreError::DecodeFailure(other),
             })
     }
 
@@ -126,9 +126,9 @@ impl BlockStore for MemoryBlockStore {
             .map(Some)
             .map_err(|error| match error {
                 BlockError::HashMismatch { expected, actual } => {
-                    BlockStoreError::IntegrityMismatch { expected, actual }
+                    BlockStoreError::DecodeFailure(BlockError::HashMismatch { expected, actual })
                 }
-                other => BlockStoreError::MalformedContent(other),
+                other => BlockStoreError::DecodeFailure(other),
             })
     }
 
@@ -2454,7 +2454,9 @@ async fn val_stream_indexer_018_storage_integrity_is_checked() {
         run.finalize(std::iter::once(items.as_slice()), &FaultyIdStore)
             .await
             .unwrap_err(),
-        StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+        StreamingIndexerError::Storage(BlockStoreError::ContractViolation(
+            BlockError::HashMismatch { .. }
+        ))
     ));
 }
 
@@ -2476,7 +2478,9 @@ async fn val_stream_indexer_023_failed_bottom_up_assembly_does_not_fail_replay_s
         run.finalize(std::iter::once(items.as_slice()), &FaultyIdStore)
             .await
             .unwrap_err(),
-        StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+        StreamingIndexerError::Storage(BlockStoreError::ContractViolation(
+            BlockError::HashMismatch { .. }
+        ))
     ));
 
     let statuses = statuses.lock().unwrap().clone();
