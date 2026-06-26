@@ -26,7 +26,7 @@ Every version-2 block has the logical shape:
 
 ```text
 BlockV2 {
-  version: uint,
+  version: 2,
   type: utf8-string,
   content: cbor-value
 }
@@ -62,6 +62,10 @@ The shared protocol does not constrain the internal structure of a custom type
 string beyond requiring it to be non-empty UTF-8 text, and it does not assign
 hierarchical meaning to any separators or substrings within that value.
 
+The reserved type strings `branch` and `leaf` are valid only for the
+corresponding reserved content shapes in this document and must not be reused
+for application-defined custom content.
+
 The shared protocol validates only the canonical CBOR form of custom-block
 `content`. Any richer meaning of a custom type is subordinate to higher-layer
 specifications for that type.
@@ -86,6 +90,10 @@ instead of living at the top level.
 `entries` is a CBOR array. The optional `ext` field, when present, is a
 canonical CBOR map with the same forward-compatible and EBCP-governed semantics
 as version 1.
+
+In particular, version 2 does not redefine the key space inside reserved-type
+`ext`; any protocol-defined `ext` keys continue to come from the inherited
+version-1 and EBCP authorities.
 
 ## Reserved `leaf` Type
 
@@ -144,6 +152,10 @@ top-level canonical CBOR map and inspecting the `version` field.
 
 Version-aware decoders may interpret either version, but they must not silently
 upgrade, downgrade, or rewrite one version into the other.
+
+Future protocol versions may define additional reserved types or different
+top-level envelope rules, but version 2 does not permit unknown top-level
+fields.
 
 ## Identity and Canonicalization
 
