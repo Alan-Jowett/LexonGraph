@@ -91,9 +91,15 @@ The `EmbeddingSpec`, `BranchEntry`, canonical ordering, duplicate rejection, and
 EBCP rules are the same as in version 1, but they are nested under `content`
 instead of living at the top level.
 
-`entries` is a CBOR array. The optional `ext` field, when present, is a
-canonical CBOR map with the same forward-compatible and EBCP-governed semantics
-as version 1.
+Within reserved `branch` content, the inherited version-1 field-key registry is
+preserved inside the nested `content` map: `level`, `embedding_spec`,
+`entries`, and `ext` continue to use the same integer wire keys they use in the
+version-1 top-level block map, and nested `EmbeddingSpec` and `BranchEntry`
+maps likewise keep their version-1 integer wire keys.
+
+`entries` is a CBOR array of `BranchEntry` items. The optional `ext` field,
+when present, is a canonical CBOR map with the same forward-compatible and
+EBCP-governed semantics as version 1.
 
 A block with `type = "branch"` is invalid unless `content` conforms exactly to
 the reserved `BranchContentV2` schema and its inherited version-1 and EBCP
@@ -118,9 +124,15 @@ LeafContentV2 {
 Version 2 leaf content keeps the version-1 rule that `entries` contains exactly
 one `LeafEntry`.
 
-Leaf content does not contain a `level` field. `entries` is a CBOR array. The
-optional `ext` field, when present, is a canonical CBOR map with the same
-forward-compatible semantics as version 1.
+Within reserved `leaf` content, the inherited version-1 field-key registry is
+preserved inside the nested `content` map: `embedding_spec`, `entries`, and
+`ext` continue to use the same integer wire keys they use in the version-1
+top-level leaf block map, and nested `EmbeddingSpec`, `LeafEntry`, and
+`content` maps likewise keep their version-1 integer wire keys.
+
+Leaf content does not contain a `level` field. `entries` is a CBOR array of
+`LeafEntry` items. The optional `ext` field, when present, is a canonical CBOR
+map with the same forward-compatible semantics as version 1.
 
 A block with `type = "leaf"` is invalid unless `content` conforms exactly to
 the reserved `LeafContentV2` schema and its inherited version-1 invariants.
