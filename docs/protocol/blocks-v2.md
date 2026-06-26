@@ -20,6 +20,10 @@ so the shared protocol can preserve the existing branch/leaf semantics while
 also admitting first-class custom block types for higher-layer metadata and
 future evolution.
 
+Canonical CBOR in this document has the same meaning as in
+`docs/protocol/blocks.md`, consistent with the canonical encoding defined by
+RFC 8949 Section 4.2.
+
 ## Top-Level Shape
 
 Every version-2 block has the logical shape:
@@ -42,11 +46,11 @@ The top-level envelope is valid only when:
 
 - `version` is the unsigned integer value `2`
 - `type` is a non-empty UTF-8 text string
-- the top-level map contains exactly keys `0`, `1`, and `2`, in canonical order
+- the top-level CBOR map contains exactly three entries with integer keys `0`,
+  `1`, and `2`, in canonical order
 - no other top-level keys are present
 
-If `content` is a map, canonical CBOR ordering and duplicate-key rejection
-apply recursively within that map and any nested maps it contains.
+The entire block, including `content`, must be encoded as canonical CBOR.
 
 ## Type Governance
 
@@ -91,6 +95,10 @@ instead of living at the top level.
 canonical CBOR map with the same forward-compatible and EBCP-governed semantics
 as version 1.
 
+A block with `type = "branch"` is invalid unless `content` conforms exactly to
+the reserved `BranchContentV2` schema and its inherited version-1 and EBCP
+invariants.
+
 In particular, version 2 does not redefine the key space inside reserved-type
 `ext`; any protocol-defined `ext` keys continue to come from the inherited
 version-1 and EBCP authorities.
@@ -114,6 +122,9 @@ Leaf content does not contain a `level` field. `entries` is a CBOR array. The
 optional `ext` field, when present, is a canonical CBOR map with the same
 forward-compatible semantics as version 1.
 
+A block with `type = "leaf"` is invalid unless `content` conforms exactly to
+the reserved `LeafContentV2` schema and its inherited version-1 invariants.
+
 ## Custom Types
 
 For any non-reserved `type` string:
@@ -122,12 +133,13 @@ For any non-reserved `type` string:
 - the shared protocol does not interpret or validate its inner schema
 - higher layers may use custom content to carry application metadata
 
-Custom blocks are first-class content-addressed blocks. They are storable,
-retrievable, and enumerable through the block-store abstraction.
+Custom blocks participate in hashing, storage, retrieval, and enumeration
+exactly like reserved blocks.
 
-Version-2 custom blocks do not embed version-1 or version-2 blocks as nested
-protocol values under shared-protocol semantics. Cross-block relationships are
-expressed only through block hashes carried inside application-defined content.
+The shared protocol assigns block semantics only to the outermost decoded block
+envelope. Any value nested within `content`, even if it is byte-for-byte a
+valid version-1 or version-2 block encoding, has no shared-protocol block
+semantics unless interpreted by a higher-layer specification.
 
 ## Reference Semantics
 
