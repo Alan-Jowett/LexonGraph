@@ -33,37 +33,9 @@ pub trait BlockStore {
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
-    ) -> Result<(), BlockStoreError> {
-        let validated =
-            deserialize_block(block_bytes, block_id).map_err(BlockStoreError::ContractViolation)?;
-        let actual = self.put(&validated.block)?;
-        if actual != *block_id {
-            return Err(BlockStoreError::ContractViolation(
-                BlockError::HashMismatch {
-                    expected: *block_id,
-                    actual,
-                },
-            ));
-        }
-        Ok(())
-    }
+    ) -> Result<(), BlockStoreError>;
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        let Some(validated) = self.get(block_id)? else {
-            return Ok(None);
-        };
-        let serialized =
-            serialize_block(&validated.block).map_err(BlockStoreError::ContractViolation)?;
-        if serialized.hash != *block_id {
-            return Err(BlockStoreError::ContractViolation(
-                BlockError::HashMismatch {
-                    expected: *block_id,
-                    actual: serialized.hash,
-                },
-            ));
-        }
-        Ok(Some(serialized.bytes))
-    }
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError>;
 
     fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
         let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;

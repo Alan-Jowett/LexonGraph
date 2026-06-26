@@ -387,27 +387,8 @@ pub fn deserialize_block(
     bytes: &[u8],
     expected_hash: &BlockHash,
 ) -> Result<ValidatedBlock, BlockError> {
-    let actual_hash = compute_block_hash(bytes);
-    if &actual_hash != expected_hash {
-        return Err(BlockError::HashMismatch {
-            expected: *expected_hash,
-            actual: actual_hash,
-        });
-    }
-
     let value = decode_single_cbor_value(bytes)?;
-    let block = parse_block(value)?;
-    let serialized = serialize_block(&block)?;
-    if serialized.bytes != bytes {
-        return Err(BlockError::NonConforming(
-            "block bytes are not the canonical encoding of the decoded block",
-        ));
-    }
-
-    Ok(ValidatedBlock {
-        block,
-        hash: actual_hash,
-    })
+    deserialize_block_from_value(value, bytes, expected_hash)
 }
 
 pub fn serialize_versioned_block(block: &VersionedBlock) -> Result<SerializedBlock, BlockError> {
@@ -421,10 +402,13 @@ pub fn deserialize_versioned_block(
     bytes: &[u8],
     expected_hash: &BlockHash,
 ) -> Result<DecodedBlock, BlockError> {
-    let version = detect_block_version(bytes)?;
+    let value = decode_single_cbor_value(bytes)?;
+    let version = detect_block_version_value(&value)?;
     match version {
-        VERSION_1 => deserialize_block(bytes, expected_hash).map(DecodedBlock::V1),
-        v2::VERSION_2 => v2::deserialize_block(bytes, expected_hash).map(DecodedBlock::V2),
+        VERSION_1 => deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V1),
+        v2::VERSION_2 => {
+            v2::deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V2)
+        }
         other => Err(BlockError::UnsupportedVersion(other)),
     }
 }
@@ -514,10 +498,64 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
     }
 }
 
-fn detect_block_version(bytes: &[u8]) -> Result<u64, BlockError> {
-    let value = decode_single_cbor_value(bytes)?;
-    let mut fields = integer_keyed_map(value, "block")?;
-    required_u64_field(&mut fields, TOP_LEVEL_VERSION_KEY, "block")
+fn deserialize_block_from_value(
+    value: Value,
+    bytes: &[u8],
+    expected_hash: &BlockHash,
+) -> Result<ValidatedBlock, BlockError> {
+    let actual_hash = compute_block_hash(bytes);
+    if &actual_hash != expected_hash {
+        return Err(BlockError::HashMismatch {
+            expected: *expected_hash,
+            actual: actual_hash,
+        });
+    }
+
+    let block = parse_block(value)?;
+    let serialized = serialize_block(&block)?;
+    if serialized.bytes != bytes {
+        return Err(BlockError::NonConforming(
+            "block bytes are not the canonical encoding of the decoded block",
+        ));
+    }
+
+    Ok(ValidatedBlock {
+        block,
+        hash: actual_hash,
+    })
+}
+
+fn detect_block_version_value(value: &Value) -> Result<u64, BlockError> {
+    let Value::Map(entries) = value else {
+        return Err(BlockError::InvalidEntryShape("expected a CBOR map"));
+    };
+
+    let mut version = None;
+    for (key, value) in entries {
+        let Value::Integer(integer) = key else {
+            return Err(BlockError::InvalidFieldKey { context: "block" });
+        };
+        let key = u64::try_from(integer.clone())
+            .map_err(|_| BlockError::InvalidFieldKey { context: "block" })?;
+        if key == TOP_LEVEL_VERSION_KEY {
+            if version.is_some() {
+                return Err(BlockError::NonConforming("duplicate field key"));
+            }
+            let Value::Integer(integer) = value else {
+                return Err(BlockError::InvalidEntryShape(
+                    "expected an unsigned integer field value",
+                ));
+            };
+            version = Some(u64::try_from(integer.clone()).map_err(|_| {
+                BlockError::InvalidEntryShape("expected an unsigned integer field value")
+            })?);
+        }
+    }
+
+    version.ok_or(BlockError::MissingField {
+        context: "block",
+        key: TOP_LEVEL_VERSION_KEY,
+    })
 }
 
 pub(crate) fn normalize_optional_map(

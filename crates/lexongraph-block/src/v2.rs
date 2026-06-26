@@ -126,6 +126,15 @@ pub fn deserialize_block(
     bytes: &[u8],
     expected_hash: &BlockHash,
 ) -> Result<ValidatedBlock, BlockError> {
+    let value = decode_single_cbor_value(bytes)?;
+    deserialize_block_from_value(value, bytes, expected_hash)
+}
+
+pub(crate) fn deserialize_block_from_value(
+    value: Value,
+    bytes: &[u8],
+    expected_hash: &BlockHash,
+) -> Result<ValidatedBlock, BlockError> {
     let actual_hash = compute_block_hash(bytes);
     if &actual_hash != expected_hash {
         return Err(BlockError::HashMismatch {
@@ -134,7 +143,6 @@ pub fn deserialize_block(
         });
     }
 
-    let value = decode_single_cbor_value(bytes)?;
     let block = parse_block(value)?;
     let serialized = serialize_block(&block)?;
     if serialized.bytes != bytes {

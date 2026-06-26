@@ -740,15 +740,19 @@ struct HarnessStore {
 }
 
 impl BlockStore for HarnessStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.inner.put(block)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        self.inner.get(block_id)
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.inner.put_block_bytes(block_id, block_bytes)
+    }
+
+    fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(

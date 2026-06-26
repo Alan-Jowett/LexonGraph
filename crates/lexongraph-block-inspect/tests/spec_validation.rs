@@ -5,10 +5,10 @@ use std::process::{Command, Output};
 
 use ciborium::value::Value as CborValue;
 use lexongraph_block::{
-    BlockHash, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_branch_block,
-    build_leaf_block, compute_block_hash,
+    BlockHash, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1, VersionedBlock,
+    build_branch_block, build_leaf_block, compute_block_hash, v2,
 };
-use lexongraph_block_store::BlockStore;
+use lexongraph_block_store::{BlockStore, BlockStoreExt};
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use serde_json::Value;
 
@@ -289,7 +289,8 @@ fn val_inspect_013_source_uses_blockstore_boundary() {
     .unwrap();
 
     assert!(source.contains("BlockStore"));
-    assert!(source.contains("store.get(block_hash)"));
+    assert!(source.contains("get_decoded(block_hash)"));
+    assert!(source.contains("get_block_bytes(block_hash)"));
     assert!(source.contains("FilesystemBlockStore::new"));
     assert!(!source.contains(".cbor"));
 }
@@ -422,6 +423,87 @@ fn val_inspect_016_fs_tree_reports_child_cap_and_level_statistics() {
         overflowing_branch_hash.to_string()
     );
     assert_eq!(largest_blocks[0]["kind"], "branch");
+}
+
+#[test]
+fn val_inspect_017_fs_tree_traverses_reserved_v2_blocks() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+
+    let leaf_a_hash = store
+        .put_versioned(&VersionedBlock::V2(
+            v2::build_leaf_block(
+                EmbeddingSpec {
+                    dims: 4,
+                    encoding: "f32le".to_owned(),
+                },
+                vec![LeafEntry {
+                    embedding: vec![0x01, 0x00, 0x00, 0x00],
+                    metadata: vec![],
+                    content: Content {
+                        media_type: "text/plain".to_owned(),
+                        body: b"leaf-a".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let leaf_b_hash = store
+        .put_versioned(&VersionedBlock::V2(
+            v2::build_leaf_block(
+                EmbeddingSpec {
+                    dims: 4,
+                    encoding: "f32le".to_owned(),
+                },
+                vec![LeafEntry {
+                    embedding: vec![0x02, 0x00, 0x00, 0x00],
+                    metadata: vec![],
+                    content: Content {
+                        media_type: "text/plain".to_owned(),
+                        body: b"leaf-b".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    let root_hash = store
+        .put_versioned(&VersionedBlock::V2(
+            v2::build_branch_block(
+                1,
+                EmbeddingSpec {
+                    dims: 4,
+                    encoding: "f32le".to_owned(),
+                },
+                vec![
+                    BranchEntry {
+                        embedding: vec![0x10, 0x00, 0x00, 0x00],
+                        child: leaf_a_hash,
+                    },
+                    BranchEntry {
+                        embedding: vec![0x20, 0x00, 0x00, 0x00],
+                        child: leaf_b_hash,
+                    },
+                ],
+                None,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let output = run_fs_tree(temp_dir.path(), &root_hash.to_string(), 2);
+    let json = successful_json(output);
+
+    assert_eq!(json["root_hash"], root_hash.to_string());
+    assert_eq!(json["root_level"], 1);
+    assert_eq!(json["unique_block_count"], 3);
+    assert_eq!(json["branch_block_count"], 1);
+    assert_eq!(json["leaf_block_count"], 2);
+    assert_eq!(json["max_children_in_block"], 2);
+    assert_eq!(json["largest_blocks"][0]["kind"], "branch");
 }
 
 fn sample_simple_leaf_block(body: &str) -> lexongraph_block::Block {

@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value as CborValue;
 use clap::{Parser, Subcommand};
 use lexongraph_block::{
-    Block, BlockHash, BranchBlock, BranchEntry, Content, DecodedBlock, EmbeddingSpec, ExtensionMap,
-    LeafBlock, LeafEntry, Metadata, ValidatedBlock, serialize_block, v2,
+    Block, BlockHash, BranchBlock, BranchEntry, Content, DecodedBlock, EmbeddingSpec,
+    ExtensionMap, LeafBlock, LeafEntry, Metadata, deserialize_versioned_block, v2,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -194,24 +194,25 @@ fn load_decoded_block(
     }
 }
 
-fn load_validated_block(
+fn load_decoded_block_bytes(
     store: &impl BlockStore,
     block_hash: &BlockHash,
-) -> Result<ValidatedBlock, InspectError> {
-    match store.get(block_hash) {
-        Ok(Some(validated_block)) => Ok(validated_block),
+) -> Result<(DecodedBlock, Vec<u8>), InspectError> {
+    match store.get_block_bytes(block_hash) {
+        Ok(Some(bytes)) => {
+            let decoded = deserialize_versioned_block(&bytes, block_hash)
+                .map_err(inspect_error_from_block_error)?;
+            Ok((decoded, bytes))
+        }
         Ok(None) => Err(InspectError::BlockAbsence(*block_hash)),
         Err(BlockStoreError::BackendFailure(message)) => {
             Err(InspectError::BackendRetrieval(message))
         }
-        Err(BlockStoreError::DecodeFailure(error)) => match error {
-            lexongraph_block::BlockError::HashMismatch { expected, actual } => {
-                Err(InspectError::IntegrityMismatch { expected, actual })
-            }
-            other => Err(InspectError::MalformedContent(other.to_string())),
-        },
         Err(BlockStoreError::ContractViolation(error)) => Err(InspectError::InspectionBoundary(
             format!("unexpected block store contract violation: {error}"),
+        )),
+        Err(BlockStoreError::DecodeFailure(error)) => Err(InspectError::InspectionBoundary(
+            format!("unexpected block store decode failure while loading raw bytes: {error}"),
         )),
     }
 }
@@ -240,10 +241,9 @@ fn analyze_tree(
             continue;
         }
 
-        let validated = load_validated_block(store, &block_hash)?;
-        let serialized = serialize_block(&validated.block)
-            .map_err(|error| InspectError::InspectionBoundary(error.to_string()))?;
-        let serialized_bytes = u64::try_from(serialized.bytes.len()).map_err(|_| {
+        let (decoded, bytes) = load_decoded_block_bytes(store, &block_hash)?;
+        let traversed = classify_traversed_block(decoded, &block_hash)?;
+        let serialized_bytes = u64::try_from(bytes.len()).map_err(|_| {
             InspectError::InspectionBoundary("serialized block is too large".to_owned())
         })?;
 
@@ -251,44 +251,42 @@ fn analyze_tree(
         insert_largest_block(
             &mut largest_blocks,
             LargestBlock {
-                hash: validated.hash,
-                level: block_level(&validated.block),
+                hash: block_hash,
+                level: traversed.level(),
                 serialized_bytes,
-                child_count: branch_child_count(&validated.block)?,
-                kind: block_kind(&validated.block),
+                child_count: traversed.child_count()?,
+                kind: traversed.kind(),
             },
         );
 
-        match validated.block {
-            Block::Branch(branch) => {
+        match traversed {
+            TraversedBlock::Branch(branch) => {
                 if root_level.is_none() {
                     root_level = Some(branch.level);
                 }
                 branch_block_count += 1;
-                let child_count = u64::try_from(branch.entries.len()).map_err(|_| {
-                    InspectError::InspectionBoundary(
-                        "branch child count does not fit in u64".to_owned(),
-                    )
-                })?;
-                max_children_in_block = max_children_in_block.max(child_count);
+                max_children_in_block = max_children_in_block.max(branch.child_count);
 
                 if max_child_count_block
                     .as_ref()
-                    .is_none_or(|current| child_count > current.child_count)
+                    .is_none_or(|current| branch.child_count > current.child_count)
                 {
                     max_child_count_block = Some(BranchChildCountSummary {
-                        hash: validated.hash,
+                        hash: block_hash,
                         level: branch.level,
-                        child_count,
+                        child_count: branch.child_count,
                         serialized_bytes,
                     });
                 }
 
-                if branch.entries.len() > expected_max_children {
+                if usize::try_from(branch.child_count)
+                    .ok()
+                    .is_some_and(|count| count > expected_max_children)
+                {
                     child_cap_violations.push(BranchChildCountSummary {
-                        hash: validated.hash,
+                        hash: block_hash,
                         level: branch.level,
-                        child_count,
+                        child_count: branch.child_count,
                         serialized_bytes,
                     });
                 }
@@ -296,13 +294,13 @@ fn analyze_tree(
                 level_stats
                     .entry(branch.level)
                     .or_default()
-                    .observe_branch(child_count, serialized_bytes);
+                    .observe_branch(branch.child_count, serialized_bytes);
 
-                for entry in branch.entries {
-                    queue.push_back(entry.child);
+                for child in branch.children {
+                    queue.push_back(child);
                 }
             }
-            Block::Leaf(leaf) => {
+            TraversedBlock::Leaf(leaf) => {
                 if root_level.is_none() {
                     root_level = Some(leaf.level);
                 }
@@ -437,6 +435,93 @@ fn render_inspection_document(decoded_block: DecodedBlock) -> Result<Value, Insp
         ("level", Value::Number(Number::from(level))),
         ("block", block),
     ]))
+}
+
+fn inspect_error_from_block_error(error: lexongraph_block::BlockError) -> InspectError {
+    match error {
+        lexongraph_block::BlockError::HashMismatch { expected, actual } => {
+            InspectError::IntegrityMismatch { expected, actual }
+        }
+        other => InspectError::MalformedContent(other.to_string()),
+    }
+}
+
+enum TraversedBlock {
+    Branch(TraversedBranch),
+    Leaf(TraversedLeaf),
+}
+
+struct TraversedBranch {
+    level: u64,
+    child_count: u64,
+    children: Vec<BlockHash>,
+}
+
+struct TraversedLeaf {
+    level: u64,
+}
+
+impl TraversedBlock {
+    fn child_count(&self) -> Result<Option<u64>, InspectError> {
+        match self {
+            Self::Branch(branch) => Ok(Some(branch.child_count)),
+            Self::Leaf(_) => Ok(None),
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Branch(_) => "branch",
+            Self::Leaf(_) => "leaf",
+        }
+    }
+
+    fn level(&self) -> u64 {
+        match self {
+            Self::Branch(branch) => branch.level,
+            Self::Leaf(leaf) => leaf.level,
+        }
+    }
+}
+
+fn classify_traversed_block(
+    decoded: DecodedBlock,
+    block_hash: &BlockHash,
+) -> Result<TraversedBlock, InspectError> {
+    match decoded {
+        DecodedBlock::V1(validated) => match validated.block {
+            lexongraph_block::Block::Branch(branch) => Ok(TraversedBlock::Branch(TraversedBranch {
+                level: branch.level,
+                child_count: u64::try_from(branch.entries.len()).map_err(|_| {
+                    InspectError::InspectionBoundary(
+                        "branch child count does not fit in u64".to_owned(),
+                    )
+                })?,
+                children: branch.entries.into_iter().map(|entry| entry.child).collect(),
+            })),
+            lexongraph_block::Block::Leaf(leaf) => {
+                Ok(TraversedBlock::Leaf(TraversedLeaf { level: leaf.level }))
+            }
+        },
+        DecodedBlock::V2(validated) => match v2::into_typed_block(validated)
+            .map_err(|error| InspectError::InspectionBoundary(error.to_string()))?
+        {
+            v2::TypedBlock::Branch(branch) => Ok(TraversedBlock::Branch(TraversedBranch {
+                level: branch.level,
+                child_count: u64::try_from(branch.entries.len()).map_err(|_| {
+                    InspectError::InspectionBoundary(
+                        "branch child count does not fit in u64".to_owned(),
+                    )
+                })?,
+                children: branch.entries.into_iter().map(|entry| entry.child).collect(),
+            })),
+            v2::TypedBlock::Leaf(_) => Ok(TraversedBlock::Leaf(TraversedLeaf { level: 0 })),
+            v2::TypedBlock::Custom(block) => Err(InspectError::InspectionBoundary(format!(
+                "fs-tree supports only traversable reserved branch/leaf blocks; found version-2 custom block type {} at {block_hash}",
+                block.type_name
+            ))),
+        },
+    }
 }
 
 fn render_branch_block(block: BranchBlock) -> Result<Value, InspectError> {
@@ -739,29 +824,6 @@ struct LargestBlock {
     serialized_bytes: u64,
     child_count: Option<u64>,
     kind: &'static str,
-}
-
-fn block_level(block: &Block) -> u64 {
-    match block {
-        Block::Branch(branch) => branch.level,
-        Block::Leaf(leaf) => leaf.level,
-    }
-}
-
-fn branch_child_count(block: &Block) -> Result<Option<u64>, InspectError> {
-    match block {
-        Block::Branch(branch) => u64::try_from(branch.entries.len()).map(Some).map_err(|_| {
-            InspectError::InspectionBoundary("branch child count does not fit in u64".to_owned())
-        }),
-        Block::Leaf(_) => Ok(None),
-    }
-}
-
-fn block_kind(block: &Block) -> &'static str {
-    match block {
-        Block::Branch(_) => "branch",
-        Block::Leaf(_) => "leaf",
-    }
 }
 
 fn render_optional_child_count_summary(summary: Option<BranchChildCountSummary>) -> Value {

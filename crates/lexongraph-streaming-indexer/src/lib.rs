@@ -6491,29 +6491,20 @@ mod conformance_support {
     }
 
     impl BlockStore for MemoryBlockStore {
-        fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-            let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-            self.blocks
-                .borrow_mut()
-                .insert(serialized.hash, serialized.bytes);
-            Ok(serialized.hash)
-        }
-
-        fn get(
+        fn put_block_bytes(
             &self,
             block_id: &BlockHash,
-        ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-            let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
-                return Ok(None);
-            };
-            lexongraph_block::deserialize_block(&bytes, block_id)
-                .map(Some)
-                .map_err(|error| match error {
-                    BlockError::HashMismatch { expected, actual } => {
-                        BlockStoreError::IntegrityMismatch { expected, actual }
-                    }
-                    other => BlockStoreError::MalformedContent(other),
-                })
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks.borrow_mut().insert(*block_id, block_bytes.to_vec());
+            Ok(())
+        }
+
+        fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.borrow().get(block_id).cloned())
         }
 
         fn iter_block_ids(
