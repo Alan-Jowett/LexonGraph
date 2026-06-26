@@ -3,10 +3,11 @@
 use ciborium::ser::into_writer;
 use ciborium::value::{Integer, Value};
 use lexongraph_block::{
-    Block, BlockError, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpQuantization,
-    EbcpRotation, EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1, build_branch_block,
-    build_leaf_block, compute_block_hash, deserialize_block, ebcp_extension_map, into_entries,
-    parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32, serialize_block,
+    Block, BlockError, BlockHash, BranchEntry, Content, DecodedBlock, EbcpDescriptor,
+    EbcpQuantization, EbcpRotation, EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1,
+    VersionedBlock, build_branch_block, build_leaf_block, compute_block_hash, deserialize_block,
+    deserialize_versioned_block, ebcp_extension_map, into_entries, parse_branch_ebcp_descriptor,
+    reconstruct_logical_branch_embedding_f32, serialize_block, serialize_versioned_block, v2,
 };
 
 #[test]
@@ -901,6 +902,151 @@ fn val_029_branch_embedding_reconstruction_fails_explicitly_for_unsupported_or_m
     assert!(matches!(pq4, BlockError::UnsupportedValue(_)));
 }
 
+#[test]
+fn val_030_versioned_dispatch_round_trips_reserved_v2_blocks() {
+    let leaf = VersionedBlock::V2(
+        v2::build_leaf_block(
+            EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            vec![leaf_entry(vec![0xaa, 0xbb], vec![])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized_leaf = serialize_versioned_block(&leaf).unwrap();
+    match deserialize_versioned_block(&serialized_leaf.bytes, &serialized_leaf.hash).unwrap() {
+        DecodedBlock::V2(validated) => match v2::into_typed_block(validated).unwrap() {
+            v2::TypedBlock::Leaf(block) => {
+                assert_eq!(block.version, v2::VERSION_2);
+                assert_eq!(block.type_name, "leaf");
+                assert_eq!(block.entries.len(), 1);
+            }
+            other => panic!("expected v2 leaf, got {other:?}"),
+        },
+        other => panic!("expected decoded v2 block, got {other:?}"),
+    }
+
+    let branch = VersionedBlock::V2(
+        v2::build_branch_block(
+            3,
+            EmbeddingSpec {
+                dims: 2,
+                encoding: "f16le".into(),
+            },
+            vec![branch_entry(vec![0x01, 0x02], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized_branch = serialize_versioned_block(&branch).unwrap();
+    match deserialize_versioned_block(&serialized_branch.bytes, &serialized_branch.hash).unwrap() {
+        DecodedBlock::V2(validated) => match v2::into_typed_block(validated).unwrap() {
+            v2::TypedBlock::Branch(block) => {
+                assert_eq!(block.version, v2::VERSION_2);
+                assert_eq!(block.type_name, "branch");
+                assert_eq!(block.level, 3);
+                assert_eq!(block.entries.len(), 1);
+            }
+            other => panic!("expected v2 branch, got {other:?}"),
+        },
+        other => panic!("expected decoded v2 block, got {other:?}"),
+    }
+}
+
+#[test]
+fn val_031_versioned_dispatch_round_trips_v2_custom_blocks() {
+    let custom = VersionedBlock::V2(
+        v2::build_custom_block(
+            "application-metadata",
+            Value::Map(vec![
+                (int_value(7), Value::Text("payload".into())),
+                (
+                    Value::Text("nested".into()),
+                    Value::Array(vec![Value::Bool(true)]),
+                ),
+            ]),
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_versioned_block(&custom).unwrap();
+
+    match deserialize_versioned_block(&serialized.bytes, &serialized.hash).unwrap() {
+        DecodedBlock::V2(validated) => match v2::into_typed_block(validated).unwrap() {
+            v2::TypedBlock::Custom(block) => {
+                assert_eq!(block.version, v2::VERSION_2);
+                assert_eq!(block.type_name, "application-metadata");
+                assert!(matches!(block.content, Value::Map(_)));
+            }
+            other => panic!("expected v2 custom block, got {other:?}"),
+        },
+        other => panic!("expected decoded v2 block, got {other:?}"),
+    }
+}
+
+#[test]
+fn val_032_versioned_dispatch_never_silently_converts_versions() {
+    let v1 = VersionedBlock::V1(sample_leaf_block());
+    let serialized_v1 = serialize_versioned_block(&v1).unwrap();
+    assert!(matches!(
+        deserialize_versioned_block(&serialized_v1.bytes, &serialized_v1.hash).unwrap(),
+        DecodedBlock::V1(_)
+    ));
+
+    let v2 = VersionedBlock::V2(
+        v2::build_leaf_block(
+            EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            vec![leaf_entry(vec![0xaa, 0xbb], vec![])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized_v2 = serialize_versioned_block(&v2).unwrap();
+    assert!(matches!(
+        deserialize_versioned_block(&serialized_v2.bytes, &serialized_v2.hash).unwrap(),
+        DecodedBlock::V2(_)
+    ));
+}
+
+#[test]
+fn val_033_reserved_v2_content_reuses_v1_nested_field_keys() {
+    let branch = v2::build_branch_block(
+        1,
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f16le".into(),
+        },
+        vec![branch_entry(vec![0x01, 0x02], [0x11; 32])],
+        None,
+    )
+    .unwrap();
+    let branch_serialized = v2::serialize_block(&branch).unwrap();
+    let branch_value = decode_value(&branch_serialized.bytes);
+    let branch_content = top_level_content_map(branch_value);
+    assert_eq!(branch_content[0].0, int_value(1));
+    assert_eq!(branch_content[1].0, int_value(2));
+    assert_eq!(branch_content[2].0, int_value(3));
+
+    let leaf = v2::build_leaf_block(
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        vec![leaf_entry(vec![0xaa, 0xbb], vec![])],
+        None,
+    )
+    .unwrap();
+    let leaf_serialized = v2::serialize_block(&leaf).unwrap();
+    let leaf_value = decode_value(&leaf_serialized.bytes);
+    let leaf_content = top_level_content_map(leaf_value);
+    assert_eq!(leaf_content[0].0, int_value(2));
+    assert_eq!(leaf_content[1].0, int_value(3));
+}
+
 fn sample_branch_block() -> Block {
     Block::Branch(
         build_branch_block(
@@ -1025,6 +1171,25 @@ fn encode_value(value: Value) -> Vec<u8> {
     let mut bytes = Vec::new();
     into_writer(&value, &mut bytes).unwrap();
     bytes
+}
+
+fn decode_value(bytes: &[u8]) -> Value {
+    let mut cursor = std::io::Cursor::new(bytes);
+    ciborium::de::from_reader(&mut cursor).unwrap()
+}
+
+fn top_level_content_map(value: Value) -> Vec<(Value, Value)> {
+    let Value::Map(entries) = value else {
+        panic!("expected top-level map");
+    };
+    let (_, content) = entries
+        .into_iter()
+        .find(|(key, _)| *key == int_value(2))
+        .expect("expected content field");
+    let Value::Map(content_entries) = content else {
+        panic!("expected content map");
+    };
+    content_entries
 }
 
 fn int_value(value: u64) -> Value {

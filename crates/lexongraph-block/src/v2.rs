@@ -25,9 +25,9 @@ const TOP_LEVEL_CONTENT_KEY: u64 = 2;
 const RESERVED_BRANCH_TYPE: &str = "branch";
 const RESERVED_LEAF_TYPE: &str = "leaf";
 
-const CONTENT_LEVEL_KEY: u64 = 0;
-const CONTENT_EMBEDDING_SPEC_KEY: u64 = 1;
-const CONTENT_ENTRIES_KEY: u64 = 2;
+const CONTENT_LEVEL_KEY: u64 = 1;
+const CONTENT_EMBEDDING_SPEC_KEY: u64 = 2;
+const CONTENT_ENTRIES_KEY: u64 = 3;
 const CONTENT_EXT_KEY: u64 = 15;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,15 +126,6 @@ pub fn deserialize_block(
     bytes: &[u8],
     expected_hash: &BlockHash,
 ) -> Result<ValidatedBlock, BlockError> {
-    let value = decode_single_cbor_value(bytes)?;
-    deserialize_block_from_value(value, bytes, expected_hash)
-}
-
-pub(crate) fn deserialize_block_from_value(
-    value: Value,
-    bytes: &[u8],
-    expected_hash: &BlockHash,
-) -> Result<ValidatedBlock, BlockError> {
     let actual_hash = compute_block_hash(bytes);
     if &actual_hash != expected_hash {
         return Err(BlockError::HashMismatch {
@@ -143,6 +134,15 @@ pub(crate) fn deserialize_block_from_value(
         });
     }
 
+    let value = decode_single_cbor_value(bytes)?;
+    deserialize_block_from_value(value, bytes, actual_hash)
+}
+
+pub(crate) fn deserialize_block_from_value(
+    value: Value,
+    bytes: &[u8],
+    actual_hash: BlockHash,
+) -> Result<ValidatedBlock, BlockError> {
     let block = parse_block(value)?;
     let serialized = serialize_block(&block)?;
     if serialized.bytes != bytes {

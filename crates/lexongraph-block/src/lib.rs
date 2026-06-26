@@ -387,8 +387,16 @@ pub fn deserialize_block(
     bytes: &[u8],
     expected_hash: &BlockHash,
 ) -> Result<ValidatedBlock, BlockError> {
+    let actual_hash = compute_block_hash(bytes);
+    if &actual_hash != expected_hash {
+        return Err(BlockError::HashMismatch {
+            expected: *expected_hash,
+            actual: actual_hash,
+        });
+    }
+
     let value = decode_single_cbor_value(bytes)?;
-    deserialize_block_from_value(value, bytes, expected_hash)
+    deserialize_block_from_value(value, bytes, actual_hash)
 }
 
 pub fn serialize_versioned_block(block: &VersionedBlock) -> Result<SerializedBlock, BlockError> {
@@ -402,14 +410,20 @@ pub fn deserialize_versioned_block(
     bytes: &[u8],
     expected_hash: &BlockHash,
 ) -> Result<DecodedBlock, BlockError> {
+    let actual_hash = compute_block_hash(bytes);
+    if &actual_hash != expected_hash {
+        return Err(BlockError::HashMismatch {
+            expected: *expected_hash,
+            actual: actual_hash,
+        });
+    }
+
     let value = decode_single_cbor_value(bytes)?;
     let version = detect_block_version_value(&value)?;
     match version {
-        VERSION_1 => {
-            deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V1)
-        }
+        VERSION_1 => deserialize_block_from_value(value, bytes, actual_hash).map(DecodedBlock::V1),
         v2::VERSION_2 => {
-            v2::deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V2)
+            v2::deserialize_block_from_value(value, bytes, actual_hash).map(DecodedBlock::V2)
         }
         other => Err(BlockError::UnsupportedVersion(other)),
     }
@@ -503,16 +517,8 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
 fn deserialize_block_from_value(
     value: Value,
     bytes: &[u8],
-    expected_hash: &BlockHash,
+    actual_hash: BlockHash,
 ) -> Result<ValidatedBlock, BlockError> {
-    let actual_hash = compute_block_hash(bytes);
-    if &actual_hash != expected_hash {
-        return Err(BlockError::HashMismatch {
-            expected: *expected_hash,
-            actual: actual_hash,
-        });
-    }
-
     let block = parse_block(value)?;
     let serialized = serialize_block(&block)?;
     if serialized.bytes != bytes {

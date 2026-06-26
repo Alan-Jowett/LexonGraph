@@ -4,7 +4,7 @@
 //!
 //! ```
 //! use lexongraph_block::{Block, BlockHash, ValidatedBlock};
-//! use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
+//! use lexongraph_block_store::{BlockStore, BlockStoreError};
 //!
 //! fn exercise_contract(
 //!     store: &dyn BlockStore,
