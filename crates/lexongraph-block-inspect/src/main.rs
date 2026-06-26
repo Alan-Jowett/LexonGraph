@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value as CborValue;
 use clap::{Parser, Subcommand};
 use lexongraph_block::{
-    Block, BlockHash, BranchBlock, BranchEntry, Content, DecodedBlock, EmbeddingSpec,
-    ExtensionMap, LeafBlock, LeafEntry, Metadata, deserialize_versioned_block, v2,
+    Block, BlockHash, BranchBlock, BranchEntry, Content, DecodedBlock, EmbeddingSpec, ExtensionMap,
+    LeafBlock, LeafEntry, Metadata, deserialize_versioned_block, v2,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -490,15 +490,21 @@ fn classify_traversed_block(
 ) -> Result<TraversedBlock, InspectError> {
     match decoded {
         DecodedBlock::V1(validated) => match validated.block {
-            lexongraph_block::Block::Branch(branch) => Ok(TraversedBlock::Branch(TraversedBranch {
-                level: branch.level,
-                child_count: u64::try_from(branch.entries.len()).map_err(|_| {
-                    InspectError::InspectionBoundary(
-                        "branch child count does not fit in u64".to_owned(),
-                    )
-                })?,
-                children: branch.entries.into_iter().map(|entry| entry.child).collect(),
-            })),
+            lexongraph_block::Block::Branch(branch) => {
+                Ok(TraversedBlock::Branch(TraversedBranch {
+                    level: branch.level,
+                    child_count: u64::try_from(branch.entries.len()).map_err(|_| {
+                        InspectError::InspectionBoundary(
+                            "branch child count does not fit in u64".to_owned(),
+                        )
+                    })?,
+                    children: branch
+                        .entries
+                        .into_iter()
+                        .map(|entry| entry.child)
+                        .collect(),
+                }))
+            }
             lexongraph_block::Block::Leaf(leaf) => {
                 Ok(TraversedBlock::Leaf(TraversedLeaf { level: leaf.level }))
             }
@@ -513,7 +519,11 @@ fn classify_traversed_block(
                         "branch child count does not fit in u64".to_owned(),
                     )
                 })?,
-                children: branch.entries.into_iter().map(|entry| entry.child).collect(),
+                children: branch
+                    .entries
+                    .into_iter()
+                    .map(|entry| entry.child)
+                    .collect(),
             })),
             v2::TypedBlock::Leaf(_) => Ok(TraversedBlock::Leaf(TraversedLeaf { level: 0 })),
             v2::TypedBlock::Custom(block) => Err(InspectError::InspectionBoundary(format!(

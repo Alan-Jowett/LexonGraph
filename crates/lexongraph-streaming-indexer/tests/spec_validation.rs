@@ -82,14 +82,13 @@ impl BlockStore for SlowBranchStore {
         ) {
             thread::sleep(Duration::from_millis(250));
         }
-        self.blocks.borrow_mut().insert(*block_id, block_bytes.to_vec());
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         Ok(self.blocks.borrow().get(block_id).cloned())
     }
 
@@ -107,14 +106,13 @@ impl BlockStore for MemoryBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.blocks.borrow_mut().insert(*block_id, block_bytes.to_vec());
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         Ok(self.blocks.borrow().get(block_id).cloned())
     }
 
@@ -137,10 +135,7 @@ impl BlockStore for FaultyIdStore {
         Ok(())
     }
 
-    fn get_block_bytes(
-        &self,
-        _: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, _: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         Ok(None)
     }
 

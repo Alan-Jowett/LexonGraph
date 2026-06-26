@@ -54,14 +54,13 @@ impl BlockStore for MemoryBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.blocks.borrow_mut().insert(*block_id, block_bytes.to_vec());
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         *self.gets.borrow_mut().entry(*block_id).or_default() += 1;
         Ok(self.blocks.borrow().get(block_id).cloned())
     }
@@ -112,10 +111,7 @@ impl BlockStore for FailingGetStore {
         self.inner.put_block_bytes(block_id, block_bytes)
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let configured = *self.fail_on.borrow();
         if configured.is_none() || configured == Some(*block_id) {
             return Err(BlockStoreError::BackendFailure(self.fail_message.into()));

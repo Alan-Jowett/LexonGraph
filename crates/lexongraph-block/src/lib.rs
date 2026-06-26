@@ -405,7 +405,9 @@ pub fn deserialize_versioned_block(
     let value = decode_single_cbor_value(bytes)?;
     let version = detect_block_version_value(&value)?;
     match version {
-        VERSION_1 => deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V1),
+        VERSION_1 => {
+            deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V1)
+        }
         v2::VERSION_2 => {
             v2::deserialize_block_from_value(value, bytes, expected_hash).map(DecodedBlock::V2)
         }
@@ -535,7 +537,7 @@ fn detect_block_version_value(value: &Value) -> Result<u64, BlockError> {
         let Value::Integer(integer) = key else {
             return Err(BlockError::InvalidFieldKey { context: "block" });
         };
-        let key = u64::try_from(integer.clone())
+        let key = u64::try_from(*integer)
             .map_err(|_| BlockError::InvalidFieldKey { context: "block" })?;
         if key == TOP_LEVEL_VERSION_KEY {
             if version.is_some() {
@@ -546,7 +548,7 @@ fn detect_block_version_value(value: &Value) -> Result<u64, BlockError> {
                     "expected an unsigned integer field value",
                 ));
             };
-            version = Some(u64::try_from(integer.clone()).map_err(|_| {
+            version = Some(u64::try_from(*integer).map_err(|_| {
                 BlockError::InvalidEntryShape("expected an unsigned integer field value")
             })?);
         }

@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use lexongraph_block::{Block, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block};
+use lexongraph_block::{
+    Block, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
+};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 
 #[derive(Clone, Default)]
@@ -30,10 +32,7 @@ impl BlockStore for SharedMemoryBlockStore {
         Ok(())
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 

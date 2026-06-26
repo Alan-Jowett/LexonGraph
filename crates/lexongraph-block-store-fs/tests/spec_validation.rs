@@ -748,10 +748,7 @@ impl BlockStore for HarnessStore {
         self.inner.put_block_bytes(block_id, block_bytes)
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         self.inner.get_block_bytes(block_id)
     }
 

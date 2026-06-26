@@ -6496,7 +6496,9 @@ mod conformance_support {
             block_id: &BlockHash,
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
-            self.blocks.borrow_mut().insert(*block_id, block_bytes.to_vec());
+            self.blocks
+                .borrow_mut()
+                .insert(*block_id, block_bytes.to_vec());
             Ok(())
         }
 

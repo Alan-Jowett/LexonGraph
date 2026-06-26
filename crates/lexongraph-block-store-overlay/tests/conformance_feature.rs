@@ -27,10 +27,7 @@ impl BlockStore for HarnessStore {
         self.overlay.put_block_bytes(block_id, block_bytes)
     }
 
-    fn get_block_bytes(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         self.overlay.get_block_bytes(block_id)
     }
 

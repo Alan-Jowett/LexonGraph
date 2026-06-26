@@ -458,10 +458,12 @@ impl BlockStore for MockStore {
         self.state.put_calls.fetch_add(1, Ordering::SeqCst);
         match self.state.put_result.lock().unwrap().clone() {
             Ok(actual) if actual == *block_id => Ok(()),
-            Ok(actual) => Err(BlockStoreError::ContractViolation(BlockError::HashMismatch {
-                expected: *block_id,
-                actual,
-            })),
+            Ok(actual) => Err(BlockStoreError::ContractViolation(
+                BlockError::HashMismatch {
+                    expected: *block_id,
+                    actual,
+                },
+            )),
             Err(error) => Err(error),
         }
     }
@@ -470,8 +472,8 @@ impl BlockStore for MockStore {
         self.state.get_calls.fetch_add(1, Ordering::SeqCst);
         match self.state.get_result.lock().unwrap().clone() {
             Ok(Some(validated)) => {
-                let serialized =
-                    serialize_block(&validated.block).map_err(BlockStoreError::ContractViolation)?;
+                let serialized = serialize_block(&validated.block)
+                    .map_err(BlockStoreError::ContractViolation)?;
                 Ok(Some(serialized.bytes))
             }
             Ok(None) => Ok(None),
