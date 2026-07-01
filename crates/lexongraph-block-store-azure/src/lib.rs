@@ -179,8 +179,10 @@ impl AzureBlobBlockStore {
         F: FnMut() -> reqwest::blocking::RequestBuilder,
     {
         let mut last_error = None;
+        let mut attempts_made = 0;
 
         for attempt in 1..=TRANSPORT_MAX_ATTEMPTS {
+            attempts_made = attempt;
             match make_request().send() {
                 Ok(response) => return Ok(response),
                 Err(error) => {
@@ -197,7 +199,7 @@ impl AzureBlobBlockStore {
 
         Err(format!(
             "after {} attempts: {}",
-            TRANSPORT_MAX_ATTEMPTS,
+            attempts_made,
             last_error.unwrap_or_else(|| "unknown request failure".to_string())
         ))
     }
