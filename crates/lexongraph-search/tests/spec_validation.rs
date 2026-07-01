@@ -49,28 +49,20 @@ impl MemoryBlockStore {
 }
 
 impl BlockStore for MemoryBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        let serialized =
-            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        self.blocks
-            .borrow_mut()
-            .insert(serialized.hash, serialized.bytes);
-        Ok(serialized.hash)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         *self.gets.borrow_mut().entry(*block_id).or_default() += 1;
-
-        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
-            return Ok(None);
-        };
-
-        lexongraph_block::deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(map_get_error)
+        Ok(self.blocks.borrow().get(block_id).cloned())
     }
 
     fn iter_block_ids(
@@ -111,16 +103,21 @@ impl BlockStore for FailingGetStore {
         self.inner.put(block)
     }
 
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.inner.put_block_bytes(block_id, block_bytes)
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let configured = *self.fail_on.borrow();
         if configured.is_none() || configured == Some(*block_id) {
             return Err(BlockStoreError::BackendFailure(self.fail_message.into()));
         }
 
-        self.inner.get(block_id)
+        self.inner.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(
@@ -2080,15 +2077,6 @@ fn encode_value(value: Value) -> Vec<u8> {
 
 fn int_value(value: u64) -> Value {
     Value::Integer(Integer::from(value))
-}
-
-fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {
-    match error {
-        lexongraph_block::BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
-        }
-        other => BlockStoreError::MalformedContent(other),
-    }
 }
 
 fn embedding_spec_i8() -> EmbeddingSpec {

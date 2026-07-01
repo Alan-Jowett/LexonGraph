@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use lexongraph_block::{Block, BlockHash};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_contract_suite, run_full_suite,
 };
@@ -23,26 +23,19 @@ impl MemoryBlockStore {
 }
 
 impl BlockStore for MemoryBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        let serialized =
-            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        self.blocks
-            .borrow_mut()
-            .insert(serialized.hash, serialized.bytes);
-        Ok(serialized.hash)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
-            return Ok(None);
-        };
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
+        Ok(())
+    }
 
-        lexongraph_block::deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(map_get_error)
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(self.blocks.borrow().get(block_id).cloned())
     }
 
     fn iter_block_ids(
@@ -83,13 +76,4 @@ fn downstream_crates_can_run_the_contract_suite() {
 #[test]
 fn downstream_crates_can_run_the_full_suite() {
     run_full_suite(&MemoryHarness).unwrap();
-}
-
-fn map_get_error(error: lexongraph_block::BlockError) -> BlockStoreError {
-    match error {
-        lexongraph_block::BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
-        }
-        other => BlockStoreError::MalformedContent(other),
-    }
 }

@@ -13,7 +13,8 @@ These validation entries define the expected conformance surface for a crate
 that implements the requirements and design in this spec package.
 
 Protocol-validity expectations referenced here are defined normatively by
-`docs/protocol/blocks.md`.
+`docs/protocol/blocks.md`, `docs/protocol/blocks-v2.md`, and
+`docs/protocol/ebcp.md`.
 
 ## Validation Entries
 
@@ -249,3 +250,45 @@ encoding, a malformed payload length, or missing required EBCP metadata.
 plausible vector.
 
 **Traces to:** REQ-BLOCK-CRATE-019
+
+### VAL-030
+
+Serialize and hash-verify deserialize a version-2 reserved `leaf` or `branch`
+block through the crate's version-aware dispatch surface.
+
+**Pass condition:** the decoded block preserves version `2`, the reserved type,
+the exact top-level `0`/`1`/`2` envelope, and the canonical nested content
+structure.
+
+**Traces to:** REQ-BLOCK-CRATE-020, REQ-BLOCK-CRATE-021
+
+### VAL-031
+
+Serialize and hash-verify deserialize a version-2 custom block with
+application-defined `type` and canonical CBOR content.
+
+**Pass condition:** the crate preserves the custom `type` string and canonical
+content value without imposing reserved-type interpretation or traversal
+semantics on that content.
+
+**Traces to:** REQ-BLOCK-CRATE-020, REQ-BLOCK-CRATE-021, REQ-BLOCK-CRATE-022
+
+### VAL-032
+
+Attempt to decode a version-2 block through the version-aware dispatch surface
+and then re-emit it as version 1 without explicit caller selection.
+
+**Pass condition:** no silent version conversion occurs; versioned encode/decode
+behavior stays explicit.
+
+**Traces to:** REQ-BLOCK-CRATE-020, REQ-BLOCK-CRATE-023, REQ-BLOCK-CRATE-024
+
+### VAL-034
+
+Attempt to construct a version-2 custom block using a reserved protocol type
+string such as `branch` or `leaf`.
+
+**Pass condition:** the constructor rejects the reserved type name instead of
+silently building a reserved-type block through the custom-block API.
+
+**Traces to:** REQ-BLOCK-CRATE-021, REQ-BLOCK-CRATE-022

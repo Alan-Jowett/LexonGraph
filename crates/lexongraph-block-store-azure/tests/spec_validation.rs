@@ -81,10 +81,10 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
 
     assert_eq!(
         store.get(&second.hash).unwrap_err(),
-        BlockStoreError::IntegrityMismatch {
+        BlockStoreError::DecodeFailure(BlockError::HashMismatch {
             expected: second.hash,
             actual: first.hash,
-        }
+        })
     );
 
     let malformed_bytes = [0xff, 0xff, 0x00];
@@ -94,7 +94,7 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
 
     assert!(matches!(
         store.get(&malformed_hash).unwrap_err(),
-        BlockStoreError::MalformedContent(BlockError::MalformedCbor(_))
+        BlockStoreError::DecodeFailure(BlockError::MalformedCbor(_))
     ));
 
     let unreadable = serialize_block(&sample_leaf_block("forbidden")).unwrap();
@@ -171,15 +171,19 @@ fn val_azure_store_010_parent_conformance_requirements_are_realized_by_tests() {
     }
 
     impl BlockStore for HarnessStore {
-        fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
-            self.inner.put(block)
-        }
-
-        fn get(
+        fn put_block_bytes(
             &self,
             block_id: &BlockHash,
-        ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-            self.inner.get(block_id)
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes)
+        }
+
+        fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id)
         }
 
         fn iter_block_ids(

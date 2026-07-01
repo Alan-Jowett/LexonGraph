@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "inject")]
 use std::sync::Arc;
 
-use lexongraph_block::{
-    Block, BlockError, BlockHash, ValidatedBlock, deserialize_block, serialize_block,
-};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use tempfile::{Builder, NamedTempFile};
 
@@ -203,9 +201,9 @@ impl FilesystemBlockStore {
         block_id: &BlockHash,
         canonical_bytes: &[u8],
         error: std::io::Error,
-    ) -> Result<BlockHash, BlockStoreError> {
+    ) -> Result<(), BlockStoreError> {
         match self.read_bytes(published_path) {
-            Ok(existing_bytes) if existing_bytes == canonical_bytes => Ok(*block_id),
+            Ok(existing_bytes) if existing_bytes == canonical_bytes => Ok(()),
             Ok(_) => Err(backend_failure(format!(
                 "integrity conflict at {} for block {} after publish error {error}",
                 published_path.display(),
@@ -331,9 +329,12 @@ impl FilesystemBlockStore {
 }
 
 impl BlockStore for FilesystemBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        let published_path = self.block_path(&serialized.hash);
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        let published_path = self.block_path(block_id);
         let parent = published_path
             .parent()
             .expect("published block paths are always rooted below the store root");
@@ -350,33 +351,33 @@ impl BlockStore for FilesystemBlockStore {
                 parent.display()
             ))
         })?;
-        staged.write_all(&serialized.bytes).map_err(|error| {
+        staged.write_all(block_bytes).map_err(|error| {
             backend_failure(format!(
                 "failed to stage block {} in {}: {error}",
-                serialized.hash,
+                block_id,
                 parent.display()
             ))
         })?;
         staged.flush().map_err(|error| {
             backend_failure(format!(
                 "failed to flush staged block {} in {}: {error}",
-                serialized.hash,
+                block_id,
                 parent.display()
             ))
         })?;
 
         match persist_staged_file(staged, &published_path) {
-            Ok(_) => Ok(serialized.hash),
+            Ok(_) => Ok(()),
             Err(error) => self.read_existing_or_map_publish_error(
                 &published_path,
-                &serialized.hash,
-                &serialized.bytes,
+                block_id,
+                block_bytes,
                 error,
             ),
         }
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let published_path = self.block_path(block_id);
         let bytes = match self.read_bytes(&published_path) {
             Ok(bytes) => bytes,
@@ -390,9 +391,7 @@ impl BlockStore for FilesystemBlockStore {
             }
         };
 
-        deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(map_get_error)
+        Ok(Some(bytes))
     }
 
     fn iter_block_ids(
@@ -427,15 +426,6 @@ fn persist_staged_file(staged: NamedTempFile, published_path: &Path) -> io::Resu
         .persist_noclobber(published_path)
         .map(|_| ())
         .map_err(|error| error.error)
-}
-
-fn map_get_error(error: BlockError) -> BlockStoreError {
-    match error {
-        BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
-        }
-        other => BlockStoreError::MalformedContent(other),
-    }
 }
 
 struct FilesystemBlockIdIterator<'a> {

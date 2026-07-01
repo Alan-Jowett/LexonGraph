@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use lexongraph_block::{Block, BlockError, BlockHash, ValidatedBlock, deserialize_block};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use zip::ZipArchive;
 
@@ -109,14 +109,18 @@ impl ZipBlockStore {
 }
 
 impl BlockStore for ZipBlockStore {
-    fn put(&self, _block: &Block) -> Result<BlockHash, BlockStoreError> {
+    fn put_block_bytes(
+        &self,
+        _block_id: &BlockHash,
+        _block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
         Err(backend_failure(format!(
             "zip archive {} is read-only; put is not supported",
             self.archive_path.display()
         )))
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let target_name = Self::block_entry_name(block_id);
         let mut file = open_archive_file(&self.archive_path)?;
         let match_count = archive_entry_names(&mut file, &self.archive_path, self.archive_offset)?
@@ -154,9 +158,7 @@ impl BlockStore for ZipBlockStore {
             ))
         })?;
 
-        deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(map_get_error)
+        Ok(Some(bytes))
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
@@ -545,15 +547,6 @@ fn read_zip64_central_directory(
         })?,
         size,
     }))
-}
-
-fn map_get_error(error: BlockError) -> BlockStoreError {
-    match error {
-        BlockError::HashMismatch { expected, actual } => {
-            BlockStoreError::IntegrityMismatch { expected, actual }
-        }
-        other => BlockStoreError::MalformedContent(other),
-    }
 }
 
 fn decode_recognized_block_entry_name(name: &str) -> Option<BlockHash> {

@@ -108,14 +108,14 @@ fn val_zip_store_005_and_006_get_reports_malformed_and_integrity_failures() {
 
     assert_eq!(
         store.get(&second.hash).unwrap_err(),
-        BlockStoreError::IntegrityMismatch {
+        BlockStoreError::DecodeFailure(BlockError::HashMismatch {
             expected: second.hash,
             actual: first.hash,
-        }
+        })
     );
     assert!(matches!(
         store.get(&malformed_hash).unwrap_err(),
-        BlockStoreError::MalformedContent(BlockError::MalformedCbor(_))
+        BlockStoreError::DecodeFailure(BlockError::MalformedCbor(_))
     ));
 }
 

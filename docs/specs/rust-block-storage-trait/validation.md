@@ -13,8 +13,8 @@ These validation entries define the minimum conformance surface for a crate that
 implements the requirements and design in this spec package.
 
 Protocol-validity and block-identity expectations referenced here remain
-normatively defined by `docs/protocol/blocks.md` and the
-`docs/specs/rust-block-crate/` specification package.
+normatively defined by `docs/protocol/blocks.md`, `docs/protocol/blocks-v2.md`,
+and the `docs/specs/rust-block-crate/` specification package.
 
 ## Validation Entries
 
@@ -187,3 +187,23 @@ Cause enumeration startup or mid-stream progress to encounter a backend failure.
 the affected stored state as though enumeration had completed successfully.
 
 **Traces to:** REQ-BLOCK-STORE-017
+
+### VAL-STORE-017
+
+Store canonical bytes for a version-1 block and for a version-2 custom block
+through the same backend implementation.
+
+**Pass condition:** the backend stores and retrieves bytes by block ID without
+requiring protocol-specific branching inside the concrete store.
+
+**Traces to:** REQ-BLOCK-STORE-019, REQ-BLOCK-STORE-020, REQ-BLOCK-STORE-022
+
+### VAL-STORE-018
+
+Use the trait crate's shared helper layer to encode/store/load both version-1
+and version-2 blocks through one raw-byte backend.
+
+**Pass condition:** callers can use shared helper logic for version-aware block
+handling without re-implementing codec selection in the backend crate.
+
+**Traces to:** REQ-BLOCK-STORE-021

@@ -37,7 +37,8 @@ The crate does not own:
 ## Protocol Conformance Boundary
 
 Canonicalization, field-key semantics, and validity rules are defined
-normatively by `docs/protocol/blocks.md`.
+normatively by `docs/protocol/blocks.md`, `docs/protocol/blocks-v2.md`, and
+`docs/protocol/ebcp.md`.
 
 This crate implements those rules; it does not redefine them.
 
@@ -197,6 +198,46 @@ The public reconstruction helper fails explicitly when:
 - stored floating-point components are non-finite
 - the required EBCP descriptor is missing
 - the EBCP metadata or payload bytes are malformed or inconsistent
+
+### DSG-023 `Version-aware dispatch surface`
+
+The crate exposes shared encode/decode entry points that dispatch by block
+version while preserving version-specific validation and canonicalization rules.
+
+Version selection is explicit at encode time and data-driven at decode time.
+
+### DSG-024 `Version-2 unified envelope`
+
+Version 2 is modeled as a top-level `version + type + content` envelope owned
+by `docs/protocol/blocks-v2.md`.
+
+Reserved `branch` and `leaf` types reuse the version-1 branch/leaf structural
+invariants inside the nested `content` map, while custom non-reserved types keep
+their `content` opaque to the shared protocol layer beyond canonical CBOR
+validation.
+
+The version-2 envelope admits only top-level field keys `0`, `1`, and `2`,
+with `version = 2` and a non-empty UTF-8 `type` string. When decoding,
+version-aware dispatch determines the active protocol version from that
+top-level envelope rather than from caller-side heuristics.
+
+### DSG-025 `Frozen version-1 path`
+
+The existing version-1 implementation remains intact as a distinct codec path.
+The crate does not auto-upgrade version-1 data into version-2 shapes during
+decode or encode.
+
+Reserved version-2 `branch` and `leaf` blocks preserve the same traversal-facing
+branch/leaf meaning as version 1, while custom block content remains opaque to
+the shared protocol layer and does not gain traversal semantics.
+
+### DSG-026 `Custom block handling`
+
+For a version-2 custom type, the shared crate preserves the `type` string and
+canonicalized `content` value exactly.
+
+The crate does not interpret application-defined references or metadata inside
+custom content; those remain owned by higher-layer specifications and consumers.
 
 ## Decode and Verification Flow
 

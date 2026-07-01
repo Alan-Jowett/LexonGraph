@@ -10,6 +10,8 @@ use ciborium::value::{Integer, Value};
 use half::f16;
 use sha2::{Digest, Sha256};
 
+pub mod v2;
+
 pub const VERSION_1: u64 = 1;
 const TOP_LEVEL_VERSION_KEY: u64 = 0;
 const TOP_LEVEL_LEVEL_KEY: u64 = 1;
@@ -186,6 +188,18 @@ pub struct SerializedBlock {
 pub struct ValidatedBlock {
     pub block: Block,
     pub hash: BlockHash,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum VersionedBlock {
+    V1(Block),
+    V2(v2::Block),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DecodedBlock {
+    V1(ValidatedBlock),
+    V2(v2::ValidatedBlock),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -382,18 +396,37 @@ pub fn deserialize_block(
     }
 
     let value = decode_single_cbor_value(bytes)?;
-    let block = parse_block(value)?;
-    let serialized = serialize_block(&block)?;
-    if serialized.bytes != bytes {
-        return Err(BlockError::NonConforming(
-            "block bytes are not the canonical encoding of the decoded block",
-        ));
+    deserialize_block_from_value(value, bytes, actual_hash)
+}
+
+pub fn serialize_versioned_block(block: &VersionedBlock) -> Result<SerializedBlock, BlockError> {
+    match block {
+        VersionedBlock::V1(block) => serialize_block(block),
+        VersionedBlock::V2(block) => v2::serialize_block(block),
+    }
+}
+
+pub fn deserialize_versioned_block(
+    bytes: &[u8],
+    expected_hash: &BlockHash,
+) -> Result<DecodedBlock, BlockError> {
+    let actual_hash = compute_block_hash(bytes);
+    if &actual_hash != expected_hash {
+        return Err(BlockError::HashMismatch {
+            expected: *expected_hash,
+            actual: actual_hash,
+        });
     }
 
-    Ok(ValidatedBlock {
-        block,
-        hash: actual_hash,
-    })
+    let value = decode_single_cbor_value(bytes)?;
+    let version = detect_block_version_value(&value)?;
+    match version {
+        VERSION_1 => deserialize_block_from_value(value, bytes, actual_hash).map(DecodedBlock::V1),
+        v2::VERSION_2 => {
+            v2::deserialize_block_from_value(value, bytes, actual_hash).map(DecodedBlock::V2)
+        }
+        other => Err(BlockError::UnsupportedVersion(other)),
+    }
 }
 
 pub fn compute_block_hash(bytes: &[u8]) -> BlockHash {
@@ -453,6 +486,7 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
                     ));
                 }
             }
+
             Ok(Block::Branch(block))
         }
         Block::Leaf(mut block) => {
@@ -480,7 +514,61 @@ fn normalize_block(block: Block) -> Result<Block, BlockError> {
     }
 }
 
-fn normalize_optional_map(value: Option<ExtensionMap>) -> Result<Option<ExtensionMap>, BlockError> {
+fn deserialize_block_from_value(
+    value: Value,
+    bytes: &[u8],
+    actual_hash: BlockHash,
+) -> Result<ValidatedBlock, BlockError> {
+    let block = parse_block(value)?;
+    let serialized = serialize_block(&block)?;
+    if serialized.bytes != bytes {
+        return Err(BlockError::NonConforming(
+            "block bytes are not the canonical encoding of the decoded block",
+        ));
+    }
+
+    Ok(ValidatedBlock {
+        block,
+        hash: actual_hash,
+    })
+}
+
+fn detect_block_version_value(value: &Value) -> Result<u64, BlockError> {
+    let Value::Map(entries) = value else {
+        return Err(BlockError::InvalidEntryShape("expected a CBOR map"));
+    };
+
+    let mut version = None;
+    for (key, value) in entries {
+        let Value::Integer(integer) = key else {
+            return Err(BlockError::InvalidFieldKey { context: "block" });
+        };
+        let key = u64::try_from(*integer)
+            .map_err(|_| BlockError::InvalidFieldKey { context: "block" })?;
+        if key == TOP_LEVEL_VERSION_KEY {
+            if version.is_some() {
+                return Err(BlockError::NonConforming("duplicate field key"));
+            }
+            let Value::Integer(integer) = value else {
+                return Err(BlockError::InvalidEntryShape(
+                    "expected an unsigned integer field value",
+                ));
+            };
+            version = Some(u64::try_from(*integer).map_err(|_| {
+                BlockError::InvalidEntryShape("expected an unsigned integer field value")
+            })?);
+        }
+    }
+
+    version.ok_or(BlockError::MissingField {
+        context: "block",
+        key: TOP_LEVEL_VERSION_KEY,
+    })
+}
+
+pub(crate) fn normalize_optional_map(
+    value: Option<ExtensionMap>,
+) -> Result<Option<ExtensionMap>, BlockError> {
     value.map(normalize_map).transpose()
 }
 
@@ -497,7 +585,7 @@ fn normalize_map(entries: Vec<(Value, Value)>) -> Result<Vec<(Value, Value)>, Bl
     }
 }
 
-fn canonicalize_value(value: Value) -> Result<Value, BlockError> {
+pub(crate) fn canonicalize_value(value: Value) -> Result<Value, BlockError> {
     match value {
         Value::Integer(_)
         | Value::Bytes(_)
@@ -551,7 +639,7 @@ fn encoded_value_bytes(value: &Value) -> Vec<u8> {
     bytes
 }
 
-fn compare_branch_entries(left: &BranchEntry, right: &BranchEntry) -> Ordering {
+pub(crate) fn compare_branch_entries(left: &BranchEntry, right: &BranchEntry) -> Ordering {
     left.embedding
         .cmp(&right.embedding)
         .then_with(|| left.child.as_bytes().cmp(right.child.as_bytes()))
@@ -565,7 +653,7 @@ fn validate_version(version: u64) -> Result<(), BlockError> {
     }
 }
 
-fn validate_embedding_spec(spec: &EmbeddingSpec) -> Result<(), BlockError> {
+pub(crate) fn validate_embedding_spec(spec: &EmbeddingSpec) -> Result<(), BlockError> {
     if matches!(spec.encoding.as_str(), "f32le" | "f16le" | "i8" | "pq4")
         || is_ebcp_encoding(&spec.encoding)
     {
@@ -577,7 +665,7 @@ fn validate_embedding_spec(spec: &EmbeddingSpec) -> Result<(), BlockError> {
     }
 }
 
-fn validate_branch_ebcp_payload_lengths(
+pub(crate) fn validate_branch_ebcp_payload_lengths(
     entries: &[BranchEntry],
     embedding_spec: &EmbeddingSpec,
     descriptor: &EbcpDescriptor,
@@ -1396,7 +1484,7 @@ fn block_to_value(block: &Block) -> Result<Value, BlockError> {
     canonicalize_value(Value::Map(fields))
 }
 
-fn embedding_spec_to_value(spec: &EmbeddingSpec) -> Value {
+pub(crate) fn embedding_spec_to_value(spec: &EmbeddingSpec) -> Value {
     Value::Map(vec![
         (int_value(EMBEDDING_SPEC_DIMS_KEY), int_value(spec.dims)),
         (
@@ -1406,7 +1494,7 @@ fn embedding_spec_to_value(spec: &EmbeddingSpec) -> Value {
     ])
 }
 
-fn branch_entry_to_value(entry: &BranchEntry) -> Value {
+pub(crate) fn branch_entry_to_value(entry: &BranchEntry) -> Value {
     Value::Map(vec![
         (
             int_value(BRANCH_ENTRY_EMBEDDING_KEY),
@@ -1419,7 +1507,7 @@ fn branch_entry_to_value(entry: &BranchEntry) -> Value {
     ])
 }
 
-fn leaf_entry_to_value(entry: &LeafEntry) -> Value {
+pub(crate) fn leaf_entry_to_value(entry: &LeafEntry) -> Value {
     Value::Map(vec![
         (
             int_value(LEAF_ENTRY_EMBEDDING_KEY),
@@ -1436,7 +1524,7 @@ fn leaf_entry_to_value(entry: &LeafEntry) -> Value {
     ])
 }
 
-fn content_to_value(content: &Content) -> Value {
+pub(crate) fn content_to_value(content: &Content) -> Value {
     Value::Map(vec![
         (
             int_value(CONTENT_MEDIA_TYPE_KEY),
@@ -1515,7 +1603,7 @@ fn parse_leaf_block(
     Ok(Block::Leaf(block))
 }
 
-fn parse_embedding_spec(value: Value) -> Result<EmbeddingSpec, BlockError> {
+pub(crate) fn parse_embedding_spec(value: Value) -> Result<EmbeddingSpec, BlockError> {
     let mut fields = integer_keyed_map(value, "embedding_spec")?;
     reject_unknown_keys(
         &fields,
@@ -1528,7 +1616,7 @@ fn parse_embedding_spec(value: Value) -> Result<EmbeddingSpec, BlockError> {
     })
 }
 
-fn parse_branch_entry(value: Value) -> Result<BranchEntry, BlockError> {
+pub(crate) fn parse_branch_entry(value: Value) -> Result<BranchEntry, BlockError> {
     let mut fields = integer_keyed_map(value, "branch entry")?;
     reject_unknown_keys(
         &fields,
@@ -1544,7 +1632,7 @@ fn parse_branch_entry(value: Value) -> Result<BranchEntry, BlockError> {
     })
 }
 
-fn parse_leaf_entry(value: Value) -> Result<LeafEntry, BlockError> {
+pub(crate) fn parse_leaf_entry(value: Value) -> Result<LeafEntry, BlockError> {
     let mut fields = integer_keyed_map(value, "leaf entry")?;
     reject_unknown_keys(
         &fields,
@@ -1571,7 +1659,7 @@ fn parse_leaf_entry(value: Value) -> Result<LeafEntry, BlockError> {
     })
 }
 
-fn parse_content(value: Value) -> Result<Content, BlockError> {
+pub(crate) fn parse_content(value: Value) -> Result<Content, BlockError> {
     let mut fields = integer_keyed_map(value, "content")?;
     reject_unknown_keys(
         &fields,
@@ -1584,7 +1672,7 @@ fn parse_content(value: Value) -> Result<Content, BlockError> {
     })
 }
 
-fn decode_single_cbor_value(bytes: &[u8]) -> Result<Value, BlockError> {
+pub(crate) fn decode_single_cbor_value(bytes: &[u8]) -> Result<Value, BlockError> {
     let mut cursor = Cursor::new(bytes);
     let value: Value =
         from_reader(&mut cursor).map_err(|error| BlockError::MalformedCbor(error.to_string()))?;
@@ -1596,7 +1684,7 @@ fn decode_single_cbor_value(bytes: &[u8]) -> Result<Value, BlockError> {
     Ok(value)
 }
 
-fn integer_keyed_map(
+pub(crate) fn integer_keyed_map(
     value: Value,
     context: &'static str,
 ) -> Result<std::collections::BTreeMap<u64, Value>, BlockError> {
@@ -1620,21 +1708,21 @@ fn integer_keyed_map(
     Ok(fields)
 }
 
-fn expect_arbitrary_map(value: Value) -> Result<ExtensionMap, BlockError> {
+pub(crate) fn expect_arbitrary_map(value: Value) -> Result<ExtensionMap, BlockError> {
     match canonicalize_value(value)? {
         Value::Map(entries) => Ok(entries),
         _ => Err(BlockError::InvalidEntryShape("expected a CBOR map")),
     }
 }
 
-fn expect_array(value: Value, message: &'static str) -> Result<Vec<Value>, BlockError> {
+pub(crate) fn expect_array(value: Value, message: &'static str) -> Result<Vec<Value>, BlockError> {
     match value {
         Value::Array(values) => Ok(values),
         _ => Err(BlockError::InvalidEntryShape(message)),
     }
 }
 
-fn required_field(
+pub(crate) fn required_field(
     fields: &mut std::collections::BTreeMap<u64, Value>,
     key: u64,
     context: &'static str,
@@ -1644,7 +1732,7 @@ fn required_field(
         .ok_or(BlockError::MissingField { context, key })
 }
 
-fn required_u64_field(
+pub(crate) fn required_u64_field(
     fields: &mut std::collections::BTreeMap<u64, Value>,
     key: u64,
     context: &'static str,
@@ -1657,7 +1745,7 @@ fn required_u64_field(
     }
 }
 
-fn required_text_field(
+pub(crate) fn required_text_field(
     fields: &mut std::collections::BTreeMap<u64, Value>,
     key: u64,
     context: &'static str,
@@ -1668,7 +1756,7 @@ fn required_text_field(
     }
 }
 
-fn required_bytes_field(
+pub(crate) fn required_bytes_field(
     fields: &mut std::collections::BTreeMap<u64, Value>,
     key: u64,
     context: &'static str,
@@ -1679,7 +1767,7 @@ fn required_bytes_field(
     }
 }
 
-fn reject_unknown_keys(
+pub(crate) fn reject_unknown_keys(
     fields: &std::collections::BTreeMap<u64, Value>,
     allowed: &[u64],
     context: &'static str,
@@ -1691,6 +1779,6 @@ fn reject_unknown_keys(
     }
 }
 
-fn int_value(value: u64) -> Value {
+pub(crate) fn int_value(value: u64) -> Value {
     Value::Integer(Integer::from(value))
 }

@@ -68,33 +68,28 @@ struct SlowBranchStore {
 }
 
 impl BlockStore for SlowBranchStore {
-    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
-        if matches!(block, lexongraph_block::Block::Branch(_)) {
-            thread::sleep(Duration::from_millis(250));
-        }
-        let serialized =
-            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        self.blocks
-            .borrow_mut()
-            .insert(serialized.hash, serialized.bytes);
-        Ok(serialized.hash)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
-            return Ok(None);
-        };
-        lexongraph_block::deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(|error| match error {
-                BlockError::HashMismatch { expected, actual } => {
-                    BlockStoreError::IntegrityMismatch { expected, actual }
-                }
-                other => BlockStoreError::MalformedContent(other),
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        if matches!(
+            lexongraph_block::deserialize_block(block_bytes, block_id),
+            Ok(lexongraph_block::ValidatedBlock {
+                block: lexongraph_block::Block::Branch(_),
+                ..
             })
+        ) {
+            thread::sleep(Duration::from_millis(250));
+        }
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(self.blocks.borrow().get(block_id).cloned())
     }
 
     fn iter_block_ids(
@@ -106,30 +101,19 @@ impl BlockStore for SlowBranchStore {
 }
 
 impl BlockStore for MemoryBlockStore {
-    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
-        let serialized =
-            lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        self.blocks
-            .borrow_mut()
-            .insert(serialized.hash, serialized.bytes);
-        Ok(serialized.hash)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        let Some(bytes) = self.blocks.borrow().get(block_id).cloned() else {
-            return Ok(None);
-        };
-        lexongraph_block::deserialize_block(&bytes, block_id)
-            .map(Some)
-            .map_err(|error| match error {
-                BlockError::HashMismatch { expected, actual } => {
-                    BlockStoreError::IntegrityMismatch { expected, actual }
-                }
-                other => BlockStoreError::MalformedContent(other),
-            })
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.blocks
+            .borrow_mut()
+            .insert(*block_id, block_bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(self.blocks.borrow().get(block_id).cloned())
     }
 
     fn iter_block_ids(
@@ -143,6 +127,18 @@ impl BlockStore for MemoryBlockStore {
 struct FaultyIdStore;
 
 impl BlockStore for FaultyIdStore {
+    fn put_block_bytes(
+        &self,
+        _block_id: &BlockHash,
+        _block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        Ok(())
+    }
+
+    fn get_block_bytes(&self, _: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(None)
+    }
+
     fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
         let serialized =
             lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
@@ -152,14 +148,6 @@ impl BlockStore for FaultyIdStore {
         }
         Ok(BlockHash::from_bytes(bytes))
     }
-
-    fn get(
-        &self,
-        _: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        Ok(None)
-    }
-
     fn iter_block_ids(
         &self,
     ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
@@ -2454,7 +2442,9 @@ async fn val_stream_indexer_018_storage_integrity_is_checked() {
         run.finalize(std::iter::once(items.as_slice()), &FaultyIdStore)
             .await
             .unwrap_err(),
-        StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+        StreamingIndexerError::Storage(BlockStoreError::ContractViolation(
+            BlockError::HashMismatch { .. }
+        ))
     ));
 }
 
@@ -2476,7 +2466,9 @@ async fn val_stream_indexer_023_failed_bottom_up_assembly_does_not_fail_replay_s
         run.finalize(std::iter::once(items.as_slice()), &FaultyIdStore)
             .await
             .unwrap_err(),
-        StreamingIndexerError::Storage(BlockStoreError::IntegrityMismatch { .. })
+        StreamingIndexerError::Storage(BlockStoreError::ContractViolation(
+            BlockError::HashMismatch { .. }
+        ))
     ));
 
     let statuses = statuses.lock().unwrap().clone();

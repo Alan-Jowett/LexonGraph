@@ -73,10 +73,10 @@ fn val_fs_store_004_and_005_get_reports_integrity_and_malformed_content_explicit
 
     assert_eq!(
         store.get(&second.hash).unwrap_err(),
-        BlockStoreError::IntegrityMismatch {
+        BlockStoreError::DecodeFailure(BlockError::HashMismatch {
             expected: second.hash,
             actual: first.hash,
-        }
+        })
     );
 
     let malformed_bytes = [0xff, 0xff, 0x00];
@@ -87,7 +87,7 @@ fn val_fs_store_004_and_005_get_reports_integrity_and_malformed_content_explicit
 
     assert!(matches!(
         store.get(&malformed_hash).unwrap_err(),
-        BlockStoreError::MalformedContent(BlockError::MalformedCbor(_))
+        BlockStoreError::DecodeFailure(BlockError::MalformedCbor(_))
     ));
 }
 
@@ -740,15 +740,16 @@ struct HarnessStore {
 }
 
 impl BlockStore for HarnessStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.inner.put(block)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        self.inner.get(block_id)
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.inner.put_block_bytes(block_id, block_bytes)
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(

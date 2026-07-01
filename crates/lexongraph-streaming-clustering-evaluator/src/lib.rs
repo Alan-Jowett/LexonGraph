@@ -471,19 +471,19 @@ fn should_force_temp_layer_failure_for_tests() -> bool {
 }
 
 impl BlockStore for FsOverlayZipBlockStore {
-    fn put(
-        &self,
-        block: &lexongraph_block::Block,
-    ) -> Result<BlockHash, lexongraph_block_store::BlockStoreError> {
-        self.store.put(block)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, lexongraph_block_store::BlockStoreError>
-    {
-        self.store.get(block_id)
+        block_bytes: &[u8],
+    ) -> Result<(), lexongraph_block_store::BlockStoreError> {
+        self.store.put_block_bytes(block_id, block_bytes)
+    }
+
+    fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, lexongraph_block_store::BlockStoreError> {
+        self.store.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(

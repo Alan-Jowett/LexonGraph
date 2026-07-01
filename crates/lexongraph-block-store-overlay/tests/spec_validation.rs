@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lexongraph_block::{Block, BlockHash, ValidatedBlock, serialize_block};
+use lexongraph_block::{BlockError, BlockHash, ValidatedBlock, serialize_block};
 use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_full_suite,
 };
@@ -291,9 +291,10 @@ fn val_overlay_store_015_put_fails_if_a_writable_layer_returns_a_non_canonical_b
 
     assert_eq!(
         overlay.put(&block).unwrap_err(),
-        backend_failure(&format!(
-            "overlay layer returned unexpected block ID {wrong_id} for block {block_id}"
-        ))
+        BlockStoreError::ContractViolation(lexongraph_block::BlockError::HashMismatch {
+            expected: block_id,
+            actual: wrong_id,
+        })
     );
     assert_eq!(first.put_calls(), 1);
     assert_eq!(second.put_calls(), 1);
@@ -336,12 +337,16 @@ struct HarnessStore {
 }
 
 impl BlockStore for HarnessStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.overlay.put(block)
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.overlay.put_block_bytes(block_id, block_bytes)
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-        self.overlay.get(block_id)
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.overlay.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(
@@ -445,14 +450,35 @@ impl MockStore {
 }
 
 impl BlockStore for MockStore {
-    fn put(&self, _block: &Block) -> Result<BlockHash, BlockStoreError> {
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        _block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
         self.state.put_calls.fetch_add(1, Ordering::SeqCst);
-        self.state.put_result.lock().unwrap().clone()
+        match self.state.put_result.lock().unwrap().clone() {
+            Ok(actual) if actual == *block_id => Ok(()),
+            Ok(actual) => Err(BlockStoreError::ContractViolation(
+                BlockError::HashMismatch {
+                    expected: *block_id,
+                    actual,
+                },
+            )),
+            Err(error) => Err(error),
+        }
     }
 
-    fn get(&self, _block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, _block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         self.state.get_calls.fetch_add(1, Ordering::SeqCst);
-        self.state.get_result.lock().unwrap().clone()
+        match self.state.get_result.lock().unwrap().clone() {
+            Ok(Some(validated)) => {
+                let serialized = serialize_block(&validated.block)
+                    .map_err(BlockStoreError::ContractViolation)?;
+                Ok(Some(serialized.bytes))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     fn iter_block_ids(
@@ -473,12 +499,16 @@ struct CustomLayer {
 }
 
 impl BlockStore for CustomLayer {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.inner.put(block)
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.inner.put_block_bytes(block_id, block_bytes)
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-        self.inner.get(block_id)
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(

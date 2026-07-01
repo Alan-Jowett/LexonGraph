@@ -191,6 +191,26 @@ the helper surface may define shared checks that consume the production
 enumeration method and compare the observed ID set against a caller-managed
 expected set.
 
+### DSG-STORE-015 `Raw-byte production boundary`
+
+The production `BlockStore` trait stores and retrieves canonical block bytes
+under caller-supplied block identifiers.
+
+The trait does not require concrete backends to parse block protocol versions or
+reserved/custom block types.
+
+### DSG-STORE-016 `Shared typed helper layer`
+
+The trait crate may expose shared helper methods layered on top of the raw-byte
+boundary for common version-1 and version-aware decode/encode flows.
+
+Those helpers centralize codec dispatch so concrete backends remain
+protocol-agnostic while higher-level callers retain a convenient typed surface.
+
+When helpers decode stored bytes, they determine the block version from the
+top-level canonical CBOR envelope and then apply the corresponding versioned
+block protocol rules from the block crate.
+
 ## Consumer Usage Model
 
 ### Indexing

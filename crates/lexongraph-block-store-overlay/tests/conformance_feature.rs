@@ -19,15 +19,16 @@ struct HarnessStore {
 }
 
 impl BlockStore for HarnessStore {
-    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
-        self.overlay.put(block)
-    }
-
-    fn get(
+    fn put_block_bytes(
         &self,
         block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        self.overlay.get(block_id)
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.overlay.put_block_bytes(block_id, block_bytes)
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.overlay.get_block_bytes(block_id)
     }
 
     fn iter_block_ids(
