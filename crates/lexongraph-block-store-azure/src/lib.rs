@@ -3,6 +3,7 @@
 //! Azure Blob Storage `BlockStore` implementation for LexonGraph blocks.
 
 use std::fmt;
+use std::thread::sleep;
 use std::time::Duration;
 
 use lexongraph_block::BlockHash;
@@ -17,6 +18,8 @@ use serde::Deserialize;
 const AZURE_API_VERSION: &str = "2023-11-03";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TRANSPORT_RETRY_DELAY: Duration = Duration::from_millis(250);
+const TRANSPORT_MAX_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
@@ -71,9 +74,10 @@ impl AzureBlobBlockStore {
 
     fn fetch_blob_bytes(&self, blob_name: &str) -> Result<Option<Vec<u8>>, String> {
         let response = self
-            .request(Method::GET, self.build_blob_url(blob_name))
-            .send()
-            .map_err(|error| format!("request failed: {}", redact_reqwest_error(error)))?;
+            .send_with_transport_retries(|| {
+                self.request(Method::GET, self.build_blob_url(blob_name))
+            })
+            .map_err(|error| format!("request failed: {error}"))?;
         let header_error_code = azure_error_code_header(&response);
 
         match response.status() {
@@ -120,13 +124,14 @@ impl AzureBlobBlockStore {
             }
         }
 
-        let response = self.request(Method::GET, url).send().map_err(|error| {
-            backend_failure(format!(
-                "failed to list Azure container {}: {}",
-                self.container_display,
-                redact_reqwest_error(error)
-            ))
-        })?;
+        let response = self
+            .send_with_transport_retries(|| self.request(Method::GET, url.clone()))
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to list Azure container {}: request failed: {}",
+                    self.container_display, error
+                ))
+            })?;
 
         if response.status() != StatusCode::OK {
             return Err(backend_failure(format!(
@@ -165,6 +170,39 @@ impl AzureBlobBlockStore {
             .request(method, url)
             .header("x-ms-version", AZURE_API_VERSION)
     }
+
+    fn send_with_transport_retries<F>(
+        &self,
+        mut make_request: F,
+    ) -> Result<reqwest::blocking::Response, String>
+    where
+        F: FnMut() -> reqwest::blocking::RequestBuilder,
+    {
+        let mut last_error = None;
+        let mut attempts_made = 0;
+
+        for attempt in 1..=TRANSPORT_MAX_ATTEMPTS {
+            attempts_made = attempt;
+            match make_request().send() {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let retriable = is_retriable_transport_error(&error);
+                    last_error = Some(redact_reqwest_error(error));
+                    if retriable && attempt < TRANSPORT_MAX_ATTEMPTS {
+                        sleep(TRANSPORT_RETRY_DELAY);
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
+        Err(format!(
+            "after {} attempts: {}",
+            attempts_made,
+            last_error.unwrap_or_else(|| "unknown request failure".to_string())
+        ))
+    }
 }
 
 impl BlockStore for AzureBlobBlockStore {
@@ -174,20 +212,19 @@ impl BlockStore for AzureBlobBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
+        let blob_url = self.build_blob_url(&blob_name);
         let response = self
-            .request(Method::PUT, self.build_blob_url(&blob_name))
-            .header("x-ms-blob-type", "BlockBlob")
-            .header(IF_NONE_MATCH, "*")
-            .header(CONTENT_TYPE, "application/octet-stream")
-            .body(block_bytes.to_vec())
-            .send()
+            .send_with_transport_retries(|| {
+                self.request(Method::PUT, blob_url.clone())
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header(IF_NONE_MATCH, "*")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(block_bytes.to_vec())
+            })
             .map_err(|error| {
                 backend_failure(format!(
                     "failed to publish block {} to blob {} in container {}: {}",
-                    block_id,
-                    blob_name,
-                    self.container_display,
-                    redact_reqwest_error(error)
+                    block_id, blob_name, self.container_display, error
                 ))
             })?;
 
@@ -321,6 +358,10 @@ fn redact_url(url: &Url) -> String {
 
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
+}
+
+fn is_retriable_transport_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request()
 }
 
 fn decode_recognized_block_blob_name(value: &str) -> Result<Option<BlockHash>, String> {
