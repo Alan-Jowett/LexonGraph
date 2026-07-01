@@ -184,10 +184,13 @@ impl AzureBlobBlockStore {
             match make_request().send() {
                 Ok(response) => return Ok(response),
                 Err(error) => {
+                    let retriable = is_retriable_transport_error(&error);
                     last_error = Some(redact_reqwest_error(error));
-                    if attempt < TRANSPORT_MAX_ATTEMPTS {
+                    if retriable && attempt < TRANSPORT_MAX_ATTEMPTS {
                         sleep(TRANSPORT_RETRY_DELAY);
+                        continue;
                     }
+                    break;
                 }
             }
         }
@@ -353,6 +356,10 @@ fn redact_url(url: &Url) -> String {
 
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
+}
+
+fn is_retriable_transport_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request()
 }
 
 fn decode_recognized_block_blob_name(value: &str) -> Result<Option<BlockHash>, String> {
