@@ -142,16 +142,16 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
     let store = server.store();
     let block = sample_leaf_block("shared");
     let serialized = serialize_block(&block).unwrap();
-    let blob_name = server.blob_name(&serialized.hash);
 
     assert_eq!(store.put(&block).unwrap(), serialized.hash);
     assert_eq!(store.put(&block).unwrap(), serialized.hash);
 
     let flaky_server = MockAzureServer::start();
+    let flaky_blob_name = flaky_server.blob_name(&serialized.hash);
     flaky_server.set_disconnect_put_attempts(1);
     assert_eq!(flaky_server.store().put(&block).unwrap(), serialized.hash);
     assert_eq!(
-        flaky_server.blob_bytes(&blob_name).unwrap(),
+        flaky_server.blob_bytes(&flaky_blob_name).unwrap(),
         serialized.bytes
     );
     let flaky_requests = flaky_server.recorded_requests();
@@ -159,10 +159,7 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
         flaky_requests
             .iter()
             .filter(|request| {
-                request.method == "PUT"
-                    && request
-                        .target
-                        .contains(&flaky_server.blob_name(&serialized.hash))
+                request.method == "PUT" && request.target.contains(&flaky_blob_name)
             })
             .count(),
         2
@@ -170,16 +167,20 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
     assert!(
         flaky_requests
             .iter()
-            .any(|request| request.method == "GET" && request.target.contains(&blob_name))
+            .any(|request| request.method == "GET" && request.target.contains(&flaky_blob_name))
     );
 
     let exhausted_retry_server = MockAzureServer::start();
+    let exhausted_retry_blob_name = exhausted_retry_server.blob_name(&serialized.hash);
     exhausted_retry_server.set_drop_put_attempts(10);
     expect_backend_failure_contains(
         exhausted_retry_server.store().put(&block).unwrap_err(),
         "after 3 attempts",
     );
-    assert_eq!(exhausted_retry_server.blob_bytes(&blob_name), None);
+    assert_eq!(
+        exhausted_retry_server.blob_bytes(&exhausted_retry_blob_name),
+        None
+    );
 
     let permission_server = MockAzureServer::start();
     permission_server.set_deny_put(true);
@@ -189,13 +190,14 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
     );
 
     let conflict_server = MockAzureServer::start();
-    conflict_server.insert_blob(blob_name.clone(), b"not canonical bytes".to_vec());
+    let conflict_blob_name = conflict_server.blob_name(&serialized.hash);
+    conflict_server.insert_blob(conflict_blob_name.clone(), b"not canonical bytes".to_vec());
     expect_backend_failure_contains(
         conflict_server.store().put(&block).unwrap_err(),
         "integrity conflict",
     );
     assert_eq!(
-        conflict_server.blob_bytes(&blob_name).unwrap(),
+        conflict_server.blob_bytes(&conflict_blob_name).unwrap(),
         b"not canonical bytes".to_vec()
     );
 }
