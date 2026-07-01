@@ -105,7 +105,8 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
 }
 
 #[test]
-fn val_azure_store_004_008_009_put_handles_idempotence_permissions_and_conflicts() {
+fn val_azure_store_004_008_009_put_handles_idempotence_transient_transport_failures_permissions_and_conflicts()
+ {
     let server = MockAzureServer::start();
     let store = server.store();
     let block = sample_leaf_block("shared");
@@ -114,6 +115,23 @@ fn val_azure_store_004_008_009_put_handles_idempotence_permissions_and_conflicts
 
     assert_eq!(store.put(&block).unwrap(), serialized.hash);
     assert_eq!(store.put(&block).unwrap(), serialized.hash);
+
+    let flaky_server = MockAzureServer::start();
+    flaky_server.set_disconnect_put_attempts(1);
+    assert_eq!(flaky_server.store().put(&block).unwrap(), serialized.hash);
+    let flaky_requests = flaky_server.recorded_requests();
+    assert_eq!(
+        flaky_requests
+            .iter()
+            .filter(|request| {
+                request.method == "PUT"
+                    && request
+                        .target
+                        .contains(&flaky_server.blob_name(&serialized.hash))
+            })
+            .count(),
+        2
+    );
 
     let permission_server = MockAzureServer::start();
     permission_server.set_deny_put(true);

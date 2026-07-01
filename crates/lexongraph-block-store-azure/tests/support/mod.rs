@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -51,6 +51,7 @@ struct MockState {
     extra_list_names: Vec<String>,
     request_log: Vec<RecordedRequest>,
     deny_put: bool,
+    disconnect_put_attempts: usize,
     malformed_listing: bool,
     list_error: Option<u16>,
     blob_status_overrides: HashMap<String, u16>,
@@ -121,6 +122,10 @@ impl MockAzureServer {
 
     pub fn set_deny_put(&self, deny: bool) {
         self.inner.state.lock().unwrap().deny_put = deny;
+    }
+
+    pub fn set_disconnect_put_attempts(&self, attempts: usize) {
+        self.inner.state.lock().unwrap().disconnect_put_attempts = attempts;
     }
 
     pub fn set_blob_status(&self, blob_name: impl Into<String>, status: u16) {
@@ -286,6 +291,12 @@ fn respond_to_put(
     let mut state = inner.state.lock().unwrap();
     if state.deny_put {
         write_response(stream, 403, &[]);
+        return;
+    }
+    if state.disconnect_put_attempts > 0 {
+        state.disconnect_put_attempts -= 1;
+        drop(state);
+        let _ = stream.shutdown(Shutdown::Both);
         return;
     }
     if state.blobs.contains_key(blob_name) {
