@@ -322,10 +322,9 @@ fn respond_to_put(
     }
     if state.disconnect_put_attempts > 0 {
         state.disconnect_put_attempts -= 1;
-        state
-            .blobs
-            .entry(blob_name.to_string())
-            .or_insert_with(|| body.clone());
+        if !state.blobs.contains_key(blob_name) {
+            state.blobs.insert(blob_name.to_string(), body);
+        }
         drop(state);
         let _ = stream.shutdown(Shutdown::Both);
         return;
