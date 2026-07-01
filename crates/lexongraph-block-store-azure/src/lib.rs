@@ -18,8 +18,8 @@ use serde::Deserialize;
 const AZURE_API_VERSION: &str = "2023-11-03";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const PUBLISH_RETRY_DELAY: Duration = Duration::from_millis(250);
-const PUBLISH_MAX_ATTEMPTS: usize = 3;
+const TRANSPORT_RETRY_DELAY: Duration = Duration::from_millis(250);
+const TRANSPORT_MAX_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
@@ -74,9 +74,10 @@ impl AzureBlobBlockStore {
 
     fn fetch_blob_bytes(&self, blob_name: &str) -> Result<Option<Vec<u8>>, String> {
         let response = self
-            .request(Method::GET, self.build_blob_url(blob_name))
-            .send()
-            .map_err(|error| format!("request failed: {}", redact_reqwest_error(error)))?;
+            .send_with_transport_retries(|| {
+                self.request(Method::GET, self.build_blob_url(blob_name))
+            })
+            .map_err(|error| format!("request failed: {error}"))?;
         let header_error_code = azure_error_code_header(&response);
 
         match response.status() {
@@ -123,13 +124,14 @@ impl AzureBlobBlockStore {
             }
         }
 
-        let response = self.request(Method::GET, url).send().map_err(|error| {
-            backend_failure(format!(
-                "failed to list Azure container {}: {}",
-                self.container_display,
-                redact_reqwest_error(error)
-            ))
-        })?;
+        let response = self
+            .send_with_transport_retries(|| self.request(Method::GET, url.clone()))
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to list Azure container {}: request failed: {}",
+                    self.container_display, error
+                ))
+            })?;
 
         if response.status() != StatusCode::OK {
             return Err(backend_failure(format!(
@@ -169,42 +171,32 @@ impl AzureBlobBlockStore {
             .header("x-ms-version", AZURE_API_VERSION)
     }
 
-    fn publish_block_with_retries(
+    fn send_with_transport_retries<F>(
         &self,
-        blob_name: &str,
-        block_id: &BlockHash,
-        bytes: &[u8],
-    ) -> Result<reqwest::blocking::Response, BlockStoreError> {
-        let blob_url = self.build_blob_url(blob_name);
+        mut make_request: F,
+    ) -> Result<reqwest::blocking::Response, String>
+    where
+        F: FnMut() -> reqwest::blocking::RequestBuilder,
+    {
         let mut last_error = None;
 
-        for attempt in 1..=PUBLISH_MAX_ATTEMPTS {
-            match self
-                .request(Method::PUT, blob_url.clone())
-                .header("x-ms-blob-type", "BlockBlob")
-                .header(IF_NONE_MATCH, "*")
-                .header(CONTENT_TYPE, "application/octet-stream")
-                .body(bytes.to_vec())
-                .send()
-            {
+        for attempt in 1..=TRANSPORT_MAX_ATTEMPTS {
+            match make_request().send() {
                 Ok(response) => return Ok(response),
                 Err(error) => {
                     last_error = Some(redact_reqwest_error(error));
-                    if attempt < PUBLISH_MAX_ATTEMPTS {
-                        sleep(PUBLISH_RETRY_DELAY);
+                    if attempt < TRANSPORT_MAX_ATTEMPTS {
+                        sleep(TRANSPORT_RETRY_DELAY);
                     }
                 }
             }
         }
 
-        Err(backend_failure(format!(
-            "failed to publish block {} to blob {} in container {} after {} attempts: {}",
-            block_id,
-            blob_name,
-            self.container_display,
-            PUBLISH_MAX_ATTEMPTS,
+        Err(format!(
+            "after {} attempts: {}",
+            TRANSPORT_MAX_ATTEMPTS,
             last_error.unwrap_or_else(|| "unknown request failure".to_string())
-        )))
+        ))
     }
 }
 
@@ -215,7 +207,21 @@ impl BlockStore for AzureBlobBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
-        let response = self.publish_block_with_retries(&blob_name, block_id, block_bytes)?;
+        let blob_url = self.build_blob_url(&blob_name);
+        let response = self
+            .send_with_transport_retries(|| {
+                self.request(Method::PUT, blob_url.clone())
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header(IF_NONE_MATCH, "*")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(block_bytes.to_vec())
+            })
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to publish block {} to blob {} in container {}: {}",
+                    block_id, blob_name, self.container_display, error
+                ))
+            })?;
 
         let status = response.status();
         let _ = response.bytes();

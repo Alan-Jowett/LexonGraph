@@ -120,6 +120,33 @@ the block was stored.
 
 **Traces to:** REQ-AZURE-STORE-014
 
+### VAL-AZURE-STORE-017
+
+Cause a transient transport failure during `get` before Azure returns any
+backend response, including both a case that later succeeds on retry and a case
+that continues failing until the bounded retry policy is exhausted.
+
+**Pass condition:** `get` retries the deterministic blob read after the
+transient transport failure, succeeds when a later retry reaches a successful
+backend response, and otherwise fails explicitly as a backend failure without
+claiming success or absence.
+
+**Traces to:** REQ-AZURE-STORE-015
+
+### VAL-AZURE-STORE-018
+
+Cause a transient transport failure during container listing before Azure
+returns any backend response, including both a case that later succeeds on
+retry and a case that continues failing until the bounded retry policy is
+exhausted.
+
+**Pass condition:** identifier enumeration retries the container listing after
+the transient transport failure, succeeds when a later retry reaches a
+successful backend response, and otherwise fails explicitly as a backend
+failure without claiming that enumeration completed successfully.
+
+**Traces to:** REQ-AZURE-STORE-015
+
 ### VAL-AZURE-STORE-010
 
 Run the parent block-store conformance suite against the Azure-backed

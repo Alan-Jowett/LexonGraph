@@ -152,6 +152,20 @@ If the bounded retry policy is exhausted without any publish attempt reaching a
 backend response, `put` shall fail explicitly as a backend failure and shall not
 report success for that block ID.
 
+### REQ-AZURE-STORE-015
+
+If Azure blob-read or container-list transport fails before `get` or
+identifier enumeration receives a backend response, the implementation shall
+retry that same read or list request using a bounded retry policy.
+
+If a later retry reaches a backend response, `get` and identifier enumeration
+shall continue applying their normal absence, decode, filtering, and
+explicit-failure rules for that response.
+
+If the bounded retry policy is exhausted without any read or list attempt
+reaching a backend response, the operation shall fail explicitly as a backend
+failure and shall not report success or absence for the affected state.
+
 ### REQ-AZURE-STORE-010
 
 The Azure-backed implementation shall implement the parent trait's streaming

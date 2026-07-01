@@ -71,7 +71,8 @@ fn val_azure_store_003_005_round_trip_and_missing_blocks_match_the_contract() {
 }
 
 #[test]
-fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failures() {
+fn val_azure_store_006_007_015_017_get_reports_integrity_malformed_transient_and_backend_failures()
+{
     let server = MockAzureServer::start();
     let store = server.store();
 
@@ -102,6 +103,36 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
     server.insert_blob(&unreadable_blob, unreadable.bytes);
     server.set_blob_status(&unreadable_blob, 403);
     expect_backend_failure_contains(store.get(&unreadable.hash).unwrap_err(), "HTTP 403");
+
+    let retry_server = MockAzureServer::start();
+    let retry_store = retry_server.store();
+    let retried = serialize_block(&sample_leaf_block("retry-get")).unwrap();
+    let retried_blob = retry_server.blob_name(&retried.hash);
+    retry_server.insert_blob(&retried_blob, retried.bytes.clone());
+    retry_server.set_disconnect_get_attempts(1);
+    let loaded = retry_store.get(&retried.hash).unwrap().unwrap();
+    assert_eq!(loaded.hash, retried.hash);
+    let retry_requests = retry_server.recorded_requests();
+    assert_eq!(
+        retry_requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.target.contains(&retried_blob))
+            .count(),
+        2
+    );
+
+    let exhausted_retry_server = MockAzureServer::start();
+    let exhausted_retry_store = exhausted_retry_server.store();
+    let exhausted = serialize_block(&sample_leaf_block("retry-exhausted-get")).unwrap();
+    exhausted_retry_server.insert_blob(
+        exhausted_retry_server.blob_name(&exhausted.hash),
+        exhausted.bytes,
+    );
+    exhausted_retry_server.set_disconnect_get_attempts(10);
+    expect_backend_failure_contains(
+        exhausted_retry_store.get(&exhausted.hash).unwrap_err(),
+        "after 3 attempts",
+    );
 }
 
 #[test]
@@ -277,7 +308,37 @@ fn val_azure_store_011_012_enumeration_yields_only_recognized_block_ids() {
 }
 
 #[test]
-fn val_azure_store_013_enumeration_surfaces_listing_and_decoding_failures() {
+fn val_azure_store_013_018_enumeration_surfaces_listing_transient_and_decoding_failures() {
+    let retry_server = MockAzureServer::start();
+    let retry_store = retry_server.store();
+    let first = sample_leaf_block("first");
+    let second = sample_leaf_block("second");
+    let expected = HashSet::from([
+        retry_store.put(&first).unwrap(),
+        retry_store.put(&second).unwrap(),
+    ]);
+    retry_server.set_disconnect_list_attempts(1);
+    let enumerated = collect_block_ids(retry_store.iter_block_ids().unwrap()).unwrap();
+    assert_eq!(enumerated, expected);
+    let retry_requests = retry_server.recorded_requests();
+    assert_eq!(
+        retry_requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.target.contains("comp=list"))
+            .count(),
+        2
+    );
+
+    let exhausted_retry_server = MockAzureServer::start();
+    exhausted_retry_server.set_disconnect_list_attempts(10);
+    match exhausted_retry_server.store().iter_block_ids() {
+        Err(error) => expect_backend_failure_contains(error, "after 3 attempts"),
+        Ok(iter) => {
+            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+            expect_backend_failure_contains(error, "after 3 attempts");
+        }
+    }
+
     let list_error_server = MockAzureServer::start();
     list_error_server.set_list_error(500);
     match list_error_server.store().iter_block_ids() {

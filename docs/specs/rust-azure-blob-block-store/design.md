@@ -132,6 +132,17 @@ Malformed bytes map to malformed-content failures, block-ID mismatch maps to an
 integrity-mismatch failure, and inaccessible blob reads map to backend
 failures. None of those states are downgraded to absence.
 
+If the Azure client reports a transport failure while issuing the blob-read
+request, before any backend response has been received, the implementation
+retries that same deterministic read request with a bounded retry policy.
+
+If a later retry reaches a backend response, `get` resumes the normal absence,
+success, decode-failure, and backend-failure handling for that response.
+
+If the bounded retry budget is exhausted with transport failure on every blob
+read attempt, `get` reports an explicit backend failure and does not claim
+success or absence.
+
 ### DSG-AZURE-STORE-007 `iter_block_ids`
 
 `iter_block_ids` lists the configured container and streams block identifiers
@@ -149,6 +160,17 @@ The enumeration realization:
 
 Listing or blob-name decoding failures map to explicit backend failures through
 the parent error taxonomy.
+
+If the Azure client reports a transport failure while issuing the container
+listing request, before any backend response has been received, the
+implementation retries that same listing request with a bounded retry policy.
+
+If a later retry reaches a backend response, enumeration resumes the normal
+listing, filtering, decoding, and explicit-failure handling for that response.
+
+If the bounded retry budget is exhausted with transport failure on every
+listing attempt, enumeration reports an explicit backend failure and does not
+claim that listing completed successfully.
 
 ### DSG-AZURE-STORE-008 `Concurrent publication`
 
@@ -227,8 +249,14 @@ The crate adds backend-specific tests for:
 - recovery from a transient publish transport failure that succeeds on retry
 - explicit failure when repeated publish transport failures exhaust the bounded
   retry policy
+- recovery from a transient blob-read transport failure that succeeds on retry
+- explicit failure when repeated blob-read transport failures exhaust the
+  bounded retry policy
 - explicit runtime failure for `put` when SAS permissions deny create or write
 - explicit runtime failure for inaccessible blob reads or container listing
+- recovery from a transient listing transport failure that succeeds on retry
+- explicit failure when repeated listing transport failures exhaust the bounded
+  retry policy
 - idempotent success when publish races converge on matching bytes
 - explicit integrity-conflict failure when pre-existing or concurrently
   published bytes differ
@@ -243,11 +271,11 @@ The crate adds backend-specific tests for:
 | DSG-AZURE-STORE-001 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-002 |
 | DSG-AZURE-STORE-002..003 | REQ-AZURE-STORE-002, REQ-AZURE-STORE-003 |
 | DSG-AZURE-STORE-004 | REQ-AZURE-STORE-004, REQ-AZURE-STORE-005 |
-| DSG-AZURE-STORE-005 | REQ-AZURE-STORE-004, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009 |
-| DSG-AZURE-STORE-006 | REQ-AZURE-STORE-006 |
-| DSG-AZURE-STORE-007 | REQ-AZURE-STORE-010, REQ-AZURE-STORE-011, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013 |
+| DSG-AZURE-STORE-005 | REQ-AZURE-STORE-004, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009, REQ-AZURE-STORE-014 |
+| DSG-AZURE-STORE-006 | REQ-AZURE-STORE-006, REQ-AZURE-STORE-015 |
+| DSG-AZURE-STORE-007 | REQ-AZURE-STORE-010, REQ-AZURE-STORE-011, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013, REQ-AZURE-STORE-015 |
 | DSG-AZURE-STORE-008 | REQ-AZURE-STORE-007, REQ-AZURE-STORE-009 |
 | DSG-AZURE-STORE-013 | REQ-AZURE-STORE-014 |
 | DSG-AZURE-STORE-009 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-011 |
-| DSG-AZURE-STORE-010 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014 |
-| DSG-AZURE-STORE-011..012 | REQ-AZURE-STORE-002, REQ-AZURE-STORE-003, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009, REQ-AZURE-STORE-010, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014 |
+| DSG-AZURE-STORE-010 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014, REQ-AZURE-STORE-015 |
+| DSG-AZURE-STORE-011..012 | REQ-AZURE-STORE-002, REQ-AZURE-STORE-003, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009, REQ-AZURE-STORE-010, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014, REQ-AZURE-STORE-015 |

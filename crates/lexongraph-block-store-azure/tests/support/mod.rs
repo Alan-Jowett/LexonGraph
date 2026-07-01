@@ -52,6 +52,8 @@ struct MockState {
     request_log: Vec<RecordedRequest>,
     deny_put: bool,
     disconnect_put_attempts: usize,
+    disconnect_get_attempts: usize,
+    disconnect_list_attempts: usize,
     drop_put_attempts: usize,
     malformed_listing: bool,
     list_error: Option<u16>,
@@ -127,6 +129,14 @@ impl MockAzureServer {
 
     pub fn set_disconnect_put_attempts(&self, attempts: usize) {
         self.inner.state.lock().unwrap().disconnect_put_attempts = attempts;
+    }
+
+    pub fn set_disconnect_get_attempts(&self, attempts: usize) {
+        self.inner.state.lock().unwrap().disconnect_get_attempts = attempts;
+    }
+
+    pub fn set_disconnect_list_attempts(&self, attempts: usize) {
+        self.inner.state.lock().unwrap().disconnect_list_attempts = attempts;
     }
 
     pub fn set_drop_put_attempts(&self, attempts: usize) {
@@ -274,7 +284,13 @@ fn handle_connection(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
 }
 
 fn respond_to_get(stream: TcpStream, inner: &Arc<MockAzureServerInner>, blob_name: &str) {
-    let state = inner.state.lock().unwrap();
+    let mut state = inner.state.lock().unwrap();
+    if state.disconnect_get_attempts > 0 {
+        state.disconnect_get_attempts -= 1;
+        drop(state);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     if let Some(status) = state.blob_status_overrides.get(blob_name) {
         write_response(stream, *status, &[]);
         return;
@@ -323,7 +339,13 @@ fn respond_to_put(
 }
 
 fn respond_to_list(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
-    let state = inner.state.lock().unwrap();
+    let mut state = inner.state.lock().unwrap();
+    if state.disconnect_list_attempts > 0 {
+        state.disconnect_list_attempts -= 1;
+        drop(state);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     if let Some(status) = state.list_error {
         write_response(stream, status, &[]);
         return;
