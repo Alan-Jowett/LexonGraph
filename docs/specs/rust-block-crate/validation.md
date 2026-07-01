@@ -282,3 +282,13 @@ and then re-emit it as version 1 without explicit caller selection.
 behavior stays explicit.
 
 **Traces to:** REQ-BLOCK-CRATE-020, REQ-BLOCK-CRATE-023, REQ-BLOCK-CRATE-024
+
+### VAL-034
+
+Attempt to construct a version-2 custom block using a reserved protocol type
+string such as `branch` or `leaf`.
+
+**Pass condition:** the constructor rejects the reserved type name instead of
+silently building a reserved-type block through the custom-block API.
+
+**Traces to:** REQ-BLOCK-CRATE-021, REQ-BLOCK-CRATE-022

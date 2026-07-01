@@ -105,9 +105,16 @@ pub fn build_custom_block(
     type_name: impl Into<String>,
     content: Value,
 ) -> Result<Block, BlockError> {
+    let type_name = type_name.into();
+    if is_reserved_type_name(&type_name) {
+        return Err(BlockError::NonConforming(
+            "custom block type must not use reserved type names `branch` or `leaf`",
+        ));
+    }
+
     normalize_block(Block {
         version: VERSION_2,
-        type_name: type_name.into(),
+        type_name,
         content,
     })
 }
@@ -180,6 +187,10 @@ fn normalize_block(mut block: Block) -> Result<Block, BlockError> {
     }
 
     Ok(block)
+}
+
+fn is_reserved_type_name(type_name: &str) -> bool {
+    matches!(type_name, RESERVED_BRANCH_TYPE | RESERVED_LEAF_TYPE)
 }
 
 fn normalize_branch_block(block: &mut Block) -> Result<(), BlockError> {

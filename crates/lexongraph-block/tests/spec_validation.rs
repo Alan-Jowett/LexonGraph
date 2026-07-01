@@ -1047,6 +1047,19 @@ fn val_033_reserved_v2_content_reuses_v1_nested_field_keys() {
     assert_eq!(leaf_content[1].0, int_value(3));
 }
 
+#[test]
+fn val_034_build_custom_block_rejects_reserved_type_names() {
+    for reserved_type in ["branch", "leaf"] {
+        let error = v2::build_custom_block(reserved_type, Value::Map(vec![])).unwrap_err();
+        assert_eq!(
+            error,
+            BlockError::NonConforming(
+                "custom block type must not use reserved type names `branch` or `leaf`",
+            )
+        );
+    }
+}
+
 fn sample_branch_block() -> Block {
     Block::Branch(
         build_branch_block(
