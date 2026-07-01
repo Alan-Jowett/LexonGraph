@@ -105,7 +105,7 @@ fn val_azure_store_006_007_015_get_reports_integrity_malformed_and_backend_failu
 }
 
 #[test]
-fn val_azure_store_004_008_009_put_handles_idempotence_transient_transport_failures_permissions_and_conflicts()
+fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_failures_permissions_and_conflicts()
  {
     let server = MockAzureServer::start();
     let store = server.store();
@@ -119,6 +119,10 @@ fn val_azure_store_004_008_009_put_handles_idempotence_transient_transport_failu
     let flaky_server = MockAzureServer::start();
     flaky_server.set_disconnect_put_attempts(1);
     assert_eq!(flaky_server.store().put(&block).unwrap(), serialized.hash);
+    assert_eq!(
+        flaky_server.blob_bytes(&blob_name).unwrap(),
+        serialized.bytes
+    );
     let flaky_requests = flaky_server.recorded_requests();
     assert_eq!(
         flaky_requests
@@ -132,6 +136,19 @@ fn val_azure_store_004_008_009_put_handles_idempotence_transient_transport_failu
             .count(),
         2
     );
+    assert!(
+        flaky_requests
+            .iter()
+            .any(|request| request.method == "GET" && request.target.contains(&blob_name))
+    );
+
+    let exhausted_retry_server = MockAzureServer::start();
+    exhausted_retry_server.set_drop_put_attempts(10);
+    expect_backend_failure_contains(
+        exhausted_retry_server.store().put(&block).unwrap_err(),
+        "after 3 attempts",
+    );
+    assert_eq!(exhausted_retry_server.blob_bytes(&blob_name), None);
 
     let permission_server = MockAzureServer::start();
     permission_server.set_deny_put(true);

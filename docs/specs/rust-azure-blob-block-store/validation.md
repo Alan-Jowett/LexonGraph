@@ -107,6 +107,19 @@ conflict.
 
 **Traces to:** REQ-AZURE-STORE-007
 
+### VAL-AZURE-STORE-016
+
+Cause a transient transport failure during `put` before Azure returns any
+backend response, including both a case that later succeeds on retry and a case
+that continues failing until the bounded retry policy is exhausted.
+
+**Pass condition:** `put` retries the deterministic publish after the transient
+transport failure, succeeds when a later retry reaches a successful backend
+response, and otherwise fails explicitly as a backend failure without claiming
+the block was stored.
+
+**Traces to:** REQ-AZURE-STORE-014
+
 ### VAL-AZURE-STORE-010
 
 Run the parent block-store conformance suite against the Azure-backed

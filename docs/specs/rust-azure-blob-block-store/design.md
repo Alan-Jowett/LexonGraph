@@ -166,6 +166,22 @@ re-checks the blob:
 - if the blob bytes differ, `put` reports an explicit backend failure
   describing integrity conflict
 
+### DSG-AZURE-STORE-013 `Transient publish retry`
+
+If the Azure client reports a transport failure while sending the
+create-without-overwrite publish request, before any backend response has been
+received, the implementation retries that same publish operation with the same
+deterministic blob name and request preconditions.
+
+The retry realization is bounded. Once any retry reaches a backend response,
+`put` resumes the normal publication outcome handling for success,
+already-existing blobs, conflicts, permissions, or other explicit backend
+failures.
+
+If the bounded retry budget is exhausted with transport failure on every
+attempt, `put` reports an explicit backend failure for the publish operation and
+does not claim that the block was stored.
+
 ### DSG-AZURE-STORE-009 `Azure-specific visibility boundary`
 
 The parent trait contract remains limited to typed block values, block IDs, and
@@ -208,6 +224,9 @@ The crate adds backend-specific tests for:
 - constructor success for a valid container SAS URL
 - explicit constructor failure for malformed or blob-scoped SAS URLs
 - deterministic blob-name derivation within the container
+- recovery from a transient publish transport failure that succeeds on retry
+- explicit failure when repeated publish transport failures exhaust the bounded
+  retry policy
 - explicit runtime failure for `put` when SAS permissions deny create or write
 - explicit runtime failure for inaccessible blob reads or container listing
 - idempotent success when publish races converge on matching bytes
@@ -228,6 +247,7 @@ The crate adds backend-specific tests for:
 | DSG-AZURE-STORE-006 | REQ-AZURE-STORE-006 |
 | DSG-AZURE-STORE-007 | REQ-AZURE-STORE-010, REQ-AZURE-STORE-011, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013 |
 | DSG-AZURE-STORE-008 | REQ-AZURE-STORE-007, REQ-AZURE-STORE-009 |
+| DSG-AZURE-STORE-013 | REQ-AZURE-STORE-014 |
 | DSG-AZURE-STORE-009 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-011 |
-| DSG-AZURE-STORE-010 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-013 |
-| DSG-AZURE-STORE-011..012 | REQ-AZURE-STORE-002, REQ-AZURE-STORE-003, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009, REQ-AZURE-STORE-010, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013 |
+| DSG-AZURE-STORE-010 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014 |
+| DSG-AZURE-STORE-011..012 | REQ-AZURE-STORE-002, REQ-AZURE-STORE-003, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009, REQ-AZURE-STORE-010, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014 |

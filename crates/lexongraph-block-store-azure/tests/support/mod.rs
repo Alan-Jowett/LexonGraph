@@ -52,6 +52,7 @@ struct MockState {
     request_log: Vec<RecordedRequest>,
     deny_put: bool,
     disconnect_put_attempts: usize,
+    drop_put_attempts: usize,
     malformed_listing: bool,
     list_error: Option<u16>,
     blob_status_overrides: HashMap<String, u16>,
@@ -126,6 +127,10 @@ impl MockAzureServer {
 
     pub fn set_disconnect_put_attempts(&self, attempts: usize) {
         self.inner.state.lock().unwrap().disconnect_put_attempts = attempts;
+    }
+
+    pub fn set_drop_put_attempts(&self, attempts: usize) {
+        self.inner.state.lock().unwrap().drop_put_attempts = attempts;
     }
 
     pub fn set_blob_status(&self, blob_name: impl Into<String>, status: u16) {
@@ -293,8 +298,18 @@ fn respond_to_put(
         write_response(stream, 403, &[]);
         return;
     }
+    if state.drop_put_attempts > 0 {
+        state.drop_put_attempts -= 1;
+        drop(state);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     if state.disconnect_put_attempts > 0 {
         state.disconnect_put_attempts -= 1;
+        state
+            .blobs
+            .entry(blob_name.to_string())
+            .or_insert_with(|| body.clone());
         drop(state);
         let _ = stream.shutdown(Shutdown::Both);
         return;
