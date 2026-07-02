@@ -170,6 +170,39 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
             .any(|request| request.method == "GET" && request.target.contains(&flaky_blob_name))
     );
 
+    let unknown_outcome_server = MockAzureServer::start();
+    let unknown_outcome_blob_name = unknown_outcome_server.blob_name(&serialized.hash);
+    unknown_outcome_server.set_disconnect_put_attempts(10);
+    assert_eq!(
+        unknown_outcome_server.store().put(&block).unwrap(),
+        serialized.hash
+    );
+    assert_eq!(
+        unknown_outcome_server
+            .blob_bytes(&unknown_outcome_blob_name)
+            .unwrap(),
+        serialized.bytes
+    );
+    let unknown_outcome_requests = unknown_outcome_server.recorded_requests();
+    assert_eq!(
+        unknown_outcome_requests
+            .iter()
+            .filter(|request| {
+                request.method == "PUT" && request.target.contains(&unknown_outcome_blob_name)
+            })
+            .count(),
+        3
+    );
+    assert_eq!(
+        unknown_outcome_requests
+            .iter()
+            .filter(|request| {
+                request.method == "GET" && request.target.contains(&unknown_outcome_blob_name)
+            })
+            .count(),
+        1
+    );
+
     let exhausted_retry_server = MockAzureServer::start();
     let exhausted_retry_blob_name = exhausted_retry_server.blob_name(&serialized.hash);
     exhausted_retry_server.set_drop_put_attempts(10);

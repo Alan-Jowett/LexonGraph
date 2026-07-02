@@ -201,8 +201,16 @@ already-existing blobs, conflicts, permissions, or other explicit backend
 failures.
 
 If the bounded retry budget is exhausted with transport failure on every
-attempt, `put` reports an explicit backend failure for the publish operation and
-does not claim that the block was stored.
+attempt, `put` treats the request outcome as unknown rather than assuming the
+backend rejected the write.
+
+The implementation re-reads the deterministic blob after retry exhaustion:
+
+- matching canonical bytes mean the publish converged successfully despite the
+  lost response
+- differing bytes mean an explicit integrity-conflict backend failure
+- missing or unreadable state mean an explicit backend failure for unknown
+  publish outcome
 
 ### DSG-AZURE-STORE-009 `Azure-specific visibility boundary`
 

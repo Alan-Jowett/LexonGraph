@@ -115,8 +115,9 @@ that continues failing until the bounded retry policy is exhausted.
 
 **Pass condition:** `put` retries the deterministic publish after the transient
 transport failure, succeeds when a later retry reaches a successful backend
-response, and otherwise fails explicitly as a backend failure without claiming
-the block was stored.
+response, succeeds when post-failure deterministic blob inspection finds the
+canonical bytes after retry exhaustion, and otherwise fails explicitly when the
+post-failure blob state is missing, unreadable, or conflicting.
 
 **Traces to:** REQ-AZURE-STORE-014
 

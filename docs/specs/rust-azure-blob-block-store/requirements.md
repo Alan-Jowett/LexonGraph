@@ -149,8 +149,16 @@ same success, idempotence, conflict, and explicit-failure rules that govern a
 single publish attempt.
 
 If the bounded retry policy is exhausted without any publish attempt reaching a
-backend response, `put` shall fail explicitly as a backend failure and shall not
-report success for that block ID.
+backend response, `put` shall re-read the deterministic blob before reporting a
+final outcome.
+
+If that post-failure re-read finds canonical bytes for the requested block ID,
+`put` shall report success because the backend has converged on the correct
+stored state despite the unknown request outcome.
+
+If that post-failure re-read finds differing bytes, missing state, or unreadable
+state, `put` shall fail explicitly and shall not report success for that block
+ID.
 
 ### REQ-AZURE-STORE-015
 
