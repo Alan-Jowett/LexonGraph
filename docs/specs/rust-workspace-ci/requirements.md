@@ -165,6 +165,11 @@ surfaces, including:
 - `docs/specs/rust-workspace-ci/**`
 - `.github/workflows/ci.yml`
 
+For `pull_request` events, the Azure live-verification job shall execute only
+for pull requests whose head repository matches this repository, so forked pull
+requests that cannot use the repository's Azure trust configuration do not
+become hard failures.
+
 ### REQ-CI-023
 
 The Azure live-verification job shall authenticate to Azure from GitHub Actions

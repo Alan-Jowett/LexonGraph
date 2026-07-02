@@ -110,6 +110,8 @@ That job:
 
 - runs on `ubuntu-latest`
 - is separate from the default workspace test job
+- skips forked `pull_request` runs before requesting Azure credentials or OIDC
+  tokens
 - performs change detection for Azure-live-test-relevant paths before executing
   live Azure setup and test steps
 - exits without running the live Azure setup and test steps when those relevant

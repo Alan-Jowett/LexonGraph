@@ -196,7 +196,8 @@ Inspect the CI workflow definition for Azure live-verification gating.
 
 **Pass condition:** the workflow defines a dedicated Azure live-verification job
 and that job executes its Azure setup and live-test steps only when the current
-change set touches the documented Azure-live-test-relevant paths.
+change set touches the documented Azure-live-test-relevant paths, while forked
+pull requests are skipped before attempting Azure-authenticated execution.
 
 **Traces to:** REQ-CI-022
 
