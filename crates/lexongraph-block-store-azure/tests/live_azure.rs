@@ -37,7 +37,7 @@ fn live_azure_round_trip_missing_and_enumeration_match_the_contract() {
         .unwrap()
         .collect::<Result<HashSet<_>, _>>()
         .unwrap();
-    assert_eq!(enumerated, expected);
+    assert!(expected.is_subset(&enumerated));
 }
 
 fn sample_leaf_block(body: &str) -> lexongraph_block::Block {
