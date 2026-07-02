@@ -131,7 +131,7 @@ fn val_azure_store_006_007_015_017_get_reports_integrity_malformed_transient_and
     exhausted_retry_server.set_disconnect_get_attempts(10);
     expect_backend_failure_contains(
         exhausted_retry_store.get(&exhausted.hash).unwrap_err(),
-        "after 3 attempts",
+        "after 6 attempts",
     );
 }
 
@@ -191,7 +191,7 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
                 request.method == "PUT" && request.target.contains(&unknown_outcome_blob_name)
             })
             .count(),
-        3
+        6
     );
     assert_eq!(
         unknown_outcome_requests
@@ -208,7 +208,7 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
     exhausted_retry_server.set_drop_put_attempts(10);
     expect_backend_failure_contains(
         exhausted_retry_server.store().put(&block).unwrap_err(),
-        "after 3 attempts",
+        "after 6 attempts",
     );
     assert_eq!(
         exhausted_retry_server.blob_bytes(&exhausted_retry_blob_name),
@@ -367,10 +367,10 @@ fn val_azure_store_013_018_enumeration_surfaces_listing_transient_and_decoding_f
     let exhausted_retry_server = MockAzureServer::start();
     exhausted_retry_server.set_disconnect_list_attempts(10);
     match exhausted_retry_server.store().iter_block_ids() {
-        Err(error) => expect_backend_failure_contains(error, "after 3 attempts"),
+        Err(error) => expect_backend_failure_contains(error, "after 6 attempts"),
         Ok(iter) => {
             let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
-            expect_backend_failure_contains(error, "after 3 attempts");
+            expect_backend_failure_contains(error, "after 6 attempts");
         }
     }
 

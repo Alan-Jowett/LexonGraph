@@ -18,8 +18,9 @@ use serde::Deserialize;
 const AZURE_API_VERSION: &str = "2023-11-03";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const TRANSPORT_RETRY_DELAY: Duration = Duration::from_millis(250);
-const TRANSPORT_MAX_ATTEMPTS: usize = 3;
+const TRANSPORT_INITIAL_RETRY_DELAY: Duration = Duration::from_millis(250);
+const TRANSPORT_MAX_RETRY_DELAY: Duration = Duration::from_secs(4);
+const TRANSPORT_MAX_ATTEMPTS: usize = 6;
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
@@ -189,7 +190,7 @@ impl AzureBlobBlockStore {
                     let retriable = is_retriable_transport_error(&error);
                     last_error = Some(redact_reqwest_error(error));
                     if retriable && attempt < TRANSPORT_MAX_ATTEMPTS {
-                        sleep(TRANSPORT_RETRY_DELAY);
+                        sleep(transport_retry_delay(attempt));
                         continue;
                     }
                     break;
@@ -385,6 +386,13 @@ fn redact_url(url: &Url) -> String {
 
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
+}
+
+fn transport_retry_delay(attempt: usize) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(4) as u32;
+    let multiplier = 1_u32 << exponent;
+    let delay = TRANSPORT_INITIAL_RETRY_DELAY.saturating_mul(multiplier);
+    delay.min(TRANSPORT_MAX_RETRY_DELAY)
 }
 
 fn is_retriable_transport_error(error: &reqwest::Error) -> bool {
