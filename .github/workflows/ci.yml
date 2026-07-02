@@ -196,7 +196,10 @@ jobs:
           set -euo pipefail
 
           resource_group="lexongraph-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          storage_account="lgaz${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          storage_suffix="$(
+            printf '%s' "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" | sha256sum | cut -c1-20
+          )"
+          storage_account="lgaz${storage_suffix}"
           container_name="blocks"
 
           echo "AZURE_TEST_RESOURCE_GROUP=$resource_group" >> "$GITHUB_ENV"
