@@ -147,6 +147,29 @@ failure without claiming that enumeration completed successfully.
 
 **Traces to:** REQ-AZURE-STORE-015
 
+### VAL-AZURE-STORE-019
+
+Inspect the crate's integration-test surface for live Azure verification.
+
+**Pass condition:** a dedicated live-test mode exists, it requires explicit
+selection rather than running as part of the default workspace test path, and
+it documents or enforces the live configuration needed to supply a real
+container SAS URL.
+
+**Traces to:** REQ-AZURE-STORE-016
+
+### VAL-AZURE-STORE-020
+
+Run the dedicated live Azure verification mode against a fresh real Azure Blob
+container using a valid container SAS URL.
+
+**Pass condition:** the live verification succeeds after proving constructor
+success, `put` publication, `get` round-trip retrieval, `get` absence handling
+for an unmapped block ID, and block-ID enumeration for blocks published by the
+test.
+
+**Traces to:** REQ-AZURE-STORE-017
+
 ### VAL-AZURE-STORE-010
 
 Run the parent block-store conformance suite against the Azure-backed

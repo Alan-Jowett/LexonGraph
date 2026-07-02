@@ -88,6 +88,156 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+  azure-live:
+    name: Azure live block-store test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'westus2' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Detect Azure live-test changes
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+          else
+            base_sha="${{ github.event.before }}"
+          fi
+          head_sha="${{ github.sha }}"
+
+          if [[ -n "$base_sha" && "$base_sha" != "0000000000000000000000000000000000000000" ]]; then
+            git fetch --no-tags --depth=1 origin "$base_sha"
+            changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
+          else
+            changed_files="$(git ls-tree --name-only -r "$head_sha")"
+          fi
+
+          run_live_tests=false
+          while IFS= read -r path; do
+            case "$path" in
+              Cargo.toml|Cargo.lock|.github/workflows/ci.yml|crates/lexongraph-block-store-azure/*|docs/specs/rust-azure-blob-block-store/*|docs/specs/rust-workspace-ci/*)
+                run_live_tests=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          echo "run_live_tests=$run_live_tests" >> "$GITHUB_OUTPUT"
+
+      - name: Skip when Azure live-test surfaces are unchanged
+        if: steps.changes.outputs.run_live_tests != 'true'
+        run: echo "Skipping Azure live verification because no Azure-relevant paths changed."
+
+      - name: Validate Azure OIDC configuration
+        if: steps.changes.outputs.run_live_tests == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AZURE_CLIENT_ID:?Set AZURE_CLIENT_ID as a repository variable or secret.}"
+          : "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID as a repository variable or secret.}"
+          : "${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID as a repository variable or secret.}"
+          : "${AZURE_LOCATION:?Set AZURE_LOCATION as a repository variable or rely on the default.}"
+
+      - uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        if: steps.changes.outputs.run_live_tests == 'true'
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        if: steps.changes.outputs.run_live_tests == 'true'
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+        if: steps.changes.outputs.run_live_tests == 'true'
+        with:
+          key: azure-live
+
+      - name: Provision temporary Azure Blob test resources
+        if: steps.changes.outputs.run_live_tests == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resource_group="lexongraph-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          storage_account="lgaz${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          container_name="blocks"
+
+          echo "AZURE_TEST_RESOURCE_GROUP=$resource_group" >> "$GITHUB_ENV"
+
+          az group create \
+            --name "$resource_group" \
+            --location "$AZURE_LOCATION" \
+            --output none
+
+          az storage account create \
+            --name "$storage_account" \
+            --resource-group "$resource_group" \
+            --location "$AZURE_LOCATION" \
+            --sku Standard_LRS \
+            --kind StorageV2 \
+            --https-only true \
+            --output none
+
+          account_key="$(
+            az storage account keys list \
+              --resource-group "$resource_group" \
+              --account-name "$storage_account" \
+              --query '[0].value' \
+              --output tsv
+          )"
+
+          az storage container create \
+            --account-name "$storage_account" \
+            --account-key "$account_key" \
+            --name "$container_name" \
+            --output none
+
+          expiry="$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%MZ')"
+          sas="$(
+            az storage container generate-sas \
+              --account-name "$storage_account" \
+              --account-key "$account_key" \
+              --name "$container_name" \
+              --permissions racwl \
+              --expiry "$expiry" \
+              --https-only \
+              --output tsv
+          )"
+          sas_url="https://${storage_account}.blob.core.windows.net/${container_name}?${sas}"
+
+          echo "::add-mask::$account_key"
+          echo "::add-mask::$sas"
+          echo "::add-mask::$sas_url"
+          echo "LEXONGRAPH_AZURE_TEST_CONTAINER_SAS_URL=$sas_url" >> "$GITHUB_ENV"
+
+      - name: Run live Azure block-store tests
+        if: steps.changes.outputs.run_live_tests == 'true'
+        env:
+          RUST_TEST_THREADS: 1
+        run: cargo test -p lexongraph-block-store-azure --test live_azure -- --ignored
+
+      - name: Clean up temporary Azure resources
+        if: always() && steps.changes.outputs.run_live_tests == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${AZURE_TEST_RESOURCE_GROUP:-}" ]] && [[ "$(az group exists --name "$AZURE_TEST_RESOURCE_GROUP")" == "true" ]]; then
+            az group delete --name "$AZURE_TEST_RESOURCE_GROUP" --yes
+          fi
+
   coverage:
     name: Code coverage
     runs-on: ubuntu-latest

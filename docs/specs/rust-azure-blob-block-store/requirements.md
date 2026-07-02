@@ -166,6 +166,32 @@ If the bounded retry policy is exhausted without any read or list attempt
 reaching a backend response, the operation shall fail explicitly as a backend
 failure and shall not report success or absence for the affected state.
 
+### REQ-AZURE-STORE-016
+
+The repository shall provide a dedicated opt-in live integration-verification
+mode for `lexongraph-block-store-azure` that exercises the crate against a real
+Azure Blob Storage container.
+
+The live verification mode shall remain outside the default local and workspace
+test path so contributors and routine non-Azure verification do not require
+live Azure credentials.
+
+### REQ-AZURE-STORE-017
+
+The live Azure verification mode shall prove the real-backend wiring needed for
+the shared `BlockStore` contract by exercising:
+
+- construction from a valid container SAS URL
+- successful publication of a valid block through `put`
+- successful retrieval of that block through `get`
+- `Ok(None)` for a block whose mapped blob is absent
+- streaming block-ID enumeration for blocks published by the test
+
+This requirement does not replace the existing mock-backed verification surface
+for transport-failure injection, malformed backend responses, or other
+backend-simulation cases that are impractical to make deterministic against a
+live subscription in routine CI.
+
 ### REQ-AZURE-STORE-010
 
 The Azure-backed implementation shall implement the parent trait's streaming

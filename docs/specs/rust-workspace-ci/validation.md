@@ -189,3 +189,46 @@ authoritative protocol and specification artifacts for normative behavior, and
 does not duplicate those specifications in full.
 
 **Traces to:** REQ-CI-021
+
+### VAL-CI-019
+
+Inspect the CI workflow definition for Azure live-verification gating.
+
+**Pass condition:** the workflow defines a dedicated Azure live-verification job
+and that job executes its Azure setup and live-test steps only when the current
+change set touches the documented Azure-live-test-relevant paths.
+
+**Traces to:** REQ-CI-022
+
+### VAL-CI-020
+
+Observe a successful Azure live-verification job run in GitHub Actions.
+
+**Pass condition:** the job authenticates to Azure through GitHub OIDC /
+federated credentials without requiring a repository-stored SAS token or
+long-lived storage-account credential as its primary authentication path.
+
+**Traces to:** REQ-CI-023
+
+### VAL-CI-021
+
+Observe a live-verification job run that provisions temporary Azure Blob test
+resources.
+
+**Pass condition:** the job creates isolated temporary Azure storage resources,
+uses them for the live test, and then cleans them up even when the live test
+step fails.
+
+**Traces to:** REQ-CI-024
+
+### VAL-CI-022
+
+Inspect the workflow's Cargo test commands and observe a successful Azure
+live-verification run.
+
+**Pass condition:** the default workspace test job continues to run
+`cargo test --workspace --locked` without live Azure credentials, while the
+Azure live-verification job explicitly selects only the crate's dedicated live
+test mode.
+
+**Traces to:** REQ-CI-025

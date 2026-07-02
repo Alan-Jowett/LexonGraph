@@ -24,6 +24,7 @@ The repository quality gates own:
 - formatting verification
 - lint verification
 - Rust test execution
+- Azure live integration verification for `lexongraph-block-store-azure`
 - Rust coverage execution and publication
 - README surfacing of repository quality/status badges and repository navigation
 - SPDX header verification
@@ -99,6 +100,59 @@ and runs:
 The workflow contains a test job that restores Cargo cache and runs:
 
 `cargo test --workspace --locked`
+
+### DSG-CI-022 `Azure live verification job`
+
+The workflow contains a dedicated Azure live-verification job for
+`lexongraph-block-store-azure` in `.github/workflows/ci.yml`.
+
+That job:
+
+- runs on `ubuntu-latest`
+- is separate from the default workspace test job
+- performs change detection for Azure-live-test-relevant paths before executing
+  live Azure setup and test steps
+- exits without running the live Azure setup and test steps when those relevant
+  paths were not changed for the current workflow event
+
+The Azure-live-test-relevant paths are:
+
+- `crates/lexongraph-block-store-azure/**`
+- `Cargo.toml`
+- `Cargo.lock`
+- `docs/specs/rust-azure-blob-block-store/**`
+- `docs/specs/rust-workspace-ci/**`
+- `.github/workflows/ci.yml`
+
+### DSG-CI-023 `Azure OIDC authentication`
+
+The Azure live-verification job grants only the GitHub Actions permissions
+needed for checkout and OIDC token exchange, then authenticates to Azure via a
+federated GitHub identity before provisioning any test resources.
+
+The workflow does not mint or store long-lived storage-account keys, account
+connection strings, or repository-managed SAS tokens as the primary
+authentication path for this job.
+
+### DSG-CI-024 `Ephemeral resource lifecycle`
+
+After authenticating to Azure, the live-verification job provisions isolated
+temporary Azure Blob test resources for the current workflow run, derives a
+container SAS URL for the test-owned container, passes that SAS URL only to the
+selected live test invocation, and then cleans up the temporary Azure resources
+even when the live test fails.
+
+The provisioned scope remains limited to the minimum resource boundary needed to
+obtain an isolated Azure Blob container and to clean it up deterministically.
+
+### DSG-CI-025 `Explicit live test invocation`
+
+The Azure live-verification job invokes only the crate's dedicated live-test
+surface by explicit Cargo test selection rather than broad workspace test
+execution.
+
+The default `cargo test --workspace --locked` job remains the routine
+repository-wide fast path and does not require live Azure credentials.
 
 ### DSG-CI-016 `Coverage job`
 
@@ -242,6 +296,10 @@ The workflow does not include:
 | DSG-CI-006 | REQ-CI-003, REQ-CI-008 |
 | DSG-CI-007 | REQ-CI-004, REQ-CI-007, REQ-CI-008 |
 | DSG-CI-008 | REQ-CI-005, REQ-CI-008 |
+| DSG-CI-022 | REQ-CI-022 |
+| DSG-CI-023 | REQ-CI-023 |
+| DSG-CI-024 | REQ-CI-024 |
+| DSG-CI-025 | REQ-CI-025 |
 | DSG-CI-016 | REQ-CI-007, REQ-CI-015 |
 | DSG-CI-017 | REQ-CI-016 |
 | DSG-CI-018 | REQ-CI-017 |

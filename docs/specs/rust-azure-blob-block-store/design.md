@@ -264,6 +264,34 @@ The crate adds backend-specific tests for:
 - exclusion of unrelated blobs from enumeration
 - explicit failure for listing or blob-name decoding errors during enumeration
 
+### DSG-AZURE-STORE-014 `Dedicated live verification mode`
+
+The crate defines a dedicated live integration-test surface for real Azure Blob
+verification that is selected only by explicit test invocation.
+
+That live verification surface:
+
+- is separate from the default workspace test command
+- accepts a caller- or CI-supplied container SAS URL for an isolated
+  test-owned container
+- fails explicitly when its required live-test configuration is absent or
+  malformed rather than silently skipping execution after selection
+
+### DSG-AZURE-STORE-015 `Live contract probe coverage`
+
+The live verification surface exercises the real Azure backend only for the
+contract-critical behaviors that need end-to-end confirmation in CI:
+
+- constructor success for a valid live container SAS URL
+- `put` publication of a valid block
+- `get` round-trip retrieval for a published block
+- `get` absence reporting for an unmapped block ID
+- `iter_block_ids` enumeration of blocks published by the test
+
+The live verification surface does not replace the mock-backed verification
+surface for injected transport failures, malformed listing payloads,
+permission-simulation cases, or deterministic conflict synthesis.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -279,3 +307,5 @@ The crate adds backend-specific tests for:
 | DSG-AZURE-STORE-009 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-011 |
 | DSG-AZURE-STORE-010 | REQ-AZURE-STORE-001, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014, REQ-AZURE-STORE-015 |
 | DSG-AZURE-STORE-011..012 | REQ-AZURE-STORE-002, REQ-AZURE-STORE-003, REQ-AZURE-STORE-006, REQ-AZURE-STORE-007, REQ-AZURE-STORE-008, REQ-AZURE-STORE-009, REQ-AZURE-STORE-010, REQ-AZURE-STORE-012, REQ-AZURE-STORE-013, REQ-AZURE-STORE-014, REQ-AZURE-STORE-015 |
+| DSG-AZURE-STORE-014 | REQ-AZURE-STORE-016 |
+| DSG-AZURE-STORE-015 | REQ-AZURE-STORE-017 |
