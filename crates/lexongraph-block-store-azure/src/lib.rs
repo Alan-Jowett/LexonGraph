@@ -213,20 +213,23 @@ impl BlockStore for AzureBlobBlockStore {
     ) -> Result<(), BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
         let blob_url = self.build_blob_url(&blob_name);
-        let response = self
-            .send_with_transport_retries(|| {
-                self.request(Method::PUT, blob_url.clone())
-                    .header("x-ms-blob-type", "BlockBlob")
-                    .header(IF_NONE_MATCH, "*")
-                    .header(CONTENT_TYPE, "application/octet-stream")
-                    .body(block_bytes.to_vec())
-            })
-            .map_err(|error| {
-                backend_failure(format!(
-                    "failed to publish block {} to blob {} in container {}: {}",
-                    block_id, blob_name, self.container_display, error
-                ))
-            })?;
+        let response = match self.send_with_transport_retries(|| {
+            self.request(Method::PUT, blob_url.clone())
+                .header("x-ms-blob-type", "BlockBlob")
+                .header(IF_NONE_MATCH, "*")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(block_bytes.to_vec())
+        }) {
+            Ok(response) => response,
+            Err(error) => {
+                return self.read_existing_or_map_transport_publish_error(
+                    &blob_name,
+                    block_id,
+                    block_bytes,
+                    &error,
+                );
+            }
+        };
 
         let status = response.status();
         let _ = response.bytes();
@@ -306,6 +309,30 @@ impl AzureBlobBlockStore {
                 self.container_display,
                 format_http_status(status),
                 block_id
+            ))),
+        }
+    }
+
+    fn read_existing_or_map_transport_publish_error(
+        &self,
+        blob_name: &str,
+        block_id: &BlockHash,
+        canonical_bytes: &[u8],
+        transport_error: &str,
+    ) -> Result<(), BlockStoreError> {
+        match self.fetch_blob_bytes(blob_name) {
+            Ok(Some(existing_bytes)) if existing_bytes == canonical_bytes => Ok(()),
+            Ok(Some(_)) => Err(backend_failure(format!(
+                "integrity conflict at blob {} in container {} for block {} after publish transport failure ({})",
+                blob_name, self.container_display, block_id, transport_error
+            ))),
+            Ok(None) => Err(backend_failure(format!(
+                "failed to publish block {} to blob {} in container {}: {}",
+                block_id, blob_name, self.container_display, transport_error
+            ))),
+            Err(error) => Err(backend_failure(format!(
+                "failed to inspect blob {} in container {} after publish transport failure ({}) for block {}: {error}",
+                blob_name, self.container_display, transport_error, block_id
             ))),
         }
     }
