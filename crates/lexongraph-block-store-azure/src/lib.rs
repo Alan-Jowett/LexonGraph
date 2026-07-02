@@ -323,7 +323,7 @@ impl AzureBlobBlockStore {
         match self.fetch_blob_bytes(blob_name) {
             Ok(Some(existing_bytes)) if existing_bytes == canonical_bytes => Ok(()),
             Ok(Some(_)) => Err(backend_failure(format!(
-                "integrity conflict at blob {} in container {} for block {} after publish transport failure {}",
+                "integrity conflict at blob {} in container {} for block {} after publish transport failure ({})",
                 blob_name, self.container_display, block_id, transport_error
             ))),
             Ok(None) => Err(backend_failure(format!(
@@ -331,7 +331,7 @@ impl AzureBlobBlockStore {
                 block_id, blob_name, self.container_display, transport_error
             ))),
             Err(error) => Err(backend_failure(format!(
-                "failed to inspect blob {} in container {} after publish transport failure {} for block {}: {error}",
+                "failed to inspect blob {} in container {} after publish transport failure ({}) for block {}: {error}",
                 blob_name, self.container_display, transport_error, block_id
             ))),
         }
