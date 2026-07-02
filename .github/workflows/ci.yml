@@ -110,6 +110,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          relevant_prefixes=(
+            "crates/lexongraph-block-store-azure/"
+            "docs/specs/rust-azure-blob-block-store/"
+            "docs/specs/rust-workspace-ci/"
+          )
+          relevant_files=(
+            "Cargo.toml"
+            "Cargo.lock"
+            ".github/workflows/ci.yml"
+          )
+
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
           else
@@ -126,12 +137,25 @@ jobs:
 
           run_live_tests=false
           while IFS= read -r path; do
-            case "$path" in
-              Cargo.toml|Cargo.lock|.github/workflows/ci.yml|crates/lexongraph-block-store-azure/*|docs/specs/rust-azure-blob-block-store/*|docs/specs/rust-workspace-ci/*)
+            for file in "${relevant_files[@]}"; do
+              if [[ "$path" == "$file" ]]; then
                 run_live_tests=true
                 break
-                ;;
-            esac
+              fi
+            done
+            if [[ "$run_live_tests" == "true" ]]; then
+              break
+            fi
+
+            for prefix in "${relevant_prefixes[@]}"; do
+              if [[ "$path" == "$prefix"* ]]; then
+                run_live_tests=true
+                break
+              fi
+            done
+            if [[ "$run_live_tests" == "true" ]]; then
+              break
+            fi
           done <<< "$changed_files"
 
           echo "run_live_tests=$run_live_tests" >> "$GITHUB_OUTPUT"
@@ -191,34 +215,26 @@ jobs:
             --https-only true \
             --output none
 
-          account_key="$(
-            az storage account keys list \
-              --resource-group "$resource_group" \
-              --account-name "$storage_account" \
-              --query '[0].value' \
-              --output tsv
-          )"
-
           az storage container create \
             --account-name "$storage_account" \
-            --account-key "$account_key" \
             --name "$container_name" \
+            --auth-mode login \
             --output none
 
           expiry="$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%MZ')"
           sas="$(
             az storage container generate-sas \
               --account-name "$storage_account" \
-              --account-key "$account_key" \
               --name "$container_name" \
               --permissions racwl \
               --expiry "$expiry" \
+              --auth-mode login \
+              --as-user \
               --https-only \
               --output tsv
           )"
           sas_url="https://${storage_account}.blob.core.windows.net/${container_name}?${sas}"
 
-          echo "::add-mask::$account_key"
           echo "::add-mask::$sas"
           echo "::add-mask::$sas_url"
           echo "LEXONGRAPH_AZURE_TEST_CONTAINER_SAS_URL=$sas_url" >> "$GITHUB_ENV"
