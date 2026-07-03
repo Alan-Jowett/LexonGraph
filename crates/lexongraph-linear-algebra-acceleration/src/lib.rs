@@ -648,7 +648,9 @@ impl WgpuContext {
             .recv()
             .map_err(|error| format!("failed to receive wgpu readback status: {error}"))?;
         map_result?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| format!("failed to access wgpu readback buffer: {error:?}"))?;
         let values = bytemuck::cast_slice(&mapped).to_vec();
         drop(mapped);
         readback_buffer.unmap();
