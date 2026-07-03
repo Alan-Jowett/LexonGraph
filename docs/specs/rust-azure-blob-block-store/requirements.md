@@ -112,8 +112,9 @@ against the requested block ID before reporting success.
 
 ### REQ-AZURE-STORE-007
 
-`put` shall publish the canonical block bytes to the deterministic blob name
-without overwriting previously published differing bytes for that block ID.
+`put` shall attempt a create-without-overwrite publication of the canonical
+block bytes to the deterministic blob name, and it shall not overwrite any
+previously published blob for that block ID.
 
 If publication observes that the deterministic blob already exists, whether
 before or after a concurrent publication race, `put` shall return success.
