@@ -178,8 +178,8 @@ Two or more store instances targeting the same container may attempt to publish
 the same block concurrently.
 
 The design relies on deterministic blob names plus create-without-overwrite
-publication so that all successful publishers converge on one valid blob for the
-block ID.
+publication so that all successful publishers converge on one already-published
+blob for the block ID.
 
 If concurrent publishers race on the same block ID, the losing publisher
 accepts the already-published deterministic blob as successful convergence.
