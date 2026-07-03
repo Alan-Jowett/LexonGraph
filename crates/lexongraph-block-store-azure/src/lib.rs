@@ -3,8 +3,10 @@
 //! Azure Blob Storage `BlockStore` implementation for LexonGraph blocks.
 
 use std::any::type_name_of_val;
+use std::env;
 use std::error::Error as StdError;
 use std::fmt;
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -23,6 +25,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TRANSPORT_INITIAL_RETRY_DELAY: Duration = Duration::from_millis(250);
 const TRANSPORT_MAX_RETRY_DELAY: Duration = Duration::from_secs(4);
 const TRANSPORT_MAX_ATTEMPTS: usize = 6;
+const DIAGNOSTICS_ENV_VAR: &str = "LEXONGRAPH_AZURE_BLOCK_STORE_DIAGNOSTICS";
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
@@ -922,13 +925,7 @@ impl RequestErrorDiagnostics {
     }
 
     fn display(&self) -> String {
-        format!(
-            "{} [class={}; debug={}; chain={}]",
-            self.summary,
-            self.class_summary(),
-            self.debug,
-            self.chain_summary()
-        )
+        format!("{} [class={}]", self.summary, self.class_summary())
     }
 
     fn display_with_response(&self, response: &AzureResponseMetadata) -> String {
@@ -1075,6 +1072,9 @@ fn reqwest_error_diagnostics(error: reqwest::Error) -> RequestErrorDiagnostics {
 }
 
 fn emit_diagnostic_log(event: &'static str, fields: &[(&'static str, String)]) {
+    if !azure_block_store_diagnostics_enabled() {
+        return;
+    }
     let mut message = format!("[AZURE-BLOCK-STORE] event={}", quote_log_value(event));
     for (name, value) in fields {
         message.push(' ');
@@ -1083,6 +1083,21 @@ fn emit_diagnostic_log(event: &'static str, fields: &[(&'static str, String)]) {
         message.push_str(&quote_log_value(value));
     }
     eprintln!("{message}");
+}
+
+fn azure_block_store_diagnostics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env::var(DIAGNOSTICS_ENV_VAR)
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim(),
+                    "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+                )
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn quote_log_value(value: &str) -> String {
