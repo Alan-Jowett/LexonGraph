@@ -374,12 +374,7 @@ impl BlockStore for AzureBlobBlockStore {
                 Some(&blob_name),
                 fields,
             );
-            return self.read_existing_or_map_publish_error(
-                &blob_name,
-                block_id,
-                block_bytes,
-                &response_meta,
-            );
+            return Ok(());
         }
 
         let publish_probe = self.probe_blob_properties(
@@ -434,97 +429,6 @@ impl BlockStore for AzureBlobBlockStore {
 }
 
 impl AzureBlobBlockStore {
-    fn read_existing_or_map_publish_error(
-        &self,
-        blob_name: &str,
-        block_id: &BlockHash,
-        canonical_bytes: &[u8],
-        publish_response: &AzureResponseMetadata,
-    ) -> Result<(), BlockStoreError> {
-        let publish_probe = self.probe_blob_properties(
-            "probe_after_publish_status",
-            Some(block_id),
-            blob_name,
-            "publish_conflict",
-        );
-        match self.fetch_blob_bytes("verify_after_publish_status", Some(block_id), blob_name) {
-            Ok(Some(existing_bytes)) if existing_bytes == canonical_bytes => {
-                self.log_blob_event(
-                    "publish_verify_succeeded",
-                    "verify_after_publish_status",
-                    Some(block_id),
-                    Some(blob_name),
-                    vec![("probe", publish_probe.summary())],
-                );
-                Ok(())
-            }
-            Ok(Some(_)) => {
-                self.log_blob_event(
-                    "publish_verify_integrity_conflict",
-                    "verify_after_publish_status",
-                    Some(block_id),
-                    Some(blob_name),
-                    vec![
-                        ("publish_response", publish_response.summary()),
-                        ("probe", publish_probe.summary()),
-                    ],
-                );
-                Err(backend_failure(format!(
-                    "integrity conflict at blob {} in container {} for block {} after publish error {}{}; probe: {}",
-                    blob_name,
-                    self.container_display,
-                    block_id,
-                    format_http_status(publish_response.status),
-                    format_azure_error_code(publish_response.error_code.as_deref()),
-                    publish_probe.summary()
-                )))
-            }
-            Ok(None) => {
-                self.log_blob_event(
-                    "publish_verify_missing",
-                    "verify_after_publish_status",
-                    Some(block_id),
-                    Some(blob_name),
-                    vec![
-                        ("publish_response", publish_response.summary()),
-                        ("probe", publish_probe.summary()),
-                    ],
-                );
-                Err(backend_failure(format!(
-                    "failed to publish block {} to blob {} in container {}: blob missing after publish error {}{}; probe: {}",
-                    block_id,
-                    blob_name,
-                    self.container_display,
-                    format_http_status(publish_response.status),
-                    format_azure_error_code(publish_response.error_code.as_deref()),
-                    publish_probe.summary()
-                )))
-            }
-            Err(error) => {
-                self.log_blob_event(
-                    "publish_verify_failed",
-                    "verify_after_publish_status",
-                    Some(block_id),
-                    Some(blob_name),
-                    vec![
-                        ("publish_response", publish_response.summary()),
-                        ("probe", publish_probe.summary()),
-                        ("verify_error", error.clone()),
-                    ],
-                );
-                Err(backend_failure(format!(
-                    "failed to inspect blob {} in container {} after publish error {}{} for block {}: {error}; probe: {}",
-                    blob_name,
-                    self.container_display,
-                    format_http_status(publish_response.status),
-                    format_azure_error_code(publish_response.error_code.as_deref()),
-                    block_id,
-                    publish_probe.summary()
-                )))
-            }
-        }
-    }
-
     fn read_existing_or_map_transport_publish_error(
         &self,
         blob_name: &str,

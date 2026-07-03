@@ -112,16 +112,19 @@ against the requested block ID before reporting success.
 
 ### REQ-AZURE-STORE-007
 
-`put` shall publish the canonical block bytes to the deterministic blob name
-without overwriting previously published differing bytes for that block ID.
+`put` shall attempt a create-without-overwrite publication of the canonical
+block bytes to the deterministic blob name, and it shall not overwrite any
+previously published blob for that block ID.
 
 If publication observes that the deterministic blob already exists, whether
-before or after a concurrent publication race is re-inspected, `put` shall:
+before or after a concurrent publication race, `put` shall return success. For
+Azure Blob Storage, this already-published outcome may surface as HTTP 409
+Conflict or HTTP 412 Precondition Failed.
 
-- return success when the existing blob bytes match the canonical bytes for the
-  block
-- fail explicitly as a backend failure describing corruption or integrity
-  conflict when the existing blob bytes differ
+This success outcome does not require `put` to re-read or re-validate the
+existing blob bytes against the requested block ID. Any later `get` remains
+responsible for validating that the retrieved bytes hash to the requested block
+ID and shall fail explicitly if they do not.
 
 ### REQ-AZURE-STORE-008
 
@@ -145,8 +148,8 @@ implementation shall retry the same deterministic create-without-overwrite
 publication using a bounded retry policy.
 
 If a later retry reaches a backend response, `put` shall continue applying the
-same success, idempotence, conflict, and explicit-failure rules that govern a
-single publish attempt.
+same success, idempotence, already-published, and explicit-failure rules that
+govern a single publish attempt.
 
 If the bounded retry policy is exhausted without any publish attempt reaching a
 backend response, `put` shall re-read the deterministic blob before reporting a
