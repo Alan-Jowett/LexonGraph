@@ -244,6 +244,11 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
             .iter()
             .any(|request| request.method == "HEAD" && request.target.contains(&conflict_blob_name))
     );
+    assert!(
+        !conflict_requests
+            .iter()
+            .any(|request| request.method == "GET" && request.target.contains(&conflict_blob_name))
+    );
     assert_eq!(
         conflict_server.blob_bytes(&conflict_blob_name).unwrap(),
         b"not canonical bytes".to_vec()
