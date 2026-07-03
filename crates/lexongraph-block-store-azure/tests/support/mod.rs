@@ -278,6 +278,7 @@ fn handle_connection(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
 
     match method.as_str() {
         "GET" => respond_to_get(stream, inner, &blob_name),
+        "HEAD" => respond_to_head(stream, inner, &blob_name),
         "PUT" => respond_to_put(stream, inner, &blob_name, body),
         _ => write_response(stream, 405, &[]),
     }
@@ -292,13 +293,65 @@ fn respond_to_get(stream: TcpStream, inner: &Arc<MockAzureServerInner>, blob_nam
         return;
     }
     if let Some(status) = state.blob_status_overrides.get(blob_name) {
-        write_response(stream, *status, &[]);
+        let request_id = mock_request_id("GET", blob_name);
+        let headers = [("x-ms-request-id", request_id.as_str())];
+        write_response_with_headers(stream, *status, &headers, &[]);
         return;
     }
     match state.blobs.get(blob_name) {
-        Some(bytes) => write_response(stream, 200, bytes),
+        Some(bytes) => {
+            let request_id = mock_request_id("GET", blob_name);
+            let etag = mock_etag(blob_name);
+            let last_modified = mock_last_modified();
+            let content_length = bytes.len().to_string();
+            let headers = [
+                ("x-ms-request-id", request_id.as_str()),
+                ("etag", etag.as_str()),
+                ("last-modified", last_modified),
+                ("content-length", content_length.as_str()),
+            ];
+            write_response_with_headers(stream, 200, &headers, bytes)
+        }
         None => {
-            write_response_with_headers(stream, 404, &[("x-ms-error-code", "BlobNotFound")], &[])
+            let request_id = mock_request_id("GET", blob_name);
+            let headers = [
+                ("x-ms-request-id", request_id.as_str()),
+                ("x-ms-error-code", "BlobNotFound"),
+            ];
+            write_response_with_headers(stream, 404, &headers, &[])
+        }
+    }
+}
+
+fn respond_to_head(stream: TcpStream, inner: &Arc<MockAzureServerInner>, blob_name: &str) {
+    let state = inner.state.lock().unwrap();
+    if let Some(status) = state.blob_status_overrides.get(blob_name) {
+        let request_id = mock_request_id("HEAD", blob_name);
+        let headers = [("x-ms-request-id", request_id.as_str())];
+        write_response_with_headers(stream, *status, &headers, &[]);
+        return;
+    }
+    match state.blobs.get(blob_name) {
+        Some(bytes) => {
+            let request_id = mock_request_id("HEAD", blob_name);
+            let etag = mock_etag(blob_name);
+            let last_modified = mock_last_modified();
+            let content_length = bytes.len().to_string();
+            let headers = [
+                ("x-ms-request-id", request_id.as_str()),
+                ("etag", etag.as_str()),
+                ("last-modified", last_modified),
+                ("content-length", content_length.as_str()),
+            ];
+            write_response_with_headers(stream, 200, &headers, &[])
+        }
+        None => {
+            let request_id = mock_request_id("HEAD", blob_name);
+            let headers = [
+                ("x-ms-request-id", request_id.as_str()),
+                ("x-ms-error-code", "BlobNotFound"),
+            ];
+            write_response_with_headers(stream, 404, &headers, &[])
         }
     }
 }
@@ -311,7 +364,9 @@ fn respond_to_put(
 ) {
     let mut state = inner.state.lock().unwrap();
     if state.deny_put {
-        write_response(stream, 403, &[]);
+        let request_id = mock_request_id("PUT", blob_name);
+        let headers = [("x-ms-request-id", request_id.as_str())];
+        write_response_with_headers(stream, 403, &headers, &[]);
         return;
     }
     if state.drop_put_attempts > 0 {
@@ -330,11 +385,21 @@ fn respond_to_put(
         return;
     }
     if state.blobs.contains_key(blob_name) {
-        write_response(stream, 412, &[]);
+        let request_id = mock_request_id("PUT", blob_name);
+        let headers = [("x-ms-request-id", request_id.as_str())];
+        write_response_with_headers(stream, 412, &headers, &[]);
         return;
     }
     state.blobs.insert(blob_name.to_string(), body);
-    write_response(stream, 201, &[]);
+    let request_id = mock_request_id("PUT", blob_name);
+    let etag = mock_etag(blob_name);
+    let last_modified = mock_last_modified();
+    let headers = [
+        ("x-ms-request-id", request_id.as_str()),
+        ("etag", etag.as_str()),
+        ("last-modified", last_modified),
+    ];
+    write_response_with_headers(stream, 201, &headers, &[]);
 }
 
 fn respond_to_list(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
@@ -346,11 +411,15 @@ fn respond_to_list(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
         return;
     }
     if let Some(status) = state.list_error {
-        write_response(stream, status, &[]);
+        let request_id = mock_request_id("LIST", "container");
+        let headers = [("x-ms-request-id", request_id.as_str())];
+        write_response_with_headers(stream, status, &headers, &[]);
         return;
     }
     if state.malformed_listing {
-        write_response(stream, 200, b"<not-xml");
+        let request_id = mock_request_id("LIST", "container");
+        let headers = [("x-ms-request-id", request_id.as_str())];
+        write_response_with_headers(stream, 200, &headers, b"<not-xml");
         return;
     }
 
@@ -358,7 +427,9 @@ fn respond_to_list(stream: TcpStream, inner: &Arc<MockAzureServerInner>) {
     names.extend(state.extra_list_names.iter().cloned());
     names.sort();
     let body = render_listing(&names);
-    write_response(stream, 200, body.as_bytes());
+    let request_id = mock_request_id("LIST", "container");
+    let headers = [("x-ms-request-id", request_id.as_str())];
+    write_response_with_headers(stream, 200, &headers, body.as_bytes());
 }
 
 fn render_listing(names: &[String]) -> String {
@@ -393,6 +464,18 @@ fn split_target(target: &str) -> (&str, &str) {
     }
 }
 
+fn mock_request_id(method: &str, target: &str) -> String {
+    format!("mock-{method}-{}", target.replace('/', "_"))
+}
+
+fn mock_etag(blob_name: &str) -> String {
+    format!("\"etag-{}\"", blob_name.replace('/', "-"))
+}
+
+fn mock_last_modified() -> &'static str {
+    "Thu, 02 Jul 2026 00:00:00 GMT"
+}
+
 fn write_response(stream: TcpStream, status: u16, body: &[u8]) {
     write_response_with_headers(stream, status, &[], body);
 }
@@ -413,10 +496,14 @@ fn write_response_with_headers(
         500 => "Internal Server Error",
         _ => "Mock",
     };
-    let mut header = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        body.len()
-    );
+    let has_content_length = headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+    let mut header = format!("HTTP/1.1 {status} {reason}\r\n");
+    if !has_content_length {
+        header.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    header.push_str("Connection: close\r\n");
     for (name, value) in headers {
         header.push_str(name);
         header.push_str(": ");
