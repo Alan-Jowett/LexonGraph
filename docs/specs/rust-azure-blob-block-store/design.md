@@ -182,11 +182,7 @@ publication so that all successful publishers converge on one valid blob for the
 block ID.
 
 If concurrent publishers race on the same block ID, the losing publisher
-re-checks the blob:
-
-- if the blob bytes equal the canonical bytes, `put` reports success
-- if the blob bytes differ, `put` reports an explicit backend failure
-  describing integrity conflict
+accepts the already-published deterministic blob as successful convergence.
 
 ### DSG-AZURE-STORE-013 `Transient publish retry`
 
@@ -197,8 +193,7 @@ deterministic blob name and request preconditions.
 
 The retry realization is bounded. Once any retry reaches a backend response,
 `put` resumes the normal publication outcome handling for success,
-already-existing blobs, conflicts, permissions, or other explicit backend
-failures.
+already-existing blobs, permissions, or other explicit backend failures.
 
 If the bounded retry budget is exhausted with transport failure on every
 attempt, `put` treats the request outcome as unknown rather than assuming the

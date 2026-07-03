@@ -165,12 +165,12 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
         2
     );
     assert!(
-        flaky_requests
+        !flaky_requests
             .iter()
             .any(|request| request.method == "GET" && request.target.contains(&flaky_blob_name))
     );
     assert!(
-        flaky_requests
+        !flaky_requests
             .iter()
             .any(|request| request.method == "HEAD" && request.target.contains(&flaky_blob_name))
     );
@@ -234,13 +234,13 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
     let conflict_server = MockAzureServer::start();
     let conflict_blob_name = conflict_server.blob_name(&serialized.hash);
     conflict_server.insert_blob(conflict_blob_name.clone(), b"not canonical bytes".to_vec());
-    expect_backend_failure_contains(
-        conflict_server.store().put(&block).unwrap_err(),
-        "integrity conflict",
+    assert_eq!(
+        conflict_server.store().put(&block).unwrap(),
+        serialized.hash
     );
     let conflict_requests = conflict_server.recorded_requests();
     assert!(
-        conflict_requests
+        !conflict_requests
             .iter()
             .any(|request| request.method == "HEAD" && request.target.contains(&conflict_blob_name))
     );

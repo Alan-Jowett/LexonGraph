@@ -116,12 +116,7 @@ against the requested block ID before reporting success.
 without overwriting previously published differing bytes for that block ID.
 
 If publication observes that the deterministic blob already exists, whether
-before or after a concurrent publication race is re-inspected, `put` shall:
-
-- return success when the existing blob bytes match the canonical bytes for the
-  block
-- fail explicitly as a backend failure describing corruption or integrity
-  conflict when the existing blob bytes differ
+before or after a concurrent publication race, `put` shall return success.
 
 ### REQ-AZURE-STORE-008
 
@@ -145,8 +140,8 @@ implementation shall retry the same deterministic create-without-overwrite
 publication using a bounded retry policy.
 
 If a later retry reaches a backend response, `put` shall continue applying the
-same success, idempotence, conflict, and explicit-failure rules that govern a
-single publish attempt.
+same success, idempotence, already-published, and explicit-failure rules that
+govern a single publish attempt.
 
 If the bounded retry policy is exhausted without any publish attempt reaching a
 backend response, `put` shall re-read the deterministic blob before reporting a

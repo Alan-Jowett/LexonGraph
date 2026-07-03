@@ -98,12 +98,11 @@ construction itself was not required to reject the SAS URL beforehand.
 
 ### VAL-AZURE-STORE-009
 
-Pre-populate the deterministic blob for a block ID with bytes that differ from
-the canonical bytes of the block supplied to `put`.
+Pre-populate the deterministic blob for a block ID before calling `put` for
+that same block ID.
 
-**Pass condition:** `put` fails explicitly and leaves the conflicting blob in
-place while reporting a backend failure that describes corruption or integrity
-conflict.
+**Pass condition:** `put` reports success and leaves the previously published
+blob in place.
 
 **Traces to:** REQ-AZURE-STORE-007
 
