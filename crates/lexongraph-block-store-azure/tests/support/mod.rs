@@ -55,6 +55,7 @@ struct MockState {
     disconnect_get_attempts: usize,
     disconnect_list_attempts: usize,
     drop_put_attempts: usize,
+    put_conflict_status: u16,
     malformed_listing: bool,
     list_error: Option<u16>,
     blob_status_overrides: HashMap<String, u16>,
@@ -75,7 +76,10 @@ impl MockAzureServer {
         let base_url = format!("http://{addr}/{container_name}?sv=test&sig=fake");
         let inner = Arc::new(MockAzureServerInner {
             container_name: container_name.clone(),
-            state: Mutex::new(MockState::default()),
+            state: Mutex::new(MockState {
+                put_conflict_status: 412,
+                ..MockState::default()
+            }),
             shutdown: AtomicBool::new(false),
             external_handles: AtomicUsize::new(1),
             thread: Mutex::new(None),
@@ -141,6 +145,10 @@ impl MockAzureServer {
 
     pub fn set_drop_put_attempts(&self, attempts: usize) {
         self.inner.state.lock().unwrap().drop_put_attempts = attempts;
+    }
+
+    pub fn set_put_conflict_status(&self, status: u16) {
+        self.inner.state.lock().unwrap().put_conflict_status = status;
     }
 
     pub fn set_blob_status(&self, blob_name: impl Into<String>, status: u16) {
@@ -387,7 +395,7 @@ fn respond_to_put(
     if state.blobs.contains_key(blob_name) {
         let request_id = mock_request_id("PUT", blob_name);
         let headers = [("x-ms-request-id", request_id.as_str())];
-        write_response_with_headers(stream, 412, &headers, &[]);
+        write_response_with_headers(stream, state.put_conflict_status, &headers, &[]);
         return;
     }
     state.blobs.insert(blob_name.to_string(), body);

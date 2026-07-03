@@ -117,7 +117,9 @@ block bytes to the deterministic blob name, and it shall not overwrite any
 previously published blob for that block ID.
 
 If publication observes that the deterministic blob already exists, whether
-before or after a concurrent publication race, `put` shall return success.
+before or after a concurrent publication race, `put` shall return success. For
+Azure Blob Storage, this already-published outcome may surface as HTTP 409
+Conflict or HTTP 412 Precondition Failed.
 
 ### REQ-AZURE-STORE-008
 

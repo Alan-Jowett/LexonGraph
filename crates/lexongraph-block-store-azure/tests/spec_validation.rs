@@ -253,6 +253,31 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
         conflict_server.blob_bytes(&conflict_blob_name).unwrap(),
         b"not canonical bytes".to_vec()
     );
+
+    let conflict_409_server = MockAzureServer::start();
+    let conflict_409_blob_name = conflict_409_server.blob_name(&serialized.hash);
+    conflict_409_server.insert_blob(conflict_409_blob_name.clone(), b"other bytes".to_vec());
+    conflict_409_server.set_put_conflict_status(409);
+    assert_eq!(
+        conflict_409_server.store().put(&block).unwrap(),
+        serialized.hash
+    );
+    let conflict_409_requests = conflict_409_server.recorded_requests();
+    assert!(!conflict_409_requests.iter().any(
+        |request| request.method == "HEAD" && request.target.contains(&conflict_409_blob_name)
+    ));
+    assert!(
+        !conflict_409_requests
+            .iter()
+            .any(|request| request.method == "GET"
+                && request.target.contains(&conflict_409_blob_name))
+    );
+    assert_eq!(
+        conflict_409_server
+            .blob_bytes(&conflict_409_blob_name)
+            .unwrap(),
+        b"other bytes".to_vec()
+    );
 }
 
 #[test]
