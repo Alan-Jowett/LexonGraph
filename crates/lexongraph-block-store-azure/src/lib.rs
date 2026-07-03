@@ -629,6 +629,16 @@ impl AzureBlobBlockStore {
         let result = match response {
             Ok(response) => {
                 let metadata = response_metadata(&response);
+                if let Err(error) = response.bytes() {
+                    let diagnostics = reqwest_error_diagnostics(error);
+                    self.log_blob_event(
+                        "response_body_read_failed",
+                        operation,
+                        block_id,
+                        Some(blob_name),
+                        diagnostics.log_fields_with_response(&metadata),
+                    );
+                }
                 let exists = match metadata.status {
                     StatusCode::OK => Some(true),
                     StatusCode::NOT_FOUND => Some(false),
