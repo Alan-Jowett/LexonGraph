@@ -121,6 +121,11 @@ before or after a concurrent publication race, `put` shall return success. For
 Azure Blob Storage, this already-published outcome may surface as HTTP 409
 Conflict or HTTP 412 Precondition Failed.
 
+This success outcome does not require `put` to re-read or re-validate the
+existing blob bytes against the requested block ID. Any later `get` remains
+responsible for validating that the retrieved bytes hash to the requested block
+ID and shall fail explicitly if they do not.
+
 ### REQ-AZURE-STORE-008
 
 If `put` cannot create or write the deterministic blob because the SAS URL or
