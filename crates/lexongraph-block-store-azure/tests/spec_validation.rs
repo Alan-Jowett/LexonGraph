@@ -169,6 +169,11 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
             .iter()
             .any(|request| request.method == "GET" && request.target.contains(&flaky_blob_name))
     );
+    assert!(
+        flaky_requests
+            .iter()
+            .any(|request| request.method == "HEAD" && request.target.contains(&flaky_blob_name))
+    );
 
     let unknown_outcome_server = MockAzureServer::start();
     let unknown_outcome_blob_name = unknown_outcome_server.blob_name(&serialized.hash);
@@ -210,6 +215,10 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
         exhausted_retry_server.store().put(&block).unwrap_err(),
         "after 6 attempts",
     );
+    let exhausted_retry_requests = exhausted_retry_server.recorded_requests();
+    assert!(exhausted_retry_requests.iter().any(|request| {
+        request.method == "HEAD" && request.target.contains(&exhausted_retry_blob_name)
+    }));
     assert_eq!(
         exhausted_retry_server.blob_bytes(&exhausted_retry_blob_name),
         None
@@ -228,6 +237,12 @@ fn val_azure_store_004_008_009_016_put_handles_idempotence_transient_transport_f
     expect_backend_failure_contains(
         conflict_server.store().put(&block).unwrap_err(),
         "integrity conflict",
+    );
+    let conflict_requests = conflict_server.recorded_requests();
+    assert!(
+        conflict_requests
+            .iter()
+            .any(|request| request.method == "HEAD" && request.target.contains(&conflict_blob_name))
     );
     assert_eq!(
         conflict_server.blob_bytes(&conflict_blob_name).unwrap(),
