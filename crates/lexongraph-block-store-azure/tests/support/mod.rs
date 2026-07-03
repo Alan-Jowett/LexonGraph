@@ -473,7 +473,7 @@ fn mock_etag(blob_name: &str) -> String {
 }
 
 fn mock_last_modified() -> &'static str {
-    "Wed, 02 Jul 2026 00:00:00 GMT"
+    "Thu, 02 Jul 2026 00:00:00 GMT"
 }
 
 fn write_response(stream: TcpStream, status: u16, body: &[u8]) {

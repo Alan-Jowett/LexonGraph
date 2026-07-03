@@ -669,6 +669,9 @@ impl AzureBlobBlockStore {
         blob_name: Option<&str>,
         mut fields: Vec<(&'static str, String)>,
     ) {
+        if !azure_block_store_diagnostics_enabled() {
+            return;
+        }
         let mut all_fields = vec![
             ("operation", operation.to_string()),
             ("container", self.container_display.clone()),
@@ -1092,8 +1095,8 @@ fn azure_block_store_diagnostics_enabled() -> bool {
             .ok()
             .map(|value| {
                 matches!(
-                    value.trim(),
-                    "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
                 )
             })
             .unwrap_or(false)
