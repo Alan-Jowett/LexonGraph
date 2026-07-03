@@ -2,7 +2,6 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Azure Blob Storage `BlockStore` implementation for LexonGraph blocks.
 
-use std::any::type_name_of_val;
 use std::env;
 use std::error::Error as StdError;
 use std::fmt;
@@ -1058,14 +1057,15 @@ fn reqwest_error_diagnostics(error: reqwest::Error) -> RequestErrorDiagnostics {
     }
 
     let mut chain = Vec::new();
-    chain.push(format!("{}: {}", type_name_of_val(&error), error));
     let mut source = error.source();
     while let Some(next) = source {
-        chain.push(format!("{}: {}", type_name_of_val(next), next));
+        chain.push(redact_sensitive_text(&next.to_string()));
         source = next.source();
     }
 
     let redacted = error.without_url();
+    chain.insert(0, redacted.to_string());
+
     RequestErrorDiagnostics {
         summary: redacted.to_string(),
         debug: format!("{redacted:?}"),
@@ -1118,6 +1118,19 @@ fn quote_log_value(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+fn redact_sensitive_text(value: &str) -> String {
+    let mut redacted = value.to_string();
+    while let Some(sig_index) = redacted.find("sig=") {
+        let suffix = &redacted[sig_index..];
+        let end = suffix
+            .find(['&', ' ', '"', '\'', '\r', '\n', ')', ']', '}'])
+            .map(|offset| sig_index + offset)
+            .unwrap_or(redacted.len());
+        redacted.replace_range(sig_index..end, "sig=<redacted>");
+    }
+    redacted
 }
 
 #[derive(Debug, Deserialize)]
