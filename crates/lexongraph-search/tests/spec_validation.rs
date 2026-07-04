@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use ciborium::ser::into_writer;
@@ -56,21 +57,26 @@ impl std::error::Error for FixtureError {}
 
 #[derive(Default)]
 struct MemoryBlockStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
-    gets: RefCell<HashMap<BlockHash, usize>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+    gets: Mutex<HashMap<BlockHash, usize>>,
 }
 
 impl MemoryBlockStore {
     fn raw_insert(&self, block_id: BlockHash, bytes: Vec<u8>) {
-        self.blocks.borrow_mut().insert(block_id, bytes);
+        self.blocks.lock().unwrap().insert(block_id, bytes);
     }
 
     fn get_count(&self, block_id: &BlockHash) -> usize {
-        self.gets.borrow().get(block_id).copied().unwrap_or(0)
+        self.gets
+            .lock()
+            .unwrap()
+            .get(block_id)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
     async fn put_block_bytes(
         &self,
@@ -78,7 +84,8 @@ impl BlockStore for MemoryBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
@@ -87,12 +94,18 @@ impl BlockStore for MemoryBlockStore {
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        *self.gets.borrow_mut().entry(*block_id).or_default() += 1;
-        Ok(self.blocks.borrow().get(block_id).cloned())
+        *self.gets.lock().unwrap().entry(*block_id).or_default() += 1;
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
     fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
-        let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        let block_ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
 }
@@ -100,7 +113,7 @@ impl BlockStore for MemoryBlockStore {
 #[derive(Default)]
 struct FailingGetStore {
     inner: MemoryBlockStore,
-    fail_on: RefCell<Option<BlockHash>>,
+    fail_on: Mutex<Option<BlockHash>>,
     fail_message: &'static str,
 }
 
@@ -108,7 +121,7 @@ impl FailingGetStore {
     fn always_fail(message: &'static str) -> Self {
         Self {
             inner: MemoryBlockStore::default(),
-            fail_on: RefCell::new(None),
+            fail_on: Mutex::new(None),
             fail_message: message,
         }
     }
@@ -116,13 +129,13 @@ impl FailingGetStore {
     fn fail_on(block_id: BlockHash, message: &'static str) -> Self {
         Self {
             inner: MemoryBlockStore::default(),
-            fail_on: RefCell::new(Some(block_id)),
+            fail_on: Mutex::new(Some(block_id)),
             fail_message: message,
         }
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for FailingGetStore {
     async fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
         self.inner.put(block).await
@@ -140,7 +153,7 @@ impl BlockStore for FailingGetStore {
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        let configured = *self.fail_on.borrow();
+        let configured = *self.fail_on.lock().unwrap();
         if configured.is_none() || configured == Some(*block_id) {
             return Err(BlockStoreError::BackendFailure(self.fail_message.into()));
         }

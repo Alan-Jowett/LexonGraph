@@ -31,10 +31,10 @@ use lexongraph_block::{
 };
 
 pub type BlockIdStream<'a> =
-    std::pin::Pin<Box<dyn Stream<Item = Result<BlockHash, BlockStoreError>> + 'a>>;
+    std::pin::Pin<Box<dyn Stream<Item = Result<BlockHash, BlockStoreError>> + Send + 'a>>;
 
-#[async_trait(?Send)]
-pub trait BlockStore {
+#[async_trait]
+pub trait BlockStore: Sync {
     async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
@@ -65,7 +65,7 @@ pub trait BlockStore {
     fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError>;
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 pub trait BlockStoreExt: BlockStore {
     async fn put_versioned(&self, block: &VersionedBlock) -> Result<BlockHash, BlockStoreError> {
         let serialized =
@@ -422,8 +422,8 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
+    use std::sync::Mutex;
 
     use async_trait::async_trait;
     use futures::{StreamExt, TryStreamExt, executor::block_on, stream};
@@ -440,16 +440,16 @@ mod tests {
 
     #[derive(Default)]
     struct MemoryBlockStore {
-        blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
     }
 
     impl MemoryBlockStore {
         fn len(&self) -> usize {
-            self.blocks.borrow().len()
+            self.blocks.lock().unwrap().len()
         }
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl BlockStore for MemoryBlockStore {
         async fn put_block_bytes(
             &self,
@@ -457,7 +457,8 @@ mod tests {
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
             self.blocks
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .insert(*block_id, block_bytes.to_vec());
             Ok(())
         }
@@ -466,11 +467,17 @@ mod tests {
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            Ok(self.blocks.borrow().get(block_id).cloned())
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
         }
 
         fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
-            let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+            let block_ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
             Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
         }
     }
@@ -488,10 +495,10 @@ mod tests {
 
     #[derive(Default)]
     struct HexKeyMemoryBlockStore {
-        blocks: RefCell<HashMap<String, Vec<u8>>>,
+        blocks: Mutex<HashMap<String, Vec<u8>>>,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl BlockStore for HexKeyMemoryBlockStore {
         async fn put_block_bytes(
             &self,
@@ -499,7 +506,8 @@ mod tests {
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
             self.blocks
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .insert(block_id.to_string(), block_bytes.to_vec());
             Ok(())
         }
@@ -508,13 +516,19 @@ mod tests {
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            Ok(self.blocks.borrow().get(&block_id.to_string()).cloned())
+            Ok(self
+                .blocks
+                .lock()
+                .unwrap()
+                .get(&block_id.to_string())
+                .cloned())
         }
 
         fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
             let block_ids = self
                 .blocks
-                .borrow()
+                .lock()
+                .unwrap()
                 .keys()
                 .map(|block_id| {
                     let bytes = decode_block_hash_hex(block_id).ok_or_else(|| {
@@ -534,7 +548,7 @@ mod tests {
         inner: MemoryBlockStore,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl BlockStore for MidstreamFailingEnumerationStore {
         async fn put_block_bytes(
             &self,
@@ -555,7 +569,8 @@ mod tests {
             let block_ids = self
                 .inner
                 .blocks
-                .borrow()
+                .lock()
+                .unwrap()
                 .keys()
                 .copied()
                 .collect::<Vec<_>>();

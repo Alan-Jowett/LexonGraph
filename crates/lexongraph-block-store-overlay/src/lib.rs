@@ -88,8 +88,8 @@ impl<S> PassiveLayer<S> {
     }
 }
 
-#[async_trait(?Send)]
-impl<S: BlockStore> BlockStore for PassiveLayer<S> {
+#[async_trait]
+impl<S: BlockStore + Sync> BlockStore for PassiveLayer<S> {
     async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
@@ -192,7 +192,7 @@ impl fmt::Debug for OverlayBlockStore {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for OverlayBlockStore {
     async fn put_block_bytes(
         &self,

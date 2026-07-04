@@ -6491,9 +6491,9 @@ fn hierarchy_stats(hierarchy: &FinalizedPartitionHierarchy) -> HierarchyStats {
 
 #[cfg(feature = "conformance")]
 mod conformance_support {
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fmt;
+    use std::sync::Mutex;
 
     use async_trait::async_trait;
     use futures::stream;
@@ -6502,10 +6502,10 @@ mod conformance_support {
 
     #[derive(Default)]
     pub(crate) struct MemoryBlockStore {
-        blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl BlockStore for MemoryBlockStore {
         async fn put_block_bytes(
             &self,
@@ -6513,7 +6513,8 @@ mod conformance_support {
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
             self.blocks
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .insert(*block_id, block_bytes.to_vec());
             Ok(())
         }
@@ -6522,13 +6523,19 @@ mod conformance_support {
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            Ok(self.blocks.borrow().get(block_id).cloned())
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
         }
 
         fn iter_block_ids(
             &self,
         ) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
-            let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+            let ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
             Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
         }
     }

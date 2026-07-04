@@ -365,7 +365,7 @@ fn val_azure_sdk_store_009_parent_conformance_requirements_are_realized_by_tests
         server: MockAzureServer,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl BlockStore for HarnessStore {
         async fn put_block_bytes(
             &self,

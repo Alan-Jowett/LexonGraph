@@ -316,7 +316,7 @@ impl AzureBlobBlockStore {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for AzureBlobBlockStore {
     async fn put_block_bytes(
         &self,

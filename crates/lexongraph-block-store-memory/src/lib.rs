@@ -124,7 +124,7 @@ impl State {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
     async fn put_block_bytes(
         &self,

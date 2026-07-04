@@ -2,8 +2,8 @@
 // Copyright (c) 2026 LexonGraph contributors
 #![cfg(feature = "conformance")]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use futures::{executor::block_on, stream};
@@ -15,16 +15,16 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 
 #[derive(Default)]
 struct MemoryBlockStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
 }
 
 impl MemoryBlockStore {
     fn raw_insert(&self, hash: BlockHash, bytes: Vec<u8>) {
-        self.blocks.borrow_mut().insert(hash, bytes);
+        self.blocks.lock().unwrap().insert(hash, bytes);
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
     async fn put_block_bytes(
         &self,
@@ -32,7 +32,8 @@ impl BlockStore for MemoryBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
@@ -41,11 +42,17 @@ impl BlockStore for MemoryBlockStore {
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        Ok(self.blocks.borrow().get(block_id).cloned())
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
     fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
-        let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        let block_ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
 }

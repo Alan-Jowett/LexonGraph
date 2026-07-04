@@ -21,7 +21,7 @@ impl SharedMemoryBlockStore {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for SharedMemoryBlockStore {
     async fn put_block_bytes(
         &self,

@@ -2,7 +2,6 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Executable verification for docs/specs/rust-streaming-indexer-crate/validation.md
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -73,15 +72,15 @@ impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Resul
 
 #[derive(Default)]
 struct MemoryBlockStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
 }
 
 #[derive(Default)]
 struct SlowBranchStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for SlowBranchStore {
     async fn put_block_bytes(
         &self,
@@ -98,7 +97,8 @@ impl BlockStore for SlowBranchStore {
             thread::sleep(Duration::from_millis(250));
         }
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
@@ -107,16 +107,22 @@ impl BlockStore for SlowBranchStore {
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        Ok(self.blocks.borrow().get(block_id).cloned())
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
     fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
-        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        let ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
     async fn put_block_bytes(
         &self,
@@ -124,7 +130,8 @@ impl BlockStore for MemoryBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
@@ -133,18 +140,24 @@ impl BlockStore for MemoryBlockStore {
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        Ok(self.blocks.borrow().get(block_id).cloned())
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
     fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
-        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
+        let ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
     }
 }
 
 struct FaultyIdStore;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for FaultyIdStore {
     async fn put_block_bytes(
         &self,

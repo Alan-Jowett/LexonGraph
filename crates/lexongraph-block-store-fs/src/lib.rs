@@ -330,7 +330,7 @@ impl FilesystemBlockStore {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for FilesystemBlockStore {
     async fn put_block_bytes(
         &self,

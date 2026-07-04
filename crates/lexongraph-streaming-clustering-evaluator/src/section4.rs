@@ -2063,7 +2063,7 @@ fn materialize_corpus_archive(
             None,
         )
         .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?;
-        let block_id = pollster::block_on(store.put(&Block::Leaf(leaf)))
+        let block_id = crate::block_on_store_future(store.put(&Block::Leaf(leaf)))
             .map_err(|error| EvaluatorError::Io(format!("failed to store leaf block: {error}")))?;
         leaves.push((block_id, encode_embedding(&entity.embedding)));
     }
@@ -2085,7 +2085,7 @@ fn materialize_corpus_archive(
             None,
         )
         .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?;
-        pollster::block_on(store.put(&Block::Branch(root)))
+        crate::block_on_store_future(store.put(&Block::Branch(root)))
             .map_err(|error| EvaluatorError::Io(format!("failed to store branch block: {error}")))?
     };
 

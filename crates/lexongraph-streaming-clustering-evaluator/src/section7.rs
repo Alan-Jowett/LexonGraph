@@ -1238,11 +1238,12 @@ where
     EC: EmbeddingCompatibility<Target>,
     CS: CandidateScorer<Target>,
 {
-    let Some(validated) = pollster::block_on(context.store.get(&block_id)).map_err(|error| {
-        EvaluatorError::InvalidConfiguration(format!(
-            "section-7 greedy routing failed to load block {block_id}: {error}"
-        ))
-    })?
+    let Some(validated) =
+        crate::block_on_store_future(context.store.get(&block_id)).map_err(|error| {
+            EvaluatorError::InvalidConfiguration(format!(
+                "section-7 greedy routing failed to load block {block_id}: {error}"
+            ))
+        })?
     else {
         return Err(EvaluatorError::InvalidConfiguration(format!(
             "section-7 greedy routing missing block {block_id}"

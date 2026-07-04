@@ -758,7 +758,7 @@ struct HarnessStore {
     root: PathBuf,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for HarnessStore {
     async fn put_block_bytes(
         &self,

@@ -362,7 +362,7 @@ struct HarnessStore {
     lower: SharedMemoryBlockStore,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for HarnessStore {
     async fn put_block_bytes(
         &self,
@@ -479,7 +479,7 @@ impl MockStore {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for MockStore {
     async fn put_block_bytes(
         &self,
@@ -530,7 +530,7 @@ struct CustomLayer {
     inner: MockStore,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for CustomLayer {
     async fn put_block_bytes(
         &self,

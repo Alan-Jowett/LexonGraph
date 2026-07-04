@@ -110,7 +110,7 @@ impl ZipBlockStore {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl BlockStore for ZipBlockStore {
     async fn put_block_bytes(
         &self,

@@ -471,7 +471,34 @@ fn should_force_temp_layer_failure_for_tests() -> bool {
     false
 }
 
-#[async_trait(?Send)]
+pub(crate) fn block_on_store_future<F>(future: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(future)
+                })
+                .join()
+                .unwrap()
+        })
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+}
+
+#[async_trait]
 impl BlockStore for FsOverlayZipBlockStore {
     async fn put_block_bytes(
         &self,
@@ -3830,7 +3857,7 @@ fn collect_leaf_records(
         ));
     }
 
-    let validated = pollster::block_on(store.get(&block_id))
+    let validated = block_on_store_future(store.get(&block_id))
         .map_err(|error| {
             source_store_read_failure(
                 reference,
