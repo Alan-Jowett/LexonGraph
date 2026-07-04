@@ -173,7 +173,7 @@ impl BlockStore for AzureBlobBlockStore {
                     };
                     decode_recognized_block_blob_name(&name).map_err(backend_failure)
                 })
-                .try_filter_map(async move |block_id| Ok(block_id)),
+                .try_filter_map(|block_id| async move { Ok(block_id) }),
         ))
     }
 }
