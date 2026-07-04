@@ -4,6 +4,8 @@ mod support;
 
 use std::sync::Mutex;
 
+use async_trait::async_trait;
+use futures::executor::block_on;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store::conformance::{
@@ -24,34 +26,36 @@ struct HarnessStore {
     server: MockAzureServer,
 }
 
+#[async_trait(?Send)]
 impl BlockStore for HarnessStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), lexongraph_block_store::BlockStoreError> {
-        self.inner.put_block_bytes(block_id, block_bytes)
+        self.inner.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(
+    async fn get_block_bytes(
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, lexongraph_block_store::BlockStoreError> {
-        self.inner.get_block_bytes(block_id)
+        self.inner.get_block_bytes(block_id).await
     }
 
     fn iter_block_ids(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, lexongraph_block_store::BlockStoreError>
+    ) -> Result<lexongraph_block_store::BlockIdStream<'_>, lexongraph_block_store::BlockStoreError>
     {
         self.inner.iter_block_ids()
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreFactory for AzureHarness {
     type Store = HarnessStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         let server = MockAzureServer::start();
         let store = HarnessStore {
             inner: server.store(),
@@ -62,8 +66,9 @@ impl BlockStoreFactory for AzureHarness {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for AzureHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,
@@ -78,10 +83,10 @@ impl BlockStoreConformanceHarness for AzureHarness {
 
 #[test]
 fn downstream_crates_can_run_the_contract_suite() {
-    run_contract_suite(&AzureHarness::default()).unwrap();
+    block_on(run_contract_suite(&AzureHarness::default())).unwrap();
 }
 
 #[test]
 fn downstream_crates_can_run_the_full_suite() {
-    run_full_suite(&AzureHarness::default()).unwrap();
+    block_on(run_full_suite(&AzureHarness::default())).unwrap();
 }

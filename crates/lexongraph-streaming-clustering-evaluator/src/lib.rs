@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Instant;
 
+use async_trait::async_trait;
 use ciborium::value::Value as CborValue;
 use half::f16;
 use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry, Metadata, TypedEntries, into_entries};
@@ -470,25 +471,26 @@ fn should_force_temp_layer_failure_for_tests() -> bool {
     false
 }
 
+#[async_trait(?Send)]
 impl BlockStore for FsOverlayZipBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), lexongraph_block_store::BlockStoreError> {
-        self.store.put_block_bytes(block_id, block_bytes)
+        self.store.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(
+    async fn get_block_bytes(
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, lexongraph_block_store::BlockStoreError> {
-        self.store.get_block_bytes(block_id)
+        self.store.get_block_bytes(block_id).await
     }
 
     fn iter_block_ids(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, lexongraph_block_store::BlockStoreError>
+    ) -> Result<lexongraph_block_store::BlockIdStream<'_>, lexongraph_block_store::BlockStoreError>
     {
         self.store.iter_block_ids()
     }
@@ -3828,8 +3830,7 @@ fn collect_leaf_records(
         ));
     }
 
-    let validated = store
-        .get(&block_id)
+    let validated = pollster::block_on(store.get(&block_id))
         .map_err(|error| {
             source_store_read_failure(
                 reference,

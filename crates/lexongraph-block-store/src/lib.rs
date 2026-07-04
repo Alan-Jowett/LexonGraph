@@ -6,12 +6,12 @@
 //! use lexongraph_block::{Block, BlockHash, ValidatedBlock};
 //! use lexongraph_block_store::{BlockStore, BlockStoreError};
 //!
-//! fn exercise_contract(
+//! async fn exercise_contract(
 //!     store: &dyn BlockStore,
 //!     block: &Block,
 //! ) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-//!     let block_id = store.put(block)?;
-//!     store.get(&block_id)
+//!     let block_id = store.put(block).await?;
+//!     store.get(&block_id).await
 //! }
 //! ```
 //!
@@ -23,28 +23,38 @@
 
 use std::fmt;
 
+use async_trait::async_trait;
+use futures::{TryStreamExt, stream::Stream};
 use lexongraph_block::{
     Block, BlockError, BlockHash, DecodedBlock, ValidatedBlock, VersionedBlock, deserialize_block,
     deserialize_versioned_block, serialize_block, serialize_versioned_block,
 };
 
+pub type BlockIdStream<'a> =
+    std::pin::Pin<Box<dyn Stream<Item = Result<BlockHash, BlockStoreError>> + 'a>>;
+
+#[async_trait(?Send)]
 pub trait BlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError>;
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError>;
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError>;
 
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+    async fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
         let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-        self.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+        self.put_block_bytes(&serialized.hash, &serialized.bytes)
+            .await?;
         Ok(serialized.hash)
     }
 
-    fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
-        let Some(bytes) = self.get_block_bytes(block_id)? else {
+    async fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+        let Some(bytes) = self.get_block_bytes(block_id).await? else {
             return Ok(None);
         };
         deserialize_block(&bytes, block_id)
@@ -52,25 +62,34 @@ pub trait BlockStore {
             .map_err(BlockStoreError::DecodeFailure)
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError>;
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError>;
 }
 
+#[async_trait(?Send)]
 pub trait BlockStoreExt: BlockStore {
-    fn put_versioned(&self, block: &VersionedBlock) -> Result<BlockHash, BlockStoreError> {
+    async fn put_versioned(&self, block: &VersionedBlock) -> Result<BlockHash, BlockStoreError> {
         let serialized =
             serialize_versioned_block(block).map_err(BlockStoreError::ContractViolation)?;
-        self.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+        self.put_block_bytes(&serialized.hash, &serialized.bytes)
+            .await?;
         Ok(serialized.hash)
     }
 
-    fn get_decoded(&self, block_id: &BlockHash) -> Result<Option<DecodedBlock>, BlockStoreError> {
-        let Some(bytes) = self.get_block_bytes(block_id)? else {
+    async fn get_decoded(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<DecodedBlock>, BlockStoreError> {
+        let Some(bytes) = self.get_block_bytes(block_id).await? else {
             return Ok(None);
         };
 
         deserialize_versioned_block(&bytes, block_id)
             .map(Some)
             .map_err(BlockStoreError::DecodeFailure)
+    }
+
+    async fn list_block_ids(&self) -> Result<Vec<BlockHash>, BlockStoreError> {
+        self.iter_block_ids()?.try_collect().await
     }
 }
 
@@ -109,13 +128,13 @@ impl std::error::Error for BlockStoreError {
     }
 }
 
-pub type BlockIdIterator<'a> = Box<dyn Iterator<Item = Result<BlockHash, BlockStoreError>> + 'a>;
-
 #[cfg(any(test, feature = "conformance"))]
 mod conformance_support {
     use std::collections::HashSet;
     use std::fmt;
 
+    use async_trait::async_trait;
+    use futures::TryStreamExt;
     use lexongraph_block::{
         Block, BlockHash, BranchEntry, Content, EmbeddingSpec, LeafEntry, VERSION_1,
         build_branch_block, build_leaf_block, serialize_block,
@@ -123,15 +142,17 @@ mod conformance_support {
 
     use super::{BlockStore, BlockStoreError};
 
+    #[async_trait(?Send)]
     pub trait BlockStoreFactory {
         type Store: BlockStore;
 
-        fn fresh_store(&self) -> Self::Store;
+        async fn fresh_store(&self) -> Self::Store;
     }
 
     #[allow(dead_code)]
+    #[async_trait(?Send)]
     pub trait BlockStoreConformanceHarness: BlockStoreFactory {
-        fn inject_raw_bytes(
+        async fn inject_raw_bytes(
             &self,
             _store: &Self::Store,
             _block_id: &BlockHash,
@@ -175,31 +196,36 @@ mod conformance_support {
         }
     }
 
-    pub fn run_contract_suite<F>(factory: &F) -> ConformanceResult
+    pub async fn run_contract_suite<F>(factory: &F) -> ConformanceResult
     where
         F: BlockStoreFactory,
     {
-        run_round_trip_case(&factory.fresh_store())?;
-        run_idempotence_case(&factory.fresh_store())?;
-        run_missing_block_case(&factory.fresh_store())?;
-        run_enumeration_case(&factory.fresh_store())?;
+        run_round_trip_case(&factory.fresh_store().await).await?;
+        run_idempotence_case(&factory.fresh_store().await).await?;
+        run_missing_block_case(&factory.fresh_store().await).await?;
+        run_enumeration_case(&factory.fresh_store().await).await?;
         Ok(())
     }
 
-    pub fn run_full_suite<F>(factory: &F) -> ConformanceResult
+    pub async fn run_full_suite<F>(factory: &F) -> ConformanceResult
     where
         F: BlockStoreFactory,
     {
-        run_contract_suite(factory)
+        run_contract_suite(factory).await
     }
 
-    pub fn run_round_trip_case(store: &impl BlockStore) -> ConformanceResult {
+    pub async fn run_round_trip_case(store: &impl BlockStore) -> ConformanceResult {
         let block = sample_leaf_block("hello");
         let serialized = serialize_block(&block).expect("sample block must serialize");
-        store.put_block_bytes(&serialized.hash, &serialized.bytes)?;
-        let loaded = store.get_block_bytes(&serialized.hash)?.ok_or_else(|| {
-            ConformanceError::Expectation("expected stored block bytes to be present".into())
-        })?;
+        store
+            .put_block_bytes(&serialized.hash, &serialized.bytes)
+            .await?;
+        let loaded = store
+            .get_block_bytes(&serialized.hash)
+            .await?
+            .ok_or_else(|| {
+                ConformanceError::Expectation("expected stored block bytes to be present".into())
+            })?;
         if loaded != serialized.bytes {
             return Err(ConformanceError::Expectation(
                 "expected round-tripped bytes to remain unchanged".into(),
@@ -208,14 +234,14 @@ mod conformance_support {
         Ok(())
     }
 
-    pub fn run_idempotence_case(store: &impl BlockStore) -> ConformanceResult {
+    pub async fn run_idempotence_case(store: &impl BlockStore) -> ConformanceResult {
         let first = serialize_block(&sample_branch_block([0x11; 32], [0x22; 32], false))
             .expect("sample block must serialize");
         let second = serialize_block(&sample_branch_block([0x11; 32], [0x22; 32], true))
             .expect("sample block must serialize");
 
-        store.put_block_bytes(&first.hash, &first.bytes)?;
-        store.put_block_bytes(&second.hash, &second.bytes)?;
+        store.put_block_bytes(&first.hash, &first.bytes).await?;
+        store.put_block_bytes(&second.hash, &second.bytes).await?;
 
         if first.hash != second.hash {
             return Err(ConformanceError::Expectation(
@@ -223,7 +249,7 @@ mod conformance_support {
             ));
         }
 
-        let loaded = store.get_block_bytes(&first.hash)?.ok_or_else(|| {
+        let loaded = store.get_block_bytes(&first.hash).await?.ok_or_else(|| {
             ConformanceError::Expectation("expected idempotently stored bytes to be present".into())
         })?;
         if loaded != first.bytes {
@@ -232,7 +258,7 @@ mod conformance_support {
             ));
         }
 
-        let enumerated = collect_block_ids(store.iter_block_ids()?)?;
+        let enumerated = collect_block_ids(store.iter_block_ids()?).await?;
         let expected = HashSet::from([first.hash]);
         if enumerated != expected {
             return Err(ConformanceError::Expectation(format!(
@@ -244,9 +270,9 @@ mod conformance_support {
         Ok(())
     }
 
-    pub fn run_missing_block_case(store: &impl BlockStore) -> ConformanceResult {
+    pub async fn run_missing_block_case(store: &impl BlockStore) -> ConformanceResult {
         let missing = BlockHash::from_bytes([0x55; 32]);
-        let loaded = store.get_block_bytes(&missing)?;
+        let loaded = store.get_block_bytes(&missing).await?;
         if loaded.is_some() {
             return Err(ConformanceError::Expectation(format!(
                 "expected missing block {missing} to return Ok(None)"
@@ -255,7 +281,7 @@ mod conformance_support {
         Ok(())
     }
 
-    pub fn run_enumeration_case(store: &impl BlockStore) -> ConformanceResult {
+    pub async fn run_enumeration_case(store: &impl BlockStore) -> ConformanceResult {
         let first =
             serialize_block(&sample_leaf_block("first")).expect("sample block must serialize");
         let second =
@@ -264,11 +290,13 @@ mod conformance_support {
             .expect("sample block must serialize");
 
         for serialized in [&first, &second, &branch] {
-            store.put_block_bytes(&serialized.hash, &serialized.bytes)?;
+            store
+                .put_block_bytes(&serialized.hash, &serialized.bytes)
+                .await?;
         }
 
         let expected = HashSet::from([first.hash, second.hash, branch.hash]);
-        let enumerated = collect_block_ids(store.iter_block_ids()?)?;
+        let enumerated = collect_block_ids(store.iter_block_ids()?).await?;
 
         if enumerated != expected {
             return Err(ConformanceError::Expectation(format!(
@@ -280,10 +308,11 @@ mod conformance_support {
         Ok(())
     }
 
-    fn collect_block_ids(
-        iter: super::BlockIdIterator<'_>,
+    async fn collect_block_ids(
+        iter: super::BlockIdStream<'_>,
     ) -> Result<HashSet<BlockHash>, ConformanceError> {
-        iter.collect::<Result<HashSet<_>, _>>()
+        iter.try_collect::<HashSet<_>>()
+            .await
             .map_err(ConformanceError::from)
     }
 
@@ -318,28 +347,33 @@ mod conformance_support {
     }
 
     #[cfg(test)]
-    pub(super) fn persist_leaf_blocks_for_indexing(
+    pub(super) async fn persist_leaf_blocks_for_indexing(
         store: &dyn BlockStore,
         blocks: &[Block],
     ) -> Result<Vec<BlockHash>, BlockStoreError> {
-        blocks.iter().map(|block| store.put(block)).collect()
+        let mut persisted = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            persisted.push(store.put(block).await?);
+        }
+        Ok(persisted)
     }
 
     #[cfg(test)]
-    pub(super) fn resolve_blocks_for_search(
+    pub(super) async fn resolve_blocks_for_search(
         store: &dyn BlockStore,
         block_ids: &[BlockHash],
     ) -> Result<Vec<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        block_ids
-            .iter()
-            .map(|block_id| {
-                let bytes = store.get_block_bytes(block_id)?.ok_or_else(|| {
-                    BlockStoreError::BackendFailure(format!("missing block {block_id}"))
-                })?;
+        let mut resolved = Vec::with_capacity(block_ids.len());
+        for block_id in block_ids {
+            let bytes = store.get_block_bytes(block_id).await?.ok_or_else(|| {
+                BlockStoreError::BackendFailure(format!("missing block {block_id}"))
+            })?;
+            resolved.push(
                 lexongraph_block::deserialize_block(&bytes, block_id)
-                    .map_err(BlockStoreError::DecodeFailure)
-            })
-            .collect()
+                    .map_err(BlockStoreError::DecodeFailure)?,
+            );
+        }
+        Ok(resolved)
     }
 
     pub(super) fn embedding_spec(encoding: &str) -> EmbeddingSpec {
@@ -391,6 +425,8 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
 
+    use async_trait::async_trait;
+    use futures::{StreamExt, TryStreamExt, executor::block_on, stream};
     use lexongraph_block::{
         Block, BlockHash, VERSION_1, build_branch_block, deserialize_block, serialize_block,
     };
@@ -413,8 +449,9 @@ mod tests {
         }
     }
 
+    #[async_trait(?Send)]
     impl BlockStore for MemoryBlockStore {
-        fn put_block_bytes(
+        async fn put_block_bytes(
             &self,
             block_id: &BlockHash,
             block_bytes: &[u8],
@@ -425,25 +462,26 @@ mod tests {
             Ok(())
         }
 
-        fn get_block_bytes(
+        async fn get_block_bytes(
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
             Ok(self.blocks.borrow().get(block_id).cloned())
         }
 
-        fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
             let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
-            Ok(Box::new(block_ids.into_iter().map(Ok)))
+            Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
         }
     }
 
     struct MemoryHarness;
 
+    #[async_trait(?Send)]
     impl BlockStoreFactory for MemoryHarness {
         type Store = MemoryBlockStore;
 
-        fn fresh_store(&self) -> Self::Store {
+        async fn fresh_store(&self) -> Self::Store {
             MemoryBlockStore::default()
         }
     }
@@ -453,8 +491,9 @@ mod tests {
         blocks: RefCell<HashMap<String, Vec<u8>>>,
     }
 
+    #[async_trait(?Send)]
     impl BlockStore for HexKeyMemoryBlockStore {
-        fn put_block_bytes(
+        async fn put_block_bytes(
             &self,
             block_id: &BlockHash,
             block_bytes: &[u8],
@@ -465,14 +504,14 @@ mod tests {
             Ok(())
         }
 
-        fn get_block_bytes(
+        async fn get_block_bytes(
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
             Ok(self.blocks.borrow().get(&block_id.to_string()).cloned())
         }
 
-        fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
             let block_ids = self
                 .blocks
                 .borrow()
@@ -486,7 +525,7 @@ mod tests {
                     Ok(BlockHash::from_bytes(bytes))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(Box::new(block_ids.into_iter().map(Ok)))
+            Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
         }
     }
 
@@ -495,23 +534,24 @@ mod tests {
         inner: MemoryBlockStore,
     }
 
+    #[async_trait(?Send)]
     impl BlockStore for MidstreamFailingEnumerationStore {
-        fn put_block_bytes(
+        async fn put_block_bytes(
             &self,
             block_id: &BlockHash,
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
-            self.inner.put_block_bytes(block_id, block_bytes)
+            self.inner.put_block_bytes(block_id, block_bytes).await
         }
 
-        fn get_block_bytes(
+        async fn get_block_bytes(
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            self.inner.get_block_bytes(block_id)
+            self.inner.get_block_bytes(block_id).await
         }
 
-        fn iter_block_ids(&self) -> Result<super::BlockIdIterator<'_>, BlockStoreError> {
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
             let block_ids = self
                 .inner
                 .blocks
@@ -520,12 +560,12 @@ mod tests {
                 .copied()
                 .collect::<Vec<_>>();
             let failure = BlockStoreError::BackendFailure("enumeration interrupted".into());
-            Ok(Box::new(
+            Ok(Box::pin(stream::iter(
                 block_ids
                     .into_iter()
                     .map(Ok)
                     .chain(std::iter::once(Err(failure))),
-            ))
+            )))
         }
     }
 
@@ -533,14 +573,14 @@ mod tests {
     fn val_store_001_put_then_get_round_trips_a_valid_block() {
         let store = MemoryBlockStore::default();
 
-        run_round_trip_case(&store).unwrap();
+        block_on(run_round_trip_case(&store)).unwrap();
     }
 
     #[test]
     fn val_store_002_put_is_idempotent_for_logically_identical_blocks() {
         let store = MemoryBlockStore::default();
 
-        run_idempotence_case(&store).unwrap();
+        block_on(run_idempotence_case(&store)).unwrap();
         assert_eq!(store.len(), 1);
     }
 
@@ -548,16 +588,16 @@ mod tests {
     fn val_store_003_missing_blocks_return_ok_none() {
         let store = MemoryBlockStore::default();
 
-        run_missing_block_case(&store).unwrap();
+        block_on(run_missing_block_case(&store)).unwrap();
     }
 
     #[test]
     fn val_store_006_indexing_consumers_can_persist_blocks_without_backend_specifics() {
         let store = MemoryBlockStore::default();
-        let child_ids = persist_leaf_blocks_for_indexing(
+        let child_ids = block_on(persist_leaf_blocks_for_indexing(
             &store,
             &[sample_leaf_block("left"), sample_leaf_block("right")],
-        )
+        ))
         .unwrap();
 
         let branch = build_branch_block(
@@ -571,9 +611,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let branch_id = store.put(&Block::Branch(branch)).unwrap();
+        let branch_id = block_on(store.put(&Block::Branch(branch))).unwrap();
 
-        assert!(store.get(&branch_id).unwrap().is_some());
+        assert!(block_on(store.get(&branch_id)).unwrap().is_some());
     }
 
     #[test]
@@ -581,8 +621,8 @@ mod tests {
         let store = MemoryBlockStore::default();
         let first_leaf = sample_leaf_block("left");
         let second_leaf = sample_leaf_block("right");
-        let first_id = store.put(&first_leaf).unwrap();
-        let second_id = store.put(&second_leaf).unwrap();
+        let first_id = block_on(store.put(&first_leaf)).unwrap();
+        let second_id = block_on(store.put(&second_leaf)).unwrap();
 
         let root = Block::Branch(
             build_branch_block(
@@ -597,9 +637,13 @@ mod tests {
             )
             .unwrap(),
         );
-        let root_id = store.put(&root).unwrap();
+        let root_id = block_on(store.put(&root)).unwrap();
 
-        let resolved = resolve_blocks_for_search(&store, &[root_id, first_id, second_id]).unwrap();
+        let resolved = block_on(resolve_blocks_for_search(
+            &store,
+            &[root_id, first_id, second_id],
+        ))
+        .unwrap();
 
         assert_eq!(resolved.len(), 3);
         assert_eq!(resolved[0].hash, root_id);
@@ -613,63 +657,65 @@ mod tests {
         let hex_store = HexKeyMemoryBlockStore::default();
         let block = sample_leaf_block("shared contract");
 
-        let hash_id = store_and_reload(&hash_store, &block).unwrap();
-        let hex_id = store_and_reload(&hex_store, &block).unwrap();
+        let hash_id = block_on(store_and_reload(&hash_store, &block)).unwrap();
+        let hex_id = block_on(store_and_reload(&hex_store, &block)).unwrap();
 
         assert_eq!(hash_id, hex_id);
     }
 
     #[test]
     fn val_store_009_internal_memory_store_supports_contract_tests() {
-        run_full_suite(&MemoryHarness).unwrap();
+        block_on(run_full_suite(&MemoryHarness)).unwrap();
     }
 
     #[test]
     fn val_store_010_public_surface_is_limited_to_the_contract() {
-        fn uses_only_public_contract(
+        async fn uses_only_public_contract(
             store: &dyn BlockStore,
             block: &Block,
             block_id: &BlockHash,
         ) -> Result<(), BlockStoreError> {
             let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
-            store.put_block_bytes(&serialized.hash, &serialized.bytes)?;
-            let _ = store.get_block_bytes(block_id)?;
-            let _ = store.iter_block_ids()?.collect::<Result<Vec<_>, _>>()?;
+            store
+                .put_block_bytes(&serialized.hash, &serialized.bytes)
+                .await?;
+            let _ = store.get_block_bytes(block_id).await?;
+            let _ = store.iter_block_ids()?.try_collect::<Vec<_>>().await?;
             Ok(())
         }
 
         let store = MemoryBlockStore::default();
         let block = sample_leaf_block("public");
-        let block_id = store.put(&block).unwrap();
+        let block_id = block_on(store.put(&block)).unwrap();
 
-        uses_only_public_contract(&store, &block, &block_id).unwrap();
+        block_on(uses_only_public_contract(&store, &block, &block_id)).unwrap();
     }
 
     #[test]
     fn val_store_013_enumeration_streams_the_stored_block_ids() {
         let store = MemoryBlockStore::default();
 
-        run_enumeration_case(&store).unwrap();
+        block_on(run_enumeration_case(&store)).unwrap();
     }
 
     #[test]
     fn val_store_014_callers_can_classify_enumerated_ids_via_get() {
         let store = MemoryBlockStore::default();
-        let leaf_id = store.put(&sample_leaf_block("leaf")).unwrap();
+        let leaf_id = block_on(store.put(&sample_leaf_block("leaf"))).unwrap();
         let branch = match sample_branch_block([0x22; 32], leaf_id.into_bytes(), false) {
             Block::Branch(branch) => branch,
             Block::Leaf(_) => unreachable!("sample_branch_block must return a branch block"),
         };
-        let branch_id = store.put(&Block::Branch(branch)).unwrap();
+        let branch_id = block_on(store.put(&Block::Branch(branch))).unwrap();
 
-        let enumerated = collect_block_ids(store.iter_block_ids().unwrap()).unwrap();
+        let enumerated = block_on(collect_block_ids(store.iter_block_ids().unwrap())).unwrap();
 
         assert_eq!(enumerated, HashSet::from([leaf_id, branch_id]));
 
         let mut leaf_count = 0;
         let mut branch_count = 0;
         for block_id in enumerated {
-            let bytes = store.get_block_bytes(&block_id).unwrap().unwrap();
+            let bytes = block_on(store.get_block_bytes(&block_id)).unwrap().unwrap();
             match deserialize_block(&bytes, &block_id).unwrap().block {
                 Block::Leaf(_) => leaf_count += 1,
                 Block::Branch(_) => branch_count += 1,
@@ -687,18 +733,18 @@ mod tests {
         let branch = sample_branch_block([0x33; 32], [0x44; 32], false);
 
         let expected = HashSet::from([
-            hash_store.put(&leaf).unwrap(),
-            hash_store.put(&branch).unwrap(),
+            block_on(hash_store.put(&leaf)).unwrap(),
+            block_on(hash_store.put(&branch)).unwrap(),
         ]);
-        hex_store.put(&leaf).unwrap();
-        hex_store.put(&branch).unwrap();
+        block_on(hex_store.put(&leaf)).unwrap();
+        block_on(hex_store.put(&branch)).unwrap();
 
         assert_eq!(
-            collect_block_ids(hash_store.iter_block_ids().unwrap()).unwrap(),
+            block_on(collect_block_ids(hash_store.iter_block_ids().unwrap())).unwrap(),
             expected
         );
         assert_eq!(
-            collect_block_ids(hex_store.iter_block_ids().unwrap()).unwrap(),
+            block_on(collect_block_ids(hex_store.iter_block_ids().unwrap())).unwrap(),
             expected
         );
     }
@@ -706,12 +752,12 @@ mod tests {
     #[test]
     fn val_store_016_enumeration_failures_are_explicit() {
         let store = MidstreamFailingEnumerationStore::default();
-        let block_id = store.put(&sample_leaf_block("midstream")).unwrap();
+        let block_id = block_on(store.put(&sample_leaf_block("midstream"))).unwrap();
         let mut iter = store.iter_block_ids().unwrap();
 
-        assert_eq!(iter.next().unwrap().unwrap(), block_id);
+        assert_eq!(block_on(iter.next()).unwrap().unwrap(), block_id);
         assert_eq!(
-            iter.next().unwrap().unwrap_err(),
+            block_on(iter.next()).unwrap().unwrap_err(),
             BlockStoreError::BackendFailure("enumeration interrupted".into())
         );
     }
@@ -727,27 +773,28 @@ mod tests {
             ext: None,
         });
 
-        let error = store.put(&invalid).unwrap_err();
+        let error = block_on(store.put(&invalid)).unwrap_err();
 
         assert!(matches!(error, BlockStoreError::ContractViolation(_)));
     }
 
-    fn store_and_reload(
+    async fn store_and_reload(
         store: &dyn BlockStore,
         block: &Block,
     ) -> Result<BlockHash, BlockStoreError> {
-        let block_id = store.put(block)?;
+        let block_id = store.put(block).await?;
         let loaded = store
-            .get(&block_id)?
+            .get(&block_id)
+            .await?
             .expect("stored block should be present");
         assert_eq!(loaded.block, *block);
         Ok(block_id)
     }
 
-    fn collect_block_ids(
-        iter: super::BlockIdIterator<'_>,
+    async fn collect_block_ids(
+        iter: super::BlockIdStream<'_>,
     ) -> Result<HashSet<BlockHash>, BlockStoreError> {
-        iter.collect::<Result<HashSet<_>, _>>()
+        iter.try_collect::<HashSet<_>>().await
     }
 
     fn decode_block_hash_hex(value: &str) -> Option<[u8; 32]> {

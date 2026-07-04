@@ -4,6 +4,7 @@
 mod support;
 
 use ciborium::value::Value as CborValue;
+use futures::StreamExt;
 use std::fs;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
@@ -486,15 +487,15 @@ fn harvested_fixture_reference(
             None,
         )
         .unwrap();
-        let block_id = store.put(&Block::Leaf(leaf)).unwrap();
+        let block_id = pollster::block_on(store.put(&Block::Leaf(leaf))).unwrap();
         leaves.push((block_id, encoded_embedding));
     }
 
     let root_block_id = if leaves.len() == 1 {
         leaves[0].0
     } else {
-        store
-            .put(&Block::Branch(
+        pollster::block_on(
+            store.put(&Block::Branch(
                 build_branch_block(
                     VERSION_1,
                     1,
@@ -509,8 +510,9 @@ fn harvested_fixture_reference(
                     None,
                 )
                 .unwrap(),
-            ))
-            .unwrap()
+            )),
+        )
+        .unwrap()
     };
 
     BlockStoreCorpusReference {
@@ -1308,7 +1310,7 @@ fn val_stream_eval_024_overlay_helper_refills_the_mutable_fs_cache_without_mutat
     };
     let store = FsOverlayZipBlockStore::new(archive_path).unwrap();
     let mut iter = store.iter_block_ids().unwrap();
-    let block_id = iter.next().unwrap().unwrap();
+    let block_id = pollster::block_on(iter.next()).unwrap().unwrap();
     let new_block = Block::Leaf(
         build_leaf_block(
             VERSION_1,
@@ -1333,33 +1335,33 @@ fn val_stream_eval_024_overlay_helper_refills_the_mutable_fs_cache_without_mutat
     );
     let new_block_id = serialize_block(&new_block).unwrap().hash;
 
-    assert!(store.put(&new_block).is_err());
+    assert!(pollster::block_on(store.put(&new_block)).is_err());
     assert!(
-        FilesystemBlockStore::new(store.cache_layer_path())
-            .unwrap()
-            .get(&new_block_id)
+        pollster::block_on(
+            FilesystemBlockStore::new(store.cache_layer_path())
+                .unwrap()
+                .get(&new_block_id)
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        pollster::block_on(ZipBlockStore::new(archive_path).unwrap().get(&new_block_id))
             .unwrap()
             .is_none()
     );
+    assert!(pollster::block_on(store.get(&block_id)).unwrap().is_some());
     assert!(
-        ZipBlockStore::new(archive_path)
-            .unwrap()
-            .get(&new_block_id)
-            .unwrap()
-            .is_none()
-    );
-    assert!(store.get(&block_id).unwrap().is_some());
-    assert!(
-        FilesystemBlockStore::new(store.cache_layer_path())
-            .unwrap()
-            .get(&block_id)
-            .unwrap()
-            .is_some()
+        pollster::block_on(
+            FilesystemBlockStore::new(store.cache_layer_path())
+                .unwrap()
+                .get(&block_id)
+        )
+        .unwrap()
+        .is_some()
     );
     assert!(
-        ZipBlockStore::new(archive_path)
-            .unwrap()
-            .get(&block_id)
+        pollster::block_on(ZipBlockStore::new(archive_path).unwrap().get(&block_id))
             .unwrap()
             .is_some()
     );

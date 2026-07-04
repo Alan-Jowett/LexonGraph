@@ -5,6 +5,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use azure_core::error::ErrorKind;
 use azure_core::http::{
     ClientOptions, ExponentialRetryOptions, RequestContent, RetryOptions, StatusCode, Url,
@@ -15,14 +16,10 @@ use azure_storage_blob::models::{BlockBlobClientUploadOptions, StorageErrorCode}
 use azure_storage_blob::{BlobClient, BlobContainerClient};
 use futures::TryStreamExt;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
-use tokio::runtime::{Builder, Runtime};
-use tokio::sync::mpsc::{self, Receiver};
-use tokio::task::JoinHandle;
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
-    runtime: Arc<Runtime>,
     container_client: Arc<BlobContainerClient>,
     container_display: String,
 }
@@ -50,18 +47,7 @@ impl AzureBlobBlockStore {
                 describe_azure_error(&error)
             ))
         })?;
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| {
-                backend_failure(format!(
-                    "failed to prepare Azure runtime for container {}: {error}",
-                    container_display
-                ))
-            })?;
-
         Ok(Self {
-            runtime: Arc::new(runtime),
             container_client: Arc::new(container_client),
             container_display,
         })
@@ -93,8 +79,9 @@ impl AzureBlobBlockStore {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStore for AzureBlobBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -104,8 +91,9 @@ impl BlockStore for AzureBlobBlockStore {
         let content = RequestContent::from(block_bytes.to_vec());
         let options = BlockBlobClientUploadOptions::default().if_not_exists();
 
-        self.runtime
-            .block_on(async { blob_client.upload(content, Some(options)).await })
+        blob_client
+            .upload(content, Some(options))
+            .await
             .map(|_| ())
             .or_else(
                 |error| match (error.http_status(), storage_error_code(&error)) {
@@ -127,118 +115,66 @@ impl BlockStore for AzureBlobBlockStore {
             )
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
         let blob_client = self.blob_client(&blob_name);
 
-        self.runtime.block_on(async {
-            let response = match blob_client.download(None).await {
-                Ok(response) => response,
-                Err(error)
-                    if storage_error_code(&error) == Some(StorageErrorCode::BlobNotFound) =>
-                {
-                    return Ok(None);
-                }
-                Err(error) => {
-                    return Err(backend_failure(format!(
-                        "failed to read block {} from blob {} in container {}: {}",
-                        block_id,
-                        blob_name,
-                        self.container_display,
-                        describe_azure_error(&error)
-                    )));
-                }
-            };
-            let body = response.body.collect().await.map_err(|error| {
-                backend_failure(format!(
+        let response = match blob_client.download(None).await {
+            Ok(response) => response,
+            Err(error) if storage_error_code(&error) == Some(StorageErrorCode::BlobNotFound) => {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(backend_failure(format!(
                     "failed to read block {} from blob {} in container {}: {}",
                     block_id,
                     blob_name,
                     self.container_display,
                     describe_azure_error(&error)
-                ))
-            })?;
-            Ok(Some(body.to_vec()))
-        })
-    }
-
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        let container_client = Arc::clone(&self.container_client);
-        let container_display = self.container_display.clone();
-        let (sender, receiver) = mpsc::channel(32);
-        let join_handle = self.runtime.spawn(async move {
-            let mut blobs = match container_client.list_blobs(None) {
-                Ok(blobs) => blobs,
-                Err(error) => {
-                    let _ = sender
-                        .send(Err(backend_failure(format!(
-                            "failed to list Azure container {}: {}",
-                            container_display,
-                            describe_azure_error(&error)
-                        ))))
-                        .await;
-                    return;
-                }
-            };
-            loop {
-                let next = match blobs.try_next().await {
-                    Ok(next) => next,
-                    Err(error) => {
-                        let _ = sender
-                            .send(Err(backend_failure(format!(
-                                "failed to list Azure container {}: {}",
-                                container_display,
-                                describe_azure_error(&error)
-                            ))))
-                            .await;
-                        return;
-                    }
-                };
-                let Some(blob) = next else {
-                    return;
-                };
-                let name = match blob.name {
-                    Some(name) => name,
-                    None => continue,
-                };
-                match decode_recognized_block_blob_name(&name) {
-                    Ok(Some(block_id)) => {
-                        if sender.send(Ok(block_id)).await.is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        let _ = sender.send(Err(backend_failure(error))).await;
-                        return;
-                    }
-                }
+                )));
             }
-        });
-
-        Ok(Box::new(AzureBlockIdIterator {
-            receiver,
-            join_handle,
-        }))
+        };
+        let body = response.body.collect().await.map_err(|error| {
+            backend_failure(format!(
+                "failed to read block {} from blob {} in container {}: {}",
+                block_id,
+                blob_name,
+                self.container_display,
+                describe_azure_error(&error)
+            ))
+        })?;
+        Ok(Some(body.to_vec()))
     }
-}
 
-struct AzureBlockIdIterator {
-    receiver: Receiver<Result<BlockHash, BlockStoreError>>,
-    join_handle: JoinHandle<()>,
-}
-
-impl Iterator for AzureBlockIdIterator {
-    type Item = Result<BlockHash, BlockStoreError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.receiver.blocking_recv()
-    }
-}
-
-impl Drop for AzureBlockIdIterator {
-    fn drop(&mut self) {
-        self.join_handle.abort();
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+        let blobs = self.container_client.list_blobs(None).map_err(|error| {
+            backend_failure(format!(
+                "failed to list Azure container {}: {}",
+                self.container_display,
+                describe_azure_error(&error)
+            ))
+        })?;
+        let container_display = self.container_display.clone();
+        Ok(Box::pin(
+            blobs
+                .map_err(move |error| {
+                    backend_failure(format!(
+                        "failed to list Azure container {}: {}",
+                        container_display,
+                        describe_azure_error(&error)
+                    ))
+                })
+                .and_then(|blob| async move {
+                    let Some(name) = blob.name else {
+                        return Ok(None);
+                    };
+                    decode_recognized_block_blob_name(&name).map_err(backend_failure)
+                })
+                .try_filter_map(async move |block_id| Ok(block_id)),
+        ))
     }
 }
 

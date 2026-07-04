@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+use async_trait::async_trait;
+use futures::executor::block_on;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_contract_suite, run_full_suite,
@@ -18,30 +20,33 @@ struct HarnessStore {
     lower: SharedMemoryBlockStore,
 }
 
+#[async_trait(?Send)]
 impl BlockStore for HarnessStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.overlay.put_block_bytes(block_id, block_bytes)
+        self.overlay.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        self.overlay.get_block_bytes(block_id)
-    }
-
-    fn iter_block_ids(
+    async fn get_block_bytes(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.overlay.get_block_bytes(block_id).await
+    }
+
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.overlay.iter_block_ids()
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreFactory for OverlayHarness {
     type Store = HarnessStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         let high = SharedMemoryBlockStore::default();
         let low = SharedMemoryBlockStore::default();
         let overlay = OverlayBlockStore::new(vec![
@@ -57,8 +62,9 @@ impl BlockStoreFactory for OverlayHarness {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for OverlayHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,
@@ -71,10 +77,10 @@ impl BlockStoreConformanceHarness for OverlayHarness {
 
 #[test]
 fn downstream_crates_can_run_the_contract_suite() {
-    run_contract_suite(&OverlayHarness).unwrap();
+    block_on(run_contract_suite(&OverlayHarness)).unwrap();
 }
 
 #[test]
 fn downstream_crates_can_run_the_full_suite() {
-    run_full_suite(&OverlayHarness).unwrap();
+    block_on(run_full_suite(&OverlayHarness)).unwrap();
 }

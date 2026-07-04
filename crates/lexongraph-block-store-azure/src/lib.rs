@@ -9,8 +9,10 @@ use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 
+use async_trait::async_trait;
+use futures::stream;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use quick_xml::de::from_str;
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -314,8 +316,9 @@ impl AzureBlobBlockStore {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStore for AzureBlobBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -406,7 +409,10 @@ impl BlockStore for AzureBlobBlockStore {
         )))
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
         let bytes = self
             .fetch_blob_bytes("read", Some(block_id), &blob_name)
@@ -423,8 +429,8 @@ impl BlockStore for AzureBlobBlockStore {
         Ok(Some(bytes))
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        Ok(Box::new(AzureBlockIdIterator::new(self)))
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+        Ok(Box::pin(stream::iter(AzureBlockIdIterator::new(self))))
     }
 }
 

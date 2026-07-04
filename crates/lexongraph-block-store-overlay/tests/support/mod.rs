@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+use futures::stream;
 use lexongraph_block::{
     Block, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
 };
@@ -19,8 +21,9 @@ impl SharedMemoryBlockStore {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStore for SharedMemoryBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -32,13 +35,14 @@ impl BlockStore for SharedMemoryBlockStore {
         Ok(())
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         let block_ids = self
             .blocks
             .lock()
@@ -46,7 +50,7 @@ impl BlockStore for SharedMemoryBlockStore {
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        Ok(Box::new(block_ids.into_iter().map(Ok)))
+        Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
 }
 

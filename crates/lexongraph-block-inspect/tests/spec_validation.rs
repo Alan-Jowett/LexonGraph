@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -11,6 +12,17 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreExt};
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use serde_json::Value;
+
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
 
 #[test]
 fn val_inspect_001_and_012_repository_includes_crate_and_verification_artifacts() {

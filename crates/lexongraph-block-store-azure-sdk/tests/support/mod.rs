@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use futures::TryStreamExt;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 
@@ -218,9 +219,20 @@ impl MockAzureServerInner {
 }
 
 pub fn collect_block_ids(
-    iter: lexongraph_block_store::BlockIdIterator<'_>,
+    iter: lexongraph_block_store::BlockIdStream<'_>,
 ) -> Result<HashSet<BlockHash>, lexongraph_block_store::BlockStoreError> {
-    iter.collect()
+    run_in_tokio_runtime(iter.try_collect())
+}
+
+pub fn run_in_tokio_runtime<F>(future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(future)
 }
 
 fn run_server(listener: TcpListener, inner: Arc<MockAzureServerInner>) {

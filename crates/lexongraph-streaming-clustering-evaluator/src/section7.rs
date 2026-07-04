@@ -1238,7 +1238,7 @@ where
     EC: EmbeddingCompatibility<Target>,
     CS: CandidateScorer<Target>,
 {
-    let Some(validated) = context.store.get(&block_id).map_err(|error| {
+    let Some(validated) = pollster::block_on(context.store.get(&block_id)).map_err(|error| {
         EvaluatorError::InvalidConfiguration(format!(
             "section-7 greedy routing failed to load block {block_id}: {error}"
         ))

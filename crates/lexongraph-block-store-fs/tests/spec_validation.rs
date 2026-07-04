@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 use std::collections::HashSet;
+use std::future::Future;
 #[cfg(feature = "inject")]
 use std::io;
 #[cfg(feature = "inject")]
@@ -10,6 +11,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 
+use async_trait::async_trait;
+use futures::TryStreamExt;
 use lexongraph_block::{
     Block, BlockError, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
     compute_block_hash, serialize_block,
@@ -24,6 +27,25 @@ use lexongraph_block_store_fs::inject::{FsOps, StagedFile};
 #[cfg(feature = "inject")]
 use tempfile::NamedTempFile;
 use tempfile::TempDir;
+
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+
+    fn unwrap_err(self) -> E
+    where
+        T: std::fmt::Debug,
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap_err()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
 
 #[test]
 fn val_fs_store_001_002_009_constructor_and_publish_path_are_deterministic() {
@@ -186,7 +208,7 @@ fn val_fs_store_008_concurrent_same_block_publishers_converge() {
         let barrier = Arc::clone(&barrier);
         threads.push(std::thread::spawn(move || {
             barrier.wait();
-            store.put(block.as_ref())
+            pollster::block_on(store.put(block.as_ref()))
         }));
     }
 
@@ -201,7 +223,7 @@ fn val_fs_store_008_concurrent_same_block_publishers_converge() {
 
 #[test]
 fn val_fs_store_010_parent_conformance_requirements_are_realized_by_tests() {
-    run_full_suite(&FilesystemHarness::default()).unwrap();
+    pollster::block_on(run_full_suite(&FilesystemHarness::default())).unwrap();
 }
 
 #[test]
@@ -248,11 +270,8 @@ fn val_fs_store_021_path_decoding_failures_are_explicit_during_enumeration() {
     std::fs::create_dir_all(malformed_path.parent().unwrap()).unwrap();
     std::fs::write(&malformed_path, b"malformed candidate").unwrap();
 
-    let error = store
-        .iter_block_ids()
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_err();
+    let error = store.iter_block_ids().unwrap().try_collect::<Vec<_>>();
+    let error = pollster::block_on(error).unwrap_err();
 
     expect_backend_failure_contains(error, "failed to decode an enumerated block ID candidate");
 }
@@ -454,9 +473,9 @@ fn shard_filenames(path: &Path) -> Vec<String> {
 }
 
 fn collect_block_ids(
-    iter: lexongraph_block_store::BlockIdIterator<'_>,
+    iter: lexongraph_block_store::BlockIdStream<'_>,
 ) -> Result<HashSet<BlockHash>, BlockStoreError> {
-    iter.collect::<Result<HashSet<_>, _>>()
+    pollster::block_on(iter.try_collect::<HashSet<_>>())
 }
 
 #[cfg(feature = "inject")]
@@ -739,30 +758,33 @@ struct HarnessStore {
     root: PathBuf,
 }
 
+#[async_trait(?Send)]
 impl BlockStore for HarnessStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.inner.put_block_bytes(block_id, block_bytes)
+        self.inner.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        self.inner.get_block_bytes(block_id)
-    }
-
-    fn iter_block_ids(
+    async fn get_block_bytes(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id).await
+    }
+
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.inner.iter_block_ids()
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreFactory for FilesystemHarness {
     type Store = HarnessStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         let root = tempfile::tempdir().unwrap();
         let store = HarnessStore {
             inner: FilesystemBlockStore::new(root.path()).unwrap(),
@@ -773,8 +795,9 @@ impl BlockStoreFactory for FilesystemHarness {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for FilesystemHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,

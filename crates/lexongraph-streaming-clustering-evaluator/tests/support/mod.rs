@@ -679,7 +679,7 @@ fn write_corpus(
         )
         .unwrap();
         let block = Block::Leaf(leaf);
-        let block_id = store.put(&block).unwrap();
+        let block_id = pollster::block_on(store.put(&block)).unwrap();
         leaves.push((block_id, encode_embedding(&entity.embedding)));
     }
 
@@ -700,7 +700,7 @@ fn write_corpus(
             None,
         )
         .unwrap();
-        store.put(&Block::Branch(root)).unwrap()
+        pollster::block_on(store.put(&Block::Branch(root))).unwrap()
     };
 
     BlockStoreCorpusReference {

@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+use futures::stream;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 
 #[derive(Clone)]
 pub struct MemoryBlockStore {
@@ -122,8 +124,9 @@ impl State {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStore for MemoryBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -132,7 +135,10 @@ impl BlockStore for MemoryBlockStore {
         Ok(())
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let bytes = {
             let state = self.state.lock().unwrap();
             let Some(entry) = state.entries.get(block_id) else {
@@ -145,7 +151,7 @@ impl BlockStore for MemoryBlockStore {
         Ok(Some(bytes))
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
         let block_ids = self
             .state
             .lock()
@@ -154,6 +160,6 @@ impl BlockStore for MemoryBlockStore {
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        Ok(Box::new(block_ids.into_iter().map(Ok)))
+        Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
 }

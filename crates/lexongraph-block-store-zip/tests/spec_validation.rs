@@ -2,9 +2,11 @@
 // Copyright (c) 2026 LexonGraph contributors
 use std::collections::HashSet;
 use std::fs::File;
+use std::future::Future;
 use std::io::Write;
 use std::path::Path;
 
+use futures::TryStreamExt;
 use lexongraph_block::{
     Block, BlockError, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
     compute_block_hash, serialize_block,
@@ -15,6 +17,25 @@ use zip::CompressionMethod;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+
+    fn unwrap_err(self) -> E
+    where
+        T: std::fmt::Debug,
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap_err()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
+
 #[test]
 fn val_zip_store_001_constructor_accepts_an_accessible_zip_archive() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -23,7 +44,12 @@ fn val_zip_store_001_constructor_accepts_an_accessible_zip_archive() {
 
     let store = ZipBlockStore::new(&archive_path).unwrap();
 
-    assert_eq!(store.iter_block_ids().unwrap().count(), 0);
+    assert_eq!(
+        pollster::block_on(store.iter_block_ids().unwrap().try_collect::<Vec<_>>())
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -448,9 +474,9 @@ fn write_zip64_archive_with_duplicate_entry(path: &Path, entry_name: &str, bytes
 }
 
 fn collect_block_ids(
-    iter: lexongraph_block_store::BlockIdIterator<'_>,
+    iter: lexongraph_block_store::BlockIdStream<'_>,
 ) -> Result<HashSet<BlockHash>, BlockStoreError> {
-    iter.collect::<Result<HashSet<_>, _>>()
+    pollster::block_on(iter.try_collect::<HashSet<_>>())
 }
 
 fn replace_all_bytes(buffer: &mut [u8], needle: &[u8], replacement: &[u8]) {

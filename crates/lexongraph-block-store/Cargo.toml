@@ -11,5 +11,6 @@ edition = "2024"
 conformance = []
 
 [dependencies]
+async-trait = "0.1"
+futures = "0.3"
 lexongraph-block = { path = "../lexongraph-block" }
-

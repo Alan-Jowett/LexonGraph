@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use async_trait::async_trait;
+use futures::executor::block_on;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_contract_suite, run_full_suite,
@@ -22,30 +24,33 @@ struct HarnessStore {
     root: PathBuf,
 }
 
+#[async_trait(?Send)]
 impl BlockStore for HarnessStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.inner.put_block_bytes(block_id, block_bytes)
+        self.inner.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        self.inner.get_block_bytes(block_id)
-    }
-
-    fn iter_block_ids(
+    async fn get_block_bytes(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id).await
+    }
+
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.inner.iter_block_ids()
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreFactory for FilesystemHarness {
     type Store = HarnessStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         let root = tempfile::tempdir().unwrap();
         let store = HarnessStore {
             inner: FilesystemBlockStore::new(root.path()).unwrap(),
@@ -56,8 +61,9 @@ impl BlockStoreFactory for FilesystemHarness {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for FilesystemHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,
@@ -71,12 +77,12 @@ impl BlockStoreConformanceHarness for FilesystemHarness {
 
 #[test]
 fn downstream_crates_can_run_the_contract_suite() {
-    run_contract_suite(&FilesystemHarness::default()).unwrap();
+    block_on(run_contract_suite(&FilesystemHarness::default())).unwrap();
 }
 
 #[test]
 fn downstream_crates_can_run_the_full_suite() {
-    run_full_suite(&FilesystemHarness::default()).unwrap();
+    block_on(run_full_suite(&FilesystemHarness::default())).unwrap();
 }
 
 fn expected_block_path(root: &std::path::Path, block_id: &BlockHash) -> std::path::PathBuf {

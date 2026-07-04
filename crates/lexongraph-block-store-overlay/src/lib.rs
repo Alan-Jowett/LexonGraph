@@ -10,8 +10,10 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use async_trait::async_trait;
+use futures::{StreamExt, stream};
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayLayerRole {
@@ -86,20 +88,24 @@ impl<S> PassiveLayer<S> {
     }
 }
 
+#[async_trait(?Send)]
 impl<S: BlockStore> BlockStore for PassiveLayer<S> {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.store.put_block_bytes(block_id, block_bytes)
+        self.store.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        self.store.get_block_bytes(block_id)
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.store.get_block_bytes(block_id).await
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
         self.store.iter_block_ids()
     }
 }
@@ -164,10 +170,15 @@ impl OverlayBlockStore {
         self.layers.len()
     }
 
-    fn refill_cache_layers(&self, hit_index: usize, block_id: &BlockHash, block_bytes: &[u8]) {
+    async fn refill_cache_layers(
+        &self,
+        hit_index: usize,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) {
         for layer in &self.layers[..hit_index] {
             if layer.role().accepts_refill() {
-                let _ = layer.put_block_bytes(block_id, block_bytes);
+                let _ = layer.put_block_bytes(block_id, block_bytes).await;
             }
         }
     }
@@ -181,8 +192,9 @@ impl fmt::Debug for OverlayBlockStore {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStore for OverlayBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -195,7 +207,7 @@ impl BlockStore for OverlayBlockStore {
                 continue;
             }
             attempted_write = true;
-            if let Err(error) = layer.put_block_bytes(block_id, block_bytes) {
+            if let Err(error) = layer.put_block_bytes(block_id, block_bytes).await {
                 last_error = Some(error);
             }
         }
@@ -212,13 +224,16 @@ impl BlockStore for OverlayBlockStore {
         }
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let mut last_error = None;
 
         for (index, layer) in self.layers.iter().enumerate() {
-            match layer.get_block_bytes(block_id) {
+            match layer.get_block_bytes(block_id).await {
                 Ok(Some(bytes)) => {
-                    self.refill_cache_layers(index, block_id, &bytes);
+                    self.refill_cache_layers(index, block_id, &bytes).await;
                     return Ok(Some(bytes));
                 }
                 Ok(None) => {}
@@ -232,81 +247,52 @@ impl BlockStore for OverlayBlockStore {
         }
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        Ok(Box::new(OverlayBlockIdIterator::new(&self.layers)?))
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+        Ok(Box::pin(overlay_block_id_stream(&self.layers)))
     }
 }
 
-struct OverlayBlockIdIterator<'a> {
+struct OverlayEnumerationState<'a> {
     layers: &'a [Box<dyn OverlayStoreLayer>],
     next_layer: usize,
-    current: Option<BlockIdIterator<'a>>,
+    current: Option<BlockIdStream<'a>>,
     seen: HashSet<BlockHash>,
-    failed: bool,
 }
 
-impl<'a> OverlayBlockIdIterator<'a> {
-    fn new(layers: &'a [Box<dyn OverlayStoreLayer>]) -> Result<Self, BlockStoreError> {
-        let mut iter = Self {
+fn overlay_block_id_stream(
+    layers: &[Box<dyn OverlayStoreLayer>],
+) -> impl futures::Stream<Item = Result<BlockHash, BlockStoreError>> + '_ {
+    stream::try_unfold(
+        OverlayEnumerationState {
             layers,
             next_layer: 0,
             current: None,
             seen: HashSet::new(),
-            failed: false,
-        };
-        iter.advance_to_next_layer()?;
-        Ok(iter)
-    }
-
-    fn advance_to_next_layer(&mut self) -> Result<(), BlockStoreError> {
-        if self.current.is_some() || self.next_layer == self.layers.len() {
-            return Ok(());
-        }
-
-        let iter = self.layers[self.next_layer].iter_block_ids()?;
-        self.current = Some(iter);
-        self.next_layer += 1;
-        Ok(())
-    }
-}
-
-impl Iterator for OverlayBlockIdIterator<'_> {
-    type Item = Result<BlockHash, BlockStoreError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.failed {
-            return None;
-        }
-
-        loop {
-            if let Some(iter) = self.current.as_mut() {
-                match iter.next() {
-                    Some(Ok(block_id)) => {
-                        if self.seen.insert(block_id) {
-                            return Some(Ok(block_id));
+        },
+        |mut state| async move {
+            loop {
+                if let Some(iter) = state.current.as_mut() {
+                    match iter.next().await {
+                        Some(Ok(block_id)) => {
+                            if state.seen.insert(block_id) {
+                                return Ok(Some((block_id, state)));
+                            }
                         }
+                        Some(Err(error)) => return Err(error),
+                        None => state.current = None,
                     }
-                    Some(Err(error)) => {
-                        self.failed = true;
-                        return Some(Err(error));
-                    }
-                    None => {
-                        self.current = None;
-                    }
+                    continue;
                 }
-                continue;
-            }
 
-            if self.next_layer == self.layers.len() {
-                return None;
-            }
+                if state.next_layer == state.layers.len() {
+                    return Ok(None);
+                }
 
-            if let Err(error) = self.advance_to_next_layer() {
-                self.failed = true;
-                return Some(Err(error));
+                state.current = Some(state.layers[state.next_layer].iter_block_ids()?);
+                state.next_layer += 1;
             }
-        }
-    }
+        },
+    )
 }
 
 fn backend_failure(message: String) -> BlockStoreError {
