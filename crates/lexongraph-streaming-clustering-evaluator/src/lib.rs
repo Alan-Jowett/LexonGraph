@@ -56,7 +56,7 @@ use tempfile::TempDir;
 
 pub use acceleration::{
     ExecutionBackendRequest, ExecutionBackendResolution, ExecutionBackendSelection,
-    execution_backend_request, with_execution_backend_request,
+    execution_backend_request, scoped_execution_backend_request, with_execution_backend_request,
 };
 pub use section4::{
     Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,

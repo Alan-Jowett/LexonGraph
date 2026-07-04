@@ -2,6 +2,8 @@
 // Copyright (c) 2026 LexonGraph contributors
 
 use std::cell::{Cell, RefCell};
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -94,8 +96,14 @@ pub fn with_execution_backend_request<T>(
     request: ExecutionBackendRequest,
     run: impl FnOnce() -> T,
 ) -> T {
-    let _scope = ExecutionBackendRequestScope::new(request);
+    let _scope = scoped_execution_backend_request(request);
     run()
+}
+
+pub fn scoped_execution_backend_request(
+    request: ExecutionBackendRequest,
+) -> ExecutionBackendRequestScope {
+    ExecutionBackendRequestScope::new(request)
 }
 
 pub fn detected_execution_backend_selection() -> ExecutionBackendSelection {
@@ -305,8 +313,9 @@ fn resolve_execution_backend_selection(
     }
 }
 
-struct ExecutionBackendRequestScope {
+pub struct ExecutionBackendRequestScope {
     previous: ExecutionBackendRequest,
+    _not_send: PhantomData<Rc<()>>,
 }
 
 impl ExecutionBackendRequestScope {
@@ -325,7 +334,10 @@ impl ExecutionBackendRequestScope {
             previous = execution_backend_request();
         });
         set_execution_backend_request_raw(request);
-        Self { previous }
+        Self {
+            previous,
+            _not_send: PhantomData,
+        }
     }
 }
 

@@ -883,25 +883,25 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
                     (*child_id, child_depth)
                 })
                 .collect::<Vec<_>>();
-            let loaded_children = future::join_all(current_round_depths.iter().map(
+            let loaded_children = match future::try_join_all(current_round_depths.iter().map(
                 |(child_id, child_depth)| async move {
-                    (
+                    Ok::<_, SearchError>((
                         *child_id,
                         *child_depth,
-                        Self::load_validated_block(store, child_id, false).await,
-                    )
+                        Self::load_validated_block(store, child_id, false).await?,
+                    ))
                 },
             ))
-            .await;
-            for (child_id, child_depth, loaded) in loaded_children {
-                let validated = match loaded {
-                    Ok(validated) => validated,
-                    Err(error) => {
-                        telemetry.finish_with_error(&error);
-                        emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
-                        return Err(error);
-                    }
-                };
+            .await
+            {
+                Ok(loaded_children) => loaded_children,
+                Err(error) => {
+                    telemetry.finish_with_error(&error);
+                    emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                    return Err(error);
+                }
+            };
+            for (child_id, child_depth, validated) in loaded_children {
                 match self.build_block_candidates(
                     &child_id,
                     target,

@@ -9,19 +9,15 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4SuiteSpec, Section5CampaignReport, Section5HierarchyContract, Section6CampaignReport,
     Section6SummaryContract, emit_campaign_artifacts, emit_section5_campaign_artifacts,
     emit_section6_campaign_artifacts, emit_section7_campaign_artifacts,
-    generate_section4_suite_assets,
-    materialize_section4_archive_from_json as materialize_section4_archive_from_json_async,
+    generate_section4_suite_assets, materialize_section4_archive_from_json,
     registered_candidate_names, registered_hierarchy_strategy_names,
     registered_packing_strategy_names, registered_section6_summary_candidate_names,
     resolve_profile_block_store_paths, resolve_registered_candidates,
     resolve_registered_hierarchy_strategies, resolve_registered_section6_summary_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
-    run_evaluation_campaign as run_evaluation_campaign_async,
-    run_section4_suite as run_section4_suite_async,
-    run_section5_campaign as run_section5_campaign_async,
-    run_section6_campaign as run_section6_campaign_async,
-    run_section7_campaign as run_section7_campaign_async, with_execution_backend_request,
-    write_campaign_artifacts, write_section4_suite_artifacts, write_section5_campaign_artifacts,
+    run_evaluation_campaign, run_section4_suite, run_section5_campaign, run_section6_campaign,
+    run_section7_campaign, scoped_execution_backend_request, write_campaign_artifacts,
+    write_section4_suite_artifacts, write_section5_campaign_artifacts,
     write_section6_campaign_artifacts, write_section7_campaign_artifacts,
 };
 
@@ -186,7 +182,9 @@ async fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -206,19 +204,21 @@ async fn run() -> Result<(), EvaluatorError> {
             }
 
             let registered_candidates = resolve_registered_candidates(&candidates)?;
-            let report = run_evaluation_campaign(&profile, &registered_candidates)?;
+            let report = run_evaluation_campaign(&profile, &registered_candidates).await?;
             let artifacts = emit_campaign_artifacts(&report)?;
             let paths = write_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::GenerateSection4Assets {
             suite,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let suite_path = suite;
             let suite = std::fs::read_to_string(&suite_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -244,7 +244,7 @@ async fn run() -> Result<(), EvaluatorError> {
                 println!("{}", generated.corpus_archive_path.display());
             }
             Ok(())
-        }),
+        }
         Command::MaterializeSection4Archive {
             input,
             output,
@@ -256,7 +256,8 @@ async fn run() -> Result<(), EvaluatorError> {
                 &output,
                 source_id.as_deref(),
                 corpus_id.as_deref(),
-            )?;
+            )
+            .await?;
             println!("{}", output.display());
             println!("{}", reference.root_block_id);
             Ok(())
@@ -266,7 +267,9 @@ async fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let manifest_path = manifest;
             let manifest = std::fs::read_to_string(&manifest_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -286,7 +289,7 @@ async fn run() -> Result<(), EvaluatorError> {
                 resolve_section4_suite_manifest_paths(&mut manifest, manifest_dir);
             }
             let candidates = resolve_registered_candidates(&candidates)?;
-            let report = run_section4_suite(&manifest, &candidates, &output_dir)?;
+            let report = run_section4_suite(&manifest, &candidates, &output_dir).await?;
             let artifacts = write_section4_suite_artifacts(&report, &output_dir)?;
             println!("{}", artifacts.suite_report_path.display());
             println!("{}", artifacts.scorecard_path.display());
@@ -295,7 +298,7 @@ async fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::RunSection5 {
             profile,
             candidates,
@@ -303,7 +306,9 @@ async fn run() -> Result<(), EvaluatorError> {
             hierarchy_strategies,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -345,14 +350,15 @@ async fn run() -> Result<(), EvaluatorError> {
                 &registered_candidates,
                 &contract,
                 &registered_strategies,
-            )?;
+            )
+            .await?;
             let artifacts = emit_section5_campaign_artifacts(&report)?;
             let paths = write_section5_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::RunSection6 {
             profile,
             section5_report,
@@ -360,7 +366,9 @@ async fn run() -> Result<(), EvaluatorError> {
             summary_candidates,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -417,21 +425,24 @@ async fn run() -> Result<(), EvaluatorError> {
                 &section5_report,
                 &contract,
                 &registered_summary_candidates,
-            )?;
+            )
+            .await?;
             let artifacts = emit_section6_campaign_artifacts(&report)?;
             let paths = write_section6_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::RunSection7 {
             profile,
             section5_report,
             section6_report,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -482,75 +493,14 @@ async fn run() -> Result<(), EvaluatorError> {
                     ))
                 })?;
 
-            let report = run_section7_campaign(&profile, &section5_report, &section6_report)?;
+            let report =
+                run_section7_campaign(&profile, &section5_report, &section6_report).await?;
             let artifacts = emit_section7_campaign_artifacts(&report)?;
             let paths = write_section7_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
     }
-}
-fn run_evaluation_campaign(
-    profile: &BenchmarkProfile,
-    candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredCandidate],
-) -> Result<lexongraph_streaming_clustering_evaluator::CampaignReport, EvaluatorError> {
-    pollster::block_on(run_evaluation_campaign_async(profile, candidates))
-}
-
-fn materialize_section4_archive_from_json(
-    input: &std::path::Path,
-    output: &std::path::Path,
-    source_id: Option<&str>,
-    corpus_id: Option<&str>,
-) -> Result<lexongraph_streaming_clustering_evaluator::BlockStoreCorpusReference, EvaluatorError> {
-    pollster::block_on(materialize_section4_archive_from_json_async(
-        input, output, source_id, corpus_id,
-    ))
-}
-
-fn run_section4_suite(
-    manifest: &Section4SuiteManifest,
-    candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredCandidate],
-    output_dir: &std::path::Path,
-) -> Result<lexongraph_streaming_clustering_evaluator::Section4SuiteRunReport, EvaluatorError> {
-    pollster::block_on(run_section4_suite_async(manifest, candidates, output_dir))
-}
-
-fn run_section5_campaign(
-    profile: &BenchmarkProfile,
-    candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredCandidate],
-    contract: &Section5HierarchyContract,
-    strategies: &[lexongraph_streaming_clustering_evaluator::RegisteredHierarchyStrategy],
-) -> Result<Section5CampaignReport, EvaluatorError> {
-    pollster::block_on(run_section5_campaign_async(
-        profile, candidates, contract, strategies,
-    ))
-}
-
-fn run_section6_campaign(
-    profile: &BenchmarkProfile,
-    section5_report: &Section5CampaignReport,
-    contract: &Section6SummaryContract,
-    summary_candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredSection6SummaryCandidate],
-) -> Result<Section6CampaignReport, EvaluatorError> {
-    pollster::block_on(run_section6_campaign_async(
-        profile,
-        section5_report,
-        contract,
-        summary_candidates,
-    ))
-}
-
-fn run_section7_campaign(
-    profile: &BenchmarkProfile,
-    section5_report: &Section5CampaignReport,
-    section6_report: &Section6CampaignReport,
-) -> Result<lexongraph_streaming_clustering_evaluator::Section7CampaignReport, EvaluatorError> {
-    pollster::block_on(run_section7_campaign_async(
-        profile,
-        section5_report,
-        section6_report,
-    ))
 }
