@@ -94,7 +94,7 @@ impl BlockStore for SlowBranchStore {
                 ..
             })
         ) {
-            thread::sleep(Duration::from_millis(250));
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         self.blocks
             .lock()

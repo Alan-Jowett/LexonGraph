@@ -6,11 +6,11 @@ use std::env;
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::OnceLock;
-use std::thread::sleep;
+use std::thread;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::stream;
+use futures::{channel::oneshot, stream};
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use quick_xml::de::from_str;
@@ -77,6 +77,123 @@ impl AzureBlobBlockStore {
         let mut url = self.container_url.clone();
         url.set_path(&format!("{}/{blob_name}", self.container_path));
         url
+    }
+
+    async fn run_blocking_io<T, F>(
+        &self,
+        operation: &'static str,
+        work: F,
+    ) -> Result<T, BlockStoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(Self) -> Result<T, BlockStoreError> + Send + 'static,
+    {
+        run_store_blocking(self.clone(), operation, work).await
+    }
+
+    fn put_block_bytes_blocking(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        let blob_name = Self::block_blob_name(block_id);
+        let blob_url = self.build_blob_url(&blob_name);
+        let response = match self.send_with_transport_retries(
+            "publish",
+            Some(block_id),
+            Some(&blob_name),
+            || {
+                self.request(Method::PUT, blob_url.clone())
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header(IF_NONE_MATCH, "*")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(block_bytes.to_vec())
+            },
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                return self.read_existing_or_map_transport_publish_error(
+                    &blob_name,
+                    block_id,
+                    block_bytes,
+                    &error,
+                );
+            }
+        };
+
+        let response_meta = response_metadata(&response);
+        if let Err(error) = response.bytes() {
+            let diagnostics = reqwest_error_diagnostics(error);
+            self.log_blob_event(
+                "response_body_read_failed",
+                "publish",
+                Some(block_id),
+                Some(&blob_name),
+                diagnostics.log_fields_with_response(&response_meta),
+            );
+        }
+
+        if response_meta.status.is_success() {
+            return Ok(());
+        }
+
+        if matches!(
+            response_meta.status,
+            StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
+        ) {
+            let mut fields = response_meta.log_fields();
+            fields.push(("publish_result", "already_exists".into()));
+            self.log_blob_event(
+                "publish_received_conflict",
+                "publish",
+                Some(block_id),
+                Some(&blob_name),
+                fields,
+            );
+            return Ok(());
+        }
+
+        let publish_probe = self.probe_blob_properties(
+            "probe_after_publish_failure",
+            Some(block_id),
+            &blob_name,
+            "publish_failure",
+        );
+        self.log_blob_event(
+            "publish_response_failure",
+            "publish",
+            Some(block_id),
+            Some(&blob_name),
+            {
+                let mut fields = response_meta.log_fields();
+                fields.push(("probe", publish_probe.summary()));
+                fields
+            },
+        );
+
+        Err(backend_failure(format!(
+            "failed to publish block {} to blob {} in container {}: {}{}; probe: {}",
+            block_id,
+            blob_name,
+            self.container_display,
+            format_http_status(response_meta.status),
+            format_azure_error_code(response_meta.error_code.as_deref()),
+            publish_probe.summary()
+        )))
+    }
+
+    fn get_block_bytes_blocking(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        let blob_name = Self::block_blob_name(block_id);
+        self.fetch_blob_bytes("read", Some(block_id), &blob_name)
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to read block {} from blob {} in container {}: {error}",
+                    block_id, blob_name, self.container_display
+                ))
+            })
     }
 
     fn fetch_blob_bytes(
@@ -287,7 +404,7 @@ impl AzureBlobBlockStore {
                     );
                     last_error = Some(diagnostics);
                     if retriable && attempt < TRANSPORT_MAX_ATTEMPTS {
-                        sleep(retry_delay.expect("retry delay must exist before retry"));
+                        thread::sleep(retry_delay.expect("retry delay must exist before retry"));
                         continue;
                     }
                     break;
@@ -323,114 +440,27 @@ impl BlockStore for AzureBlobBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        let blob_name = Self::block_blob_name(block_id);
-        let blob_url = self.build_blob_url(&blob_name);
-        let response = match self.send_with_transport_retries(
-            "publish",
-            Some(block_id),
-            Some(&blob_name),
-            || {
-                self.request(Method::PUT, blob_url.clone())
-                    .header("x-ms-blob-type", "BlockBlob")
-                    .header(IF_NONE_MATCH, "*")
-                    .header(CONTENT_TYPE, "application/octet-stream")
-                    .body(block_bytes.to_vec())
-            },
-        ) {
-            Ok(response) => response,
-            Err(error) => {
-                return self.read_existing_or_map_transport_publish_error(
-                    &blob_name,
-                    block_id,
-                    block_bytes,
-                    &error,
-                );
-            }
-        };
-
-        let response_meta = response_metadata(&response);
-        if let Err(error) = response.bytes() {
-            let diagnostics = reqwest_error_diagnostics(error);
-            self.log_blob_event(
-                "response_body_read_failed",
-                "publish",
-                Some(block_id),
-                Some(&blob_name),
-                diagnostics.log_fields_with_response(&response_meta),
-            );
-        }
-
-        if response_meta.status.is_success() {
-            return Ok(());
-        }
-
-        if matches!(
-            response_meta.status,
-            StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
-        ) {
-            let mut fields = response_meta.log_fields();
-            fields.push(("publish_result", "already_exists".into()));
-            self.log_blob_event(
-                "publish_received_conflict",
-                "publish",
-                Some(block_id),
-                Some(&blob_name),
-                fields,
-            );
-            return Ok(());
-        }
-
-        let publish_probe = self.probe_blob_properties(
-            "probe_after_publish_failure",
-            Some(block_id),
-            &blob_name,
-            "publish_failure",
-        );
-        self.log_blob_event(
-            "publish_response_failure",
-            "publish",
-            Some(block_id),
-            Some(&blob_name),
-            {
-                let mut fields = response_meta.log_fields();
-                fields.push(("probe", publish_probe.summary()));
-                fields
-            },
-        );
-
-        Err(backend_failure(format!(
-            "failed to publish block {} to blob {} in container {}: {}{}; probe: {}",
-            block_id,
-            blob_name,
-            self.container_display,
-            format_http_status(response_meta.status),
-            format_azure_error_code(response_meta.error_code.as_deref()),
-            publish_probe.summary()
-        )))
+        let block_id = *block_id;
+        let block_bytes = block_bytes.to_vec();
+        self.run_blocking_io("publish", move |store| {
+            store.put_block_bytes_blocking(&block_id, &block_bytes)
+        })
+        .await
     }
 
     async fn get_block_bytes(
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        let blob_name = Self::block_blob_name(block_id);
-        let bytes = self
-            .fetch_blob_bytes("read", Some(block_id), &blob_name)
-            .map_err(|error| {
-                backend_failure(format!(
-                    "failed to read block {} from blob {} in container {}: {error}",
-                    block_id, blob_name, self.container_display
-                ))
-            })?;
-        let Some(bytes) = bytes else {
-            return Ok(None);
-        };
-
-        Ok(Some(bytes))
+        let block_id = *block_id;
+        self.run_blocking_io("read", move |store| {
+            store.get_block_bytes_blocking(&block_id)
+        })
+        .await
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
-        Ok(Box::pin(stream::iter(AzureBlockIdIterator::new(self))))
+        Ok(Box::pin(azure_block_id_stream(self.clone())))
     }
 }
 
@@ -643,6 +673,26 @@ fn redact_url(url: &Url) -> String {
 
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
+}
+
+async fn run_store_blocking<T, F>(
+    store: AzureBlobBlockStore,
+    operation: &'static str,
+    work: F,
+) -> Result<T, BlockStoreError>
+where
+    T: Send + 'static,
+    F: FnOnce(AzureBlobBlockStore) -> Result<T, BlockStoreError> + Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel();
+    thread::spawn(move || {
+        let _ = sender.send(work(store));
+    });
+    receiver.await.unwrap_or_else(|_| {
+        Err(backend_failure(format!(
+            "Azure Blob {operation} worker terminated before completing the request"
+        )))
+    })
 }
 
 fn transport_retry_delay(attempt: usize) -> Duration {
@@ -1068,15 +1118,15 @@ struct ListPage {
     next_marker: String,
 }
 
-struct AzureBlockIdIterator<'a> {
-    store: &'a AzureBlobBlockStore,
+struct AzureBlockIdStreamState {
+    store: AzureBlobBlockStore,
     pending_names: Vec<String>,
     next_marker: String,
     exhausted: bool,
 }
 
-impl<'a> AzureBlockIdIterator<'a> {
-    fn new(store: &'a AzureBlobBlockStore) -> Self {
+impl AzureBlockIdStreamState {
+    fn new(store: AzureBlobBlockStore) -> Self {
         Self {
             store,
             pending_names: Vec::new(),
@@ -1084,42 +1134,37 @@ impl<'a> AzureBlockIdIterator<'a> {
             exhausted: false,
         }
     }
-
-    fn load_next_page(&mut self) -> Result<(), BlockStoreError> {
-        if self.exhausted {
-            return Ok(());
-        }
-
-        let page = self.store.list_blob_page(&self.next_marker)?;
-        self.next_marker = page.next_marker;
-        self.exhausted = self.next_marker.is_empty();
-        self.pending_names = page.names;
-        self.pending_names.reverse();
-        Ok(())
-    }
 }
 
-impl Iterator for AzureBlockIdIterator<'_> {
-    type Item = Result<BlockHash, BlockStoreError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(name) = self.pending_names.pop() {
-                match decode_recognized_block_blob_name(&name) {
-                    Ok(Some(block_id)) => return Some(Ok(block_id)),
-                    Ok(None) => continue,
-                    Err(error) => return Some(Err(backend_failure(error))),
+fn azure_block_id_stream(
+    store: AzureBlobBlockStore,
+) -> impl futures::Stream<Item = Result<BlockHash, BlockStoreError>> {
+    stream::try_unfold(
+        AzureBlockIdStreamState::new(store),
+        |mut state| async move {
+            loop {
+                if let Some(name) = state.pending_names.pop() {
+                    match decode_recognized_block_blob_name(&name) {
+                        Ok(Some(block_id)) => return Ok(Some((block_id, state))),
+                        Ok(None) => continue,
+                        Err(error) => return Err(backend_failure(error)),
+                    }
                 }
-            }
 
-            if self.exhausted {
-                return None;
-            }
+                if state.exhausted {
+                    return Ok(None);
+                }
 
-            if let Err(error) = self.load_next_page() {
-                self.exhausted = true;
-                return Some(Err(error));
+                let marker = state.next_marker.clone();
+                let page = run_store_blocking(state.store.clone(), "list", move |store| {
+                    store.list_blob_page(&marker)
+                })
+                .await?;
+                state.next_marker = page.next_marker;
+                state.exhausted = state.next_marker.is_empty();
+                state.pending_names = page.names;
+                state.pending_names.reverse();
             }
-        }
-    }
+        },
+    )
 }

@@ -222,14 +222,10 @@ fn val_overlay_store_011_enumeration_failures_are_explicit() {
     ])
     .unwrap();
 
-    let mut startup_iter = startup_overlay.iter_block_ids().unwrap();
-    assert_eq!(
-        pollster::block_on(startup_iter.next())
-            .unwrap()
-            .unwrap_err(),
-        startup_error
-    );
-    assert!(pollster::block_on(startup_iter.next()).is_none());
+    match startup_overlay.iter_block_ids() {
+        Ok(_) => panic!("expected startup enumeration failure"),
+        Err(error) => assert_eq!(error, startup_error),
+    }
 
     let expected_error = backend_failure("lower enumeration failed");
     let overlay = OverlayBlockStore::new(vec![

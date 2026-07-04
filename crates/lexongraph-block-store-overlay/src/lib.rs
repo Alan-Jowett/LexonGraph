@@ -250,7 +250,11 @@ impl BlockStore for OverlayBlockStore {
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
-        Ok(Box::pin(overlay_block_id_stream(&self.layers)))
+        Ok(Box::pin(overlay_block_id_stream(
+            &self.layers,
+            Some(self.layers[0].iter_block_ids()?),
+            1,
+        )))
     }
 }
 
@@ -261,14 +265,16 @@ struct OverlayEnumerationState<'a> {
     seen: HashSet<BlockHash>,
 }
 
-fn overlay_block_id_stream(
-    layers: &[Box<dyn OverlayStoreLayer>],
-) -> impl futures::Stream<Item = Result<BlockHash, BlockStoreError>> + '_ {
+fn overlay_block_id_stream<'a>(
+    layers: &'a [Box<dyn OverlayStoreLayer>],
+    current: Option<BlockIdStream<'a>>,
+    next_layer: usize,
+) -> impl futures::Stream<Item = Result<BlockHash, BlockStoreError>> + 'a {
     stream::try_unfold(
         OverlayEnumerationState {
             layers,
-            next_layer: 0,
-            current: None,
+            next_layer,
+            current,
             seen: HashSet::new(),
         },
         |mut state| async move {
