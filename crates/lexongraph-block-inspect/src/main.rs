@@ -80,9 +80,10 @@ impl std::fmt::Display for InspectError {
 
 impl std::error::Error for InspectError {}
 
-fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     let cli = Cli::parse();
-    match pollster::block_on(run(cli)) {
+    match run(cli).await {
         Ok(json) => println!("{json}"),
         Err(error) => {
             eprintln!("{error}");

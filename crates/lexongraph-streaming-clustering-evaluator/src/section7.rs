@@ -286,7 +286,7 @@ struct QueryDocument {
     embedding: Vec<f32>,
 }
 
-pub fn run_section7_campaign(
+pub async fn run_section7_campaign(
     profile: &BenchmarkProfile,
     section5_campaign: &Section5CampaignReport,
     section6_campaign: &Section6CampaignReport,
@@ -373,15 +373,18 @@ pub fn run_section7_campaign(
                 ))
             })?;
 
-        design_reports.push(run_section7_design(
-            summary_report,
-            &section6_campaign.summary_contract.contract_id,
-            pair,
-            survivor,
-            &real_entities,
-            &held_out_query_set_ids,
-            &held_out_queries,
-        )?);
+        design_reports.push(
+            run_section7_design(
+                summary_report,
+                &section6_campaign.summary_contract.contract_id,
+                pair,
+                survivor,
+                &real_entities,
+                &held_out_query_set_ids,
+                &held_out_queries,
+            )
+            .await?,
+        );
     }
 
     let ranking = rank_designs(&mut design_reports);
@@ -518,7 +521,7 @@ pub fn render_section7_carry_forward_summary(report: &Section7CampaignReport) ->
     lines.join("\n")
 }
 
-fn run_section7_design(
+async fn run_section7_design(
     summary_report: &Section6SummaryReport,
     section6_contract_id: &str,
     pair_report: &Section5PairReport,
@@ -599,7 +602,7 @@ fn run_section7_design(
     for &beam_width in &SECTION7_BEAM_WIDTHS {
         for (query, exact_neighbor_ids) in held_out_queries.iter().zip(&exact_neighbor_ids_by_query)
         {
-            let predicted_neighbor_ids = pollster::block_on(search_neighbors(
+            let predicted_neighbor_ids = search_neighbors(
                 &design_tree.store,
                 design_tree.root_id,
                 query,
@@ -607,7 +610,8 @@ fn run_section7_design(
                 materialized_entities.len(),
                 beam_width,
                 &summary_report.metric_semantics_profile,
-            ))?;
+            )
+            .await?;
             query_reports.push(build_query_report(
                 query,
                 beam_width,

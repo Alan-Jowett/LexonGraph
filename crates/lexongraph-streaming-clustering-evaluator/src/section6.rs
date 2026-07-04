@@ -269,7 +269,7 @@ pub fn resolve_registered_section6_summary_candidates(
     Ok(registered)
 }
 
-pub fn run_section6_campaign(
+pub async fn run_section6_campaign(
     profile: &BenchmarkProfile,
     section5_campaign: &Section5CampaignReport,
     contract: &Section6SummaryContract,

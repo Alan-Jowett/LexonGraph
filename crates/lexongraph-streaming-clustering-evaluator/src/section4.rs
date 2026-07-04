@@ -341,7 +341,7 @@ pub fn generate_section4_suite_assets(
         let probe_source_id = format!("{}-probe", profile_spec.profile_id);
         let evaluation_source_id = format!("{}-evaluation", profile_spec.profile_id);
         let corpus_archive_path = corpora_dir.join(format!("{}.zip", profile_spec.profile_id));
-        let corpus_reference = materialize_corpus_archive(
+        let corpus_reference = materialize_corpus_archive_sync(
             &corpus_archive_path,
             &evaluation_entities,
             &evaluation_source_id,
@@ -518,7 +518,7 @@ pub fn generate_section4_suite_assets(
     Ok(manifest)
 }
 
-pub fn materialize_section4_archive_from_json(
+pub async fn materialize_section4_archive_from_json(
     input_path: &Path,
     archive_path: &Path,
     source_id_override: Option<&str>,
@@ -588,10 +588,10 @@ pub fn materialize_section4_archive_from_json(
             synthetic: false,
         })
         .collect::<Vec<_>>();
-    materialize_corpus_archive(archive_path, &entities, &source_id)
+    materialize_corpus_archive_async(archive_path, &entities, &source_id).await
 }
 
-pub fn run_section4_suite(
+pub async fn run_section4_suite(
     manifest: &Section4SuiteManifest,
     candidates: &[RegisteredCandidate],
     output_dir: &Path,
@@ -2006,7 +2006,19 @@ fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, EvaluatorError
         .sqrt())
 }
 
-fn materialize_corpus_archive(
+fn materialize_corpus_archive_sync(
+    archive_path: &Path,
+    entities: &[EvaluationEntity],
+    source_id: &str,
+) -> Result<BlockStoreCorpusReference, EvaluatorError> {
+    pollster::block_on(materialize_corpus_archive_async(
+        archive_path,
+        entities,
+        source_id,
+    ))
+}
+
+async fn materialize_corpus_archive_async(
     archive_path: &Path,
     entities: &[EvaluationEntity],
     source_id: &str,
@@ -2063,7 +2075,9 @@ fn materialize_corpus_archive(
             None,
         )
         .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?;
-        let block_id = pollster::block_on(store.put(&Block::Leaf(leaf)))
+        let block_id = store
+            .put(&Block::Leaf(leaf))
+            .await
             .map_err(|error| EvaluatorError::Io(format!("failed to store leaf block: {error}")))?;
         leaves.push((block_id, encode_embedding(&entity.embedding)));
     }
@@ -2085,7 +2099,9 @@ fn materialize_corpus_archive(
             None,
         )
         .map_err(|error| EvaluatorError::InvalidConfiguration(error.to_string()))?;
-        pollster::block_on(store.put(&Block::Branch(root)))
+        store
+            .put(&Block::Branch(root))
+            .await
             .map_err(|error| EvaluatorError::Io(format!("failed to store branch block: {error}")))?
     };
 

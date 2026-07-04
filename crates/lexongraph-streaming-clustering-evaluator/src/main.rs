@@ -9,15 +9,19 @@ use lexongraph_streaming_clustering_evaluator::{
     Section4SuiteSpec, Section5CampaignReport, Section5HierarchyContract, Section6CampaignReport,
     Section6SummaryContract, emit_campaign_artifacts, emit_section5_campaign_artifacts,
     emit_section6_campaign_artifacts, emit_section7_campaign_artifacts,
-    generate_section4_suite_assets, materialize_section4_archive_from_json,
+    generate_section4_suite_assets,
+    materialize_section4_archive_from_json as materialize_section4_archive_from_json_async,
     registered_candidate_names, registered_hierarchy_strategy_names,
     registered_packing_strategy_names, registered_section6_summary_candidate_names,
     resolve_profile_block_store_paths, resolve_registered_candidates,
     resolve_registered_hierarchy_strategies, resolve_registered_section6_summary_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
-    run_evaluation_campaign, run_section4_suite, run_section5_campaign, run_section6_campaign,
-    run_section7_campaign, with_execution_backend_request, write_campaign_artifacts,
-    write_section4_suite_artifacts, write_section5_campaign_artifacts,
+    run_evaluation_campaign as run_evaluation_campaign_async,
+    run_section4_suite as run_section4_suite_async,
+    run_section5_campaign as run_section5_campaign_async,
+    run_section6_campaign as run_section6_campaign_async,
+    run_section7_campaign as run_section7_campaign_async, with_execution_backend_request,
+    write_campaign_artifacts, write_section4_suite_artifacts, write_section5_campaign_artifacts,
     write_section6_campaign_artifacts, write_section7_campaign_artifacts,
 };
 
@@ -143,14 +147,15 @@ enum Command {
     },
 }
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), EvaluatorError> {
+async fn run() -> Result<(), EvaluatorError> {
     match Cli::parse().command {
         Command::ListCandidates => {
             for candidate in registered_candidate_names() {
@@ -486,4 +491,66 @@ fn run() -> Result<(), EvaluatorError> {
             Ok(())
         }),
     }
+}
+fn run_evaluation_campaign(
+    profile: &BenchmarkProfile,
+    candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredCandidate],
+) -> Result<lexongraph_streaming_clustering_evaluator::CampaignReport, EvaluatorError> {
+    pollster::block_on(run_evaluation_campaign_async(profile, candidates))
+}
+
+fn materialize_section4_archive_from_json(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    source_id: Option<&str>,
+    corpus_id: Option<&str>,
+) -> Result<lexongraph_streaming_clustering_evaluator::BlockStoreCorpusReference, EvaluatorError> {
+    pollster::block_on(materialize_section4_archive_from_json_async(
+        input, output, source_id, corpus_id,
+    ))
+}
+
+fn run_section4_suite(
+    manifest: &Section4SuiteManifest,
+    candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredCandidate],
+    output_dir: &std::path::Path,
+) -> Result<lexongraph_streaming_clustering_evaluator::Section4SuiteRunReport, EvaluatorError> {
+    pollster::block_on(run_section4_suite_async(manifest, candidates, output_dir))
+}
+
+fn run_section5_campaign(
+    profile: &BenchmarkProfile,
+    candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredCandidate],
+    contract: &Section5HierarchyContract,
+    strategies: &[lexongraph_streaming_clustering_evaluator::RegisteredHierarchyStrategy],
+) -> Result<Section5CampaignReport, EvaluatorError> {
+    pollster::block_on(run_section5_campaign_async(
+        profile, candidates, contract, strategies,
+    ))
+}
+
+fn run_section6_campaign(
+    profile: &BenchmarkProfile,
+    section5_report: &Section5CampaignReport,
+    contract: &Section6SummaryContract,
+    summary_candidates: &[lexongraph_streaming_clustering_evaluator::RegisteredSection6SummaryCandidate],
+) -> Result<Section6CampaignReport, EvaluatorError> {
+    pollster::block_on(run_section6_campaign_async(
+        profile,
+        section5_report,
+        contract,
+        summary_candidates,
+    ))
+}
+
+fn run_section7_campaign(
+    profile: &BenchmarkProfile,
+    section5_report: &Section5CampaignReport,
+    section6_report: &Section6CampaignReport,
+) -> Result<lexongraph_streaming_clustering_evaluator::Section7CampaignReport, EvaluatorError> {
+    pollster::block_on(run_section7_campaign_async(
+        profile,
+        section5_report,
+        section6_report,
+    ))
 }

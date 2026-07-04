@@ -38,10 +38,11 @@ use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 
+use futures::future;
 pub use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry};
 
 use lexongraph_block::{
-    TypedEntries, into_entries, parse_branch_ebcp_descriptor,
+    TypedEntries, ValidatedBlock, into_entries, parse_branch_ebcp_descriptor,
     reconstruct_logical_branch_embedding_f32,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
@@ -865,30 +866,49 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
                 emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
                 return Err(error);
             }
-
             let current_round_set: HashSet<_> = current_round.iter().copied().collect();
             let mut next_candidates = Vec::new();
-            for child_id in &current_round {
-                let child_depth = frontier
-                    .iter()
-                    .find_map(|candidate| match candidate {
-                        SearchCandidate::Branch { child, depth, .. } if child == child_id => {
-                            Some(*depth)
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or(1);
-                match self
-                    .load_block_candidates(
-                        child_id,
-                        target,
-                        store,
-                        false,
-                        child_depth,
-                        &mut telemetry,
+            let current_round_depths = current_round
+                .iter()
+                .map(|child_id| {
+                    let child_depth = frontier
+                        .iter()
+                        .find_map(|candidate| match candidate {
+                            SearchCandidate::Branch { child, depth, .. } if child == child_id => {
+                                Some(*depth)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(1);
+                    (*child_id, child_depth)
+                })
+                .collect::<Vec<_>>();
+            let loaded_children = future::join_all(current_round_depths.iter().map(
+                |(child_id, child_depth)| async move {
+                    (
+                        *child_id,
+                        *child_depth,
+                        Self::load_validated_block(store, child_id, false).await,
                     )
-                    .await
-                {
+                },
+            ))
+            .await;
+            for (child_id, child_depth, loaded) in loaded_children {
+                let validated = match loaded {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        telemetry.finish_with_error(&error);
+                        emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                        return Err(error);
+                    }
+                };
+                match self.build_block_candidates(
+                    &child_id,
+                    target,
+                    validated,
+                    child_depth,
+                    &mut telemetry,
+                ) {
                     Ok(candidates) => next_candidates.extend(candidates),
                     Err(error) => {
                         telemetry.finish_with_error(&error);
@@ -896,7 +916,7 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
                         return Err(error);
                     }
                 }
-                expanded_children.insert(*child_id);
+                expanded_children.insert(child_id);
             }
 
             frontier.retain(|candidate| {
@@ -923,19 +943,38 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
         CS: CandidateScorer<Target>,
         FS: FrontierSelector<CS::Score>,
     {
-        let validated = match store.get(block_id).await {
-            Ok(Some(validated)) => validated,
-            Ok(None) if is_root => {
-                return Err(SearchError::MissingRootBlock { root_id: *block_id });
-            }
-            Ok(None) => {
-                return Err(SearchError::MissingChildBlock {
-                    child_id: *block_id,
-                });
-            }
-            Err(error) => return Err(classify_store_error(*block_id, is_root, error)),
-        };
+        let validated = Self::load_validated_block(store, block_id, is_root).await?;
+        self.build_block_candidates(block_id, target, validated, depth, telemetry)
+    }
 
+    async fn load_validated_block(
+        store: &dyn BlockStore,
+        block_id: &BlockHash,
+        is_root: bool,
+    ) -> Result<ValidatedBlock, SearchError> {
+        match store.get(block_id).await {
+            Ok(Some(validated)) => Ok(validated),
+            Ok(None) if is_root => Err(SearchError::MissingRootBlock { root_id: *block_id }),
+            Ok(None) => Err(SearchError::MissingChildBlock {
+                child_id: *block_id,
+            }),
+            Err(error) => Err(classify_store_error(*block_id, is_root, error)),
+        }
+    }
+
+    fn build_block_candidates<Target>(
+        &self,
+        block_id: &BlockHash,
+        target: &Target,
+        validated: ValidatedBlock,
+        depth: usize,
+        telemetry: &mut SearchTelemetryCollector,
+    ) -> Result<Vec<SearchCandidate<CS::Score>>, SearchError>
+    where
+        EC: EmbeddingCompatibility<Target>,
+        CS: CandidateScorer<Target>,
+        FS: FrontierSelector<CS::Score>,
+    {
         let entries = into_entries(validated);
         let (metadata, entries) = match entries {
             TypedEntries::Branch(metadata, entries) => (metadata, LoadedEntries::Branch(entries)),
