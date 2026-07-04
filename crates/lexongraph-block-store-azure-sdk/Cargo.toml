@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-block-store-azure-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+azure_core = "1"
+azure_storage_blob = "1"
+futures = "0.3"
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }

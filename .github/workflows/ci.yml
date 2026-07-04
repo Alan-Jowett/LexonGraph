@@ -111,7 +111,9 @@ jobs:
 
           relevant_prefixes=(
             "crates/lexongraph-block-store-azure/"
+            "crates/lexongraph-block-store-azure-sdk/"
             "docs/specs/rust-azure-blob-block-store/"
+            "docs/specs/rust-azure-blob-block-store-sdk/"
             "docs/specs/rust-workspace-ci/"
           )
           relevant_files=(
@@ -245,7 +247,9 @@ jobs:
         if: steps.changes.outputs.run_live_tests == 'true'
         env:
           RUST_TEST_THREADS: 1
-        run: cargo test -p lexongraph-block-store-azure --locked --test live_azure -- --ignored
+        run: |
+          cargo test -p lexongraph-block-store-azure --locked --test live_azure -- --ignored
+          cargo test -p lexongraph-block-store-azure-sdk --locked --test live_azure -- --ignored
 
       - name: Clean up temporary Azure resources
         if: always() && steps.changes.outputs.run_live_tests == 'true'
