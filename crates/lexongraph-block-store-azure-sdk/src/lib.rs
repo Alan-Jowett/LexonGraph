@@ -18,11 +18,12 @@ use futures::TryStreamExt;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use tokio::runtime::{Builder, Runtime};
+use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct AzureBlobBlockStore {
     runtime: Arc<Runtime>,
-    container_url: Url,
+    container_client: Arc<BlobContainerClient>,
     container_display: String,
 }
 
@@ -37,7 +38,7 @@ impl std::fmt::Debug for AzureBlobBlockStore {
 impl AzureBlobBlockStore {
     pub fn new(container_sas_url: &str) -> Result<Self, BlockStoreError> {
         let (container_url, container_display, _) = normalize_container_url(container_sas_url)?;
-        BlobContainerClient::new(
+        let container_client = BlobContainerClient::new(
             container_url.clone(),
             None,
             Some(Self::blob_container_client_options()),
@@ -61,7 +62,7 @@ impl AzureBlobBlockStore {
 
         Ok(Self {
             runtime: Arc::new(runtime),
-            container_url,
+            container_client: Arc::new(container_client),
             container_display,
         })
     }
@@ -87,23 +88,8 @@ impl AzureBlobBlockStore {
         }
     }
 
-    fn container_client(&self) -> Result<BlobContainerClient, BlockStoreError> {
-        BlobContainerClient::new(
-            self.container_url.clone(),
-            None,
-            Some(Self::blob_container_client_options()),
-        )
-        .map_err(|error| {
-            backend_failure(format!(
-                "failed to prepare Azure Blob client for container {}: {}",
-                self.container_display,
-                describe_azure_error(&error)
-            ))
-        })
-    }
-
-    fn blob_client(&self, blob_name: &str) -> Result<BlobClient, BlockStoreError> {
-        Ok(self.container_client()?.blob_client(blob_name))
+    fn blob_client(&self, blob_name: &str) -> BlobClient {
+        self.container_client.blob_client(blob_name)
     }
 }
 
@@ -114,7 +100,7 @@ impl BlockStore for AzureBlobBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
-        let blob_client = self.blob_client(&blob_name)?;
+        let blob_client = self.blob_client(&blob_name);
         let content = RequestContent::from(block_bytes.to_vec());
         let options = BlockBlobClientUploadOptions::default().if_not_exists();
 
@@ -143,7 +129,7 @@ impl BlockStore for AzureBlobBlockStore {
 
     fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let blob_name = Self::block_blob_name(block_id);
-        let blob_client = self.blob_client(&blob_name)?;
+        let blob_client = self.blob_client(&blob_name);
 
         self.runtime.block_on(async {
             let response = match blob_client.download(None).await {
@@ -177,10 +163,10 @@ impl BlockStore for AzureBlobBlockStore {
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        let container_client = self.container_client()?;
+        let container_client = Arc::clone(&self.container_client);
         let container_display = self.container_display.clone();
         let (sender, receiver) = mpsc::channel();
-        self.runtime.spawn(async move {
+        let join_handle = self.runtime.spawn(async move {
             let mut blobs = match container_client.list_blobs(None) {
                 Ok(blobs) => blobs,
                 Err(error) => {
@@ -207,8 +193,9 @@ impl BlockStore for AzureBlobBlockStore {
                 let Some(blob) = next else {
                     return;
                 };
-                let Some(name) = blob.name else {
-                    continue;
+                let name = match blob.name {
+                    Some(name) => name,
+                    None => continue,
                 };
                 let item = match decode_recognized_block_blob_name(&name) {
                     Ok(Some(block_id)) => Some(Ok(block_id)),
@@ -223,12 +210,16 @@ impl BlockStore for AzureBlobBlockStore {
             }
         });
 
-        Ok(Box::new(AzureBlockIdIterator { receiver }))
+        Ok(Box::new(AzureBlockIdIterator {
+            receiver,
+            join_handle,
+        }))
     }
 }
 
 struct AzureBlockIdIterator {
     receiver: Receiver<Result<BlockHash, BlockStoreError>>,
+    join_handle: JoinHandle<()>,
 }
 
 impl Iterator for AzureBlockIdIterator {
@@ -236,6 +227,12 @@ impl Iterator for AzureBlockIdIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.receiver.recv().ok()
+    }
+}
+
+impl Drop for AzureBlockIdIterator {
+    fn drop(&mut self) {
+        self.join_handle.abort();
     }
 }
 
