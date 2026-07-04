@@ -94,10 +94,9 @@ retry exhaustion.
 `get`:
 
 1. derives the deterministic blob name from the requested block ID
-2. uses the Azure SDK to check for blob existence
-3. returns `Ok(None)` when Azure reports absence
-4. downloads blob bytes when present
-5. validates the downloaded bytes through the block crate before returning
+2. attempts to download blob bytes through the Azure SDK directly
+3. returns `Ok(None)` when Azure reports `BlobNotFound`
+4. validates the downloaded bytes through the block crate before returning
    success
 
 Malformed bytes map to malformed-content failures, block-ID mismatches map to
@@ -108,6 +107,10 @@ integrity-mismatch failures, and inaccessible reads map to backend failures.
 `iter_block_ids` uses the Azure SDK to list container blobs, filters for
 recognized deterministic blob names, decodes them back into block IDs, and
 yields only block IDs at the parent trait boundary.
+
+The implementation streams listing results through a bounded channel so the
+producer cannot run arbitrarily far ahead of the consumer, and it aborts the
+background listing task if the iterator is dropped before enumeration completes.
 
 Unrecognized container content is ignored. Malformed recognized candidates are
 surfaced as explicit backend failures.

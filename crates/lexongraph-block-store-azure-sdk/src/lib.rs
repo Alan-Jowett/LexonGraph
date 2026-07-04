@@ -4,7 +4,6 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
 
 use azure_core::error::ErrorKind;
 use azure_core::http::{
@@ -18,6 +17,7 @@ use futures::TryStreamExt;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
@@ -165,16 +165,18 @@ impl BlockStore for AzureBlobBlockStore {
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
         let container_client = Arc::clone(&self.container_client);
         let container_display = self.container_display.clone();
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel(32);
         let join_handle = self.runtime.spawn(async move {
             let mut blobs = match container_client.list_blobs(None) {
                 Ok(blobs) => blobs,
                 Err(error) => {
-                    let _ = sender.send(Err(backend_failure(format!(
-                        "failed to list Azure container {}: {}",
-                        container_display,
-                        describe_azure_error(&error)
-                    ))));
+                    let _ = sender
+                        .send(Err(backend_failure(format!(
+                            "failed to list Azure container {}: {}",
+                            container_display,
+                            describe_azure_error(&error)
+                        ))))
+                        .await;
                     return;
                 }
             };
@@ -182,11 +184,13 @@ impl BlockStore for AzureBlobBlockStore {
                 let next = match blobs.try_next().await {
                     Ok(next) => next,
                     Err(error) => {
-                        let _ = sender.send(Err(backend_failure(format!(
-                            "failed to list Azure container {}: {}",
-                            container_display,
-                            describe_azure_error(&error)
-                        ))));
+                        let _ = sender
+                            .send(Err(backend_failure(format!(
+                                "failed to list Azure container {}: {}",
+                                container_display,
+                                describe_azure_error(&error)
+                            ))))
+                            .await;
                         return;
                     }
                 };
@@ -203,7 +207,7 @@ impl BlockStore for AzureBlobBlockStore {
                     Err(error) => Some(Err(backend_failure(error))),
                 };
                 if let Some(item) = item
-                    && sender.send(item).is_err()
+                    && sender.send(item).await.is_err()
                 {
                     return;
                 }
@@ -226,7 +230,7 @@ impl Iterator for AzureBlockIdIterator {
     type Item = Result<BlockHash, BlockStoreError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.receiver.recv().ok()
+        self.receiver.blocking_recv()
     }
 }
 
