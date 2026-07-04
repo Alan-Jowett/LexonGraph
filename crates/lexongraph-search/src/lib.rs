@@ -9,7 +9,7 @@
 //!     CandidateScorer, EmbeddingCompatibility, SearchError, SearchResult, Searcher,
 //! };
 //!
-//! fn search_one<Target, EC, CS>(
+//! async fn search_one<Target, EC, CS>(
 //!     searcher: &Searcher<EC, CS>,
 //!     root_id: &BlockHash,
 //!     target: &Target,
@@ -19,7 +19,7 @@
 //!     EC: EmbeddingCompatibility<Target>,
 //!     CS: CandidateScorer<Target>,
 //! {
-//!     searcher.search(root_id, target, 1, 1, store)
+//!     searcher.search(root_id, target, 1, 1, store).await
 //! }
 //! ```
 //!
@@ -355,7 +355,7 @@ impl ProfiledSearcher {
         self.profile
     }
 
-    pub fn search(
+    pub async fn search(
         &self,
         root_id: &BlockHash,
         target_bytes: Vec<u8>,
@@ -365,10 +365,10 @@ impl ProfiledSearcher {
         store: &dyn BlockStore,
     ) -> Result<SearchResult, SearchError> {
         let target = self.profile.encode_target(target_bytes, embedding_spec);
-        self.inner.search(root_id, &target, w, n, store)
+        self.inner.search(root_id, &target, w, n, store).await
     }
 
-    pub fn search_with_telemetry(
+    pub async fn search_with_telemetry(
         &self,
         root_id: &BlockHash,
         target_bytes: Vec<u8>,
@@ -380,10 +380,11 @@ impl ProfiledSearcher {
         let target = self.profile.encode_target(target_bytes, embedding_spec);
         self.inner
             .search_with_telemetry(root_id, &target, w, n, store)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn search_with_observer<TO>(
+    pub async fn search_with_observer<TO>(
         &self,
         root_id: &BlockHash,
         target_bytes: Vec<u8>,
@@ -399,6 +400,7 @@ impl ProfiledSearcher {
         let target = self.profile.encode_target(target_bytes, embedding_spec);
         self.inner
             .search_with_observer(root_id, &target, w, n, store, observer)
+            .await
     }
 }
 
@@ -704,7 +706,7 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
 }
 
 impl<EC, CS, FS> Searcher<EC, CS, FS> {
-    pub fn search<Target>(
+    pub async fn search<Target>(
         &self,
         root_id: &BlockHash,
         target: &Target,
@@ -718,10 +720,11 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
         FS: FrontierSelector<CS::Score>,
     {
         self.search_internal(root_id, target, w, n, store, TelemetryMode::Disabled)
+            .await
             .map(|(result, _)| result)
     }
 
-    pub fn search_with_telemetry<Target>(
+    pub async fn search_with_telemetry<Target>(
         &self,
         root_id: &BlockHash,
         target: &Target,
@@ -735,9 +738,10 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
         FS: FrontierSelector<CS::Score>,
     {
         self.search_internal(root_id, target, w, n, store, TelemetryMode::Enabled(None))
+            .await
     }
 
-    pub fn search_with_observer<Target, TO>(
+    pub async fn search_with_observer<Target, TO>(
         &self,
         root_id: &BlockHash,
         target: &Target,
@@ -760,10 +764,11 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
             store,
             TelemetryMode::Enabled(Some(observer)),
         )
+        .await
         .map(|(result, _)| result)
     }
 
-    fn search_internal<Target>(
+    async fn search_internal<Target>(
         &self,
         root_id: &BlockHash,
         target: &Target,
@@ -786,15 +791,17 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
             return Err(error);
         }
 
-        let mut frontier =
-            match self.load_block_candidates(root_id, target, store, true, 0, &mut telemetry) {
-                Ok(frontier) => frontier,
-                Err(error) => {
-                    telemetry.finish_with_error(&error);
-                    emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
-                    return Err(error);
-                }
-            };
+        let mut frontier = match self
+            .load_block_candidates(root_id, target, store, true, 0, &mut telemetry)
+            .await
+        {
+            Ok(frontier) => frontier,
+            Err(error) => {
+                telemetry.finish_with_error(&error);
+                emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                return Err(error);
+            }
+        };
         let mut expanded_children = HashSet::new();
 
         loop {
@@ -871,14 +878,17 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
                         _ => None,
                     })
                     .unwrap_or(1);
-                match self.load_block_candidates(
-                    child_id,
-                    target,
-                    store,
-                    false,
-                    child_depth,
-                    &mut telemetry,
-                ) {
+                match self
+                    .load_block_candidates(
+                        child_id,
+                        target,
+                        store,
+                        false,
+                        child_depth,
+                        &mut telemetry,
+                    )
+                    .await
+                {
                     Ok(candidates) => next_candidates.extend(candidates),
                     Err(error) => {
                         telemetry.finish_with_error(&error);
@@ -899,7 +909,7 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
         }
     }
 
-    fn load_block_candidates<Target>(
+    async fn load_block_candidates<Target>(
         &self,
         block_id: &BlockHash,
         target: &Target,
@@ -913,7 +923,7 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
         CS: CandidateScorer<Target>,
         FS: FrontierSelector<CS::Score>,
     {
-        let validated = match store.get(block_id) {
+        let validated = match store.get(block_id).await {
             Ok(Some(validated)) => validated,
             Ok(None) if is_root => {
                 return Err(SearchError::MissingRootBlock { root_id: *block_id });

@@ -4,9 +4,14 @@
 use std::collections::HashSet;
 use std::env;
 
+use futures::TryStreamExt;
 use lexongraph_block::{BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block};
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
+
+mod support;
+
+use support::run_in_tokio_runtime;
 
 const TEST_CONTAINER_SAS_URL_ENV: &str = "LEXONGRAPH_AZURE_TEST_CONTAINER_SAS_URL";
 
@@ -22,21 +27,21 @@ fn live_azure_round_trip_missing_and_enumeration_match_the_contract() {
 
     let first = sample_leaf_block("live-first");
     let second = sample_leaf_block("live-second");
-    let first_id = store.put(&first).unwrap();
-    let second_id = store.put(&second).unwrap();
+    let first_id = run_in_tokio_runtime(store.put(&first)).unwrap();
+    let second_id = run_in_tokio_runtime(store.put(&second)).unwrap();
     let expected = HashSet::from([first_id, second_id]);
 
-    let loaded = store.get(&first_id).unwrap().unwrap();
+    let loaded = run_in_tokio_runtime(store.get(&first_id)).unwrap().unwrap();
     assert_eq!(loaded.hash, first_id);
     assert_eq!(loaded.block, first);
 
-    assert_eq!(store.get(&BlockHash::from_bytes([0x44; 32])).unwrap(), None);
+    assert_eq!(
+        run_in_tokio_runtime(store.get(&BlockHash::from_bytes([0x44; 32]))).unwrap(),
+        None
+    );
 
-    let enumerated = store
-        .iter_block_ids()
-        .unwrap()
-        .collect::<Result<HashSet<_>, _>>()
-        .unwrap();
+    let enumerated =
+        run_in_tokio_runtime(store.iter_block_ids().unwrap().try_collect::<HashSet<_>>()).unwrap();
     assert!(expected.is_subset(&enumerated));
 }
 

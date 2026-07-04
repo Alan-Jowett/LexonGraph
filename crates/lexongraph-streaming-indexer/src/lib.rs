@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use async_recursion::async_recursion;
 use ciborium::{Value, ser::into_writer};
 use half::f16;
 use lexongraph_adaptive_planning_policy::AdaptivePlanningSelector;
@@ -2492,6 +2493,7 @@ where
                         .map_err(StreamingIndexerError::BlockConstruction)?;
                     let block_id = store
                         .put(&leaf_block)
+                        .await
                         .map_err(StreamingIndexerError::Storage)?;
                     verify_persisted_block_id(block_id, serialized.hash)?;
                     persisted_ids.push(block_id);
@@ -2561,13 +2563,15 @@ where
             });
         }
 
-        let root_child = self.materialize_hierarchy_bottom_up(
-            hierarchy,
-            &leaf_children,
-            materializability_bound,
-            store,
-            &mut persisted_ids,
-        )?;
+        let root_child = self
+            .materialize_hierarchy_bottom_up(
+                hierarchy,
+                &leaf_children,
+                materializability_bound,
+                store,
+                &mut persisted_ids,
+            )
+            .await?;
         dedup_sort_ids(&mut persisted_ids);
         Ok(StreamingIndexingResult {
             root_id: root_child.child,
@@ -2575,7 +2579,7 @@ where
         })
     }
 
-    fn materialize_hierarchy_bottom_up(
+    async fn materialize_hierarchy_bottom_up(
         &self,
         hierarchy: &FinalizedPartitionHierarchy,
         leaf_children: &[IndexedChild],
@@ -2598,10 +2602,12 @@ where
             store,
             persisted_ids,
         )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn materialize_partition(
+    #[async_recursion(?Send)]
+    async fn materialize_partition(
         &self,
         partition_id: &str,
         partitions: &HashMap<String, FinalizedPartition>,
@@ -2630,10 +2636,9 @@ where
                 })
                 .collect::<Result<Vec<_>, _>>()?
         } else {
-            partition
-                .child_ids
-                .iter()
-                .map(|child_id| {
+            let mut materialized = Vec::with_capacity(partition.child_ids.len());
+            for child_id in &partition.child_ids {
+                materialized.push(
                     self.materialize_partition(
                         child_id,
                         partitions,
@@ -2643,8 +2648,10 @@ where
                         store,
                         persisted_ids,
                     )
-                })
-                .collect::<Result<Vec<_>, _>>()?
+                    .await?,
+                );
+            }
+            materialized
         };
 
         self.assemble_child_set(
@@ -2654,9 +2661,10 @@ where
             store,
             persisted_ids,
         )
+        .await
     }
 
-    fn assemble_child_set(
+    async fn assemble_child_set(
         &self,
         children: Vec<IndexedChild>,
         is_global_root_partition: bool,
@@ -2731,20 +2739,23 @@ where
             ));
 
             let next_level = current.iter().map(|child| child.level).max().unwrap_or(0) + 1;
-            let next_layer = match self.build_branch_layer(
-                &current,
-                &groups,
-                next_level,
-                LayerBuildStatus {
-                    phase: phase.clone(),
-                    started,
-                    progress: &phase_progress,
-                    legacy_item_count,
-                    is_global_root_partition,
-                },
-                store,
-                persisted_ids,
-            ) {
+            let next_layer = match self
+                .build_branch_layer(
+                    &current,
+                    &groups,
+                    next_level,
+                    LayerBuildStatus {
+                        phase: phase.clone(),
+                        started,
+                        progress: &phase_progress,
+                        legacy_item_count,
+                        is_global_root_partition,
+                    },
+                    store,
+                    persisted_ids,
+                )
+                .await
+            {
                 Ok(next_layer) => next_layer,
                 Err(error) => {
                     heartbeat.stop();
@@ -2785,7 +2796,7 @@ where
         }
     }
 
-    fn build_branch_layer(
+    async fn build_branch_layer(
         &self,
         children: &[IndexedChild],
         groups: &[Vec<usize>],
@@ -2864,6 +2875,7 @@ where
 
             let block_id = store
                 .put(&branch_block)
+                .await
                 .map_err(StreamingIndexerError::Storage)?;
             verify_persisted_block_id(block_id, serialized.hash)?;
             persisted_ids.push(block_id);
@@ -6479,41 +6491,52 @@ fn hierarchy_stats(hierarchy: &FinalizedPartitionHierarchy) -> HierarchyStats {
 
 #[cfg(feature = "conformance")]
 mod conformance_support {
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fmt;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use futures::stream;
 
     use super::*;
 
     #[derive(Default)]
     pub(crate) struct MemoryBlockStore {
-        blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
     }
 
+    #[async_trait]
     impl BlockStore for MemoryBlockStore {
-        fn put_block_bytes(
+        async fn put_block_bytes(
             &self,
             block_id: &BlockHash,
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
             self.blocks
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .insert(*block_id, block_bytes.to_vec());
             Ok(())
         }
 
-        fn get_block_bytes(
+        async fn get_block_bytes(
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            Ok(self.blocks.borrow().get(block_id).cloned())
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
         }
 
         fn iter_block_ids(
             &self,
-        ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-            let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
-            Ok(Box::new(ids.into_iter().map(Ok)))
+        ) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
+            let ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
         }
     }
 
@@ -6633,6 +6656,7 @@ mod conformance_support {
                 .await?;
             if store
                 .get(&result.root_id)
+                .await
                 .map_err(StreamingIndexerError::Storage)?
                 .is_none()
             {

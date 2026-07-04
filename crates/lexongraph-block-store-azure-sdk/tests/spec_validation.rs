@@ -3,11 +3,14 @@
 mod support;
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 
+use async_trait::async_trait;
 use azure_core::http::Url;
+use futures::TryStreamExt;
 use lexongraph_block::{
     BlockError, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
     compute_block_hash, serialize_block,
@@ -16,7 +19,26 @@ use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 
-use support::{MockAzureServer, collect_block_ids};
+use support::{MockAzureServer, collect_block_ids, run_in_tokio_runtime};
+
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        run_in_tokio_runtime(self).unwrap()
+    }
+
+    fn unwrap_err(self) -> E
+    where
+        T: std::fmt::Debug,
+        E: std::fmt::Debug,
+    {
+        run_in_tokio_runtime(self).unwrap_err()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
 
 #[test]
 fn val_azure_sdk_store_001_002_constructor_and_publish_path_are_deterministic() {
@@ -316,7 +338,9 @@ fn val_azure_sdk_store_004_concurrent_publishers_converge_on_one_valid_blob() {
     for _ in 0..6 {
         let store = store.clone();
         let block = Arc::clone(&block);
-        threads.push(thread::spawn(move || store.put(block.as_ref())));
+        threads.push(thread::spawn(move || {
+            run_in_tokio_runtime(store.put(block.as_ref()))
+        }));
     }
 
     for result in threads {
@@ -341,33 +365,35 @@ fn val_azure_sdk_store_009_parent_conformance_requirements_are_realized_by_tests
         server: MockAzureServer,
     }
 
+    #[async_trait]
     impl BlockStore for HarnessStore {
-        fn put_block_bytes(
+        async fn put_block_bytes(
             &self,
             block_id: &BlockHash,
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
-            self.inner.put_block_bytes(block_id, block_bytes)
+            self.inner.put_block_bytes(block_id, block_bytes).await
         }
 
-        fn get_block_bytes(
+        async fn get_block_bytes(
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            self.inner.get_block_bytes(block_id)
+            self.inner.get_block_bytes(block_id).await
         }
 
         fn iter_block_ids(
             &self,
-        ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        ) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
             self.inner.iter_block_ids()
         }
     }
 
+    #[async_trait(?Send)]
     impl lexongraph_block_store::conformance::BlockStoreFactory for Harness {
         type Store = HarnessStore;
 
-        fn fresh_store(&self) -> Self::Store {
+        async fn fresh_store(&self) -> Self::Store {
             let server = MockAzureServer::start();
             let store = HarnessStore {
                 inner: server.store(),
@@ -378,8 +404,9 @@ fn val_azure_sdk_store_009_parent_conformance_requirements_are_realized_by_tests
         }
     }
 
+    #[async_trait(?Send)]
     impl lexongraph_block_store::conformance::BlockStoreConformanceHarness for Harness {
-        fn inject_raw_bytes(
+        async fn inject_raw_bytes(
             &self,
             store: &Self::Store,
             block_id: &BlockHash,
@@ -392,7 +419,7 @@ fn val_azure_sdk_store_009_parent_conformance_requirements_are_realized_by_tests
         }
     }
 
-    run_full_suite(&Harness::default()).unwrap();
+    run_in_tokio_runtime(run_full_suite(&Harness::default())).unwrap();
 }
 
 #[test]
@@ -439,7 +466,7 @@ fn val_azure_sdk_store_007_008_enumeration_surfaces_listing_transient_and_decodi
     match exhausted_retry_server.store().iter_block_ids() {
         Err(error) => expect_backend_failure_contains(error, "retry policy expired"),
         Ok(iter) => {
-            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+            let error = run_in_tokio_runtime(iter.try_collect::<Vec<_>>()).unwrap_err();
             expect_backend_failure_contains(error, "retry policy expired");
         }
     }
@@ -449,7 +476,7 @@ fn val_azure_sdk_store_007_008_enumeration_surfaces_listing_transient_and_decodi
     match list_error_server.store().iter_block_ids() {
         Err(error) => expect_backend_failure_contains(error, "HTTP 500"),
         Ok(iter) => {
-            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+            let error = run_in_tokio_runtime(iter.try_collect::<Vec<_>>()).unwrap_err();
             expect_backend_failure_contains(error, "HTTP 500");
         }
     }
@@ -464,13 +491,12 @@ fn val_azure_sdk_store_007_008_enumeration_surfaces_listing_transient_and_decodi
             error,
             "failed to decode an enumerated block ID candidate at blob 00/00/not-a-block-id.cbor",
         ),
-        Ok(mut iter) => {
-            let error = iter.next().unwrap().unwrap_err();
+        Ok(iter) => {
+            let error = run_in_tokio_runtime(iter.try_collect::<Vec<_>>()).unwrap_err();
             expect_backend_failure_contains(
                 error,
                 "failed to decode an enumerated block ID candidate at blob 00/00/not-a-block-id.cbor",
             );
-            assert!(iter.next().is_none());
         }
     }
 
@@ -484,7 +510,7 @@ fn val_azure_sdk_store_007_008_enumeration_surfaces_listing_transient_and_decodi
             "failed to decode an enumerated block ID candidate at blob aa/bb/cc00000000000000000000000000000000000000000000000000000000000000.cbor: shard prefix mismatch",
         ),
         Ok(iter) => {
-            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+            let error = run_in_tokio_runtime(iter.try_collect::<Vec<_>>()).unwrap_err();
             expect_backend_failure_contains(
                 error,
                 "failed to decode an enumerated block ID candidate at blob aa/bb/cc00000000000000000000000000000000000000000000000000000000000000.cbor: shard prefix mismatch",
@@ -500,7 +526,7 @@ fn malformed_listing_xml_is_an_explicit_backend_failure() {
     match server.store().iter_block_ids() {
         Err(error) => expect_backend_failure_contains(error, "failed to list Azure container"),
         Ok(iter) => {
-            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+            let error = run_in_tokio_runtime(iter.try_collect::<Vec<_>>()).unwrap_err();
             expect_backend_failure_contains(error, "failed to list Azure container");
         }
     }

@@ -2,10 +2,14 @@
 // Copyright (c) 2026 LexonGraph contributors
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
+use std::sync::Mutex;
 
+use async_trait::async_trait;
 use ciborium::ser::into_writer;
 use ciborium::value::{Integer, Value};
+use futures::stream;
 use lexongraph_block::{
     Block, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpRotation, EmbeddingSpec, LeafEntry,
     VERSION_1, build_branch_block, build_leaf_block, compute_block_hash, ebcp_extension_map,
@@ -21,6 +25,25 @@ use lexongraph_search::{
     Searcher, published_search_profile,
 };
 
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+
+    fn unwrap_err(self) -> E
+    where
+        T: std::fmt::Debug,
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap_err()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FixtureError(String);
 
@@ -34,49 +57,63 @@ impl std::error::Error for FixtureError {}
 
 #[derive(Default)]
 struct MemoryBlockStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
-    gets: RefCell<HashMap<BlockHash, usize>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+    gets: Mutex<HashMap<BlockHash, usize>>,
 }
 
 impl MemoryBlockStore {
     fn raw_insert(&self, block_id: BlockHash, bytes: Vec<u8>) {
-        self.blocks.borrow_mut().insert(block_id, bytes);
+        self.blocks.lock().unwrap().insert(block_id, bytes);
     }
 
     fn get_count(&self, block_id: &BlockHash) -> usize {
-        self.gets.borrow().get(block_id).copied().unwrap_or(0)
+        self.gets
+            .lock()
+            .unwrap()
+            .get(block_id)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        *self.gets.borrow_mut().entry(*block_id).or_default() += 1;
-        Ok(self.blocks.borrow().get(block_id).cloned())
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        *self.gets.lock().unwrap().entry(*block_id).or_default() += 1;
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-        let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
-        Ok(Box::new(block_ids.into_iter().map(Ok)))
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
+        let block_ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
 }
 
 #[derive(Default)]
 struct FailingGetStore {
     inner: MemoryBlockStore,
-    fail_on: RefCell<Option<BlockHash>>,
+    fail_on: Mutex<Option<BlockHash>>,
     fail_message: &'static str,
 }
 
@@ -84,7 +121,7 @@ impl FailingGetStore {
     fn always_fail(message: &'static str) -> Self {
         Self {
             inner: MemoryBlockStore::default(),
-            fail_on: RefCell::new(None),
+            fail_on: Mutex::new(None),
             fail_message: message,
         }
     }
@@ -92,37 +129,39 @@ impl FailingGetStore {
     fn fail_on(block_id: BlockHash, message: &'static str) -> Self {
         Self {
             inner: MemoryBlockStore::default(),
-            fail_on: RefCell::new(Some(block_id)),
+            fail_on: Mutex::new(Some(block_id)),
             fail_message: message,
         }
     }
 }
 
+#[async_trait]
 impl BlockStore for FailingGetStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        self.inner.put(block)
+    async fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+        self.inner.put(block).await
     }
 
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.inner.put_block_bytes(block_id, block_bytes)
+        self.inner.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        let configured = *self.fail_on.borrow();
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        let configured = *self.fail_on.lock().unwrap();
         if configured.is_none() || configured == Some(*block_id) {
             return Err(BlockStoreError::BackendFailure(self.fail_message.into()));
         }
 
-        self.inner.get_block_bytes(block_id)
+        self.inner.get_block_bytes(block_id).await
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.inner.iter_block_ids()
     }
 }
@@ -332,7 +371,7 @@ fn val_search_002_public_api_exposes_protocol_inputs_and_policy_dependencies() {
         root_id: &BlockHash,
         store: &dyn BlockStore,
     ) -> Result<SearchResult, SearchError> {
-        searcher.search(root_id, &(), 1, 1, store)
+        pollster::block_on(searcher.search(root_id, &(), 1, 1, store))
     }
 
     let store = MemoryBlockStore::default();
@@ -856,7 +895,7 @@ fn val_search_014_public_surface_is_limited_to_runtime_contract() {
         root_id: &BlockHash,
         store: &dyn BlockStore,
     ) -> Result<SearchResult, SearchError> {
-        searcher.search(root_id, &(), 1, 1, store)
+        pollster::block_on(searcher.search(root_id, &(), 1, 1, store))
     }
 
     let store = MemoryBlockStore::default();
@@ -926,7 +965,7 @@ fn val_search_022_default_runtime_surface_exposes_default_policy_types() {
         target: &EncodedTargetEmbedding,
         store: &dyn BlockStore,
     ) -> Result<SearchResult, SearchError> {
-        searcher.search(root_id, target, 1, 1, store)
+        pollster::block_on(searcher.search(root_id, target, 1, 1, store))
     }
 
     fn uses_custom_contract(
@@ -934,7 +973,7 @@ fn val_search_022_default_runtime_surface_exposes_default_policy_types() {
         root_id: &BlockHash,
         store: &dyn BlockStore,
     ) -> Result<SearchResult, SearchError> {
-        searcher.search(root_id, &(), 1, 1, store)
+        pollster::block_on(searcher.search(root_id, &(), 1, 1, store))
     }
 
     let store = MemoryBlockStore::default();
@@ -1751,7 +1790,7 @@ where
     let root_id = store.put(&root).unwrap();
     let target = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
-    searcher.search(&root_id, &target, 1, 1, &store)
+    pollster::block_on(searcher.search(&root_id, &target, 1, 1, &store))
 }
 
 struct GeometryOrderFixture {

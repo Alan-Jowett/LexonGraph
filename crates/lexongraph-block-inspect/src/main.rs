@@ -82,7 +82,7 @@ impl std::error::Error for InspectError {}
 
 fn main() {
     let cli = Cli::parse();
-    match run(cli) {
+    match pollster::block_on(run(cli)) {
         Ok(json) => println!("{json}"),
         Err(error) => {
             eprintln!("{error}");
@@ -91,7 +91,7 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> Result<String, InspectError> {
+async fn run(cli: Cli) -> Result<String, InspectError> {
     let document = match cli.backend {
         BackendCommand::Fs {
             store_root,
@@ -99,7 +99,7 @@ fn run(cli: Cli) -> Result<String, InspectError> {
         } => {
             let block_hash = parse_block_hash(&block_hash)?;
             let store = open_filesystem_store(&store_root)?;
-            inspect_store(&store, &block_hash)?
+            inspect_store(&store, &block_hash).await?
         }
         BackendCommand::FsTree {
             store_root,
@@ -108,7 +108,7 @@ fn run(cli: Cli) -> Result<String, InspectError> {
         } => {
             let root_hash = parse_block_hash(&root_hash)?;
             let store = open_filesystem_store(&store_root)?;
-            analyze_tree(&store, &root_hash, expected_max_children)?
+            analyze_tree(&store, &root_hash, expected_max_children).await?
         }
     };
 
@@ -168,15 +168,20 @@ fn open_filesystem_store(store_root: &Path) -> Result<FilesystemBlockStore, Insp
     })
 }
 
-fn inspect_store(store: &impl BlockStore, block_hash: &BlockHash) -> Result<Value, InspectError> {
-    load_decoded_block(store, block_hash).and_then(render_inspection_document)
+async fn inspect_store(
+    store: &impl BlockStore,
+    block_hash: &BlockHash,
+) -> Result<Value, InspectError> {
+    load_decoded_block(store, block_hash)
+        .await
+        .and_then(render_inspection_document)
 }
 
-fn load_decoded_block(
+async fn load_decoded_block(
     store: &impl BlockStore,
     block_hash: &BlockHash,
 ) -> Result<DecodedBlock, InspectError> {
-    match store.get_decoded(block_hash) {
+    match store.get_decoded(block_hash).await {
         Ok(Some(decoded_block)) => Ok(decoded_block),
         Ok(None) => Err(InspectError::BlockAbsence(*block_hash)),
         Err(BlockStoreError::BackendFailure(message)) => {
@@ -194,11 +199,11 @@ fn load_decoded_block(
     }
 }
 
-fn load_decoded_block_bytes(
+async fn load_decoded_block_bytes(
     store: &impl BlockStore,
     block_hash: &BlockHash,
 ) -> Result<(DecodedBlock, Vec<u8>), InspectError> {
-    match store.get_block_bytes(block_hash) {
+    match store.get_block_bytes(block_hash).await {
         Ok(Some(bytes)) => {
             let decoded = deserialize_versioned_block(&bytes, block_hash)
                 .map_err(inspect_error_from_block_error)?;
@@ -217,7 +222,7 @@ fn load_decoded_block_bytes(
     }
 }
 
-fn analyze_tree(
+async fn analyze_tree(
     store: &impl BlockStore,
     root_hash: &BlockHash,
     expected_max_children: usize,
@@ -241,7 +246,7 @@ fn analyze_tree(
             continue;
         }
 
-        let (decoded, bytes) = load_decoded_block_bytes(store, &block_hash)?;
+        let (decoded, bytes) = load_decoded_block_bytes(store, &block_hash).await?;
         let traversed = classify_traversed_block(decoded, &block_hash)?;
         let serialized_bytes = u64::try_from(bytes.len()).map_err(|_| {
             InspectError::InspectionBoundary("serialized block is too large".to_owned())

@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "inject")]
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use futures::stream;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use tempfile::{Builder, NamedTempFile};
 
 #[cfg(feature = "inject")]
@@ -328,8 +330,9 @@ impl FilesystemBlockStore {
     }
 }
 
+#[async_trait]
 impl BlockStore for FilesystemBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -377,7 +380,10 @@ impl BlockStore for FilesystemBlockStore {
         }
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let published_path = self.block_path(block_id);
         let bytes = match self.read_bytes(&published_path) {
             Ok(bytes) => bytes,
@@ -394,10 +400,10 @@ impl BlockStore for FilesystemBlockStore {
         Ok(Some(bytes))
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-        Ok(Box::new(FilesystemBlockIdIterator::new(self)?))
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+        Ok(Box::pin(stream::iter(FilesystemBlockIdIterator::new(
+            self,
+        )?)))
     }
 }
 

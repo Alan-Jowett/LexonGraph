@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
+use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+use futures::{StreamExt, TryStreamExt, stream};
 use lexongraph_block::{BlockError, BlockHash, ValidatedBlock, serialize_block};
 use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_full_suite,
@@ -19,6 +22,25 @@ use tempfile::TempDir;
 mod support;
 
 use support::{SharedMemoryBlockStore, sample_leaf_block};
+
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+
+    fn unwrap_err(self) -> E
+    where
+        T: std::fmt::Debug,
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap_err()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
 
 #[test]
 fn val_overlay_store_001_constructor_requires_at_least_two_layers() {
@@ -162,7 +184,7 @@ fn val_overlay_store_008_put_fails_when_no_layer_accepts_direct_writes() {
 
 #[test]
 fn val_overlay_store_009_parent_conformance_requirements_are_realized_by_tests() {
-    run_full_suite(&OverlayHarness).unwrap();
+    pollster::block_on(run_full_suite(&OverlayHarness)).unwrap();
 }
 
 #[test]
@@ -182,11 +204,8 @@ fn val_overlay_store_010_enumeration_yields_the_deduplicated_union_in_priority_o
     ])
     .unwrap();
 
-    let enumerated = overlay
-        .iter_block_ids()
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let enumerated = overlay.iter_block_ids().unwrap();
+    let enumerated = pollster::block_on(enumerated.try_collect::<Vec<_>>()).unwrap();
 
     assert_eq!(enumerated, vec![first, second, third]);
 }
@@ -204,7 +223,7 @@ fn val_overlay_store_011_enumeration_failures_are_explicit() {
     .unwrap();
 
     match startup_overlay.iter_block_ids() {
-        Ok(_) => panic!("expected highest-priority enumeration startup to fail explicitly"),
+        Ok(_) => panic!("expected startup enumeration failure"),
         Err(error) => assert_eq!(error, startup_error),
     }
 
@@ -218,9 +237,12 @@ fn val_overlay_store_011_enumeration_failures_are_explicit() {
     .unwrap();
     let mut iter = overlay.iter_block_ids().unwrap();
 
-    assert_eq!(iter.next().unwrap().unwrap(), first);
-    assert_eq!(iter.next().unwrap().unwrap_err(), expected_error);
-    assert!(iter.next().is_none());
+    assert_eq!(pollster::block_on(iter.next()).unwrap().unwrap(), first);
+    assert_eq!(
+        pollster::block_on(iter.next()).unwrap().unwrap_err(),
+        expected_error
+    );
+    assert!(pollster::block_on(iter.next()).is_none());
 }
 
 #[test]
@@ -336,30 +358,33 @@ struct HarnessStore {
     lower: SharedMemoryBlockStore,
 }
 
+#[async_trait]
 impl BlockStore for HarnessStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.overlay.put_block_bytes(block_id, block_bytes)
+        self.overlay.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        self.overlay.get_block_bytes(block_id)
-    }
-
-    fn iter_block_ids(
+    async fn get_block_bytes(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.overlay.get_block_bytes(block_id).await
+    }
+
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.overlay.iter_block_ids()
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreFactory for OverlayHarness {
     type Store = HarnessStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         let high = SharedMemoryBlockStore::default();
         let low = SharedMemoryBlockStore::default();
         let overlay = OverlayBlockStore::new(vec![
@@ -375,8 +400,9 @@ impl BlockStoreFactory for OverlayHarness {
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for OverlayHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,
@@ -449,8 +475,9 @@ impl MockStore {
     }
 }
 
+#[async_trait]
 impl BlockStore for MockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         _block_bytes: &[u8],
@@ -468,7 +495,10 @@ impl BlockStore for MockStore {
         }
     }
 
-    fn get_block_bytes(&self, _block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        _block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         self.state.get_calls.fetch_add(1, Ordering::SeqCst);
         match self.state.get_result.lock().unwrap().clone() {
             Ok(Some(validated)) => {
@@ -481,15 +511,13 @@ impl BlockStore for MockStore {
         }
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.state
             .iter_result
             .lock()
             .unwrap()
             .clone()
-            .map(|items| Box::new(items.into_iter()) as lexongraph_block_store::BlockIdIterator<'_>)
+            .map(|items| Box::pin(stream::iter(items)) as lexongraph_block_store::BlockIdStream<'_>)
     }
 }
 
@@ -498,22 +526,24 @@ struct CustomLayer {
     inner: MockStore,
 }
 
+#[async_trait]
 impl BlockStore for CustomLayer {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.inner.put_block_bytes(block_id, block_bytes)
+        self.inner.put_block_bytes(block_id, block_bytes).await
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        self.inner.get_block_bytes(block_id)
-    }
-
-    fn iter_block_ids(
+    async fn get_block_bytes(
         &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id).await
+    }
+
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
         self.inner.iter_block_ids()
     }
 }

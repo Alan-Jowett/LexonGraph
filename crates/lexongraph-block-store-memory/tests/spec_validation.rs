@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 use std::collections::HashSet;
+use std::future::Future;
 
-use lexongraph_block_store::BlockStore;
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
+use lexongraph_block_store::{BlockStore, BlockStoreExt};
 use lexongraph_block_store_memory::{MemoryBlockStore, MemoryBlockStoreBuildError};
 
 mod support;
@@ -12,6 +13,17 @@ mod support;
 #[cfg(feature = "inject")]
 use support::MemoryHarness;
 use support::sample_leaf_block;
+
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
 
 #[test]
 fn val_mem_store_001_and_002_constructor_enforces_positive_capacity() {
@@ -105,7 +117,7 @@ fn val_mem_store_008_least_recently_used_entry_is_evicted_on_capacity_pressure()
 #[test]
 #[cfg(feature = "inject")]
 fn val_mem_store_009_parent_conformance_requirements_are_realized_by_tests() {
-    run_full_suite(&MemoryHarness).unwrap();
+    pollster::block_on(run_full_suite(&MemoryHarness)).unwrap();
 }
 
 #[test]
@@ -120,8 +132,8 @@ fn val_mem_store_010_public_surface_keeps_backend_volatile_and_bounded() {
 
 fn resident_ids(store: &MemoryBlockStore) -> HashSet<lexongraph_block::BlockHash> {
     store
-        .iter_block_ids()
+        .list_block_ids()
         .unwrap()
-        .collect::<Result<HashSet<_>, _>>()
-        .unwrap()
+        .into_iter()
+        .collect::<HashSet<_>>()
 }

@@ -2,9 +2,11 @@
 // Copyright (c) 2026 LexonGraph contributors
 #![cfg(feature = "conformance")]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
+use async_trait::async_trait;
+use futures::{executor::block_on, stream};
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_contract_suite, run_full_suite,
@@ -13,51 +15,62 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 
 #[derive(Default)]
 struct MemoryBlockStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
 }
 
 impl MemoryBlockStore {
     fn raw_insert(&self, hash: BlockHash, bytes: Vec<u8>) {
-        self.blocks.borrow_mut().insert(hash, bytes);
+        self.blocks.lock().unwrap().insert(hash, bytes);
     }
 }
 
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        Ok(self.blocks.borrow().get(block_id).cloned())
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-        let block_ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
-        Ok(Box::new(block_ids.into_iter().map(Ok)))
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
+        let block_ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
 }
 
 struct MemoryHarness;
 
+#[async_trait(?Send)]
 impl BlockStoreFactory for MemoryHarness {
     type Store = MemoryBlockStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         MemoryBlockStore::default()
     }
 }
 
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for MemoryHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,
@@ -70,10 +83,10 @@ impl BlockStoreConformanceHarness for MemoryHarness {
 
 #[test]
 fn downstream_crates_can_run_the_contract_suite() {
-    run_contract_suite(&MemoryHarness).unwrap();
+    block_on(run_contract_suite(&MemoryHarness)).unwrap();
 }
 
 #[test]
 fn downstream_crates_can_run_the_full_suite() {
-    run_full_suite(&MemoryHarness).unwrap();
+    block_on(run_full_suite(&MemoryHarness)).unwrap();
 }

@@ -11,7 +11,10 @@ edition = "2024"
 conformance = ["dep:pollster"]
 
 [dependencies]
+async-trait = "0.1"
+async-recursion = "1"
 ciborium = "0.2.2"
+futures = "0.3"
 half = "2.7.1"
 lexongraph-adaptive-planning-policy = { path = "../lexongraph-adaptive-planning-policy" }
 lexongraph-block = { path = "../lexongraph-block" }
@@ -26,4 +29,5 @@ pollster = { version = "0.4.0", optional = true }
 sha2 = "0.11.0"
 
 [dev-dependencies]
-tokio = { version = "1.52.3", features = ["macros", "rt"] }
+pollster = "0.4.0"
+tokio = { version = "1.52.3", features = ["macros", "rt", "time"] }

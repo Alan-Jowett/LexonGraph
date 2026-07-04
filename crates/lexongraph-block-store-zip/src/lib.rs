@@ -13,8 +13,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
+use futures::stream;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use zip::ZipArchive;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,8 +110,9 @@ impl ZipBlockStore {
     }
 }
 
+#[async_trait]
 impl BlockStore for ZipBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         _block_id: &BlockHash,
         _block_bytes: &[u8],
@@ -120,7 +123,10 @@ impl BlockStore for ZipBlockStore {
         )))
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let target_name = Self::block_entry_name(block_id);
         let mut file = open_archive_file(&self.archive_path)?;
         let match_count = archive_entry_names(&mut file, &self.archive_path, self.archive_offset)?
@@ -161,8 +167,10 @@ impl BlockStore for ZipBlockStore {
         Ok(Some(bytes))
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        Ok(Box::new(self.enumerate_block_ids()?.into_iter().map(Ok)))
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+        Ok(Box::pin(stream::iter(
+            self.enumerate_block_ids()?.into_iter().map(Ok),
+        )))
     }
 }
 

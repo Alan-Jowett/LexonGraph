@@ -6,9 +6,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = "0.1"
+futures = "0.3"
 lexongraph-block = { version = "0.1.0", path = "../lexongraph-block" }
 lexongraph-block-store = { version = "0.1.0", path = "../lexongraph-block-store" }
 zip = "8"
 
 [dev-dependencies]
+pollster = "0.4.0"
 tempfile = "3"

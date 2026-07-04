@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 #[cfg(feature = "inject")]
+use async_trait::async_trait;
+#[cfg(feature = "inject")]
+use futures::stream;
+#[cfg(feature = "inject")]
 use lexongraph_block::BlockHash;
 use lexongraph_block::{
     Block, Content, EmbeddingSpec, LeafEntry, VERSION_1, ValidatedBlock, build_leaf_block,
@@ -8,6 +12,8 @@ use lexongraph_block::{
 };
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::{BlockStoreConformanceHarness, BlockStoreFactory};
+#[cfg(feature = "inject")]
+use lexongraph_block_store::{BlockStore, BlockStoreError};
 #[cfg(feature = "inject")]
 use lexongraph_block_store_memory::MemoryBlockStore;
 
@@ -48,17 +54,19 @@ pub fn validated_block(body: &str) -> ValidatedBlock {
 pub struct MemoryHarness;
 
 #[cfg(feature = "inject")]
+#[async_trait(?Send)]
 impl BlockStoreFactory for MemoryHarness {
     type Store = MemoryBlockStore;
 
-    fn fresh_store(&self) -> Self::Store {
+    async fn fresh_store(&self) -> Self::Store {
         MemoryBlockStore::new(8).unwrap()
     }
 }
 
 #[cfg(feature = "inject")]
+#[async_trait(?Send)]
 impl BlockStoreConformanceHarness for MemoryHarness {
-    fn inject_raw_bytes(
+    async fn inject_raw_bytes(
         &self,
         store: &Self::Store,
         block_id: &BlockHash,

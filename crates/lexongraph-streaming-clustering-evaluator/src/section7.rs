@@ -599,7 +599,7 @@ fn run_section7_design(
     for &beam_width in &SECTION7_BEAM_WIDTHS {
         for (query, exact_neighbor_ids) in held_out_queries.iter().zip(&exact_neighbor_ids_by_query)
         {
-            let predicted_neighbor_ids = search_neighbors(
+            let predicted_neighbor_ids = pollster::block_on(search_neighbors(
                 &design_tree.store,
                 design_tree.root_id,
                 query,
@@ -607,7 +607,7 @@ fn run_section7_design(
                 materialized_entities.len(),
                 beam_width,
                 &summary_report.metric_semantics_profile,
-            )?;
+            ))?;
             query_reports.push(build_query_report(
                 query,
                 beam_width,
@@ -1052,7 +1052,7 @@ fn held_out_query_set_ids(profile: &BenchmarkProfile) -> Vec<String> {
         .collect()
 }
 
-fn search_neighbors(
+async fn search_neighbors(
     store: &dyn BlockStore,
     root_id: BlockHash,
     query: &Section7HeldOutQuery,
@@ -1076,24 +1076,30 @@ fn search_neighbors(
         neighbor_count.saturating_add(1).min(indexed_entity_count)
     };
     let (neighbor_ids, telemetry) = match metric_semantics_profile {
-        "cosine" => greedy_route_with_telemetry(
-            &root_id,
-            &target,
-            beam_width,
-            requested,
-            store,
-            DefaultEmbeddingCompatibility,
-            lexongraph_search::DefaultCandidateScorer,
-        )?,
-        "euclidean" => greedy_route_with_telemetry(
-            &root_id,
-            &target,
-            beam_width,
-            requested,
-            store,
-            DefaultEmbeddingCompatibility,
-            EuclideanCandidateScorer,
-        )?,
+        "cosine" => {
+            greedy_route_with_telemetry(
+                &root_id,
+                &target,
+                beam_width,
+                requested,
+                store,
+                DefaultEmbeddingCompatibility,
+                lexongraph_search::DefaultCandidateScorer,
+            )
+            .await?
+        }
+        "euclidean" => {
+            greedy_route_with_telemetry(
+                &root_id,
+                &target,
+                beam_width,
+                requested,
+                store,
+                DefaultEmbeddingCompatibility,
+                EuclideanCandidateScorer,
+            )
+            .await?
+        }
         other => {
             return Err(EvaluatorError::InvalidConfiguration(format!(
                 "section-7 metric semantics profile {other} is unsupported; supported profiles: euclidean, cosine"
@@ -1132,7 +1138,7 @@ struct GreedyRoutingContext<'a, Target, EC, CS> {
     visited_blocks: &'a mut HashSet<BlockHash>,
 }
 
-fn greedy_route_with_telemetry<Target, EC, CS>(
+async fn greedy_route_with_telemetry<Target, EC, CS>(
     root_id: &BlockHash,
     target: &Target,
     beam_width: usize,
@@ -1175,7 +1181,8 @@ where
                     telemetry: &mut telemetry,
                     visited_blocks: &mut visited_blocks,
                 },
-            )?;
+            )
+            .await?;
             for candidate in scored {
                 match candidate {
                     GreedyCandidate::Branch { .. } => branch_candidates.push(candidate),
@@ -1229,7 +1236,7 @@ where
     Ok((Vec::new(), telemetry))
 }
 
-fn load_greedy_candidates<Target, EC, CS>(
+async fn load_greedy_candidates<Target, EC, CS>(
     block_id: BlockHash,
     depth: usize,
     context: &mut GreedyRoutingContext<'_, Target, EC, CS>,
@@ -1238,7 +1245,7 @@ where
     EC: EmbeddingCompatibility<Target>,
     CS: CandidateScorer<Target>,
 {
-    let Some(validated) = context.store.get(&block_id).map_err(|error| {
+    let Some(validated) = context.store.get(&block_id).await.map_err(|error| {
         EvaluatorError::InvalidConfiguration(format!(
             "section-7 greedy routing failed to load block {block_id}: {error}"
         ))

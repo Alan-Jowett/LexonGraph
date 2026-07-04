@@ -206,6 +206,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-recursion"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1737,6 +1748,7 @@ dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
  "lexongraph-block-store-fs",
+ "pollster",
  "serde_json",
  "tempfile",
 ]
@@ -1745,6 +1757,8 @@ dependencies = [
 name = "lexongraph-block-store"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
  "lexongraph-block",
 ]
 
@@ -1752,8 +1766,11 @@ dependencies = [
 name = "lexongraph-block-store-azure"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
  "lexongraph-block",
  "lexongraph-block-store",
+ "pollster",
  "quick-xml 0.41.0",
  "reqwest",
  "serde",
@@ -1763,11 +1780,13 @@ dependencies = [
 name = "lexongraph-block-store-azure-sdk"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "azure_core",
  "azure_storage_blob",
  "futures",
  "lexongraph-block",
  "lexongraph-block-store",
+ "pollster",
  "tokio",
 ]
 
@@ -1775,8 +1794,11 @@ dependencies = [
 name = "lexongraph-block-store-fs"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
  "lexongraph-block",
  "lexongraph-block-store",
+ "pollster",
  "tempfile",
 ]
 
@@ -1784,20 +1806,26 @@ dependencies = [
 name = "lexongraph-block-store-memory"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ciborium",
+ "futures",
  "lexongraph-block",
  "lexongraph-block-store",
+ "pollster",
 ]
 
 [[package]]
 name = "lexongraph-block-store-overlay"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
  "lexongraph-block",
  "lexongraph-block-store",
  "lexongraph-block-store-azure",
  "lexongraph-block-store-fs",
  "lexongraph-block-store-memory",
+ "pollster",
  "tempfile",
 ]
 
@@ -1805,8 +1833,11 @@ dependencies = [
 name = "lexongraph-block-store-zip"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures",
  "lexongraph-block",
  "lexongraph-block-store",
+ "pollster",
  "tempfile",
  "zip",
 ]
@@ -1877,9 +1908,12 @@ dependencies = [
 name = "lexongraph-search"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ciborium",
+ "futures",
  "lexongraph-block",
  "lexongraph-block-store",
+ "pollster",
 ]
 
 [[package]]
@@ -1900,9 +1934,11 @@ version = "0.1.0"
 name = "lexongraph-streaming-clustering-evaluator"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytemuck",
  "ciborium",
  "clap",
+ "futures",
  "half",
  "lexongraph-block",
  "lexongraph-block-store",
@@ -1932,7 +1968,10 @@ dependencies = [
 name = "lexongraph-streaming-indexer"
 version = "0.3.0"
 dependencies = [
+ "async-recursion",
+ "async-trait",
  "ciborium",
+ "futures",
  "half",
  "lexongraph-adaptive-planning-policy",
  "lexongraph-block",

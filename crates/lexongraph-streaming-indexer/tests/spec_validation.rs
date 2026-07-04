@@ -2,18 +2,20 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Executable verification for docs/specs/rust-streaming-indexer-crate/validation.md
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use async_trait::async_trait;
+use futures::stream;
 use lexongraph_block::{
     BlockError, BlockHash, BranchBlock, Content, EbcpQuantization, EmbeddingSpec, TypedEntries,
     into_entries, parse_branch_ebcp_descriptor,
 };
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::DirectionalPcaParams;
 use lexongraph_directional_pca::{
@@ -55,20 +57,32 @@ use lexongraph_streaming_indexer::{
 };
 use sha2::{Digest, Sha256};
 
+trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
+    fn unwrap(self) -> T
+    where
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap()
+    }
+}
+
+impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
+
 // ─── Shared infrastructure ─────────────────────────────────────────────────────
 
 #[derive(Default)]
 struct MemoryBlockStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
 }
 
 #[derive(Default)]
 struct SlowBranchStore {
-    blocks: RefCell<HashMap<BlockHash, Vec<u8>>>,
+    blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
 }
 
+#[async_trait]
 impl BlockStore for SlowBranchStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
@@ -80,54 +94,72 @@ impl BlockStore for SlowBranchStore {
                 ..
             })
         ) {
-            thread::sleep(Duration::from_millis(250));
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        Ok(self.blocks.borrow().get(block_id).cloned())
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
-        Ok(Box::new(ids.into_iter().map(Ok)))
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
+        let ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
     }
 }
 
+#[async_trait]
 impl BlockStore for MemoryBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         self.blocks
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(*block_id, block_bytes.to_vec());
         Ok(())
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        Ok(self.blocks.borrow().get(block_id).cloned())
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        Ok(self.blocks.lock().unwrap().get(block_id).cloned())
     }
 
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-        let ids = self.blocks.borrow().keys().copied().collect::<Vec<_>>();
-        Ok(Box::new(ids.into_iter().map(Ok)))
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
+        let ids = self
+            .blocks
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
     }
 }
 
 struct FaultyIdStore;
 
+#[async_trait]
 impl BlockStore for FaultyIdStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         _block_id: &BlockHash,
         _block_bytes: &[u8],
@@ -135,11 +167,11 @@ impl BlockStore for FaultyIdStore {
         Ok(())
     }
 
-    fn get_block_bytes(&self, _: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(&self, _: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         Ok(None)
     }
 
-    fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
+    async fn put(&self, block: &lexongraph_block::Block) -> Result<BlockHash, BlockStoreError> {
         let serialized =
             lexongraph_block::serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
         let mut bytes = serialized.hash.into_bytes();
@@ -148,10 +180,8 @@ impl BlockStore for FaultyIdStore {
         }
         Ok(BlockHash::from_bytes(bytes))
     }
-    fn iter_block_ids(
-        &self,
-    ) -> Result<lexongraph_block_store::BlockIdIterator<'_>, BlockStoreError> {
-        Ok(Box::new(std::iter::empty()))
+    fn iter_block_ids(&self) -> Result<lexongraph_block_store::BlockIdStream<'_>, BlockStoreError> {
+        Ok(Box::pin(stream::empty()))
     }
 }
 
@@ -3426,8 +3456,7 @@ async fn materialize_string_profile(
 
 fn max_branch_fanout(store: &MemoryBlockStore) -> usize {
     let mut max_fanout = 0usize;
-    for block_id in store.iter_block_ids().unwrap() {
-        let block_id = block_id.unwrap();
+    for block_id in store.list_block_ids().unwrap() {
         let Some(block) = store.get(&block_id).unwrap() else {
             continue;
         };
