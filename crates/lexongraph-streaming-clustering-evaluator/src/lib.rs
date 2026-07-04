@@ -471,33 +471,6 @@ fn should_force_temp_layer_failure_for_tests() -> bool {
     false
 }
 
-pub(crate) fn block_on_store_future<F>(future: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap()
-                        .block_on(future)
-                })
-                .join()
-                .unwrap()
-        })
-    } else {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
-}
-
 #[async_trait]
 impl BlockStore for FsOverlayZipBlockStore {
     async fn put_block_bytes(
@@ -3793,6 +3766,12 @@ fn load_evaluation_entities_from_reference(
 pub(crate) fn load_leaf_records(
     reference: &BlockStoreCorpusReference,
 ) -> Result<Vec<LoadedLeafRecord>, CandidateExecutionError> {
+    pollster::block_on(load_leaf_records_async(reference))
+}
+
+async fn load_leaf_records_async(
+    reference: &BlockStoreCorpusReference,
+) -> Result<Vec<LoadedLeafRecord>, CandidateExecutionError> {
     let root_block_id = parse_block_hash_hex(&reference.root_block_id)
         .map_err(|message| invalid_corpus_source_reference(&reference.source_id, message))?;
     let store = open_corpus_store(reference)?;
@@ -3804,7 +3783,8 @@ pub(crate) fn load_leaf_records(
         root_block_id,
         &mut visited,
         &mut records,
-    )?;
+    )
+    .await?;
     Ok(records)
 }
 
@@ -3843,47 +3823,50 @@ fn open_corpus_store(
     }
 }
 
-fn collect_leaf_records(
+async fn collect_leaf_records(
     store: &dyn BlockStore,
     reference: &BlockStoreCorpusReference,
     block_id: BlockHash,
     visited: &mut HashSet<BlockHash>,
     records: &mut Vec<LoadedLeafRecord>,
 ) -> Result<(), CandidateExecutionError> {
-    if !visited.insert(block_id) {
-        return Err(corpus_source_load_failure(
-            &reference.source_id,
-            format!("encountered block {block_id} more than once while traversing the source"),
-        ));
-    }
-
-    let validated = block_on_store_future(store.get(&block_id))
-        .map_err(|error| {
-            source_store_read_failure(
-                reference,
-                format!("failed to load block {block_id}: {error}"),
-            )
-        })?
-        .ok_or_else(|| {
-            corpus_source_load_failure(
+    let mut pending = vec![block_id];
+    while let Some(block_id) = pending.pop() {
+        if !visited.insert(block_id) {
+            return Err(corpus_source_load_failure(
                 &reference.source_id,
-                format!("referenced block {block_id} was not present in the store"),
-            )
-        })?;
-
-    match into_entries(validated) {
-        TypedEntries::Branch(_, entries) => {
-            for entry in entries {
-                collect_leaf_records(store, reference, entry.child, visited, records)?;
-            }
+                format!("encountered block {block_id} more than once while traversing the source"),
+            ));
         }
-        TypedEntries::Leaf(metadata, entries) => {
-            for entry in entries {
-                records.push(LoadedLeafRecord {
-                    block_id,
-                    embedding_spec: metadata.embedding_spec.clone(),
-                    entry,
-                });
+
+        let validated = store
+            .get(&block_id)
+            .await
+            .map_err(|error| {
+                source_store_read_failure(
+                    reference,
+                    format!("failed to load block {block_id}: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                corpus_source_load_failure(
+                    &reference.source_id,
+                    format!("referenced block {block_id} was not present in the store"),
+                )
+            })?;
+
+        match into_entries(validated) {
+            TypedEntries::Branch(_, entries) => {
+                pending.extend(entries.into_iter().rev().map(|entry| entry.child));
+            }
+            TypedEntries::Leaf(metadata, entries) => {
+                for entry in entries {
+                    records.push(LoadedLeafRecord {
+                        block_id,
+                        embedding_spec: metadata.embedding_spec.clone(),
+                        entry,
+                    });
+                }
             }
         }
     }
