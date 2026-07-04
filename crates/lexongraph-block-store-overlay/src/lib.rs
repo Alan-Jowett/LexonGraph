@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use async_trait::async_trait;
-use futures::{StreamExt, stream};
+use futures::{StreamExt, future, stream};
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 
@@ -176,11 +176,13 @@ impl OverlayBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) {
-        for layer in &self.layers[..hit_index] {
-            if layer.role().accepts_refill() {
-                let _ = layer.put_block_bytes(block_id, block_bytes).await;
-            }
-        }
+        let _ = future::join_all(
+            self.layers[..hit_index]
+                .iter()
+                .filter(|layer| layer.role().accepts_refill())
+                .map(|layer| layer.put_block_bytes(block_id, block_bytes)),
+        )
+        .await;
     }
 }
 
