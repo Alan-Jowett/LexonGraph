@@ -455,18 +455,22 @@ fn val_azure_sdk_store_007_008_enumeration_surfaces_listing_transient_and_decodi
     }
 
     let decode_error_server = MockAzureServer::start();
-    decode_error_server.add_extra_list_name("aa/bb/not-a-block-id.cbor");
+    decode_error_server.add_extra_list_name("00/00/not-a-block-id.cbor");
+    decode_error_server.add_extra_list_name(
+        "ff/ff/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.cbor",
+    );
     match decode_error_server.store().iter_block_ids() {
         Err(error) => expect_backend_failure_contains(
             error,
-            "failed to decode an enumerated block ID candidate at blob aa/bb/not-a-block-id.cbor",
+            "failed to decode an enumerated block ID candidate at blob 00/00/not-a-block-id.cbor",
         ),
-        Ok(iter) => {
-            let error = iter.collect::<Result<Vec<_>, _>>().unwrap_err();
+        Ok(mut iter) => {
+            let error = iter.next().unwrap().unwrap_err();
             expect_backend_failure_contains(
                 error,
-                "failed to decode an enumerated block ID candidate at blob aa/bb/not-a-block-id.cbor",
+                "failed to decode an enumerated block ID candidate at blob 00/00/not-a-block-id.cbor",
             );
+            assert!(iter.next().is_none());
         }
     }
 

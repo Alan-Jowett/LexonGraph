@@ -201,15 +201,17 @@ impl BlockStore for AzureBlobBlockStore {
                     Some(name) => name,
                     None => continue,
                 };
-                let item = match decode_recognized_block_blob_name(&name) {
-                    Ok(Some(block_id)) => Some(Ok(block_id)),
-                    Ok(None) => None,
-                    Err(error) => Some(Err(backend_failure(error))),
-                };
-                if let Some(item) = item
-                    && sender.send(item).await.is_err()
-                {
-                    return;
+                match decode_recognized_block_blob_name(&name) {
+                    Ok(Some(block_id)) => {
+                        if sender.send(Ok(block_id)).await.is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = sender.send(Err(backend_failure(error))).await;
+                        return;
+                    }
                 }
             }
         });
