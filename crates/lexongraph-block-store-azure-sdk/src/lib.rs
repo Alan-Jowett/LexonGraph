@@ -148,15 +148,24 @@ impl BlockStore for AzureBlobBlockStore {
             match blob_client.exists().await {
                 Ok(false) => Ok(None),
                 Ok(true) => {
-                    let response = blob_client.download(None).await.map_err(|error| {
-                        backend_failure(format!(
-                            "failed to read block {} from blob {} in container {}: {}",
-                            block_id,
-                            blob_name,
-                            self.container_display,
-                            describe_azure_error(&error)
-                        ))
-                    })?;
+                    let response = match blob_client.download(None).await {
+                        Ok(response) => response,
+                        Err(error)
+                            if storage_error_code(&error)
+                                == Some(StorageErrorCode::BlobNotFound) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(error) => {
+                            return Err(backend_failure(format!(
+                                "failed to read block {} from blob {} in container {}: {}",
+                                block_id,
+                                blob_name,
+                                self.container_display,
+                                describe_azure_error(&error)
+                            )));
+                        }
+                    };
                     let body = response.body.collect().await.map_err(|error| {
                         backend_failure(format!(
                             "failed to read block {} from blob {} in container {}: {}",

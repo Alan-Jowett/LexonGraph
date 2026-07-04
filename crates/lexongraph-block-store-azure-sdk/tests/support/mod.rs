@@ -59,6 +59,7 @@ struct MockState {
     malformed_listing: bool,
     list_error: Option<u16>,
     blob_status_overrides: HashMap<String, u16>,
+    get_status_overrides: HashMap<String, u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -157,6 +158,15 @@ impl MockAzureServer {
             .lock()
             .unwrap()
             .blob_status_overrides
+            .insert(blob_name.into(), status);
+    }
+
+    pub fn set_get_status(&self, blob_name: impl Into<String>, status: u16) {
+        self.inner
+            .state
+            .lock()
+            .unwrap()
+            .get_status_overrides
             .insert(blob_name.into(), status);
     }
 
@@ -305,6 +315,19 @@ fn respond_to_get(stream: TcpStream, inner: &Arc<MockAzureServerInner>, blob_nam
         state.disconnect_get_attempts -= 1;
         drop(state);
         let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+    if let Some(status) = state.get_status_overrides.get(blob_name) {
+        let request_id = mock_request_id("GET", blob_name);
+        let headers = if *status == 404 {
+            vec![
+                ("x-ms-request-id", request_id.as_str()),
+                ("x-ms-error-code", "BlobNotFound"),
+            ]
+        } else {
+            vec![("x-ms-request-id", request_id.as_str())]
+        };
+        write_response_with_headers(stream, *status, &headers, &[]);
         return;
     }
     if let Some(status) = state.blob_status_overrides.get(blob_name) {

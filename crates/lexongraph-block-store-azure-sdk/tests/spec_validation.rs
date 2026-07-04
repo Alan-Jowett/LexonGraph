@@ -120,6 +120,14 @@ fn val_azure_sdk_store_005_007_get_reports_integrity_malformed_transient_and_bac
         2
     );
 
+    let disappeared_server = MockAzureServer::start();
+    let disappeared_store = disappeared_server.store();
+    let disappeared = serialize_block(&sample_leaf_block("disappeared-after-exists")).unwrap();
+    let disappeared_blob = disappeared_server.blob_name(&disappeared.hash);
+    disappeared_server.insert_blob(&disappeared_blob, disappeared.bytes);
+    disappeared_server.set_get_status(&disappeared_blob, 404);
+    assert_eq!(disappeared_store.get(&disappeared.hash).unwrap(), None);
+
     let exhausted_retry_server = MockAzureServer::start();
     let exhausted_retry_store = exhausted_retry_server.store();
     let exhausted = serialize_block(&sample_leaf_block("retry-exhausted-get")).unwrap();
