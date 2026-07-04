@@ -4,6 +4,7 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 
 use azure_core::error::ErrorKind;
 use azure_core::http::{
@@ -145,86 +146,96 @@ impl BlockStore for AzureBlobBlockStore {
         let blob_client = self.blob_client(&blob_name)?;
 
         self.runtime.block_on(async {
-            match blob_client.exists().await {
-                Ok(false) => Ok(None),
-                Ok(true) => {
-                    let response = match blob_client.download(None).await {
-                        Ok(response) => response,
-                        Err(error)
-                            if storage_error_code(&error)
-                                == Some(StorageErrorCode::BlobNotFound) =>
-                        {
-                            return Ok(None);
-                        }
-                        Err(error) => {
-                            return Err(backend_failure(format!(
-                                "failed to read block {} from blob {} in container {}: {}",
-                                block_id,
-                                blob_name,
-                                self.container_display,
-                                describe_azure_error(&error)
-                            )));
-                        }
-                    };
-                    let body = response.body.collect().await.map_err(|error| {
-                        backend_failure(format!(
-                            "failed to read block {} from blob {} in container {}: {}",
-                            block_id,
-                            blob_name,
-                            self.container_display,
-                            describe_azure_error(&error)
-                        ))
-                    })?;
-                    Ok(Some(body.to_vec()))
-                }
+            let response = match blob_client.download(None).await {
+                Ok(response) => response,
                 Err(error)
                     if storage_error_code(&error) == Some(StorageErrorCode::BlobNotFound) =>
                 {
-                    Ok(None)
+                    return Ok(None);
                 }
-                Err(error) => Err(backend_failure(format!(
+                Err(error) => {
+                    return Err(backend_failure(format!(
+                        "failed to read block {} from blob {} in container {}: {}",
+                        block_id,
+                        blob_name,
+                        self.container_display,
+                        describe_azure_error(&error)
+                    )));
+                }
+            };
+            let body = response.body.collect().await.map_err(|error| {
+                backend_failure(format!(
                     "failed to read block {} from blob {} in container {}: {}",
                     block_id,
                     blob_name,
                     self.container_display,
                     describe_azure_error(&error)
-                ))),
-            }
+                ))
+            })?;
+            Ok(Some(body.to_vec()))
         })
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
         let container_client = self.container_client()?;
         let container_display = self.container_display.clone();
-        let ids = self.runtime.block_on(async move {
-            let mut blobs = container_client.list_blobs(None).map_err(|error| {
-                backend_failure(format!(
-                    "failed to list Azure container {}: {}",
-                    container_display,
-                    describe_azure_error(&error)
-                ))
-            })?;
-            let mut block_ids = Vec::new();
-            while let Some(blob) = blobs.try_next().await.map_err(|error| {
-                backend_failure(format!(
-                    "failed to list Azure container {}: {}",
-                    container_display,
-                    describe_azure_error(&error)
-                ))
-            })? {
+        let (sender, receiver) = mpsc::channel();
+        self.runtime.spawn(async move {
+            let mut blobs = match container_client.list_blobs(None) {
+                Ok(blobs) => blobs,
+                Err(error) => {
+                    let _ = sender.send(Err(backend_failure(format!(
+                        "failed to list Azure container {}: {}",
+                        container_display,
+                        describe_azure_error(&error)
+                    ))));
+                    return;
+                }
+            };
+            loop {
+                let next = match blobs.try_next().await {
+                    Ok(next) => next,
+                    Err(error) => {
+                        let _ = sender.send(Err(backend_failure(format!(
+                            "failed to list Azure container {}: {}",
+                            container_display,
+                            describe_azure_error(&error)
+                        ))));
+                        return;
+                    }
+                };
+                let Some(blob) = next else {
+                    return;
+                };
                 let Some(name) = blob.name else {
                     continue;
                 };
-                match decode_recognized_block_blob_name(&name) {
-                    Ok(Some(block_id)) => block_ids.push(Ok(block_id)),
-                    Ok(None) => {}
-                    Err(error) => block_ids.push(Err(backend_failure(error))),
+                let item = match decode_recognized_block_blob_name(&name) {
+                    Ok(Some(block_id)) => Some(Ok(block_id)),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(backend_failure(error))),
+                };
+                if let Some(item) = item
+                    && sender.send(item).is_err()
+                {
+                    return;
                 }
             }
-            Ok::<_, BlockStoreError>(block_ids)
-        })?;
+        });
 
-        Ok(Box::new(ids.into_iter()))
+        Ok(Box::new(AzureBlockIdIterator { receiver }))
+    }
+}
+
+struct AzureBlockIdIterator {
+    receiver: Receiver<Result<BlockHash, BlockStoreError>>,
+}
+
+impl Iterator for AzureBlockIdIterator {
+    type Item = Result<BlockHash, BlockStoreError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.receiver.recv().ok()
     }
 }
 

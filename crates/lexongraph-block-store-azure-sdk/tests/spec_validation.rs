@@ -63,11 +63,23 @@ fn val_azure_sdk_store_003_round_trip_and_missing_blocks_match_the_contract() {
     let block = sample_leaf_block("round-trip");
 
     let block_id = store.put(&block).unwrap();
+    let blob_name = server.blob_name(&block_id);
     let loaded = store.get(&block_id).unwrap().unwrap();
 
     assert_eq!(loaded.hash, block_id);
     assert_eq!(loaded.block, block);
     assert_eq!(store.get(&BlockHash::from_bytes([0x44; 32])).unwrap(), None);
+    let requests = server.recorded_requests();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.method == "HEAD" && request.target.contains(&blob_name))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.method == "GET" && request.target.contains(&blob_name))
+    );
 }
 
 #[test]
