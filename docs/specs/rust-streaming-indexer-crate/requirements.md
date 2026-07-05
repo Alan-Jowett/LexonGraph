@@ -198,6 +198,11 @@ The crate shall continue to provide explicit API paths that accept
 caller-supplied canonical-embedding, hierarchical planning, and streaming
 clustering policy implementations.
 
+When those paths participate in indexer-owned replay planning or final
+materialization, the crate shall remain authoritative for replay validation,
+block-store-backed planning-artifact ownership, and finalized-hierarchy
+normalization.
+
 ### REQ-STREAM-INDEXER-016
 
 The first completed streaming indexing pass shall establish the logical item set
@@ -212,6 +217,10 @@ The public contract shall remain dataset-size independent by requiring caller
 replay for repeated passes and final materialization rather than requiring the
 crate's default API surface to retain or rematerialize the full logical dataset
 on the caller's behalf.
+
+The default and built-in planning surfaces shall likewise avoid requiring
+whole-pass in-memory embedding materialization or recursive copies of active
+partition embeddings as protocol-significant retained state.
 
 ### REQ-STREAM-INDEXER-018
 
@@ -230,10 +239,14 @@ for deriving or refining a deterministic finalized partition hierarchy.
 
 When the built-in planning path is selected:
 
-- `Divisive` mode shall derive or refine that hierarchy by partitioning replayed
-  original-item embeddings from coarser planning units to finer ones
-- `Agglomerative` mode shall derive or refine that hierarchy by grouping
-  lower-layer planning units bottom-up
+- `Divisive` mode shall derive or refine that hierarchy by replaying persisted
+  original-item embedding artifacts for selected planning units, addressed
+  through stable partition membership descriptors, from coarser units to finer
+  ones
+- `Agglomerative` mode shall derive or refine that hierarchy by replaying
+  persisted lower-layer planning-unit summaries or equivalent carried-forward
+  artifacts, addressed through stable unit descriptors, to group lower-layer
+  planning units bottom-up
 
 Both modes shall normalize into the same deterministic finalized partition
 hierarchy abstraction before final materialization.
@@ -330,6 +343,10 @@ The crate shall surface explicit failure when:
 - a later replay differs from the established logical item set or replay order
 - the finalized partition hierarchy is invalid, overlapping, non-covering, or
   otherwise inconsistent with the replayed logical item set
+- block-store-backed planning-artifact creation, persistence, reopening, or
+  replay fails
+- a planning-unit descriptor cannot be resolved deterministically against the
+  block-store-backed planning artifacts for the current pass
 - hybrid planning configuration is invalid
 - adaptive planning configuration is invalid
 - a selected built-in planning realization does not support the requested
@@ -417,9 +434,9 @@ symmetric matrix.
 
 ### REQ-STREAM-INDEXER-034
 
-The crate shall define an explicit deterministic planning boundary over replayed
-original-item embeddings or lower-layer planning units that is distinct from
-final block materialization.
+The crate shall define an explicit deterministic planning boundary over
+persisted replayable original-item embedding artifacts or persisted lower-layer
+planning-unit artifacts that is distinct from final block materialization.
 
 This boundary shall remain expressed as a finalized partition hierarchy
 regardless of whether the built-in planning path derives that hierarchy
@@ -483,6 +500,10 @@ The adaptive aggregate built-in realization shall support both `Divisive` and
 Across any internal algorithm switch, the selected built-in direction shall
 remain unchanged.
 
+That support shall use the same block-store-backed replayable planning-artifact
+boundary as non-adaptive built-in planning rather than a separate
+resident-corpus path.
+
 ### REQ-STREAM-INDEXER-046
 
 The adaptive aggregate built-in realization shall derive its PCA-to-DCBC switch
@@ -491,11 +512,17 @@ decisions from explicit deterministic diagnostics and configured thresholds.
 Given the same logical item set, replay order, planning settings, and
 deterministic dependency behavior, the same switch boundary shall be selected.
 
+Those diagnostics shall be derived from the block-store-backed replayable
+planning inputs or planning outputs available at the adaptive boundary.
+
 ### REQ-STREAM-INDEXER-047
 
 Within one adaptive planning flow, once the built-in realization switches from
 directional PCA to DCBC, it shall not switch back to directional PCA later in
 that same flow.
+
+Replaying a later partition or layer from block-store-backed planning
+artifacts shall not reopen directional-PCA eligibility after such a switch.
 
 ### REQ-STREAM-INDEXER-048
 
@@ -1108,6 +1135,38 @@ It shall not:
 When a `0.6.x` profile emits an EBCP-encoded non-leaf block, the emitted block
 shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,
 including the required `ext` metadata for the selected EBCP encoding.
+
+### REQ-STREAM-INDEXER-113
+
+Each completed planning pass shall persist deterministic replayable
+block-store-backed planning artifacts sufficient to re-read original-item
+embeddings and lower-layer planning summaries for later partition refinement or
+grouping without retaining the whole pass as resident vectors.
+
+### REQ-STREAM-INDEXER-114
+
+For both built-in planning directions, the planning boundary shall represent
+the active work in terms of stable item identities, stable ancestry paths,
+ranges, membership sets, or equivalent deterministic planning-unit descriptors
+that can be resolved against block-store-backed planning artifacts without
+copying full embedding sets.
+
+### REQ-STREAM-INDEXER-115
+
+Planning may retain only bounded transient state for the currently active
+planning unit or layer, such as projected coordinates, assignments, centroids,
+or scan-local accumulators.
+
+Once that unit completes, the crate shall not require the original embeddings
+for that unit to remain resident as hidden state for later child refinement or
+upper-layer grouping.
+
+### REQ-STREAM-INDEXER-116
+
+Directional-PCA, adaptive, and other built-in planning realizations may
+perform deterministic multi-scan or out-of-core refinement over
+block-store-backed planning artifacts when deriving child partitions,
+regrouping higher layers, or computing adaptive switch diagnostics.
 
 ## Out of Scope
 

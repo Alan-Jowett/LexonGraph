@@ -105,7 +105,9 @@ caller-supplied canonical-embedding, hierarchical-planning, or clustering
 implementations.
 
 **Pass condition:** the crate accepts those replacements without changing the
-rest of the streaming runtime contract.
+rest of the streaming runtime contract, while the indexer remains
+authoritative for replay validation, block-store-backed planning-artifact
+ownership, and finalized-hierarchy normalization.
 
 **Traces to:** REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015
 
@@ -1194,3 +1196,63 @@ and selecting any `0.6.x` profile does not mutate the declared mapping of
 `0.5.0` or any earlier published profile.
 
 **Traces to:** REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-111
+
+### VAL-STREAM-INDEXER-101
+
+Complete one successful built-in `Divisive` planning pass over multiple caller
+batches and drive at least one non-terminal partition to a later child refit.
+
+Inspect the implementation-visible block-store-backed planning artifact ledger
+or equivalent verification hooks for that pass.
+
+**Pass condition:** the pass persists deterministic replayable
+block-store-backed artifacts for original-item embeddings, and child partition
+planning reopens the needed subset through stable partition descriptors instead
+of relying on a full resident pass-wide `Vec<Vec<f32>>`.
+
+**Traces to:** REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-019,
+REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-114,
+REQ-STREAM-INDEXER-115, REQ-STREAM-INDEXER-116
+
+### VAL-STREAM-INDEXER-102
+
+Run built-in `Agglomerative` planning on a fixture that requires at least one
+higher-layer grouping step after lower-layer units have already been emitted.
+
+**Pass condition:** agglomerative grouping replays block-store-backed
+lower-layer summary artifacts or equivalent carried-forward records for the
+active layer, normalizes into the same finalized hierarchy abstraction, and
+does not require all layer embeddings to remain resident after the prior layer
+completes.
+
+**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-034,
+REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-114,
+REQ-STREAM-INDEXER-115, REQ-STREAM-INDEXER-116
+
+### VAL-STREAM-INDEXER-103
+
+Run an adaptive planning fixture whose switch criteria are met only after at
+least one planning boundary has been persisted and later reopened.
+
+**Pass condition:** switch diagnostics are derived from block-store-backed
+replayable planning inputs or outputs at that boundary, the same switch
+boundary is reproduced on identical replays, the selected built-in direction
+is preserved, and no later reopened partition or layer re-enables directional
+PCA after the switch.
+
+**Traces to:** REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046,
+REQ-STREAM-INDEXER-047, REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-116
+
+### VAL-STREAM-INDEXER-104
+
+Corrupt, remove, or make inaccessible a required block-store-backed planning
+artifact before a pending child refit or agglomerative regroup step.
+
+**Pass condition:** the crate fails explicitly before claiming successful
+planning completion or conformant continuation, and the surfaced error
+identifies block-store-backed planning-artifact read, write, replay, or
+descriptor resolution failure rather than silently falling back to hidden
+resident state.
+
+**Traces to:** REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-113,
+REQ-STREAM-INDEXER-114

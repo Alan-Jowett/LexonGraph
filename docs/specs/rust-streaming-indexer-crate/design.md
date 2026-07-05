@@ -105,6 +105,9 @@ The crate exposes:
   `lexongraph-directional-pca`, `lexongraph-spherical-kmeans`,
   `lexongraph-dcbc-streaming`, and the adaptive planning-policy crate that
   composes directional PCA with DCBC for one built-in aggregate option
+- a repository-owned replayable planning-artifact boundary that built-in
+  planning realizations reopen through stable partition or layer descriptors
+  rather than by requiring caller-provided resident embedding slices
 - a caller-visible built-in planning-selection surface that requires explicit
   selection of one supported realization-and-direction combination or hybrid
   coarse/fine combination without requiring a caller-implemented factory
@@ -146,8 +149,9 @@ The public API requires the caller to replay the logical item set for repeated
 passes and final materialization rather than requiring the crate to keep the
 entire corpus resident or rematerializable through hidden caller-facing state.
 
-Implementation-internal transient storage is permitted, but it is not part of
-the caller contract.
+Implementation-internal transient caches are permitted, but built-in replay
+planning treats block-store-backed planning artifacts as the source of truth
+and does not make caller correctness depend on a hidden resident corpus.
 
 ### DSG-STREAM-INDEXER-010 `Caller-visible pass realization`
 
@@ -307,6 +311,8 @@ The crate defines an explicit error surface covering at least:
 - unusable resolved content
 - embedding failure
 - clustering failure
+- block-store-backed planning-artifact failure
+- planning-unit descriptor resolution failure
 - hierarchy-validation failure
 - invalid hybrid-planning configuration
 - invalid adaptive-planning configuration
@@ -352,10 +358,11 @@ direction-specific behavior remains covered by separate targeted cases.
 ### DSG-STREAM-INDEXER-023 `Planning boundary`
 
 The run maintains a deterministic partition hierarchy over the established
-logical item set. Planning operates over replayed original-item embeddings or
-lower-layer planning units, depending on the selected built-in direction, and
-stores only the hierarchy state and replay-baseline information needed for
-later replay validation and bottom-up assembly.
+logical item set. Planning operates over persisted replayable original-item
+embedding artifacts or persisted lower-layer planning-unit artifacts,
+depending on the selected built-in direction, and stores only the hierarchy
+state, deterministic planning-unit descriptors, and replay-baseline
+information needed for later replay validation and bottom-up assembly.
 
 Both built-in directions normalize into the same finalized partition-hierarchy
 representation before final materialization.
@@ -1066,6 +1073,49 @@ the indexer writes blocks that remain valid under `docs/protocol/blocks.md` and
 carry all protocol-required EBCP metadata in `ext` so a search reader can
 interpret the branch embeddings without out-of-band state.
 
+### DSG-STREAM-INDEXER-107 `Persisted planning replay artifacts`
+
+The first successful planning pass persists a deterministic replayable
+block-store-backed artifact set containing original-item embedding records in
+replay order together with any lower-layer summary records needed for later
+agglomerative or adaptive planning work.
+
+Artifact identities derive from pass number, layer or partition ancestry, and
+replay order so reopened scans remain deterministic.
+
+### DSG-STREAM-INDEXER-108 `Planning-unit descriptors`
+
+Each planning unit is represented by stable ancestry plus deterministic
+membership descriptors, such as ordered ranges, ordered item identifiers, or
+stable child-summary handles.
+
+Those descriptors identify what to reopen from block-store-backed planning
+artifacts without materializing standalone vectors for the whole pass or active
+partition.
+
+### DSG-STREAM-INDEXER-109 `Out-of-core planning-unit execution`
+
+For divisive planning, the run may scan a planning unit's persisted embeddings
+multiple times to fit PCA or clustering state, project points, assign bins, and
+materialize child memberships.
+
+For agglomerative planning, the run replays persisted lower-layer summaries or
+centroids for the current layer while grouping units bottom-up.
+
+In either direction, transient resident state is bounded to the active unit and
+its immediate outputs, such as projected coordinates, assignments, centroids,
+or scan-local accumulators, and is released after that unit completes.
+
+### DSG-STREAM-INDEXER-110 `Replay-based adaptive diagnostics`
+
+The adaptive realization computes switch diagnostics from the
+block-store-backed planning inputs or outputs available at the current planning
+boundary.
+
+Once it records a switch to DCBC for one planning flow, later
+persisted-artifact replays in that same flow reuse the recorded active
+algorithm and do not reopen directional-PCA eligibility.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1162,4 +1212,8 @@ interpret the branch embeddings without out-of-band state.
 | DSG-STREAM-INDEXER-104 | REQ-STREAM-INDEXER-109, REQ-STREAM-INDEXER-111 |
 | DSG-STREAM-INDEXER-105 | REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-111 |
 | DSG-STREAM-INDEXER-106 | REQ-STREAM-INDEXER-111, REQ-STREAM-INDEXER-112 |
+| DSG-STREAM-INDEXER-107 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-113 |
+| DSG-STREAM-INDEXER-108 | REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-114 |
+| DSG-STREAM-INDEXER-109 | REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-115, REQ-STREAM-INDEXER-116 |
+| DSG-STREAM-INDEXER-110 | REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047, REQ-STREAM-INDEXER-116 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |

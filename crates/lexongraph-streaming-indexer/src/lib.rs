@@ -123,6 +123,91 @@ pub struct FinalizedPartitionHierarchy {
     pub partitions: Vec<FinalizedPartition>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct PlanningArtifactStore {
+    blocks: Arc<Mutex<HashMap<BlockHash, Vec<u8>>>>,
+}
+
+impl PlanningArtifactStore {
+    fn put_bytes(&self, bytes: Vec<u8>) -> BlockHash {
+        let block_id = hash_bytes(bytes.as_slice());
+        self.blocks.lock().unwrap().insert(block_id, bytes);
+        block_id
+    }
+
+    fn get_bytes(&self, block_id: &BlockHash) -> Result<Vec<u8>, StreamingIndexerError> {
+        self.blocks
+            .lock()
+            .unwrap()
+            .get(block_id)
+            .cloned()
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning artifact {block_id:?} is unavailable"
+                ))
+            })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PlanningArtifactLedger {
+    store: PlanningArtifactStore,
+    original_item_artifact_ids: Arc<Mutex<Vec<BlockHash>>>,
+}
+
+impl PlanningArtifactLedger {
+    fn push_original_embedding(&self, embedding: &[f32]) {
+        let block_id = self.store.put_bytes(encode_f32_vec(embedding));
+        self.original_item_artifact_ids
+            .lock()
+            .unwrap()
+            .push(block_id);
+    }
+
+    fn len(&self) -> usize {
+        self.original_item_artifact_ids.lock().unwrap().len()
+    }
+
+    fn original_item_artifact_ids(&self) -> Vec<BlockHash> {
+        self.original_item_artifact_ids.lock().unwrap().clone()
+    }
+
+    fn load_all_embeddings(&self) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
+        let item_ids = self.original_item_artifact_ids.lock().unwrap().clone();
+        item_ids
+            .iter()
+            .map(|block_id| self.load_embedding_artifact(block_id))
+            .collect()
+    }
+
+    fn load_embeddings(&self, indices: &[usize]) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
+        let item_ids = self.original_item_artifact_ids.lock().unwrap().clone();
+        indices
+            .iter()
+            .map(|&index| {
+                let block_id = item_ids.get(index).ok_or_else(|| {
+                    StreamingIndexerError::PlanningArtifactResolution(format!(
+                        "planning unit referenced missing original-item artifact at index {index}"
+                    ))
+                })?;
+                self.load_embedding_artifact(block_id)
+            })
+            .collect()
+    }
+
+    fn persist_summary_embedding(&self, embedding: &[f32]) -> BlockHash {
+        self.store.put_bytes(encode_f32_vec(embedding))
+    }
+
+    fn load_embedding_artifact(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Vec<f32>, StreamingIndexerError> {
+        let bytes = self.store.get_bytes(block_id)?;
+        decode_f32_artifact(bytes.as_slice())
+    }
+}
+
 pub struct PlanningPassOutcome {
     pub hierarchy: FinalizedPartitionHierarchy,
     pub requested_cluster_count: Option<u32>,
@@ -247,6 +332,12 @@ pub trait StreamingClusteringFactory {
 pub trait HierarchicalPlanningPolicy {
     type Error: std::error::Error;
 
+    fn uses_planning_artifacts(&self) -> bool {
+        false
+    }
+
+    fn install_planning_artifacts(&mut self, _artifacts: PlanningArtifactLedger) {}
+
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
         BTreeSet::from([PlanningStage::Custom])
     }
@@ -334,6 +425,8 @@ pub enum StreamingIndexerError {
     InvalidAdaptivePlanningConfiguration(String),
     HierarchyValidation(String),
     CanonicalEmbeddingFailure(String),
+    PlanningArtifactFailure(String),
+    PlanningArtifactResolution(String),
     IntermediateNodeTooLarge {
         min_serialized_bytes: usize,
         size_target: usize,
@@ -370,6 +463,10 @@ impl fmt::Display for StreamingIndexerError {
             Self::HierarchyValidation(m) => write!(f, "partition hierarchy is invalid: {m}"),
             Self::CanonicalEmbeddingFailure(m) => {
                 write!(f, "canonical embedding selection failed: {m}")
+            }
+            Self::PlanningArtifactFailure(m) => write!(f, "planning artifact failed: {m}"),
+            Self::PlanningArtifactResolution(m) => {
+                write!(f, "planning artifact resolution failed: {m}")
             }
             Self::IntermediateNodeTooLarge {
                 min_serialized_bytes,
@@ -1283,14 +1380,24 @@ pub fn published_indexing_profile(
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PublishedProfilePlanningPolicy {
     profile: PublishedIndexingProfile,
+    planning_artifacts: Option<PlanningArtifactLedger>,
+}
+
+impl PartialEq for PublishedProfilePlanningPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.profile == other.profile
+    }
 }
 
 impl PublishedProfilePlanningPolicy {
     pub fn new(profile: PublishedIndexingProfile) -> Self {
-        Self { profile }
+        Self {
+            profile,
+            planning_artifacts: None,
+        }
     }
 
     pub fn profile(&self) -> &PublishedIndexingProfile {
@@ -1365,10 +1472,18 @@ pub enum BuiltInPlanning {
     Adaptive(AdaptivePlanningSettings),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct BuiltInPlanningPolicy {
     planning: BuiltInPlanning,
     last_adaptive_decision_records: Vec<AdaptiveSwitchDecisionRecord>,
+    planning_artifacts: Option<PlanningArtifactLedger>,
+}
+
+impl PartialEq for BuiltInPlanningPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.planning == other.planning
+            && self.last_adaptive_decision_records == other.last_adaptive_decision_records
+    }
 }
 
 impl BuiltInPlanningPolicy {
@@ -1376,6 +1491,7 @@ impl BuiltInPlanningPolicy {
         Self {
             planning,
             last_adaptive_decision_records: Vec::new(),
+            planning_artifacts: None,
         }
     }
 
@@ -1595,6 +1711,14 @@ where
 impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
     type Error = StreamingIndexerError;
 
+    fn uses_planning_artifacts(&self) -> bool {
+        true
+    }
+
+    fn install_planning_artifacts(&mut self, artifacts: PlanningArtifactLedger) {
+        self.planning_artifacts = Some(artifacts);
+    }
+
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
         match &self.planning {
             BuiltInPlanning::Dcbc(_)
@@ -1615,8 +1739,10 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
         let mut noop = |_| {};
+        let artifacts = self.planning_artifacts.take();
         let (outcome, decision_records) = derive_hierarchy_from_built_in(
             &self.planning,
+            artifacts.as_ref(),
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -1638,8 +1764,10 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
     where
         SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
     {
+        let artifacts = self.planning_artifacts.take();
         let (outcome, decision_records) = derive_hierarchy_from_built_in(
             &self.planning,
+            artifacts.as_ref(),
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -1661,8 +1789,10 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
     where
         SO: FnMut(HierarchyPlanningStatusEvent),
     {
+        let artifacts = self.planning_artifacts.take();
         let (outcome, decision_records) = derive_hierarchy_from_built_in(
             &self.planning,
+            artifacts.as_ref(),
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -1676,6 +1806,14 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
 
 impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
     type Error = StreamingIndexerError;
+
+    fn uses_planning_artifacts(&self) -> bool {
+        true
+    }
+
+    fn install_planning_artifacts(&mut self, artifacts: PlanningArtifactLedger) {
+        self.planning_artifacts = Some(artifacts);
+    }
 
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
         match &self.profile.planning_strategy {
@@ -1696,8 +1834,10 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
         _block_size_target: usize,
     ) -> Result<PlanningPassOutcome, Self::Error> {
         let mut noop = |_| {};
+        let artifacts = self.planning_artifacts.take();
         derive_hierarchy_from_published_profile(
             &self.profile,
+            artifacts.as_ref(),
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -1716,8 +1856,10 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
     where
         SO: FnMut(PlanningStage, usize, StreamingIndexingStatusState),
     {
+        let artifacts = self.planning_artifacts.take();
         derive_hierarchy_from_published_profile(
             &self.profile,
+            artifacts.as_ref(),
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -1736,8 +1878,10 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
     where
         SO: FnMut(HierarchyPlanningStatusEvent),
     {
+        let artifacts = self.planning_artifacts.take();
         derive_hierarchy_from_published_profile(
             &self.profile,
+            artifacts.as_ref(),
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -1800,7 +1944,7 @@ pub struct StreamingIndexingRun<R, CR, EP, CEP, HPP> {
     baseline: Option<Vec<BaselineItem>>,
     finalized_hierarchy: Option<FinalizedPartitionHierarchy>,
     current_pass_items: Vec<BaselineItem>,
-    current_pass_f32_embeddings: Vec<Vec<f32>>,
+    current_pass_artifacts: PlanningArtifactLedger,
     items_seen_in_current_pass: usize,
     _item_ref: PhantomData<R>,
 }
@@ -1996,7 +2140,7 @@ impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP> {
             baseline: None,
             finalized_hierarchy: None,
             current_pass_items: Vec::new(),
-            current_pass_f32_embeddings: Vec::new(),
+            current_pass_artifacts: PlanningArtifactLedger::default(),
             items_seen_in_current_pass: 0,
             _item_ref: PhantomData,
         }
@@ -2112,8 +2256,9 @@ where
         }
 
         for embedding in &embeddings {
-            self.current_pass_f32_embeddings
-                .push(decode_embedding_as_f32(embedding, &self.embedding_spec)?);
+            let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
+            self.current_pass_artifacts
+                .push_original_embedding(decoded.as_slice());
         }
         self.items_seen_in_current_pass += batch.len();
         Ok(())
@@ -2183,11 +2328,18 @@ where
         ));
 
         let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
-        let buffered = std::mem::take(&mut self.current_pass_f32_embeddings);
+        let buffered = std::mem::take(&mut self.current_pass_artifacts);
+        self.planning_policy
+            .install_planning_artifacts(buffered.clone());
+        let materialized_embeddings = if self.planning_policy.uses_planning_artifacts() {
+            None
+        } else {
+            Some(buffered.load_all_embeddings()?)
+        };
         let outcome = self
             .planning_policy
             .finish_planning_pass_with_status_observer(
-                &buffered,
+                materialized_embeddings.as_deref().unwrap_or(&[]),
                 &self.embedding_spec,
                 materializability_bound,
                 self.block_size_target,
@@ -2200,7 +2352,7 @@ where
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.current_pass_f32_embeddings = buffered;
+                self.current_pass_artifacts = buffered;
                 heartbeat.stop();
                 stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 emit_status(
@@ -2223,7 +2375,7 @@ where
             validate_partition_hierarchy(&outcome.hierarchy, self.items_seen_in_current_pass)
                 .map_err(StreamingIndexerError::HierarchyValidation)
         {
-            self.current_pass_f32_embeddings = buffered;
+            self.current_pass_artifacts = buffered;
             stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             emit_status(
                 &self.observer,
@@ -2924,6 +3076,7 @@ where
 
 fn derive_hierarchy_from_built_in(
     planning: &BuiltInPlanning,
+    artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
@@ -2933,6 +3086,7 @@ fn derive_hierarchy_from_built_in(
     match planning {
         BuiltInPlanning::Dcbc(settings) => derive_hierarchy_for_single_built_in_phase(
             BuiltInPlanningPhase::Dcbc(settings.clone()),
+            artifacts,
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -2941,6 +3095,7 @@ fn derive_hierarchy_from_built_in(
         .map(|outcome| (outcome, Vec::new())),
         BuiltInPlanning::DirectionalPca(settings) => derive_hierarchy_for_single_built_in_phase(
             BuiltInPlanningPhase::DirectionalPca(settings.clone()),
+            artifacts,
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -2949,6 +3104,7 @@ fn derive_hierarchy_from_built_in(
         .map(|outcome| (outcome, Vec::new())),
         BuiltInPlanning::SphericalKmeans(settings) => derive_hierarchy_for_single_built_in_phase(
             BuiltInPlanningPhase::SphericalKmeans(settings.clone()),
+            artifacts,
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -2967,27 +3123,68 @@ fn derive_hierarchy_from_built_in(
                 ));
             };
             match direction {
-                BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder(
-                    embeddings,
-                    materializability_bound,
-                    stage_observer,
-                    |partition_embeddings| {
-                        let (stage, phase) =
-                            select_hybrid_phase(settings, partition_embeddings.len());
-                        Ok(PartitionPlanner::new(
-                            stage,
-                            create_built_in_trainer(
-                                &phase,
-                                partition_embeddings.len(),
-                                partition_embeddings.first().map_or(0, std::vec::Vec::len),
-                                embedding_spec,
-                                materializability_bound,
-                            )?,
-                        ))
-                    },
-                )
+                BuiltInPlanningDirection::Divisive => if let Some(artifacts) = artifacts {
+                    derive_hierarchy_with_streaming_artifacts_and_fallback_group_cap(
+                        artifacts,
+                        materializability_bound,
+                        None,
+                        stage_observer,
+                        |partition_len, dimensions| {
+                            let (stage, phase) = select_hybrid_phase(settings, partition_len);
+                            Ok(PartitionPlanner::new(
+                                stage,
+                                create_built_in_trainer(
+                                    &phase,
+                                    partition_len,
+                                    dimensions,
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ))
+                        },
+                    )
+                } else {
+                    derive_hierarchy_with_builder(
+                        embeddings,
+                        materializability_bound,
+                        stage_observer,
+                        |partition_embeddings| {
+                            let (stage, phase) =
+                                select_hybrid_phase(settings, partition_embeddings.len());
+                            Ok(PartitionPlanner::new(
+                                stage,
+                                create_built_in_trainer(
+                                    &phase,
+                                    partition_embeddings.len(),
+                                    partition_embeddings.first().map_or(0, std::vec::Vec::len),
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ))
+                        },
+                    )
+                }
                 .map(|outcome| (outcome, Vec::new())),
-                BuiltInPlanningDirection::Agglomerative => {
+                BuiltInPlanningDirection::Agglomerative => if let Some(artifacts) = artifacts {
+                    derive_hierarchy_agglomeratively_from_artifacts_with_builder(
+                        artifacts,
+                        materializability_bound,
+                        stage_observer,
+                        |layer_embeddings, _represented_item_count, max_unit_item_count| {
+                            let (stage, phase) = select_hybrid_phase(settings, max_unit_item_count);
+                            Ok(PartitionPlanner::new(
+                                stage,
+                                create_built_in_trainer(
+                                    &phase,
+                                    layer_embeddings.len(),
+                                    layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ))
+                        },
+                    )
+                } else {
                     derive_hierarchy_agglomeratively_with_builder(
                         embeddings,
                         materializability_bound,
@@ -3006,12 +3203,13 @@ fn derive_hierarchy_from_built_in(
                             ))
                         },
                     )
-                    .map(|outcome| (outcome, Vec::new()))
                 }
+                .map(|outcome| (outcome, Vec::new())),
             }
         }
         BuiltInPlanning::Adaptive(settings) => derive_hierarchy_for_adaptive_built_in(
             settings,
+            artifacts,
             embeddings,
             embedding_spec,
             materializability_bound,
@@ -3022,6 +3220,7 @@ fn derive_hierarchy_from_built_in(
 
 fn derive_hierarchy_for_single_built_in_phase(
     phase: BuiltInPlanningPhase,
+    artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
@@ -3029,6 +3228,7 @@ fn derive_hierarchy_for_single_built_in_phase(
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
         phase,
+        artifacts,
         embeddings,
         embedding_spec,
         materializability_bound,
@@ -3039,6 +3239,7 @@ fn derive_hierarchy_for_single_built_in_phase(
 
 fn derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
     phase: BuiltInPlanningPhase,
+    artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
@@ -3046,41 +3247,86 @@ fn derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
     match phase.direction() {
-        BuiltInPlanningDirection::Divisive => derive_hierarchy_with_builder_and_fallback_group_cap(
-            embeddings,
-            materializability_bound,
-            fallback_group_cap,
-            stage_observer,
-            |partition_embeddings| {
-                Ok(PartitionPlanner::new(
-                    PlanningStage::Single,
-                    create_built_in_trainer(
-                        &phase,
-                        partition_embeddings.len(),
-                        partition_embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
-                ))
-            },
-        ),
-        BuiltInPlanningDirection::Agglomerative => derive_hierarchy_agglomeratively_with_builder(
-            embeddings,
-            materializability_bound,
-            stage_observer,
-            |layer_embeddings, _represented_item_count, _max_unit_item_count| {
-                Ok(PartitionPlanner::new(
-                    PlanningStage::Single,
-                    create_built_in_trainer(
-                        &phase,
-                        layer_embeddings.len(),
-                        layer_embeddings.first().map_or(0, std::vec::Vec::len),
-                        embedding_spec,
-                        materializability_bound,
-                    )?,
-                ))
-            },
-        ),
+        BuiltInPlanningDirection::Divisive => {
+            if let Some(artifacts) = artifacts {
+                derive_hierarchy_with_streaming_artifacts_and_fallback_group_cap(
+                    artifacts,
+                    materializability_bound,
+                    fallback_group_cap,
+                    stage_observer,
+                    |partition_len, dimensions| {
+                        Ok(PartitionPlanner::new(
+                            PlanningStage::Single,
+                            create_built_in_trainer(
+                                &phase,
+                                partition_len,
+                                dimensions,
+                                embedding_spec,
+                                materializability_bound,
+                            )?,
+                        ))
+                    },
+                )
+            } else {
+                derive_hierarchy_with_builder_and_fallback_group_cap(
+                    embeddings,
+                    materializability_bound,
+                    fallback_group_cap,
+                    stage_observer,
+                    |partition_embeddings| {
+                        Ok(PartitionPlanner::new(
+                            PlanningStage::Single,
+                            create_built_in_trainer(
+                                &phase,
+                                partition_embeddings.len(),
+                                partition_embeddings.first().map_or(0, std::vec::Vec::len),
+                                embedding_spec,
+                                materializability_bound,
+                            )?,
+                        ))
+                    },
+                )
+            }
+        }
+        BuiltInPlanningDirection::Agglomerative => {
+            if let Some(artifacts) = artifacts {
+                derive_hierarchy_agglomeratively_from_artifacts_with_builder(
+                    artifacts,
+                    materializability_bound,
+                    stage_observer,
+                    |layer_embeddings, _represented_item_count, _max_unit_item_count| {
+                        Ok(PartitionPlanner::new(
+                            PlanningStage::Single,
+                            create_built_in_trainer(
+                                &phase,
+                                layer_embeddings.len(),
+                                layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                                embedding_spec,
+                                materializability_bound,
+                            )?,
+                        ))
+                    },
+                )
+            } else {
+                derive_hierarchy_agglomeratively_with_builder(
+                    embeddings,
+                    materializability_bound,
+                    stage_observer,
+                    |layer_embeddings, _represented_item_count, _max_unit_item_count| {
+                        Ok(PartitionPlanner::new(
+                            PlanningStage::Single,
+                            create_built_in_trainer(
+                                &phase,
+                                layer_embeddings.len(),
+                                layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                                embedding_spec,
+                                materializability_bound,
+                            )?,
+                        ))
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -3169,11 +3415,23 @@ fn create_built_in_trainer(
 
 fn derive_hierarchy_for_adaptive_built_in(
     settings: &AdaptivePlanningSettings,
+    artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<(PlanningPassOutcome, Vec<AdaptiveSwitchDecisionRecord>), StreamingIndexerError> {
+    if let (AdaptivePlanningDirection::Divisive, Some(artifacts)) = (settings.direction, artifacts)
+    {
+        return derive_adaptive_divisive_hierarchy_from_artifacts(
+            artifacts,
+            settings,
+            embedding_spec,
+            materializability_bound,
+            stage_observer,
+        );
+    }
+
     let mut selector =
         AdaptivePlanningSelector::new(settings.clone()).map_err(map_adaptive_planning_error)?;
     let outcome = match settings.direction {
@@ -3200,29 +3458,57 @@ fn derive_hierarchy_for_adaptive_built_in(
                 )
             },
         ),
-        AdaptivePlanningDirection::Agglomerative => derive_hierarchy_agglomeratively_with_builder(
-            embeddings,
-            materializability_bound,
-            stage_observer,
-            |layer_embeddings, represented_item_count, _max_unit_item_count| {
-                let algorithm = selector
-                    .select_algorithm(represented_item_count, layer_embeddings)
-                    .map_err(map_adaptive_planning_error)?;
-                let phase = adaptive_phase(settings, algorithm);
-                Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
-                    PartitionPlanner::new(
-                        PlanningStage::Single,
-                        create_built_in_trainer(
-                            &phase,
-                            layer_embeddings.len(),
-                            layer_embeddings.first().map_or(0, std::vec::Vec::len),
-                            embedding_spec,
-                            materializability_bound,
-                        )?,
-                    ),
+        AdaptivePlanningDirection::Agglomerative => {
+            if let Some(artifacts) = artifacts {
+                derive_hierarchy_agglomeratively_from_artifacts_with_builder(
+                    artifacts,
+                    materializability_bound,
+                    stage_observer,
+                    |layer_embeddings, represented_item_count, _max_unit_item_count| {
+                        let algorithm = selector
+                            .select_algorithm(represented_item_count, layer_embeddings)
+                            .map_err(map_adaptive_planning_error)?;
+                        let phase = adaptive_phase(settings, algorithm);
+                        Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
+                            PartitionPlanner::new(
+                                PlanningStage::Single,
+                                create_built_in_trainer(
+                                    &phase,
+                                    layer_embeddings.len(),
+                                    layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ),
+                        )
+                    },
                 )
-            },
-        ),
+            } else {
+                derive_hierarchy_agglomeratively_with_builder(
+                    embeddings,
+                    materializability_bound,
+                    stage_observer,
+                    |layer_embeddings, represented_item_count, _max_unit_item_count| {
+                        let algorithm = selector
+                            .select_algorithm(represented_item_count, layer_embeddings)
+                            .map_err(map_adaptive_planning_error)?;
+                        let phase = adaptive_phase(settings, algorithm);
+                        Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
+                            PartitionPlanner::new(
+                                PlanningStage::Single,
+                                create_built_in_trainer(
+                                    &phase,
+                                    layer_embeddings.len(),
+                                    layer_embeddings.first().map_or(0, std::vec::Vec::len),
+                                    embedding_spec,
+                                    materializability_bound,
+                                )?,
+                            ),
+                        )
+                    },
+                )
+            }
+        }
     }?;
     Ok((outcome, selector.decision_records().to_vec()))
 }
@@ -3272,6 +3558,7 @@ fn map_adaptive_planning_error(error: AdaptivePlanningError) -> StreamingIndexer
 
 fn derive_hierarchy_from_published_profile(
     profile: &PublishedIndexingProfile,
+    artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
     embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
@@ -3283,6 +3570,7 @@ fn derive_hierarchy_from_published_profile(
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
             derive_hierarchy_from_published_spherical_kmeans_profile(
                 settings,
+                artifacts,
                 embeddings,
                 effective_partition_bound,
                 stage_observer,
@@ -3296,6 +3584,7 @@ fn derive_hierarchy_from_published_profile(
                     random_seed: settings.random_seed,
                     params: settings.params.clone(),
                 }),
+                artifacts,
                 embeddings,
                 embedding_spec,
                 effective_partition_bound,
@@ -3335,10 +3624,18 @@ fn published_profile_fallback_group_cap(
 
 fn derive_hierarchy_from_published_spherical_kmeans_profile(
     settings: &PublishedSphericalKmeansProfileSettings,
+    artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
+    let owned_embeddings;
+    let embeddings = if let Some(artifacts) = artifacts {
+        owned_embeddings = artifacts.load_all_embeddings()?;
+        owned_embeddings.as_slice()
+    } else {
+        embeddings
+    };
     if embeddings.is_empty() {
         return Ok(PlanningPassOutcome {
             hierarchy: FinalizedPartitionHierarchy {
@@ -3426,6 +3723,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                     child_node_indices: Vec::new(),
                     item_indices,
                     representative_embedding: Some(representative_embedding),
+                    representative_artifact_id: None,
                     planning_stage: PlanningStage::Fine,
                 }
             })
@@ -3489,6 +3787,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                 child_node_indices: group,
                 item_indices,
                 representative_embedding: Some(representative_embedding),
+                representative_artifact_id: None,
                 planning_stage: PlanningStage::Coarse,
             });
             next_layer.push(next_index);
@@ -3599,11 +3898,65 @@ where
     }
 }
 
+fn run_partition_planner_with_replay<T, OP, Load>(
+    mut planner: PartitionPlanner<T>,
+    embedding_count: usize,
+    load_embedding: &mut Load,
+    observe_progress: &mut OP,
+) -> Result<(PassReport, Vec<ClusterId>), StreamingIndexerError>
+where
+    T: StreamingClusterTrainer,
+    OP: FnMut(),
+    Load: FnMut(usize) -> Result<Vec<f32>, StreamingIndexerError>,
+{
+    for index in 0..embedding_count {
+        planner.trainer.ingest_batch(&[load_embedding(index)?])?;
+    }
+    observe_progress();
+    let pass_report = planner.trainer.finish_pass()?;
+    observe_progress();
+    planner.trainer.complete_training()?;
+    observe_progress();
+    let classifier = planner.trainer.into_classifier()?;
+    let assignments = (0..embedding_count)
+        .map(|index| {
+            classifier
+                .assign(&load_embedding(index)?)
+                .map_err(StreamingIndexerError::from)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    observe_progress();
+    Ok((pass_report, assignments))
+}
+
+fn run_partition_planner_with_artifacts<T, OP>(
+    planner: PartitionPlanner<T>,
+    artifacts: &PlanningArtifactLedger,
+    indices: &[usize],
+    observe_progress: &mut OP,
+) -> Result<(PassReport, Vec<ClusterId>), StreamingIndexerError>
+where
+    T: StreamingClusterTrainer,
+    OP: FnMut(),
+{
+    run_partition_planner_with_replay(
+        planner,
+        indices.len(),
+        &mut |position| {
+            artifacts
+                .load_embeddings(&[indices[position]])
+                .map(|embeddings| embeddings[0].clone())
+        },
+        observe_progress,
+    )
+}
+
 #[derive(Clone, Debug)]
 struct AgglomerativeHierarchyNode {
     child_node_indices: Vec<usize>,
     item_indices: Vec<usize>,
     representative_embedding: Option<Vec<f32>>,
+    representative_artifact_id: Option<BlockHash>,
     planning_stage: PlanningStage,
 }
 
@@ -3727,6 +4080,7 @@ where
             child_node_indices: Vec::new(),
             item_indices: vec![index],
             representative_embedding: Some(embedding.clone()),
+            representative_artifact_id: None,
             planning_stage: PlanningStage::Single,
         })
         .collect::<Vec<_>>();
@@ -3836,6 +4190,7 @@ where
                 child_node_indices,
                 item_indices,
                 representative_embedding: Some(representative_embedding),
+                representative_artifact_id: None,
                 planning_stage: stage,
             });
             next_layer.push(next_index);
@@ -3860,6 +4215,330 @@ where
         planning_balance_direction: accumulator.balance_direction,
         stages_used: accumulator.stages_used,
     })
+}
+
+fn derive_hierarchy_agglomeratively_from_artifacts_with_builder<B, P, SO>(
+    artifacts: &PlanningArtifactLedger,
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+    planner_builder: B,
+) -> Result<PlanningPassOutcome, StreamingIndexerError>
+where
+    B: FnMut(&[Vec<f32>], usize, usize) -> Result<P, StreamingIndexerError>,
+    P: PartitionPlannerRunner,
+    SO: FnMut(HierarchyPlanningStatusEvent),
+{
+    let original_item_artifact_ids = artifacts.original_item_artifact_ids();
+    let mut nodes = original_item_artifact_ids
+        .iter()
+        .enumerate()
+        .map(|(index, artifact_id)| AgglomerativeHierarchyNode {
+            child_node_indices: Vec::new(),
+            item_indices: vec![index],
+            representative_embedding: None,
+            representative_artifact_id: Some(*artifact_id),
+            planning_stage: PlanningStage::Single,
+        })
+        .collect::<Vec<_>>();
+    derive_hierarchy_agglomeratively_with_artifact_nodes(
+        artifacts,
+        nodes.as_mut_slice(),
+        materializability_bound,
+        stage_observer,
+        planner_builder,
+    )
+}
+
+fn derive_hierarchy_agglomeratively_with_artifact_nodes<B, P, SO>(
+    artifacts: &PlanningArtifactLedger,
+    nodes: &mut [AgglomerativeHierarchyNode],
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+    mut planner_builder: B,
+) -> Result<PlanningPassOutcome, StreamingIndexerError>
+where
+    B: FnMut(&[Vec<f32>], usize, usize) -> Result<P, StreamingIndexerError>,
+    P: PartitionPlannerRunner,
+    SO: FnMut(HierarchyPlanningStatusEvent),
+{
+    if nodes.is_empty() {
+        return Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: Vec::new(),
+            },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        });
+    }
+
+    let mut accumulator = PlanningMetricAccumulator::default();
+    let mut nodes = nodes.to_vec();
+    let mut current_layer = (0..nodes.len()).collect::<Vec<_>>();
+
+    while current_layer.len() > 1 {
+        let represented_item_count = current_layer
+            .iter()
+            .map(|&node_index| nodes[node_index].item_indices.len())
+            .sum();
+        let max_unit_item_count = current_layer
+            .iter()
+            .map(|&node_index| nodes[node_index].item_indices.len())
+            .max()
+            .unwrap_or(0);
+        let layer_embeddings = current_layer
+            .iter()
+            .map(|&node_index| {
+                let block_id = nodes[node_index]
+                    .representative_artifact_id
+                    .ok_or_else(|| {
+                        StreamingIndexerError::PlanningArtifactResolution(format!(
+                            "planning unit {node_index} is missing its representative artifact"
+                        ))
+                    })?;
+                artifacts.load_embedding_artifact(&block_id)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let planner = planner_builder(
+            &layer_embeddings,
+            represented_item_count,
+            max_unit_item_count,
+        )?;
+        let stage = planner.stage();
+        stage_observer(HierarchyPlanningStatusEvent::legacy(
+            stage,
+            represented_item_count,
+            StreamingIndexingStatusState::Started,
+        ));
+        stage_observer(HierarchyPlanningStatusEvent::legacy(
+            stage,
+            represented_item_count,
+            StreamingIndexingStatusState::InProgress,
+        ));
+        let (pass_report, assignments) = planner.run(&layer_embeddings, &mut || {})?;
+        if assignments.len() != layer_embeddings.len() {
+            return Err(StreamingIndexerError::ClusteringFailure(format!(
+                "planner returned {} cluster ids for {} planning units",
+                assignments.len(),
+                layer_embeddings.len()
+            )));
+        }
+
+        accumulator.observe(stage, &pass_report);
+
+        let mut groups = assignments_to_groups(&assignments);
+        groups = ensure_min_two_per_group(groups);
+        for group in &mut groups {
+            group.sort_unstable();
+        }
+        groups.sort_by_key(|group| group[0]);
+        if groups.len() <= 1 || groups.len() >= current_layer.len() {
+            groups = balanced_groups(current_layer.len(), materializability_bound)
+                .map_err(StreamingIndexerError::HierarchyValidation)?;
+        }
+
+        let mut next_layer = Vec::with_capacity(groups.len());
+        for group in groups {
+            let child_node_indices = group
+                .into_iter()
+                .map(|local_index| current_layer[local_index])
+                .collect::<Vec<_>>();
+            let mut item_indices = child_node_indices
+                .iter()
+                .flat_map(|&node_index| nodes[node_index].item_indices.iter().copied())
+                .collect::<Vec<_>>();
+            item_indices.sort_unstable();
+            let child_representative_embeddings =
+                child_node_indices
+                    .iter()
+                    .map(|&node_index| {
+                        let block_id = nodes[node_index].representative_artifact_id.ok_or_else(|| {
+                        StreamingIndexerError::PlanningArtifactResolution(format!(
+                            "planning unit {node_index} is missing its representative artifact"
+                        ))
+                    })?;
+                        artifacts.load_embedding_artifact(&block_id)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+            let representative_embedding = weighted_mean_f32_embeddings(
+                child_node_indices
+                    .iter()
+                    .zip(child_representative_embeddings.iter())
+                    .map(|(&node_index, embedding)| {
+                        (embedding.as_slice(), nodes[node_index].item_indices.len())
+                    }),
+            )?;
+            let next_index = nodes.len();
+            nodes.push(AgglomerativeHierarchyNode {
+                child_node_indices,
+                item_indices,
+                representative_embedding: None,
+                representative_artifact_id: Some(
+                    artifacts.persist_summary_embedding(representative_embedding.as_slice()),
+                ),
+                planning_stage: stage,
+            });
+            next_layer.push(next_index);
+        }
+        current_layer = next_layer;
+    }
+
+    let mut partitions = Vec::new();
+    build_agglomerative_partitions(&nodes, current_layer[0], "p0".into(), None, &mut partitions);
+    partitions.sort_by(|left, right| left.id.cmp(&right.id));
+
+    Ok(PlanningPassOutcome {
+        hierarchy: FinalizedPartitionHierarchy {
+            root_partition_id: "p0".into(),
+            partitions,
+        },
+        requested_cluster_count: accumulator.requested_cluster_count,
+        realized_cluster_count: accumulator.realized_cluster_count,
+        planning_quality_metric: accumulator.average_quality(),
+        planning_balance_metric: accumulator.average_balance(),
+        planning_quality_direction: accumulator.quality_direction,
+        planning_balance_direction: accumulator.balance_direction,
+        stages_used: accumulator.stages_used,
+    })
+}
+
+fn derive_hierarchy_with_streaming_artifacts_and_fallback_group_cap<SO, B>(
+    artifacts: &PlanningArtifactLedger,
+    materializability_bound: usize,
+    fallback_group_cap: Option<usize>,
+    stage_observer: &mut SO,
+    mut planner_builder: B,
+) -> Result<PlanningPassOutcome, StreamingIndexerError>
+where
+    SO: FnMut(HierarchyPlanningStatusEvent),
+    B: FnMut(
+        usize,
+        usize,
+    )
+        -> Result<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>,
+{
+    if artifacts.len() == 0 {
+        return Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: Vec::new(),
+            },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: BTreeSet::new(),
+        });
+    }
+
+    let mut accumulator = PlanningMetricAccumulator::default();
+    let mut telemetry = RecursivePlanningTelemetry::default();
+    let mut partitions = Vec::new();
+    let root_indices = (0..artifacts.len()).collect::<Vec<_>>();
+    derive_partition_recursive_streaming_from_artifacts(
+        root_indices.as_slice(),
+        "p0".into(),
+        None,
+        None,
+        artifacts,
+        materializability_bound,
+        fallback_group_cap,
+        stage_observer,
+        &mut telemetry,
+        &mut planner_builder,
+        &mut accumulator,
+        &mut partitions,
+    )?;
+    partitions.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(PlanningPassOutcome {
+        hierarchy: FinalizedPartitionHierarchy {
+            root_partition_id: "p0".into(),
+            partitions,
+        },
+        requested_cluster_count: accumulator.requested_cluster_count,
+        realized_cluster_count: accumulator.realized_cluster_count,
+        planning_quality_metric: accumulator.average_quality(),
+        planning_balance_metric: accumulator.average_balance(),
+        planning_quality_direction: accumulator.quality_direction,
+        planning_balance_direction: accumulator.balance_direction,
+        stages_used: accumulator.stages_used,
+    })
+}
+
+fn derive_adaptive_divisive_hierarchy_from_artifacts<SO>(
+    artifacts: &PlanningArtifactLedger,
+    settings: &AdaptivePlanningSettings,
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+) -> Result<(PlanningPassOutcome, Vec<AdaptiveSwitchDecisionRecord>), StreamingIndexerError>
+where
+    SO: FnMut(HierarchyPlanningStatusEvent),
+{
+    if artifacts.len() == 0 {
+        return Ok((
+            PlanningPassOutcome {
+                hierarchy: FinalizedPartitionHierarchy {
+                    root_partition_id: "p0".into(),
+                    partitions: Vec::new(),
+                },
+                requested_cluster_count: None,
+                realized_cluster_count: None,
+                planning_quality_metric: 0.0,
+                planning_balance_metric: 0.0,
+                planning_quality_direction: MetricDirection::LargerIsBetter,
+                planning_balance_direction: MetricDirection::SmallerIsBetter,
+                stages_used: BTreeSet::new(),
+            },
+            Vec::new(),
+        ));
+    }
+
+    let mut selector =
+        AdaptivePlanningSelector::new(settings.clone()).map_err(map_adaptive_planning_error)?;
+    let mut accumulator = PlanningMetricAccumulator::default();
+    let mut telemetry = RecursivePlanningTelemetry::default();
+    let mut partitions = Vec::new();
+    let root_indices = (0..artifacts.len()).collect::<Vec<_>>();
+    derive_partition_recursive_streaming_adaptive_from_artifacts(
+        root_indices.as_slice(),
+        "p0".into(),
+        None,
+        None,
+        artifacts,
+        settings,
+        embedding_spec,
+        materializability_bound,
+        stage_observer,
+        &mut selector,
+        &mut telemetry,
+        &mut accumulator,
+        &mut partitions,
+    )?;
+    partitions.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok((
+        PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions,
+            },
+            requested_cluster_count: accumulator.requested_cluster_count,
+            realized_cluster_count: accumulator.realized_cluster_count,
+            planning_quality_metric: accumulator.average_quality(),
+            planning_balance_metric: accumulator.average_balance(),
+            planning_quality_direction: accumulator.quality_direction,
+            planning_balance_direction: accumulator.balance_direction,
+            stages_used: accumulator.stages_used,
+        },
+        selector.decision_records().to_vec(),
+    ))
 }
 
 fn build_agglomerative_partitions(
@@ -3893,6 +4572,338 @@ fn build_agglomerative_partitions(
             partitions,
         );
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_partition_recursive_streaming_from_artifacts<SO, B>(
+    indices: &[usize],
+    partition_id: String,
+    parent_id: Option<String>,
+    stage_hint: Option<PlanningStage>,
+    artifacts: &PlanningArtifactLedger,
+    materializability_bound: usize,
+    fallback_group_cap: Option<usize>,
+    stage_observer: &mut SO,
+    telemetry: &mut RecursivePlanningTelemetry,
+    planner_builder: &mut B,
+    accumulator: &mut PlanningMetricAccumulator,
+    partitions: &mut Vec<FinalizedPartition>,
+) -> Result<(), StreamingIndexerError>
+where
+    SO: FnMut(HierarchyPlanningStatusEvent),
+    B: FnMut(
+        usize,
+        usize,
+    )
+        -> Result<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>,
+{
+    telemetry.started_subproblem_count += 1;
+    telemetry.visited_partition_count += 1;
+    let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
+    if terminal {
+        telemetry.finalized_partition_count += 1;
+        telemetry.terminal_partition_count += 1;
+        telemetry.completed_subproblem_count += 1;
+        partitions.push(FinalizedPartition {
+            id: partition_id,
+            parent_id,
+            child_ids: Vec::new(),
+            item_indices: indices.to_vec(),
+            terminal: true,
+            planning_stage: stage_hint.unwrap_or(PlanningStage::Single),
+        });
+        return Ok(());
+    }
+
+    let first_index = *indices.first().ok_or_else(|| {
+        StreamingIndexerError::PlanningArtifactResolution(
+            "active planning unit unexpectedly had no first item".into(),
+        )
+    })?;
+    let dimensions = artifacts.load_embeddings(&[first_index])?[0].len();
+    let planner = planner_builder(indices.len(), dimensions)?;
+    let stage = planner.stage();
+    telemetry.started_planner_invocation_count += 1;
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::Started,
+    ));
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::InProgress,
+    ));
+    let (pass_report, assignments) =
+        match run_partition_planner_with_artifacts(planner, artifacts, indices, &mut || {
+            stage_observer(telemetry.unit_event(
+                stage,
+                indices.len(),
+                &partition_id,
+                StreamingIndexingStatusState::InProgress,
+            ));
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+                return Err(error);
+            }
+        };
+    if assignments.len() != indices.len() {
+        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+        return Err(StreamingIndexerError::ClusteringFailure(format!(
+            "planner returned {} cluster ids for {} embeddings",
+            assignments.len(),
+            indices.len()
+        )));
+    }
+
+    accumulator.observe(stage, &pass_report);
+
+    let mut groups = assignments_to_groups(&assignments);
+    groups = ensure_min_two_per_group(groups);
+    for group in &mut groups {
+        group.sort_unstable();
+    }
+    groups.sort_by_key(|group| group[0]);
+    if groups.len() <= 1 {
+        telemetry.fallback_count += 1;
+        stage_observer(telemetry.unit_event(
+            stage,
+            indices.len(),
+            &partition_id,
+            StreamingIndexingStatusState::InProgress,
+        ));
+        groups =
+            fallback_partition_groups(indices.len(), materializability_bound, fallback_group_cap)
+                .map_err(StreamingIndexerError::InvalidHybridPlanningConfiguration)?;
+    }
+
+    let child_ids = (0..groups.len())
+        .map(|child_index| format!("{partition_id}.{child_index}"))
+        .collect::<Vec<_>>();
+    partitions.push(FinalizedPartition {
+        id: partition_id.clone(),
+        parent_id: parent_id.clone(),
+        child_ids: child_ids.clone(),
+        item_indices: indices.to_vec(),
+        terminal: false,
+        planning_stage: stage,
+    });
+    telemetry.finalized_partition_count += 1;
+    telemetry.completed_subproblem_count += 1;
+    telemetry.completed_planner_invocation_count += 1;
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::Completed,
+    ));
+
+    for (child_index, group) in groups.into_iter().enumerate() {
+        let child_indices = group
+            .into_iter()
+            .map(|local_index| indices[local_index])
+            .collect::<Vec<_>>();
+        derive_partition_recursive_streaming_from_artifacts(
+            &child_indices,
+            child_ids[child_index].clone(),
+            Some(partition_id.clone()),
+            Some(stage),
+            artifacts,
+            materializability_bound,
+            fallback_group_cap,
+            stage_observer,
+            telemetry,
+            planner_builder,
+            accumulator,
+            partitions,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_partition_recursive_streaming_adaptive_from_artifacts<SO>(
+    indices: &[usize],
+    partition_id: String,
+    parent_id: Option<String>,
+    stage_hint: Option<PlanningStage>,
+    artifacts: &PlanningArtifactLedger,
+    settings: &AdaptivePlanningSettings,
+    embedding_spec: &EmbeddingSpec,
+    materializability_bound: usize,
+    stage_observer: &mut SO,
+    selector: &mut AdaptivePlanningSelector,
+    telemetry: &mut RecursivePlanningTelemetry,
+    accumulator: &mut PlanningMetricAccumulator,
+    partitions: &mut Vec<FinalizedPartition>,
+) -> Result<(), StreamingIndexerError>
+where
+    SO: FnMut(HierarchyPlanningStatusEvent),
+{
+    telemetry.started_subproblem_count += 1;
+    telemetry.visited_partition_count += 1;
+    let terminal = indices.len() <= materializability_bound || indices.len() <= 1;
+    if terminal {
+        telemetry.finalized_partition_count += 1;
+        telemetry.terminal_partition_count += 1;
+        telemetry.completed_subproblem_count += 1;
+        partitions.push(FinalizedPartition {
+            id: partition_id,
+            parent_id,
+            child_ids: Vec::new(),
+            item_indices: indices.to_vec(),
+            terminal: true,
+            planning_stage: stage_hint.unwrap_or(PlanningStage::Single),
+        });
+        return Ok(());
+    }
+
+    let first_index = *indices.first().ok_or_else(|| {
+        StreamingIndexerError::PlanningArtifactResolution(
+            "active planning unit unexpectedly had no first item".into(),
+        )
+    })?;
+    let dimensions = artifacts.load_embeddings(&[first_index])?[0].len();
+    let algorithm = selector
+        .select_algorithm_with_embedding_replay(
+            indices.len(),
+            indices.len(),
+            dimensions,
+            |position| {
+                artifacts
+                    .load_embeddings(&[indices[position]])
+                    .map(|embeddings| embeddings[0].clone())
+                    .map_err(|error| {
+                        AdaptivePlanningError::DiagnosticComputation(error.to_string())
+                    })
+            },
+        )
+        .map_err(map_adaptive_planning_error)?;
+    let phase = adaptive_phase(settings, algorithm);
+    let planner = PartitionPlanner::new(
+        PlanningStage::Single,
+        create_built_in_trainer(
+            &phase,
+            indices.len(),
+            dimensions,
+            embedding_spec,
+            materializability_bound,
+        )?,
+    );
+    let stage = planner.stage();
+    telemetry.started_planner_invocation_count += 1;
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::Started,
+    ));
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::InProgress,
+    ));
+    let (pass_report, assignments) = match run_partition_planner_with_replay(
+        planner,
+        indices.len(),
+        &mut |position| {
+            artifacts
+                .load_embeddings(&[indices[position]])
+                .map(|embeddings| embeddings[0].clone())
+        },
+        &mut || {
+            stage_observer(telemetry.unit_event(
+                stage,
+                indices.len(),
+                &partition_id,
+                StreamingIndexingStatusState::InProgress,
+            ));
+        },
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+            return Err(error);
+        }
+    };
+    if assignments.len() != indices.len() {
+        telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+        return Err(StreamingIndexerError::ClusteringFailure(format!(
+            "planner returned {} cluster ids for {} embeddings",
+            assignments.len(),
+            indices.len()
+        )));
+    }
+
+    accumulator.observe(stage, &pass_report);
+    let mut groups = assignments_to_groups(&assignments);
+    groups = ensure_min_two_per_group(groups);
+    for group in &mut groups {
+        group.sort_unstable();
+    }
+    groups.sort_by_key(|group| group[0]);
+    if groups.len() <= 1 {
+        telemetry.fallback_count += 1;
+        stage_observer(telemetry.unit_event(
+            stage,
+            indices.len(),
+            &partition_id,
+            StreamingIndexingStatusState::InProgress,
+        ));
+        groups = fallback_partition_groups(indices.len(), materializability_bound, None)
+            .map_err(map_clustering_configuration_error)?;
+    }
+
+    let child_ids = (0..groups.len())
+        .map(|child_index| format!("{partition_id}.{child_index}"))
+        .collect::<Vec<_>>();
+    partitions.push(FinalizedPartition {
+        id: partition_id.clone(),
+        parent_id: parent_id.clone(),
+        child_ids: child_ids.clone(),
+        item_indices: indices.to_vec(),
+        terminal: false,
+        planning_stage: stage,
+    });
+    telemetry.finalized_partition_count += 1;
+    telemetry.completed_subproblem_count += 1;
+    telemetry.completed_planner_invocation_count += 1;
+    stage_observer(telemetry.unit_event(
+        stage,
+        indices.len(),
+        &partition_id,
+        StreamingIndexingStatusState::Completed,
+    ));
+
+    for (child_index, group) in groups.into_iter().enumerate() {
+        let child_indices = group
+            .into_iter()
+            .map(|local_index| indices[local_index])
+            .collect::<Vec<_>>();
+        derive_partition_recursive_streaming_adaptive_from_artifacts(
+            &child_indices,
+            child_ids[child_index].clone(),
+            Some(partition_id.clone()),
+            Some(stage),
+            artifacts,
+            settings,
+            embedding_spec,
+            materializability_bound,
+            stage_observer,
+            selector,
+            telemetry,
+            accumulator,
+            partitions,
+        )?;
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5027,6 +6038,19 @@ fn decode_embedding_as_f32(
             "unsupported embedding encoding {other:?} for streaming clustering"
         ))),
     }
+}
+
+fn decode_f32_artifact(bytes: &[u8]) -> Result<Vec<f32>, StreamingIndexerError> {
+    if !bytes.len().is_multiple_of(4) {
+        return Err(StreamingIndexerError::PlanningArtifactFailure(format!(
+            "planning artifact stored {} bytes, which is not divisible by 4",
+            bytes.len()
+        )));
+    }
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| Ok(f32::from_le_bytes(chunk.try_into().unwrap())))
+        .collect()
 }
 
 fn dedup_sort_ids(ids: &mut Vec<BlockHash>) {
@@ -6794,7 +7818,14 @@ pub mod conformance {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildSummaryInput, DirectionalPcaAllocationPolicy, allocate_variable_bit_widths,
+        AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings, AdaptivePlanningDirection,
+        AdaptivePlanningSelector, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
+        BuiltInPlanningDirection, BuiltInPlanningPhase, ChildSummaryInput,
+        DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
+        DirectionalPcaBuiltInPlanningSettings, DirectionalPcaClusterCardinalityMode,
+        DirectionalPcaRetainedAxisPolicy, PlanningArtifactLedger, StreamingIndexerError,
+        allocate_variable_bit_widths, derive_hierarchy_agglomeratively_from_artifacts_with_builder,
+        derive_hierarchy_for_single_built_in_phase, directional_pca_published_profile_params,
         effective_directional_pca_cluster_count, exact_centroid_child_summary,
         fallback_partition_groups, fit_ebcp_rotation, uses_root_branch_budget,
         weighted_mean_f32_embeddings,
@@ -6868,6 +7899,181 @@ mod tests {
             .expect("single-entry fallback should succeed");
         assert_eq!(rotation, vec![1.0, 0.0, 0.0, 1.0]);
         assert_eq!(explained_variance, vec![0.0, 0.0]);
+    }
+
+    fn test_embedding_spec() -> EmbeddingSpec {
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        }
+    }
+
+    fn test_embeddings() -> Vec<Vec<f32>> {
+        vec![
+            vec![1.0, 0.0],
+            vec![0.9, 0.1],
+            vec![-1.0, 0.0],
+            vec![-0.9, -0.1],
+        ]
+    }
+
+    fn seed_artifacts(embeddings: &[Vec<f32>]) -> PlanningArtifactLedger {
+        let ledger = PlanningArtifactLedger::default();
+        for embedding in embeddings {
+            ledger.push_original_embedding(embedding);
+        }
+        ledger
+    }
+
+    fn test_directional_phase(direction: BuiltInPlanningDirection) -> BuiltInPlanningPhase {
+        BuiltInPlanningPhase::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+            direction,
+            cluster_count: 2,
+            random_seed: Some(7),
+            params: directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+        })
+    }
+
+    #[test]
+    fn divisive_built_in_phase_replays_embeddings_from_artifacts() {
+        let artifacts = seed_artifacts(&test_embeddings());
+        let mut statuses = Vec::new();
+        let outcome = derive_hierarchy_for_single_built_in_phase(
+            test_directional_phase(BuiltInPlanningDirection::Divisive),
+            Some(&artifacts),
+            &[],
+            &test_embedding_spec(),
+            2,
+            &mut |event| statuses.push(event),
+        )
+        .expect("artifact-backed divisive planning should succeed");
+        assert_eq!(outcome.hierarchy.root_partition_id, "p0");
+        assert_eq!(
+            outcome
+                .hierarchy
+                .partitions
+                .iter()
+                .filter(|partition| partition.terminal)
+                .map(|partition| partition.item_indices.len())
+                .sum::<usize>(),
+            4
+        );
+        assert!(
+            statuses
+                .iter()
+                .any(|event| event.stage == super::PlanningStage::Single)
+        );
+    }
+
+    #[test]
+    fn agglomerative_built_in_path_replays_summary_artifacts() {
+        let artifacts = seed_artifacts(&test_embeddings());
+        let mut statuses = Vec::new();
+        let outcome = derive_hierarchy_agglomeratively_from_artifacts_with_builder(
+            &artifacts,
+            2,
+            &mut |event| statuses.push(event),
+            |layer_embeddings, _, _| {
+                Ok(super::PartitionPlanner::new(
+                    super::PlanningStage::Single,
+                    super::create_built_in_trainer(
+                        &test_directional_phase(BuiltInPlanningDirection::Agglomerative),
+                        layer_embeddings.len(),
+                        layer_embeddings.first().map_or(0, Vec::len),
+                        &test_embedding_spec(),
+                        2,
+                    )?,
+                ))
+            },
+        )
+        .expect("artifact-backed agglomerative planning should succeed");
+        assert_eq!(outcome.hierarchy.root_partition_id, "p0");
+        assert!(outcome.hierarchy.partitions.len() >= 3);
+        assert!(
+            statuses
+                .iter()
+                .any(|event| event.stage == super::PlanningStage::Single)
+        );
+    }
+
+    #[test]
+    fn adaptive_selector_supports_embedding_replay() {
+        let embeddings = test_embeddings();
+        let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
+            direction: AdaptivePlanningDirection::Divisive,
+            directional_pca: AdaptiveDirectionalPcaSettings {
+                cluster_count: 2,
+                random_seed: Some(11),
+                params: directional_pca_published_profile_params(
+                    DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                    DirectionalPcaBinningPolicy::Quantile,
+                    DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                    1,
+                    0.0,
+                ),
+            },
+            dcbc: AdaptiveDcbcSettings {
+                cluster_count: 2,
+                balance_constraints: None,
+                random_seed: Some(11),
+            },
+            switch_criteria: AdaptiveSwitchCriteria {
+                mean_cluster_radius_threshold: 0.0,
+            },
+        })
+        .expect("adaptive settings should be valid");
+        assert_eq!(
+            selector
+                .select_algorithm_with_embedding_replay(
+                    embeddings.len(),
+                    embeddings.len(),
+                    2,
+                    |index| { Ok(embeddings[index].clone()) }
+                )
+                .expect("initial replay segment should select directional PCA"),
+            super::ActivePlanningAlgorithm::DirectionalPca
+        );
+        assert_eq!(
+            selector
+                .select_algorithm_with_embedding_replay(
+                    embeddings.len(),
+                    embeddings.len(),
+                    2,
+                    |index| { Ok(embeddings[index].clone()) }
+                )
+                .expect("second replay segment should evaluate diagnostics"),
+            super::ActivePlanningAlgorithm::Dcbc
+        );
+    }
+
+    #[test]
+    fn missing_planning_artifact_fails_explicitly() {
+        let artifacts = seed_artifacts(&test_embeddings());
+        let missing = artifacts.original_item_artifact_ids()[0];
+        artifacts.store.blocks.lock().unwrap().remove(&missing);
+        let error = match derive_hierarchy_for_single_built_in_phase(
+            test_directional_phase(BuiltInPlanningDirection::Divisive),
+            Some(&artifacts),
+            &[],
+            &test_embedding_spec(),
+            2,
+            &mut |_| {},
+        ) {
+            Ok(_) => panic!("missing planning artifact should fail explicitly"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            StreamingIndexerError::PlanningArtifactResolution(_)
+        ));
     }
 
     #[test]
