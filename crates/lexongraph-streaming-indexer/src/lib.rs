@@ -316,21 +316,23 @@ impl PlanningArtifactLedger {
             .map(|&index| self.original_item_artifact_ref(index))
             .collect::<Result<Vec<_>, _>>()?;
         let mut page_embeddings = HashMap::<BlockHash, Vec<Vec<f32>>>::new();
-        let mut loaded_pages = Vec::<Option<Vec<Vec<f32>>>>::with_capacity(artifact_refs.len());
         for artifact_ref in &artifact_refs {
-            if let Some(page) = page_embeddings.get(&artifact_ref.block_id) {
-                loaded_pages.push(Some(page.clone()));
-                continue;
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                page_embeddings.entry(artifact_ref.block_id)
+            {
+                let page = self.load_original_embedding_page(&artifact_ref.block_id)?;
+                entry.insert(page);
             }
-            let page = self.load_original_embedding_page(&artifact_ref.block_id)?;
-            loaded_pages.push(Some(page.clone()));
-            page_embeddings.insert(artifact_ref.block_id, page);
         }
         artifact_refs
             .into_iter()
-            .zip(loaded_pages)
-            .map(|(artifact_ref, page)| {
-                let page = page.expect("loaded_pages always populated");
+            .map(|artifact_ref| {
+                let page = page_embeddings.get(&artifact_ref.block_id).ok_or_else(|| {
+                    StreamingIndexerError::PlanningArtifactResolution(format!(
+                        "planning artifact {:?} did not remain cached while loading embeddings",
+                        artifact_ref.block_id
+                    ))
+                })?;
                 page.get(artifact_ref.page_index).cloned().ok_or_else(|| {
                     StreamingIndexerError::PlanningArtifactResolution(format!(
                         "planning artifact {:?} is missing page index {}",
@@ -4492,15 +4494,13 @@ where
     P: PartitionPlannerRunner,
     SO: FnMut(HierarchyPlanningStatusEvent),
 {
-    let original_item_artifact_ids = artifacts.original_item_artifact_ids()?;
-    let mut nodes = original_item_artifact_ids
-        .iter()
-        .enumerate()
-        .map(|(index, artifact_id)| AgglomerativeHierarchyNode {
+    let item_count = artifacts.len()?;
+    let mut nodes = (0..item_count)
+        .map(|index| AgglomerativeHierarchyNode {
             child_node_indices: Vec::new(),
             item_indices: vec![index],
             representative_embedding: None,
-            representative_artifact_id: Some(*artifact_id),
+            representative_artifact_id: None,
             planning_stage: PlanningStage::Single,
         })
         .collect::<Vec<_>>();
@@ -4511,6 +4511,25 @@ where
         stage_observer,
         planner_builder,
     )
+}
+
+fn load_agglomerative_representative_embedding(
+    artifacts: &PlanningArtifactLedger,
+    node: &AgglomerativeHierarchyNode,
+    node_index: usize,
+) -> Result<Vec<f32>, StreamingIndexerError> {
+    if let Some(block_id) = node.representative_artifact_id {
+        return artifacts.load_embedding_artifact(&block_id);
+    }
+    if let Some(embedding) = &node.representative_embedding {
+        return Ok(embedding.clone());
+    }
+    if node.child_node_indices.is_empty() && node.item_indices.len() == 1 {
+        return artifacts.load_embedding(node.item_indices[0]);
+    }
+    Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+        "planning unit {node_index} is missing its representative embedding"
+    )))
 }
 
 fn derive_hierarchy_agglomeratively_with_artifact_nodes<B, P, SO>(
@@ -4558,14 +4577,11 @@ where
         let layer_embeddings = current_layer
             .iter()
             .map(|&node_index| {
-                let block_id = nodes[node_index]
-                    .representative_artifact_id
-                    .ok_or_else(|| {
-                        StreamingIndexerError::PlanningArtifactResolution(format!(
-                            "planning unit {node_index} is missing its representative artifact"
-                        ))
-                    })?;
-                artifacts.load_embedding_artifact(&block_id)
+                load_agglomerative_representative_embedding(
+                    artifacts,
+                    &nodes[node_index],
+                    node_index,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let planner = planner_builder(
@@ -4617,18 +4633,16 @@ where
                 .flat_map(|&node_index| nodes[node_index].item_indices.iter().copied())
                 .collect::<Vec<_>>();
             item_indices.sort_unstable();
-            let child_representative_embeddings =
-                child_node_indices
-                    .iter()
-                    .map(|&node_index| {
-                        let block_id = nodes[node_index].representative_artifact_id.ok_or_else(|| {
-                        StreamingIndexerError::PlanningArtifactResolution(format!(
-                            "planning unit {node_index} is missing its representative artifact"
-                        ))
-                    })?;
-                        artifacts.load_embedding_artifact(&block_id)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+            let child_representative_embeddings = child_node_indices
+                .iter()
+                .map(|&node_index| {
+                    load_agglomerative_representative_embedding(
+                        artifacts,
+                        &nodes[node_index],
+                        node_index,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             let representative_embedding = weighted_mean_f32_embeddings(
                 child_node_indices
                     .iter()
