@@ -313,6 +313,7 @@ fn resolve_execution_backend_selection(
     }
 }
 
+#[must_use]
 pub struct ExecutionBackendRequestScope {
     previous: ExecutionBackendRequest,
     _not_send: PhantomData<Rc<()>>,
