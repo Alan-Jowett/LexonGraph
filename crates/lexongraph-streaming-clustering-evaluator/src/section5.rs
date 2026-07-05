@@ -344,7 +344,7 @@ pub fn resolve_registered_hierarchy_strategies(
     Ok(strategies)
 }
 
-pub fn run_section5_campaign(
+pub async fn run_section5_campaign(
     profile: &BenchmarkProfile,
     candidates: &[RegisteredCandidate],
     contract: &Section5HierarchyContract,
@@ -353,7 +353,7 @@ pub fn run_section5_campaign(
     validate_section5_contract(contract)?;
     validate_section5_strategies(strategies)?;
 
-    let section4_campaign = run_evaluation_campaign(profile, candidates)?;
+    let section4_campaign = run_evaluation_campaign(profile, candidates).await?;
     let survivor_reports = section4_campaign
         .run_reports
         .iter()

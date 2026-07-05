@@ -1751,6 +1751,7 @@ dependencies = [
  "pollster",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1960,6 +1961,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "wgpu",
  "zip",
 ]

@@ -56,7 +56,7 @@ use tempfile::TempDir;
 
 pub use acceleration::{
     ExecutionBackendRequest, ExecutionBackendResolution, ExecutionBackendSelection,
-    execution_backend_request, with_execution_backend_request,
+    execution_backend_request, scoped_execution_backend_request, with_execution_backend_request,
 };
 pub use section4::{
     Section4CorpusFamily, Section4DimensionalityContract, Section4ExperimentTrackContract,
@@ -1107,7 +1107,7 @@ fn registered_packing_strategy(strategy_id: &str) -> Option<RegisteredPackingStr
     }
 }
 
-pub fn run_evaluation_campaign(
+pub async fn run_evaluation_campaign(
     profile: &BenchmarkProfile,
     candidates: &[RegisteredCandidate],
 ) -> Result<CampaignReport, EvaluatorError> {
@@ -5772,10 +5772,10 @@ mod tests {
         TEST_FORCE_TEMP_LAYER_FAILURE.with(|flag| flag.set(true));
         let _reset = TempLayerFailureReset;
 
-        let report = run_evaluation_campaign(
+        let report = pollster::block_on(run_evaluation_campaign(
             &archive_training_profile_for_tests(),
             &[built_in_fixture_candidate("balanced-threshold").unwrap()],
-        )
+        ))
         .unwrap();
 
         assert_eq!(
@@ -5851,10 +5851,10 @@ mod tests {
 
     #[test]
     fn render_scorecard_reports_execution_backend_resolution() {
-        let report = run_evaluation_campaign(
+        let report = pollster::block_on(run_evaluation_campaign(
             &archive_training_profile_for_tests(),
             &[built_in_fixture_candidate("balanced-threshold").unwrap()],
-        )
+        ))
         .unwrap();
 
         let scorecard = super::render_scorecard(&report);
@@ -5957,10 +5957,10 @@ mod tests {
     fn evaluation_campaign_reports_multiple_packing_strategies() {
         let report =
             super::with_execution_backend_request(super::ExecutionBackendRequest::Cpu, || {
-                run_evaluation_campaign(
+                pollster::block_on(run_evaluation_campaign(
                     &inline_strict_alignment_profile(),
                     &[built_in_fixture_candidate("balanced-threshold").unwrap()],
-                )
+                ))
             })
             .expect("inline fixture profile should evaluate successfully");
 
@@ -5996,10 +5996,10 @@ mod tests {
 
         let report =
             super::with_execution_backend_request(super::ExecutionBackendRequest::Cpu, || {
-                run_evaluation_campaign(
+                pollster::block_on(run_evaluation_campaign(
                     &profile,
                     &[built_in_fixture_candidate("balanced-threshold").unwrap()],
-                )
+                ))
             })
             .expect("test-only failing packer should be isolated inside the campaign report");
 
@@ -6028,10 +6028,10 @@ mod tests {
 
         let report =
             super::with_execution_backend_request(super::ExecutionBackendRequest::Cpu, || {
-                run_evaluation_campaign(
+                pollster::block_on(run_evaluation_campaign(
                     &profile,
                     &[built_in_fixture_candidate("balanced-threshold").unwrap()],
-                )
+                ))
             })
             .expect("all-failing packers should still produce a deterministic campaign report");
 

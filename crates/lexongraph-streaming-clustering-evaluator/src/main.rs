@@ -16,7 +16,7 @@ use lexongraph_streaming_clustering_evaluator::{
     resolve_registered_hierarchy_strategies, resolve_registered_section6_summary_candidates,
     resolve_section4_suite_manifest_paths, resolve_section4_suite_spec_paths,
     run_evaluation_campaign, run_section4_suite, run_section5_campaign, run_section6_campaign,
-    run_section7_campaign, with_execution_backend_request, write_campaign_artifacts,
+    run_section7_campaign, scoped_execution_backend_request, write_campaign_artifacts,
     write_section4_suite_artifacts, write_section5_campaign_artifacts,
     write_section6_campaign_artifacts, write_section7_campaign_artifacts,
 };
@@ -143,14 +143,15 @@ enum Command {
     },
 }
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), EvaluatorError> {
+async fn run() -> Result<(), EvaluatorError> {
     match Cli::parse().command {
         Command::ListCandidates => {
             for candidate in registered_candidate_names() {
@@ -181,7 +182,9 @@ fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -201,19 +204,21 @@ fn run() -> Result<(), EvaluatorError> {
             }
 
             let registered_candidates = resolve_registered_candidates(&candidates)?;
-            let report = run_evaluation_campaign(&profile, &registered_candidates)?;
+            let report = run_evaluation_campaign(&profile, &registered_candidates).await?;
             let artifacts = emit_campaign_artifacts(&report)?;
             let paths = write_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::GenerateSection4Assets {
             suite,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let suite_path = suite;
             let suite = std::fs::read_to_string(&suite_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -239,7 +244,7 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", generated.corpus_archive_path.display());
             }
             Ok(())
-        }),
+        }
         Command::MaterializeSection4Archive {
             input,
             output,
@@ -251,7 +256,8 @@ fn run() -> Result<(), EvaluatorError> {
                 &output,
                 source_id.as_deref(),
                 corpus_id.as_deref(),
-            )?;
+            )
+            .await?;
             println!("{}", output.display());
             println!("{}", reference.root_block_id);
             Ok(())
@@ -261,7 +267,9 @@ fn run() -> Result<(), EvaluatorError> {
             candidates,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let manifest_path = manifest;
             let manifest = std::fs::read_to_string(&manifest_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -281,7 +289,7 @@ fn run() -> Result<(), EvaluatorError> {
                 resolve_section4_suite_manifest_paths(&mut manifest, manifest_dir);
             }
             let candidates = resolve_registered_candidates(&candidates)?;
-            let report = run_section4_suite(&manifest, &candidates, &output_dir)?;
+            let report = run_section4_suite(&manifest, &candidates, &output_dir).await?;
             let artifacts = write_section4_suite_artifacts(&report, &output_dir)?;
             println!("{}", artifacts.suite_report_path.display());
             println!("{}", artifacts.scorecard_path.display());
@@ -290,7 +298,7 @@ fn run() -> Result<(), EvaluatorError> {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::RunSection5 {
             profile,
             candidates,
@@ -298,7 +306,9 @@ fn run() -> Result<(), EvaluatorError> {
             hierarchy_strategies,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -340,14 +350,15 @@ fn run() -> Result<(), EvaluatorError> {
                 &registered_candidates,
                 &contract,
                 &registered_strategies,
-            )?;
+            )
+            .await?;
             let artifacts = emit_section5_campaign_artifacts(&report)?;
             let paths = write_section5_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::RunSection6 {
             profile,
             section5_report,
@@ -355,7 +366,9 @@ fn run() -> Result<(), EvaluatorError> {
             summary_candidates,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -412,21 +425,24 @@ fn run() -> Result<(), EvaluatorError> {
                 &section5_report,
                 &contract,
                 &registered_summary_candidates,
-            )?;
+            )
+            .await?;
             let artifacts = emit_section6_campaign_artifacts(&report)?;
             let paths = write_section6_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
         Command::RunSection7 {
             profile,
             section5_report,
             section6_report,
             output_dir,
             execution_backend,
-        } => with_execution_backend_request(execution_backend.into_request(), || {
+        } => {
+            let _execution_backend_scope =
+                scoped_execution_backend_request(execution_backend.into_request());
             let profile_path = profile;
             let profile = std::fs::read_to_string(&profile_path).map_err(|error| {
                 EvaluatorError::Io(format!(
@@ -477,13 +493,14 @@ fn run() -> Result<(), EvaluatorError> {
                     ))
                 })?;
 
-            let report = run_section7_campaign(&profile, &section5_report, &section6_report)?;
+            let report =
+                run_section7_campaign(&profile, &section5_report, &section6_report).await?;
             let artifacts = emit_section7_campaign_artifacts(&report)?;
             let paths = write_section7_campaign_artifacts(&output_dir, &artifacts)?;
             for path in paths {
                 println!("{}", path.display());
             }
             Ok(())
-        }),
+        }
     }
 }

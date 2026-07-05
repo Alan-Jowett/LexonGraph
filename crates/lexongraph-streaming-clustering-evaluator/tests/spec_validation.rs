@@ -28,8 +28,9 @@ use lexongraph_streaming_clustering_evaluator::{
     DEFAULT_DEFERRED_HIERARCHY_ROUTING_REASON, DeferredMeasurementStatus, EmbeddingWorkloadSource,
     EvaluationEntity, EvaluationEntitySource, EvaluatorError, ExecutionBackendRequest,
     ExecutionBackendResolution, ExecutionBudget, FsOverlayZipBlockStore, GateStatus,
-    LaterPhaseIdentity, LaterPhaseIdentityKind, Section4CorpusFamily,
-    Section4DimensionalityContract, Section4ExperimentTrackContract, Section4FrozenContractItem,
+    LaterPhaseIdentity, LaterPhaseIdentityKind, RegisteredCandidate, RegisteredHierarchyStrategy,
+    RegisteredSection6SummaryCandidate, Section4CorpusFamily, Section4DimensionalityContract,
+    Section4ExperimentTrackContract, Section4FrozenContractItem,
     Section4HarvestEmbeddingAdmissibility, Section4HarvestPolicy, Section4HarvestSubsetSelection,
     Section4MetricContract, Section4ProfileSourceSpec, Section4ProfileSpec, Section4ProofSurface,
     Section4QualificationSurface, Section4ScaleTierKind, Section4SuiteManifest, Section4SuiteSpec,
@@ -40,10 +41,13 @@ use lexongraph_streaming_clustering_evaluator::{
     emit_section7_campaign_artifacts, generate_section4_suite_assets, registered_candidate_names,
     registered_hierarchy_strategy_names, registered_section6_summary_candidate_names,
     resolve_registered_candidates, resolve_registered_hierarchy_strategies,
-    resolve_registered_section6_summary_candidates, run_evaluation_campaign, run_section4_suite,
-    run_section5_campaign, run_section6_campaign, run_section7_campaign,
-    section4_family_candidate_names, with_execution_backend_request,
-    write_section4_suite_artifacts,
+    resolve_registered_section6_summary_candidates,
+    run_evaluation_campaign as run_evaluation_campaign_async,
+    run_section4_suite as run_section4_suite_async,
+    run_section5_campaign as run_section5_campaign_async,
+    run_section6_campaign as run_section6_campaign_async,
+    run_section7_campaign as run_section7_campaign_async, section4_family_candidate_names,
+    with_execution_backend_request, write_section4_suite_artifacts,
 };
 use support::{
     archive_backed_profile, balanced_and_skewed_candidates, block_store_backed_profile,
@@ -56,6 +60,58 @@ use support::{
     synthetic_padding_profile, wrong_entity_count_block_store_profile,
 };
 use tempfile::tempdir;
+
+fn run_evaluation_campaign(
+    profile: &BenchmarkProfile,
+    candidates: &[RegisteredCandidate],
+) -> Result<CampaignReport, EvaluatorError> {
+    pollster::block_on(run_evaluation_campaign_async(profile, candidates))
+}
+
+fn run_section4_suite(
+    manifest: &Section4SuiteManifest,
+    candidates: &[RegisteredCandidate],
+    output_dir: &Path,
+) -> Result<lexongraph_streaming_clustering_evaluator::Section4SuiteRunReport, EvaluatorError> {
+    pollster::block_on(run_section4_suite_async(manifest, candidates, output_dir))
+}
+
+fn run_section5_campaign(
+    profile: &BenchmarkProfile,
+    candidates: &[RegisteredCandidate],
+    contract: &Section5HierarchyContract,
+    strategies: &[RegisteredHierarchyStrategy],
+) -> Result<lexongraph_streaming_clustering_evaluator::Section5CampaignReport, EvaluatorError> {
+    pollster::block_on(run_section5_campaign_async(
+        profile, candidates, contract, strategies,
+    ))
+}
+
+fn run_section6_campaign(
+    profile: &BenchmarkProfile,
+    section5_report: &lexongraph_streaming_clustering_evaluator::Section5CampaignReport,
+    contract: &lexongraph_streaming_clustering_evaluator::Section6SummaryContract,
+    summary_candidates: &[RegisteredSection6SummaryCandidate],
+) -> Result<lexongraph_streaming_clustering_evaluator::Section6CampaignReport, EvaluatorError> {
+    pollster::block_on(run_section6_campaign_async(
+        profile,
+        section5_report,
+        contract,
+        summary_candidates,
+    ))
+}
+
+fn run_section7_campaign(
+    profile: &BenchmarkProfile,
+    section5_report: &lexongraph_streaming_clustering_evaluator::Section5CampaignReport,
+    section6_report: &lexongraph_streaming_clustering_evaluator::Section6CampaignReport,
+) -> Result<lexongraph_streaming_clustering_evaluator::Section7CampaignReport, EvaluatorError> {
+    pollster::block_on(run_section7_campaign_async(
+        profile,
+        section5_report,
+        section6_report,
+    ))
+}
 
 #[derive(Clone, Copy)]
 enum InvalidRangeMode {
