@@ -47,6 +47,8 @@ use lexongraph_block::{
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 
+const MAX_CONCURRENT_CHILD_LOADS: usize = 32;
+
 pub trait EmbeddingCompatibility<Target> {
     type Error: std::error::Error;
 
@@ -883,40 +885,43 @@ impl<EC, CS, FS> Searcher<EC, CS, FS> {
                     (*child_id, child_depth)
                 })
                 .collect::<Vec<_>>();
-            let loaded_children = future::join_all(current_round_depths.iter().map(
-                |(child_id, child_depth)| async move {
-                    (
-                        *child_id,
-                        *child_depth,
-                        Self::load_validated_block(store, child_id, false).await,
-                    )
-                },
-            ))
-            .await;
-            for (child_id, child_depth, validated) in loaded_children {
-                let validated = match validated {
-                    Ok(validated) => validated,
-                    Err(error) => {
-                        telemetry.finish_with_error(&error);
-                        emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
-                        return Err(error);
+            let child_load_limit = w.clamp(1, MAX_CONCURRENT_CHILD_LOADS);
+            for current_round_chunk in current_round_depths.chunks(child_load_limit) {
+                let loaded_children = future::join_all(current_round_chunk.iter().map(
+                    |(child_id, child_depth)| async move {
+                        (
+                            *child_id,
+                            *child_depth,
+                            Self::load_validated_block(store, child_id, false).await,
+                        )
+                    },
+                ))
+                .await;
+                for (child_id, child_depth, validated) in loaded_children {
+                    let validated = match validated {
+                        Ok(validated) => validated,
+                        Err(error) => {
+                            telemetry.finish_with_error(&error);
+                            emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                            return Err(error);
+                        }
+                    };
+                    match self.build_block_candidates(
+                        &child_id,
+                        target,
+                        validated,
+                        child_depth,
+                        &mut telemetry,
+                    ) {
+                        Ok(candidates) => next_candidates.extend(candidates),
+                        Err(error) => {
+                            telemetry.finish_with_error(&error);
+                            emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
+                            return Err(error);
+                        }
                     }
-                };
-                match self.build_block_candidates(
-                    &child_id,
-                    target,
-                    validated,
-                    child_depth,
-                    &mut telemetry,
-                ) {
-                    Ok(candidates) => next_candidates.extend(candidates),
-                    Err(error) => {
-                        telemetry.finish_with_error(&error);
-                        emit_search_telemetry(telemetry_mode.observer(), telemetry.summary());
-                        return Err(error);
-                    }
+                    expanded_children.insert(child_id);
                 }
-                expanded_children.insert(child_id);
             }
 
             frontier.retain(|candidate| {
