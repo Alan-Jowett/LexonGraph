@@ -229,6 +229,7 @@ impl PlanningArtifactStore {
 }
 
 const ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE: usize = 256;
+const REPLAY_BATCH_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OriginalItemArtifactRef {
@@ -294,10 +295,37 @@ impl PlanningArtifactLedger {
     }
 
     pub fn load_all_embeddings(&self) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-        let item_count = self.len()?;
-        (0..item_count)
-            .map(|index| self.load_embedding(index))
-            .collect()
+        self.flush_pending_original_embeddings()?;
+        let artifact_refs = self
+            .original_item_artifact_refs
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
+            .clone();
+        let mut embeddings = Vec::with_capacity(artifact_refs.len());
+        let mut current_page_id = None;
+        let mut current_page = Vec::new();
+        for artifact_ref in artifact_refs {
+            if current_page_id != Some(artifact_ref.block_id) {
+                current_page = self.load_original_embedding_page(&artifact_ref.block_id)?;
+                current_page_id = Some(artifact_ref.block_id);
+            }
+            embeddings.push(
+                current_page
+                    .get(artifact_ref.page_index)
+                    .cloned()
+                    .ok_or_else(|| {
+                        StreamingIndexerError::PlanningArtifactResolution(format!(
+                            "planning artifact {:?} is missing page index {}",
+                            artifact_ref.block_id, artifact_ref.page_index
+                        ))
+                    })?,
+            );
+        }
+        Ok(embeddings)
     }
 
     pub fn load_embedding(&self, index: usize) -> Result<Vec<f32>, StreamingIndexerError> {
@@ -2181,6 +2209,7 @@ pub struct StreamingIndexingRun<R, CR, EP, CEP, HPP> {
     finalized_hierarchy: Option<FinalizedPartitionHierarchy>,
     current_pass_items: Vec<BaselineItem>,
     current_pass_artifacts: PlanningArtifactLedger,
+    current_pass_f32_embeddings: Vec<Vec<f32>>,
     items_seen_in_current_pass: usize,
     _item_ref: PhantomData<R>,
 }
@@ -2377,6 +2406,7 @@ impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP> {
             finalized_hierarchy: None,
             current_pass_items: Vec::new(),
             current_pass_artifacts: PlanningArtifactLedger::default(),
+            current_pass_f32_embeddings: Vec::new(),
             items_seen_in_current_pass: 0,
             _item_ref: PhantomData,
         }
@@ -2491,10 +2521,15 @@ where
             }
         }
 
+        let persist_planning_artifacts = self.planning_policy.uses_planning_artifacts();
         for embedding in &embeddings {
             let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
-            self.current_pass_artifacts
-                .push_original_embedding(decoded.as_slice())?;
+            if persist_planning_artifacts {
+                self.current_pass_artifacts
+                    .push_original_embedding(decoded.as_slice())?;
+            } else {
+                self.current_pass_f32_embeddings.push(decoded);
+            }
         }
         self.items_seen_in_current_pass += batch.len();
         Ok(())
@@ -2564,13 +2599,14 @@ where
         ));
 
         let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
+        let uses_planning_artifacts = self.planning_policy.uses_planning_artifacts();
         let buffered = std::mem::take(&mut self.current_pass_artifacts);
-        self.planning_policy
-            .install_planning_artifacts(buffered.clone());
-        let materialized_embeddings = if self.planning_policy.uses_planning_artifacts() {
+        let materialized_embeddings = if uses_planning_artifacts {
+            self.planning_policy
+                .install_planning_artifacts(buffered.clone());
             None
         } else {
-            Some(buffered.load_all_embeddings()?)
+            Some(std::mem::take(&mut self.current_pass_f32_embeddings))
         };
         let outcome = self
             .planning_policy
@@ -2588,7 +2624,11 @@ where
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.current_pass_artifacts = buffered;
+                if uses_planning_artifacts {
+                    self.current_pass_artifacts = buffered;
+                } else {
+                    self.current_pass_f32_embeddings = materialized_embeddings.unwrap_or_default();
+                }
                 heartbeat.stop();
                 stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
                 emit_status(
@@ -2611,7 +2651,11 @@ where
             validate_partition_hierarchy(&outcome.hierarchy, self.items_seen_in_current_pass)
                 .map_err(StreamingIndexerError::HierarchyValidation)
         {
-            self.current_pass_artifacts = buffered;
+            if uses_planning_artifacts {
+                self.current_pass_artifacts = buffered;
+            } else {
+                self.current_pass_f32_embeddings = materialized_embeddings.unwrap_or_default();
+            }
             stage_statuses.fail_all(pass_started.elapsed(), &error.to_string());
             emit_status(
                 &self.observer,
@@ -4171,7 +4215,7 @@ where
 fn run_partition_planner_with_replay<T, OP, Load>(
     mut planner: PartitionPlanner<T>,
     embedding_count: usize,
-    load_embedding: &mut Load,
+    mut load_embedding: &mut Load,
     observe_progress: &mut OP,
 ) -> Result<(PassReport, Vec<ClusterId>), StreamingIndexerError>
 where
@@ -4179,8 +4223,12 @@ where
     OP: FnMut(),
     Load: FnMut(usize) -> Result<Vec<f32>, StreamingIndexerError>,
 {
-    for index in 0..embedding_count {
-        planner.trainer.ingest_batch(&[load_embedding(index)?])?;
+    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
+        let batch = (batch_start..batch_end)
+            .map(&mut load_embedding)
+            .collect::<Result<Vec<_>, _>>()?;
+        planner.trainer.ingest_batch(batch.as_slice())?;
     }
     observe_progress();
     let pass_report = planner.trainer.finish_pass()?;
@@ -4188,13 +4236,18 @@ where
     planner.trainer.complete_training()?;
     observe_progress();
     let classifier = planner.trainer.into_classifier()?;
-    let assignments = (0..embedding_count)
-        .map(|index| {
+    let mut assignments = Vec::with_capacity(embedding_count);
+    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
+        let batch = (batch_start..batch_end)
+            .map(&mut load_embedding)
+            .collect::<Result<Vec<_>, _>>()?;
+        assignments.extend(
             classifier
-                .assign(&load_embedding(index)?)
-                .map_err(StreamingIndexerError::from)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+                .assign_batch(batch.as_slice())
+                .map_err(StreamingIndexerError::from)?,
+        );
+    }
     observe_progress();
     Ok((pass_report, assignments))
 }
@@ -6347,6 +6400,13 @@ fn decode_f32_embedding_page(bytes: &[u8]) -> Result<Vec<Vec<f32>>, StreamingInd
     let embedding_count =
         u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
     cursor += 4;
+    let maximum_possible_embeddings = bytes.len().saturating_sub(cursor) / 4;
+    if embedding_count > maximum_possible_embeddings {
+        return Err(StreamingIndexerError::PlanningArtifactFailure(format!(
+            "planning artifact page declares {embedding_count} embeddings, which exceeds the maximum possible count {maximum_possible_embeddings} for {} payload bytes",
+            bytes.len().saturating_sub(cursor)
+        )));
+    }
     let mut embeddings = Vec::with_capacity(embedding_count);
     for embedding_index in 0..embedding_count {
         if bytes.len().saturating_sub(cursor) < 4 {
