@@ -1978,6 +1978,7 @@ dependencies = [
  "lexongraph-adaptive-planning-policy",
  "lexongraph-block",
  "lexongraph-block-store",
+ "lexongraph-block-store-fs",
  "lexongraph-dcbc-streaming",
  "lexongraph-directional-pca",
  "lexongraph-embeddings-trait",
@@ -1986,6 +1987,7 @@ dependencies = [
  "lexongraph-streaming-clustering",
  "pollster",
  "sha2",
+ "tempfile",
  "tokio",
 ]
 

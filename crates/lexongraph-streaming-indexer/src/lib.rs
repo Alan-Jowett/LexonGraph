@@ -47,6 +47,7 @@ pub use lexongraph_block::{
     BlockHash, BranchBlock, Content, EmbeddingSpec, Metadata, SerializedBlock,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{
     DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
@@ -62,6 +63,7 @@ use lexongraph_streaming_clustering::{
     StreamingClusteringConfig, StreamingClusteringError,
 };
 use sha2::{Digest, Sha256};
+use tempfile::{Builder as TempDirBuilder, TempDir};
 
 // ─────────────────────────────────────────────────────────────
 // Public input / output types
@@ -123,29 +125,106 @@ pub struct FinalizedPartitionHierarchy {
     pub partitions: Vec<FinalizedPartition>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug)]
 struct PlanningArtifactStore {
-    blocks: Arc<Mutex<HashMap<BlockHash, Vec<u8>>>>,
+    state: Arc<Mutex<PlanningArtifactStoreState>>,
+}
+
+#[derive(Debug, Default)]
+struct PlanningArtifactStoreState {
+    backend: Option<Arc<FilesystemBlockStore>>,
+    storage_root: Option<Arc<TempDir>>,
+}
+
+impl Clone for PlanningArtifactStore {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+        }
+    }
+}
+
+impl Default for PlanningArtifactStore {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PlanningArtifactStoreState::default())),
+        }
+    }
 }
 
 impl PlanningArtifactStore {
-    fn put_bytes(&self, bytes: Vec<u8>) -> BlockHash {
+    fn put_bytes(&self, bytes: Vec<u8>) -> Result<BlockHash, StreamingIndexerError> {
+        let backend = self.backend()?;
         let block_id = hash_bytes(bytes.as_slice());
-        self.blocks.lock().unwrap().insert(block_id, bytes);
-        block_id
+        futures::executor::block_on(backend.put_block_bytes(&block_id, bytes.as_slice()))
+            .map_err(map_planning_artifact_store_error)?;
+        Ok(block_id)
     }
 
     fn get_bytes(&self, block_id: &BlockHash) -> Result<Vec<u8>, StreamingIndexerError> {
-        self.blocks
-            .lock()
-            .unwrap()
-            .get(block_id)
-            .cloned()
+        let backend = self.backend()?;
+        futures::executor::block_on(backend.get_block_bytes(block_id))
+            .map_err(map_planning_artifact_store_error)?
             .ok_or_else(|| {
                 StreamingIndexerError::PlanningArtifactResolution(format!(
                     "planning artifact {block_id:?} is unavailable"
                 ))
             })
+    }
+
+    fn backend(&self) -> Result<Arc<FilesystemBlockStore>, StreamingIndexerError> {
+        let mut state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact store state lock was poisoned".into(),
+            )
+        })?;
+        if let Some(backend) = &state.backend {
+            return Ok(Arc::clone(backend));
+        }
+
+        let storage_root = TempDirBuilder::new()
+            .prefix("lexongraph-planning-artifacts-")
+            .tempdir()
+            .map_err(|error| {
+                StreamingIndexerError::PlanningArtifactFailure(format!(
+                    "failed to create planning artifact store root: {error}"
+                ))
+            })?;
+        let backend = Arc::new(
+            FilesystemBlockStore::new(storage_root.path())
+                .map_err(map_planning_artifact_store_error)?,
+        );
+        state.storage_root = Some(Arc::new(storage_root));
+        state.backend = Some(Arc::clone(&backend));
+        Ok(backend)
+    }
+
+    #[cfg(test)]
+    fn remove_bytes(&self, block_id: &BlockHash) -> Result<(), StreamingIndexerError> {
+        let state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact store state lock was poisoned".into(),
+            )
+        })?;
+        let Some(storage_root) = state.storage_root.as_ref() else {
+            return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                "planning artifact {block_id:?} store root is unavailable"
+            )));
+        };
+        let hex = block_id.to_string();
+        let (first_level, rest) = hex.split_at(2);
+        let (second_level, _) = rest.split_at(2);
+        let artifact_path = storage_root
+            .path()
+            .join(first_level)
+            .join(second_level)
+            .join(format!("{hex}.cbor"));
+        std::fs::remove_file(&artifact_path).map_err(|error| {
+            StreamingIndexerError::PlanningArtifactFailure(format!(
+                "failed to remove planning artifact {}: {error}",
+                artifact_path.display()
+            ))
+        })
     }
 }
 
@@ -156,56 +235,104 @@ pub struct PlanningArtifactLedger {
 }
 
 impl PlanningArtifactLedger {
-    fn push_original_embedding(&self, embedding: &[f32]) {
-        let block_id = self.store.put_bytes(encode_f32_vec(embedding));
+    fn push_original_embedding(&self, embedding: &[f32]) -> Result<(), StreamingIndexerError> {
+        let block_id = self.store.put_bytes(encode_f32_vec(embedding))?;
         self.original_item_artifact_ids
             .lock()
-            .unwrap()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
             .push(block_id);
+        Ok(())
     }
 
-    fn len(&self) -> usize {
-        self.original_item_artifact_ids.lock().unwrap().len()
+    pub fn len(&self) -> Result<usize, StreamingIndexerError> {
+        Ok(self
+            .original_item_artifact_ids
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
+            .len())
     }
 
-    fn original_item_artifact_ids(&self) -> Vec<BlockHash> {
-        self.original_item_artifact_ids.lock().unwrap().clone()
+    pub fn is_empty(&self) -> Result<bool, StreamingIndexerError> {
+        Ok(self.len()? == 0)
     }
 
-    fn load_all_embeddings(&self) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-        let item_ids = self.original_item_artifact_ids.lock().unwrap().clone();
-        item_ids
-            .iter()
-            .map(|block_id| self.load_embedding_artifact(block_id))
+    pub fn original_item_artifact_ids(&self) -> Result<Vec<BlockHash>, StreamingIndexerError> {
+        Ok(self
+            .original_item_artifact_ids
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
+            .clone())
+    }
+
+    pub fn load_all_embeddings(&self) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
+        let item_count = self.len()?;
+        (0..item_count)
+            .map(|index| self.load_embedding(index))
             .collect()
     }
 
-    fn load_embeddings(&self, indices: &[usize]) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-        let item_ids = self.original_item_artifact_ids.lock().unwrap().clone();
+    pub fn load_embedding(&self, index: usize) -> Result<Vec<f32>, StreamingIndexerError> {
+        let block_id = self.original_item_artifact_id(index)?;
+        self.load_embedding_artifact(&block_id)
+    }
+
+    pub fn load_embeddings(
+        &self,
+        indices: &[usize],
+    ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
         indices
             .iter()
-            .map(|&index| {
-                let block_id = item_ids.get(index).ok_or_else(|| {
-                    StreamingIndexerError::PlanningArtifactResolution(format!(
-                        "planning unit referenced missing original-item artifact at index {index}"
-                    ))
-                })?;
-                self.load_embedding_artifact(block_id)
-            })
+            .map(|&index| self.load_embedding(index))
             .collect()
     }
 
-    fn persist_summary_embedding(&self, embedding: &[f32]) -> BlockHash {
+    fn persist_summary_embedding(
+        &self,
+        embedding: &[f32],
+    ) -> Result<BlockHash, StreamingIndexerError> {
         self.store.put_bytes(encode_f32_vec(embedding))
     }
 
-    fn load_embedding_artifact(
+    pub fn load_embedding_artifact(
         &self,
         block_id: &BlockHash,
     ) -> Result<Vec<f32>, StreamingIndexerError> {
         let bytes = self.store.get_bytes(block_id)?;
         decode_f32_artifact(bytes.as_slice())
     }
+
+    fn original_item_artifact_id(&self, index: usize) -> Result<BlockHash, StreamingIndexerError> {
+        self.original_item_artifact_ids
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
+            .get(index)
+            .copied()
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning unit referenced missing original-item artifact at index {index}"
+                ))
+            })
+    }
+}
+
+fn map_planning_artifact_store_error(error: BlockStoreError) -> StreamingIndexerError {
+    StreamingIndexerError::PlanningArtifactFailure(error.to_string())
 }
 
 pub struct PlanningPassOutcome {
@@ -2258,7 +2385,7 @@ where
         for embedding in &embeddings {
             let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
             self.current_pass_artifacts
-                .push_original_embedding(decoded.as_slice());
+                .push_original_embedding(decoded.as_slice())?;
         }
         self.items_seen_in_current_pass += batch.len();
         Ok(())
@@ -3629,14 +3756,12 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
-    let owned_embeddings;
-    let embeddings = if let Some(artifacts) = artifacts {
-        owned_embeddings = artifacts.load_all_embeddings()?;
-        owned_embeddings.as_slice()
+    let embedding_count = if let Some(artifacts) = artifacts {
+        artifacts.len()?
     } else {
-        embeddings
+        embeddings.len()
     };
-    if embeddings.is_empty() {
+    if embedding_count == 0 {
         return Ok(PlanningPassOutcome {
             hierarchy: FinalizedPartitionHierarchy {
                 root_partition_id: "p0".into(),
@@ -3652,7 +3777,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
         });
     }
 
-    if embeddings.len() <= materializability_bound {
+    if embedding_count <= materializability_bound {
         return Ok(PlanningPassOutcome {
             hierarchy: FinalizedPartitionHierarchy {
                 root_partition_id: "p0".into(),
@@ -3660,7 +3785,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                     id: "p0".into(),
                     parent_id: None,
                     child_ids: Vec::new(),
-                    item_indices: (0..embeddings.len()).collect(),
+                    item_indices: (0..embedding_count).collect(),
                     terminal: true,
                     planning_stage: PlanningStage::Single,
                 }],
@@ -3677,40 +3802,63 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
 
     stage_observer(HierarchyPlanningStatusEvent::legacy(
         PlanningStage::Fine,
-        embeddings.len(),
+        embedding_count,
         StreamingIndexingStatusState::Started,
     ));
     stage_observer(HierarchyPlanningStatusEvent::legacy(
         PlanningStage::Fine,
-        embeddings.len(),
+        embedding_count,
         StreamingIndexingStatusState::InProgress,
     ));
 
     let requested_cluster_count = effective_cluster_count(
         settings.cluster_count,
-        embeddings.len(),
+        embedding_count,
         materializability_bound,
     )
     .map_err(map_clustering_configuration_error)?;
+    let dimensions = if let Some(artifacts) = artifacts {
+        artifacts.load_embedding(0)?.len()
+    } else {
+        embeddings.first().map_or(0, std::vec::Vec::len)
+    };
     let mut trainer = SphericalKmeansStreamingTrainer::new(
         StreamingClusteringConfig {
             cluster_count: requested_cluster_count,
-            dimensions: embeddings.first().map_or(0, std::vec::Vec::len),
+            dimensions,
             balance_constraints: None,
             random_seed: settings.random_seed,
         },
         settings.params.clone(),
     )
     .map_err(map_clustering_error)?;
-    trainer
-        .ingest_batch(embeddings)
-        .map_err(map_clustering_error)?;
+    if let Some(artifacts) = artifacts {
+        for index in 0..embedding_count {
+            trainer
+                .ingest_batch(&[artifacts.load_embedding(index)?])
+                .map_err(map_clustering_error)?;
+        }
+    } else {
+        trainer
+            .ingest_batch(embeddings)
+            .map_err(map_clustering_error)?;
+    }
     let pass_report = trainer.finish_pass().map_err(map_clustering_error)?;
     trainer.complete_training().map_err(map_clustering_error)?;
     let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
-    let assignments = classifier
-        .assign_batch(embeddings)
-        .map_err(map_clustering_error)?;
+    let assignments = if let Some(artifacts) = artifacts {
+        (0..embedding_count)
+            .map(|index| {
+                classifier
+                    .assign(&artifacts.load_embedding(index)?)
+                    .map_err(map_clustering_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        classifier
+            .assign_batch(embeddings)
+            .map_err(map_clustering_error)?
+    };
 
     let terminal_groups = build_profile_terminal_groups(&assignments, materializability_bound)
         .map_err(StreamingIndexerError::HierarchyValidation)?;
@@ -3718,14 +3866,17 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
     let mut nodes = terminal_groups
         .into_iter()
         .map(|item_indices| {
-            profile_terminal_node(&item_indices, embeddings).map(|representative_embedding| {
-                AgglomerativeHierarchyNode {
-                    child_node_indices: Vec::new(),
-                    item_indices,
-                    representative_embedding: Some(representative_embedding),
-                    representative_artifact_id: None,
-                    planning_stage: PlanningStage::Fine,
-                }
+            let representative_embedding = if let Some(artifacts) = artifacts {
+                profile_terminal_node_from_artifacts(&item_indices, artifacts)
+            } else {
+                profile_terminal_node(&item_indices, embeddings)
+            }?;
+            Ok::<AgglomerativeHierarchyNode, String>(AgglomerativeHierarchyNode {
+                child_node_indices: Vec::new(),
+                item_indices,
+                representative_embedding: Some(representative_embedding),
+                representative_artifact_id: None,
+                planning_stage: PlanningStage::Fine,
             })
         })
         .collect::<Result<Vec<_>, _>>()
@@ -3942,11 +4093,7 @@ where
     run_partition_planner_with_replay(
         planner,
         indices.len(),
-        &mut |position| {
-            artifacts
-                .load_embeddings(&[indices[position]])
-                .map(|embeddings| embeddings[0].clone())
-        },
+        &mut |position| artifacts.load_embedding(indices[position]),
         observe_progress,
     )
 }
@@ -4228,7 +4375,7 @@ where
     P: PartitionPlannerRunner,
     SO: FnMut(HierarchyPlanningStatusEvent),
 {
-    let original_item_artifact_ids = artifacts.original_item_artifact_ids();
+    let original_item_artifact_ids = artifacts.original_item_artifact_ids()?;
     let mut nodes = original_item_artifact_ids
         .iter()
         .enumerate()
@@ -4379,7 +4526,7 @@ where
                 item_indices,
                 representative_embedding: None,
                 representative_artifact_id: Some(
-                    artifacts.persist_summary_embedding(representative_embedding.as_slice()),
+                    artifacts.persist_summary_embedding(representative_embedding.as_slice())?,
                 ),
                 planning_stage: stage,
             });
@@ -4422,7 +4569,7 @@ where
     )
         -> Result<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>,
 {
-    if artifacts.len() == 0 {
+    if artifacts.len()? == 0 {
         return Ok(PlanningPassOutcome {
             hierarchy: FinalizedPartitionHierarchy {
                 root_partition_id: "p0".into(),
@@ -4441,7 +4588,7 @@ where
     let mut accumulator = PlanningMetricAccumulator::default();
     let mut telemetry = RecursivePlanningTelemetry::default();
     let mut partitions = Vec::new();
-    let root_indices = (0..artifacts.len()).collect::<Vec<_>>();
+    let root_indices = (0..artifacts.len()?).collect::<Vec<_>>();
     derive_partition_recursive_streaming_from_artifacts(
         root_indices.as_slice(),
         "p0".into(),
@@ -4482,7 +4629,7 @@ fn derive_adaptive_divisive_hierarchy_from_artifacts<SO>(
 where
     SO: FnMut(HierarchyPlanningStatusEvent),
 {
-    if artifacts.len() == 0 {
+    if artifacts.len()? == 0 {
         return Ok((
             PlanningPassOutcome {
                 hierarchy: FinalizedPartitionHierarchy {
@@ -4506,7 +4653,7 @@ where
     let mut accumulator = PlanningMetricAccumulator::default();
     let mut telemetry = RecursivePlanningTelemetry::default();
     let mut partitions = Vec::new();
-    let root_indices = (0..artifacts.len()).collect::<Vec<_>>();
+    let root_indices = (0..artifacts.len()?).collect::<Vec<_>>();
     derive_partition_recursive_streaming_adaptive_from_artifacts(
         root_indices.as_slice(),
         "p0".into(),
@@ -4620,7 +4767,7 @@ where
             "active planning unit unexpectedly had no first item".into(),
         )
     })?;
-    let dimensions = artifacts.load_embeddings(&[first_index])?[0].len();
+    let dimensions = artifacts.load_embedding(first_index)?.len();
     let planner = planner_builder(indices.len(), dimensions)?;
     let stage = planner.stage();
     telemetry.started_planner_invocation_count += 1;
@@ -4768,7 +4915,7 @@ where
             "active planning unit unexpectedly had no first item".into(),
         )
     })?;
-    let dimensions = artifacts.load_embeddings(&[first_index])?[0].len();
+    let dimensions = artifacts.load_embedding(first_index)?.len();
     let algorithm = selector
         .select_algorithm_with_embedding_replay(
             indices.len(),
@@ -4776,8 +4923,7 @@ where
             dimensions,
             |position| {
                 artifacts
-                    .load_embeddings(&[indices[position]])
-                    .map(|embeddings| embeddings[0].clone())
+                    .load_embedding(indices[position])
                     .map_err(|error| {
                         AdaptivePlanningError::DiagnosticComputation(error.to_string())
                     })
@@ -4812,11 +4958,7 @@ where
     let (pass_report, assignments) = match run_partition_planner_with_replay(
         planner,
         indices.len(),
-        &mut |position| {
-            artifacts
-                .load_embeddings(&[indices[position]])
-                .map(|embeddings| embeddings[0].clone())
-        },
+        &mut |position| artifacts.load_embedding(indices[position]),
         &mut || {
             stage_observer(telemetry.unit_event(
                 stage,
@@ -5870,6 +6012,17 @@ fn profile_terminal_node(
             .collect::<Result<Vec<_>, _>>()?,
     )
     .map_err(|error| error.to_string())
+}
+
+fn profile_terminal_node_from_artifacts(
+    item_indices: &[usize],
+    artifacts: &PlanningArtifactLedger,
+) -> Result<Vec<f32>, String> {
+    let embeddings = artifacts
+        .load_embeddings(item_indices)
+        .map_err(|error| error.to_string())?;
+    weighted_mean_f32_embeddings(embeddings.iter().map(|embedding| (embedding.as_slice(), 1)))
+        .map_err(|error| error.to_string())
 }
 
 fn greedy_pack_node_groups(
@@ -7920,7 +8073,9 @@ mod tests {
     fn seed_artifacts(embeddings: &[Vec<f32>]) -> PlanningArtifactLedger {
         let ledger = PlanningArtifactLedger::default();
         for embedding in embeddings {
-            ledger.push_original_embedding(embedding);
+            ledger
+                .push_original_embedding(embedding)
+                .expect("test artifacts should persist to the block store");
         }
         ledger
     }
@@ -8057,8 +8212,13 @@ mod tests {
     #[test]
     fn missing_planning_artifact_fails_explicitly() {
         let artifacts = seed_artifacts(&test_embeddings());
-        let missing = artifacts.original_item_artifact_ids()[0];
-        artifacts.store.blocks.lock().unwrap().remove(&missing);
+        let missing = artifacts
+            .original_item_artifact_ids()
+            .expect("artifact ids should be readable")[0];
+        artifacts
+            .store
+            .remove_bytes(&missing)
+            .expect("test should be able to remove a seeded artifact");
         let error = match derive_hierarchy_for_single_built_in_phase(
             test_directional_phase(BuiltInPlanningDirection::Divisive),
             Some(&artifacts),

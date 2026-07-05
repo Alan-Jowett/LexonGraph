@@ -19,6 +19,7 @@ half = "2.7.1"
 lexongraph-adaptive-planning-policy = { path = "../lexongraph-adaptive-planning-policy" }
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
+lexongraph-block-store-fs = { path = "../lexongraph-block-store-fs" }
 lexongraph-dcbc-streaming = { path = "../lexongraph-dcbc-streaming" }
 lexongraph-directional-pca = { path = "../lexongraph-directional-pca" }
 lexongraph-embeddings-trait = { version = "0.1.0", path = "../lexongraph-embeddings-trait" }
@@ -27,6 +28,7 @@ lexongraph-spherical-kmeans = { path = "../lexongraph-spherical-kmeans" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
 pollster = { version = "0.4.0", optional = true }
 sha2 = "0.11.0"
+tempfile = "3.23.0"
 
 [dev-dependencies]
 pollster = "0.4.0"

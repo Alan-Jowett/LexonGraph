@@ -503,7 +503,10 @@ where
                             "mean cluster radius centroid normalization became non-finite".into(),
                         ));
                     }
-                    Ok(normalized as f32)
+                    checked_f32_from_f64(
+                        normalized,
+                        "mean cluster radius centroid normalization overflowed f32",
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         );
@@ -564,7 +567,10 @@ where
 
     Ok(AdaptivePlanningDiagnostics {
         represented_item_count,
-        mean_cluster_radius: mean_cluster_radius as f32,
+        mean_cluster_radius: checked_f32_from_f64(
+            mean_cluster_radius,
+            "mean cluster radius overflowed f32",
+        )?,
     })
 }
 
@@ -673,7 +679,10 @@ fn compute_mean_cluster_radius(
                             "mean cluster radius centroid normalization became non-finite".into(),
                         ));
                     }
-                    Ok(normalized as f32)
+                    checked_f32_from_f64(
+                        normalized,
+                        "mean cluster radius centroid normalization overflowed f32",
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         );
@@ -732,7 +741,15 @@ fn compute_mean_cluster_radius(
         ));
     }
 
-    Ok(mean_cluster_radius as f32)
+    checked_f32_from_f64(mean_cluster_radius, "mean cluster radius overflowed f32")
+}
+
+fn checked_f32_from_f64(value: f64, message: &'static str) -> Result<f32, AdaptivePlanningError> {
+    let value = value as f32;
+    if !value.is_finite() {
+        return Err(AdaptivePlanningError::DiagnosticComputation(message.into()));
+    }
+    Ok(value)
 }
 
 fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanningError> {
@@ -766,4 +783,31 @@ fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanni
         ));
     }
     Ok(distance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdaptivePlanningError, checked_f32_from_f64, compute_mean_cluster_radius};
+
+    #[test]
+    fn mean_cluster_radius_rejects_f32_overflow() {
+        let embeddings = vec![vec![f32::MAX, f32::MAX], vec![-f32::MAX, -f32::MAX]];
+        let error = compute_mean_cluster_radius(&embeddings, &[0, 0]).unwrap_err();
+        assert!(matches!(
+            error,
+            AdaptivePlanningError::DiagnosticComputation(message)
+                if message == "mean cluster radius overflowed f32"
+        ));
+    }
+
+    #[test]
+    fn checked_f32_from_f64_rejects_overflow() {
+        let error =
+            checked_f32_from_f64(f64::MAX, "mean cluster radius overflowed f32").unwrap_err();
+        assert!(matches!(
+            error,
+            AdaptivePlanningError::DiagnosticComputation(message)
+                if message == "mean cluster radius overflowed f32"
+        ));
+    }
 }
