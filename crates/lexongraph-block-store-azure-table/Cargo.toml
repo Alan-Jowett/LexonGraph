@@ -7,9 +7,9 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1"
-azure_core = "0.13"
-azure_data_tables = "0.13"
-azure_storage = "0.13"
+azure_core = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_data_tables = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_storage = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
 base64 = "0.22"
 futures = "0.3"
 lexongraph-block = { path = "../lexongraph-block" }

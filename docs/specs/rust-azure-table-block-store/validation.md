@@ -136,7 +136,7 @@ single-entity payload path works for supported larger blocks.
 Run the parent block-store conformance suite against the Azure Table-backed
 implementation.
 
-**Pass condition:** the backend satisfies the shared `put`/`get`/enumeration`
+**Pass condition:** the backend satisfies the shared `put`/`get`/`enumeration`
 contract without backend-specific changes to the parent trait API.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-001

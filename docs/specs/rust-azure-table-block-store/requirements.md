@@ -182,11 +182,11 @@ oversized blocks.
 and required storage metadata, encoded using this revision's single-entity
 multi-property representation, cannot fit within one Azure Table entity under
 the documented Azure Table service limits applicable to this revision,
-including the per-entity size limit and per-property binary payload limit for
+including the per-entity size limit and per-property value-size limit for
 that encoded representation.
 
 `put` shall not reject a block solely because its canonical bytes exceed the
-per-property binary payload limit when those bytes can still be represented
+per-property binary value-size limit when those bytes can still be represented
 within one entity by this revision's deterministic multi-property encoding.
 
 ### REQ-AZURE-TABLE-STORE-016

@@ -72,11 +72,11 @@ Each logical block is stored in one Azure Table entity whose payload properties
 encode the canonical block bytes plus any metadata needed to reconstruct those
 bytes deterministically.
 
-Because Azure Table Storage limits a single binary property to 64 KiB while also
+Because Azure Table Storage limits a single string property to 64 KiB while also
 limiting the serialized entity to 1 MiB, the design shall split canonical bytes
-across multiple deterministic binary payload properties within the same entity
-when one property would be insufficient but the full payload still fits within
-the entity-level limit.
+across multiple deterministic base64 string payload properties within the same
+entity when one property would be insufficient but the full payload still fits
+within the entity-level limit.
 
 The property naming scheme, chunk ordering, and supporting metadata remain crate
 implementation details, but the stored representation must be sufficient to:
