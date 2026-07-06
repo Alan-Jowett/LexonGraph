@@ -293,14 +293,14 @@ struct PlanningArtifactLedgerCheckpoint {
 pub struct PlanningArtifactLedger {
     store: PlanningArtifactStore,
     state: Arc<Mutex<PlanningArtifactLedgerState>>,
-    mutation_lock: Arc<Mutex<()>>,
+    mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl PlanningArtifactLedger {
-    fn mutation_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, StreamingIndexerError> {
-        self.mutation_lock.lock().map_err(|_| {
+    fn try_mutation_guard(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, StreamingIndexerError> {
+        self.mutation_lock.try_lock().map_err(|_| {
             StreamingIndexerError::PlanningArtifactFailure(
-                "planning artifact ledger mutation lock was poisoned".into(),
+                "planning artifact ledger mutation is already in progress".into(),
             )
         })
     }
@@ -360,16 +360,15 @@ impl PlanningArtifactLedger {
         &self,
         embedding: Vec<f32>,
     ) -> Result<(), StreamingIndexerError> {
-        let _mutation_guard = self.mutation_guard()?;
+        let _mutation_guard = self.try_mutation_guard()?;
         self.push_original_embedding_vec_locked(embedding)
     }
 
-    #[allow(clippy::await_holding_lock)]
     async fn append_original_embeddings_transactionally(
         &self,
         embeddings: Vec<Vec<f32>>,
     ) -> Result<(), StreamingIndexerError> {
-        let _mutation_guard = self.mutation_guard()?;
+        let _mutation_guard = self.mutation_lock.lock().await;
         let checkpoint = self.checkpoint_locked()?;
         for embedding in embeddings {
             if let Err(error) = self
@@ -518,7 +517,7 @@ impl PlanningArtifactLedger {
     }
 
     fn flush_pending_original_embeddings(&self) -> Result<(), StreamingIndexerError> {
-        let _mutation_guard = self.mutation_guard()?;
+        let _mutation_guard = self.try_mutation_guard()?;
         self.flush_pending_original_embeddings_locked()
     }
 
@@ -888,11 +887,24 @@ pub trait StreamingClusteringFactory {
 pub trait HierarchicalPlanningPolicy {
     type Error: std::error::Error;
 
+    /// When true, `StreamingIndexingRun::finish_pass` installs persisted planning
+    /// artifacts and passes an empty `embeddings` slice to the finish methods
+    /// below. Implementers opting in must therefore consume the installed
+    /// artifacts instead of reading `embeddings` directly.
     fn uses_planning_artifacts(&self) -> bool {
         false
     }
 
+    /// Called before `finish_planning_pass*` when `uses_planning_artifacts()`
+    /// returns true.
     fn install_planning_artifacts(&mut self, _artifacts: PlanningArtifactLedger) {}
+
+    /// Returns whether the policy has acknowledged a prior
+    /// `install_planning_artifacts(...)` call and is ready to finish planning
+    /// without an in-memory `embeddings` slice.
+    fn planning_artifacts_installed(&self) -> bool {
+        !self.uses_planning_artifacts()
+    }
 
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
         BTreeSet::from([PlanningStage::Custom])
@@ -2275,6 +2287,10 @@ impl HierarchicalPlanningPolicy for BuiltInPlanningPolicy {
         self.planning_artifacts = Some(artifacts);
     }
 
+    fn planning_artifacts_installed(&self) -> bool {
+        self.planning_artifacts.is_some()
+    }
+
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
         match &self.planning {
             BuiltInPlanning::Dcbc(_)
@@ -2369,6 +2385,10 @@ impl HierarchicalPlanningPolicy for PublishedProfilePlanningPolicy {
 
     fn install_planning_artifacts(&mut self, artifacts: PlanningArtifactLedger) {
         self.planning_artifacts = Some(artifacts);
+    }
+
+    fn planning_artifacts_installed(&self) -> bool {
+        self.planning_artifacts.is_some()
     }
 
     fn declared_stages(&self) -> BTreeSet<PlanningStage> {
@@ -2900,6 +2920,12 @@ where
         let materialized_embeddings = if uses_planning_artifacts {
             self.planning_policy
                 .install_planning_artifacts(buffered.clone());
+            if !self.planning_policy.planning_artifacts_installed() {
+                self.current_pass_artifacts = buffered;
+                return Err(StreamingIndexerError::InvalidLifecycleTransition(
+                    "planning policy enabled persisted artifacts but did not acknowledge install_planning_artifacts".into(),
+                ));
+            }
             None
         } else {
             Some(std::mem::take(&mut self.current_pass_f32_embeddings))
