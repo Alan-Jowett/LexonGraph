@@ -4875,23 +4875,49 @@ where
     )
 }
 
-fn load_agglomerative_representative_embedding(
+fn load_agglomerative_layer_embeddings(
     artifacts: &PlanningArtifactLedger,
-    node: &AgglomerativeHierarchyNode,
-    node_index: usize,
-) -> Result<Vec<f32>, StreamingIndexerError> {
-    if let Some(block_id) = node.representative_artifact_id {
-        return artifacts.load_embedding_artifact(&block_id);
+    nodes: &[AgglomerativeHierarchyNode],
+    current_layer: &[usize],
+) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
+    let mut layer_embeddings = vec![None; current_layer.len()];
+    let mut leaf_positions = Vec::new();
+    let mut leaf_item_indices = Vec::new();
+
+    for (position, &node_index) in current_layer.iter().enumerate() {
+        let node = &nodes[node_index];
+        if let Some(block_id) = node.representative_artifact_id {
+            layer_embeddings[position] = Some(artifacts.load_embedding_artifact(&block_id)?);
+        } else if let Some(embedding) = &node.representative_embedding {
+            layer_embeddings[position] = Some(embedding.clone());
+        } else if node.child_node_indices.is_empty() && node.item_indices.len() == 1 {
+            leaf_positions.push(position);
+            leaf_item_indices.push(node.item_indices[0]);
+        } else {
+            return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                "planning unit {node_index} is missing its representative embedding"
+            )));
+        }
     }
-    if let Some(embedding) = &node.representative_embedding {
-        return Ok(embedding.clone());
+
+    if !leaf_item_indices.is_empty() {
+        let leaf_embeddings = artifacts.load_embeddings(&leaf_item_indices)?;
+        for (position, embedding) in leaf_positions.into_iter().zip(leaf_embeddings) {
+            layer_embeddings[position] = Some(embedding);
+        }
     }
-    if node.child_node_indices.is_empty() && node.item_indices.len() == 1 {
-        return artifacts.load_embedding(node.item_indices[0]);
-    }
-    Err(StreamingIndexerError::PlanningArtifactResolution(format!(
-        "planning unit {node_index} is missing its representative embedding"
-    )))
+
+    layer_embeddings
+        .into_iter()
+        .enumerate()
+        .map(|(position, embedding)| {
+            embedding.ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning unit at layer position {position} did not load a representative embedding"
+                ))
+            })
+        })
+        .collect()
 }
 
 fn derive_hierarchy_agglomeratively_with_artifact_nodes<B, P, SO>(
@@ -4935,16 +4961,11 @@ where
             .map(|&node_index| nodes[node_index].item_indices.len())
             .max()
             .unwrap_or(0);
-        let layer_embeddings = current_layer
-            .iter()
-            .map(|&node_index| {
-                load_agglomerative_representative_embedding(
-                    artifacts,
-                    &nodes[node_index],
-                    node_index,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let layer_embeddings = load_agglomerative_layer_embeddings(
+            artifacts,
+            nodes.as_slice(),
+            current_layer.as_slice(),
+        )?;
         let planner = planner_builder(
             &layer_embeddings,
             represented_item_count,
@@ -6708,6 +6729,12 @@ fn decode_f32_embedding_page(bytes: &[u8]) -> Result<Vec<Vec<f32>>, StreamingInd
     let embedding_count =
         u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
     cursor += 4;
+    if embedding_count > ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE {
+        return Err(StreamingIndexerError::PlanningArtifactFailure(format!(
+            "planning artifact page declares {embedding_count} embeddings, exceeding the supported page size limit {}",
+            ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE
+        )));
+    }
     let maximum_possible_embeddings = bytes.len().saturating_sub(cursor) / 4;
     if embedding_count > maximum_possible_embeddings {
         return Err(StreamingIndexerError::PlanningArtifactFailure(format!(
@@ -8798,6 +8825,17 @@ mod tests {
                 embeddings[ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE].clone(),
             ]
         );
+    }
+
+    #[test]
+    fn decode_f32_embedding_page_rejects_declared_page_size_over_limit() {
+        let bytes = (ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE as u32 + 1).to_le_bytes();
+        let error = super::decode_f32_embedding_page(bytes.as_slice())
+            .expect_err("oversized declared page count should fail before allocation");
+        assert!(matches!(
+            error,
+            StreamingIndexerError::PlanningArtifactFailure(_)
+        ));
     }
 
     #[test]
