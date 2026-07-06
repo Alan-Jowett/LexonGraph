@@ -2971,6 +2971,10 @@ where
             policy_uses_planning_artifacts,
             "finish_pass",
         )?;
+        if uses_planning_artifacts {
+            self.current_pass_artifacts
+                .flush_pending_original_embeddings()?;
+        }
         let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
         let buffered = std::mem::take(&mut self.current_pass_artifacts);
         let materialized_embeddings = if uses_planning_artifacts {
@@ -8671,10 +8675,11 @@ mod tests {
         BuiltInPlanningPhase, ChildSummaryInput, Content, ContentResolver,
         DcbcStreamingClusteringFactory, DirectionalPcaAllocationPolicy,
         DirectionalPcaBinningPolicy, DirectionalPcaBuiltInPlanningSettings,
-        DirectionalPcaClusterCardinalityMode, DirectionalPcaRetainedAxisPolicy,
-        HierarchicalPlanningPolicy, IndexItem, ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
-        PlanningArtifactLedger, PlanningPassOutcome, StreamingIndexerError, StreamingIndexingRun,
-        allocate_variable_bit_widths, derive_hierarchy_agglomeratively_from_artifacts_with_builder,
+        DirectionalPcaClusterCardinalityMode, DirectionalPcaRetainedAxisPolicy, FinalizedPartition,
+        FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, MetricDirection,
+        ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE, PlanningArtifactLedger, PlanningPassOutcome,
+        PlanningStage, StreamingIndexerError, StreamingIndexingRun, allocate_variable_bit_widths,
+        derive_hierarchy_agglomeratively_from_artifacts_with_builder,
         derive_hierarchy_for_adaptive_built_in, derive_hierarchy_for_single_built_in_phase,
         directional_pca_published_profile_params, effective_directional_pca_cluster_count,
         exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
@@ -8882,6 +8887,97 @@ mod tests {
             _block_size_target: usize,
         ) -> Result<PlanningPassOutcome, Self::Error> {
             panic!("finish_planning_pass should not be reached when storage mode drifts");
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct FlushCheckingArtifactPolicy {
+        planning_artifacts: Option<PlanningArtifactLedger>,
+    }
+
+    #[derive(Debug)]
+    struct FlushCheckingArtifactPolicyError(String);
+
+    impl fmt::Display for FlushCheckingArtifactPolicyError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl std::error::Error for FlushCheckingArtifactPolicyError {}
+
+    impl HierarchicalPlanningPolicy for FlushCheckingArtifactPolicy {
+        type Error = FlushCheckingArtifactPolicyError;
+
+        fn uses_planning_artifacts(&self) -> bool {
+            true
+        }
+
+        fn install_planning_artifacts(&mut self, artifacts: PlanningArtifactLedger) {
+            self.planning_artifacts = Some(artifacts);
+        }
+
+        fn planning_artifacts_installed(&self) -> bool {
+            self.planning_artifacts.is_some()
+        }
+
+        fn finish_planning_pass(
+            &mut self,
+            _embeddings: &[Vec<f32>],
+            _embedding_spec: &EmbeddingSpec,
+            _materializability_bound: usize,
+            _block_size_target: usize,
+        ) -> Result<PlanningPassOutcome, Self::Error> {
+            let artifacts = self.planning_artifacts.as_ref().ok_or_else(|| {
+                FlushCheckingArtifactPolicyError(
+                    "planning artifacts were not installed before finish_planning_pass".into(),
+                )
+            })?;
+            let state = artifacts.state.lock().map_err(|_| {
+                FlushCheckingArtifactPolicyError(
+                    "artifact ledger lock was poisoned during finish_planning_pass".into(),
+                )
+            })?;
+            if !state.pending_original_embeddings.is_empty() {
+                return Err(FlushCheckingArtifactPolicyError(
+                    "finish_pass installed planning artifacts before flushing the pending page"
+                        .into(),
+                ));
+            }
+            if state.original_item_count != 1 {
+                return Err(FlushCheckingArtifactPolicyError(format!(
+                    "expected exactly one persisted embedding, found {}",
+                    state.original_item_count
+                )));
+            }
+            if state.original_item_artifact_page_ids.len() != 1 {
+                return Err(FlushCheckingArtifactPolicyError(format!(
+                    "expected exactly one persisted artifact page, found {}",
+                    state.original_item_artifact_page_ids.len()
+                )));
+            }
+            drop(state);
+
+            Ok(PlanningPassOutcome {
+                hierarchy: FinalizedPartitionHierarchy {
+                    root_partition_id: "p0".into(),
+                    partitions: vec![FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: Vec::new(),
+                        item_indices: vec![0],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    }],
+                },
+                requested_cluster_count: None,
+                realized_cluster_count: None,
+                planning_quality_metric: 0.0,
+                planning_balance_metric: 0.0,
+                planning_quality_direction: MetricDirection::LargerIsBetter,
+                planning_balance_direction: MetricDirection::SmallerIsBetter,
+                stages_used: std::collections::BTreeSet::from([PlanningStage::Custom]),
+            })
         }
     }
 
@@ -9146,6 +9242,30 @@ mod tests {
                     .to_string()
                     .contains("changed persisted-artifact mode during finish_pass")
             );
+        });
+    }
+
+    #[test]
+    fn finish_pass_flushes_pending_artifact_page_before_install() {
+        pollster::block_on(async {
+            let mut run = StreamingIndexingRun::new(
+                TestResolver,
+                TestEmbeddingProvider,
+                ArithmeticMeanCanonicalEmbeddingPolicy,
+                FlushCheckingArtifactPolicy::default(),
+                test_embedding_spec(),
+                256,
+            );
+            let batch = [IndexItem {
+                metadata: Metadata::default(),
+                content_ref: 1,
+            }];
+            run.ingest_batch(&batch)
+                .await
+                .expect("artifact-backed ingest should succeed");
+
+            run.finish_pass()
+                .expect("finish_pass should flush the pending artifact page before install");
         });
     }
 
