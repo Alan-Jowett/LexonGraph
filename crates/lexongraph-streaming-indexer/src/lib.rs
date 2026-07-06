@@ -134,6 +134,8 @@ struct PlanningArtifactStore {
 struct PlanningArtifactStoreState {
     backend: Option<Arc<FilesystemBlockStore>>,
     storage_root: Option<Arc<TempDir>>,
+    #[cfg(test)]
+    fail_next_put_error: Option<String>,
 }
 
 impl Clone for PlanningArtifactStore {
@@ -154,6 +156,17 @@ impl Default for PlanningArtifactStore {
 
 impl PlanningArtifactStore {
     fn put_bytes(&self, bytes: Vec<u8>) -> Result<BlockHash, StreamingIndexerError> {
+        #[cfg(test)]
+        {
+            let mut state = self.state.lock().map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact store state lock was poisoned".into(),
+                )
+            })?;
+            if let Some(message) = state.fail_next_put_error.take() {
+                return Err(StreamingIndexerError::PlanningArtifactFailure(message));
+            }
+        }
         let backend = self.backend()?;
         let block_id = hash_bytes(bytes.as_slice());
         futures::executor::block_on(backend.put_block_bytes(&block_id, bytes.as_slice()))
@@ -170,6 +183,17 @@ impl PlanningArtifactStore {
                     "planning artifact {block_id:?} is unavailable"
                 ))
             })
+    }
+
+    #[cfg(test)]
+    fn fail_next_put_for_test(&self, message: &str) -> Result<(), StreamingIndexerError> {
+        let mut state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact store state lock was poisoned".into(),
+            )
+        })?;
+        state.fail_next_put_error = Some(message.to_owned());
+        Ok(())
     }
 
     fn backend(&self) -> Result<Arc<FilesystemBlockStore>, StreamingIndexerError> {
@@ -249,6 +273,12 @@ struct OriginalItemArtifactRef {
     page_index: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PlanningArtifactLedgerCheckpoint {
+    original_item_artifact_ref_len: usize,
+    pending_original_embeddings_len: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PlanningArtifactLedger {
     store: PlanningArtifactStore,
@@ -257,6 +287,54 @@ pub struct PlanningArtifactLedger {
 }
 
 impl PlanningArtifactLedger {
+    fn checkpoint(&self) -> Result<PlanningArtifactLedgerCheckpoint, StreamingIndexerError> {
+        let original_item_artifact_ref_len = self
+            .original_item_artifact_refs
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
+            .len();
+        let pending_original_embeddings_len = self
+            .pending_original_embeddings
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger pending buffer lock was poisoned".into(),
+                )
+            })?
+            .len();
+        Ok(PlanningArtifactLedgerCheckpoint {
+            original_item_artifact_ref_len,
+            pending_original_embeddings_len,
+        })
+    }
+
+    fn rollback_to_checkpoint(
+        &self,
+        checkpoint: PlanningArtifactLedgerCheckpoint,
+    ) -> Result<(), StreamingIndexerError> {
+        self.original_item_artifact_refs
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?
+            .truncate(checkpoint.original_item_artifact_ref_len);
+        self.pending_original_embeddings
+            .lock()
+            .map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger pending buffer lock was poisoned".into(),
+                )
+            })?
+            .truncate(checkpoint.pending_original_embeddings_len);
+        Ok(())
+    }
+
     fn push_original_embedding_vec(
         &self,
         embedding: Vec<f32>,
@@ -2612,6 +2690,7 @@ where
         }
 
         let offset = self.items_seen_in_current_pass;
+        let mut replay_items = Vec::with_capacity(batch.len());
         for (index, ((item, content), embedding)) in batch
             .iter()
             .zip(contents.iter())
@@ -2643,20 +2722,31 @@ where
                     )));
                 }
             } else {
-                self.current_pass_items.push(replay_item);
+                replay_items.push(replay_item);
             }
         }
 
         let persist_planning_artifacts = self.planning_policy.uses_planning_artifacts();
+        let mut decoded_embeddings = Vec::with_capacity(embeddings.len());
         for embedding in &embeddings {
-            let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
-            if persist_planning_artifacts {
-                self.current_pass_artifacts
-                    .push_original_embedding_vec(decoded)?;
-            } else {
-                self.current_pass_f32_embeddings.push(decoded);
-            }
+            decoded_embeddings.push(decode_embedding_as_f32(embedding, &self.embedding_spec)?);
         }
+        if persist_planning_artifacts {
+            let checkpoint = self.current_pass_artifacts.checkpoint()?;
+            for decoded in decoded_embeddings {
+                if let Err(error) = self
+                    .current_pass_artifacts
+                    .push_original_embedding_vec(decoded)
+                {
+                    self.current_pass_artifacts
+                        .rollback_to_checkpoint(checkpoint)?;
+                    return Err(error);
+                }
+            }
+        } else {
+            self.current_pass_f32_embeddings.extend(decoded_embeddings);
+        }
+        self.current_pass_items.extend(replay_items);
         self.items_seen_in_current_pass += batch.len();
         Ok(())
     }
@@ -8347,18 +8437,20 @@ mod tests {
     use super::{
         AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings, AdaptivePlanningDirection,
         AdaptivePlanningSelector, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-        BuiltInPlanningDirection, BuiltInPlanningPhase, ChildSummaryInput,
-        DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
+        BuiltInPlanning, BuiltInPlanningDirection, BuiltInPlanningPhase, ChildSummaryInput,
+        Content, ContentResolver, DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
         DirectionalPcaBuiltInPlanningSettings, DirectionalPcaClusterCardinalityMode,
-        DirectionalPcaRetainedAxisPolicy, ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
-        PlanningArtifactLedger, StreamingIndexerError, allocate_variable_bit_widths,
-        derive_hierarchy_agglomeratively_from_artifacts_with_builder,
+        DirectionalPcaRetainedAxisPolicy, IndexItem, ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
+        PlanningArtifactLedger, StreamingIndexerError, StreamingIndexingRun,
+        allocate_variable_bit_widths, derive_hierarchy_agglomeratively_from_artifacts_with_builder,
         derive_hierarchy_for_adaptive_built_in, derive_hierarchy_for_single_built_in_phase,
         directional_pca_published_profile_params, effective_directional_pca_cluster_count,
         exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
         uses_root_branch_budget, weighted_mean_f32_embeddings,
     };
-    use crate::{BlockHash, EmbeddingSpec};
+    use crate::{BlockHash, EmbeddingSpec, Metadata};
+    use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
+    use std::fmt;
 
     #[test]
     fn weighted_representative_embedding_uses_item_counts() {
@@ -8445,6 +8537,72 @@ mod tests {
         ]
     }
 
+    #[derive(Debug)]
+    struct TestResolverError(String);
+
+    impl fmt::Display for TestResolverError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl std::error::Error for TestResolverError {}
+
+    #[derive(Clone, Copy, Debug)]
+    struct TestResolver;
+
+    impl ContentResolver<u8> for TestResolver {
+        type Error = TestResolverError;
+
+        fn resolve(&self, content_ref: &u8) -> Result<Content, Self::Error> {
+            Ok(Content {
+                media_type: "application/octet-stream".into(),
+                body: vec![*content_ref],
+            })
+        }
+
+        fn fingerprint(&self, content_ref: &u8) -> Result<BlockHash, Self::Error> {
+            let mut bytes = [0u8; BlockHash::LEN];
+            bytes[0] = *content_ref;
+            Ok(BlockHash::from_bytes(bytes))
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestEmbeddingProviderError(String);
+
+    impl fmt::Display for TestEmbeddingProviderError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl std::error::Error for TestEmbeddingProviderError {}
+
+    #[derive(Clone, Copy, Debug)]
+    struct TestEmbeddingProvider;
+
+    impl EmbeddingProvider for TestEmbeddingProvider {
+        type Error = TestEmbeddingProviderError;
+
+        async fn embed(
+            &self,
+            input: &EmbeddingInput,
+            spec: &EmbeddingSpec,
+        ) -> Result<Vec<u8>, Self::Error> {
+            if spec != &test_embedding_spec() {
+                return Err(TestEmbeddingProviderError(
+                    "unexpected embedding spec in test provider".into(),
+                ));
+            }
+            let value =
+                input.body.first().copied().ok_or_else(|| {
+                    TestEmbeddingProviderError("expected a one-byte test body".into())
+                })? as f32;
+            Ok([value.to_le_bytes(), (value + 0.5).to_le_bytes()].concat())
+        }
+    }
+
     fn seed_artifacts(embeddings: &[Vec<f32>]) -> PlanningArtifactLedger {
         let ledger = PlanningArtifactLedger::default();
         for embedding in embeddings {
@@ -8494,6 +8652,70 @@ mod tests {
                 embeddings[ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE].clone(),
             ]
         );
+    }
+
+    #[test]
+    fn ingest_batch_rolls_back_state_when_artifact_persist_fails() {
+        pollster::block_on(async {
+            let batch = (0..ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
+                .map(|index| IndexItem {
+                    metadata: Metadata::default(),
+                    content_ref: index as u8,
+                })
+                .collect::<Vec<_>>();
+            let mut run = StreamingIndexingRun::with_builtin_planning(
+                TestResolver,
+                TestEmbeddingProvider,
+                BuiltInPlanning::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                    direction: BuiltInPlanningDirection::Divisive,
+                    cluster_count: 2,
+                    random_seed: Some(7),
+                    params: directional_pca_published_profile_params(
+                        DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                        DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                        DirectionalPcaBinningPolicy::Quantile,
+                        DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                        1,
+                        0.0,
+                    ),
+                }),
+                test_embedding_spec(),
+                256,
+            );
+            run.current_pass_artifacts
+                .store
+                .fail_next_put_for_test("injected planning artifact failure")
+                .expect("test should be able to inject artifact-store failure");
+
+            let error = run
+                .ingest_batch(&batch)
+                .await
+                .expect_err("artifact persistence failure should bubble out of ingest_batch");
+            assert!(matches!(
+                error,
+                StreamingIndexerError::PlanningArtifactFailure(_)
+            ));
+            assert!(run.current_pass_items.is_empty());
+            assert_eq!(run.items_seen_in_current_pass, 0);
+            assert!(
+                run.current_pass_f32_embeddings.is_empty(),
+                "artifact-backed ingest should not spill embeddings into in-memory fallback state"
+            );
+            assert!(
+                run.current_pass_artifacts
+                    .original_item_artifact_refs
+                    .lock()
+                    .expect("artifact refs lock should remain usable")
+                    .is_empty()
+            );
+            assert!(
+                run.current_pass_artifacts
+                    .pending_original_embeddings
+                    .lock()
+                    .expect("pending artifact lock should remain usable")
+                    .is_empty()
+            );
+        });
     }
 
     fn test_directional_phase(direction: BuiltInPlanningDirection) -> BuiltInPlanningPhase {
