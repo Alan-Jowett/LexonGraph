@@ -7088,20 +7088,38 @@ fn subtract_f32_vectors(left: &[f32], right: &[f32]) -> Result<Vec<f32>, Streami
 
 fn encode_f32_vec(values: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(values.len() * 4);
-    for value in values {
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
+    append_f32_vec(&mut bytes, values);
     bytes
 }
 
 fn encode_f32_embedding_page(embeddings: &[Vec<f32>]) -> Result<Vec<u8>, StreamingIndexerError> {
-    let mut bytes = Vec::new();
     let embedding_count = u32::try_from(embeddings.len()).map_err(|_| {
         StreamingIndexerError::PlanningArtifactFailure(format!(
             "planning artifact page cannot encode {} embeddings because it exceeds u32::MAX",
             embeddings.len()
         ))
     })?;
+    let mut total_bytes = std::mem::size_of::<u32>();
+    for embedding in embeddings {
+        let encoded_embedding_bytes = embedding.len().checked_mul(std::mem::size_of::<f32>()).ok_or_else(
+            || {
+                StreamingIndexerError::PlanningArtifactFailure(format!(
+                    "planning artifact page cannot encode embedding length {} because serialized bytes overflow usize",
+                    embedding.len()
+                ))
+            },
+        )?;
+        total_bytes = total_bytes
+            .checked_add(std::mem::size_of::<u32>())
+            .and_then(|bytes| bytes.checked_add(encoded_embedding_bytes))
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactFailure(format!(
+                    "planning artifact page cannot encode {} embeddings because serialized bytes overflow usize",
+                    embeddings.len()
+                ))
+            })?;
+    }
+    let mut bytes = Vec::with_capacity(total_bytes);
     bytes.extend_from_slice(&embedding_count.to_le_bytes());
     for embedding in embeddings {
         let value_count = u32::try_from(embedding.len()).map_err(|_| {
@@ -7111,9 +7129,15 @@ fn encode_f32_embedding_page(embeddings: &[Vec<f32>]) -> Result<Vec<u8>, Streami
             ))
         })?;
         bytes.extend_from_slice(&value_count.to_le_bytes());
-        bytes.extend_from_slice(&encode_f32_vec(embedding));
+        append_f32_vec(&mut bytes, embedding);
     }
     Ok(bytes)
+}
+
+fn append_f32_vec(bytes: &mut Vec<u8>, values: &[f32]) {
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
 }
 
 fn compute_quantization_scales(
