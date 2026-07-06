@@ -108,6 +108,16 @@ impl std::fmt::Debug for FilesystemBlockStore {
 }
 
 impl FilesystemBlockStore {
+    pub fn block_path_for_root(store_root: &Path, block_id: &BlockHash) -> PathBuf {
+        let hex = block_id.to_string();
+        let (first_level, rest) = hex.split_at(2);
+        let (second_level, _) = rest.split_at(2);
+        store_root
+            .join(first_level)
+            .join(second_level)
+            .join(format!("{hex}.cbor"))
+    }
+
     #[cfg(not(feature = "inject"))]
     pub fn new(store_root: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
         let requested_root = store_root.as_ref();
@@ -188,13 +198,7 @@ impl FilesystemBlockStore {
     }
 
     fn block_path(&self, block_id: &BlockHash) -> PathBuf {
-        let hex = block_id.to_string();
-        let (first_level, rest) = hex.split_at(2);
-        let (second_level, _) = rest.split_at(2);
-        self.store_root
-            .join(first_level)
-            .join(second_level)
-            .join(format!("{hex}.cbor"))
+        Self::block_path_for_root(&self.store_root, block_id)
     }
 
     fn read_existing_or_map_publish_error(

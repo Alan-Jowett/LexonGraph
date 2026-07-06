@@ -261,14 +261,8 @@ impl PlanningArtifactStore {
                 "planning artifact {block_id:?} store root is unavailable"
             )));
         };
-        let hex = block_id.to_string();
-        let (first_level, rest) = hex.split_at(2);
-        let (second_level, _) = rest.split_at(2);
-        let artifact_path = storage_root
-            .path()
-            .join(first_level)
-            .join(second_level)
-            .join(format!("{hex}.cbor"));
+        let artifact_path =
+            FilesystemBlockStore::block_path_for_root(storage_root.path(), block_id);
         std::fs::remove_file(&artifact_path).map_err(|error| {
             StreamingIndexerError::PlanningArtifactFailure(format!(
                 "failed to remove planning artifact {}: {error}",
@@ -4156,6 +4150,7 @@ fn derive_hierarchy_from_published_profile(
                 settings,
                 artifacts,
                 embeddings,
+                embedding_spec,
                 effective_partition_bound,
                 stage_observer,
             )
@@ -4210,6 +4205,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
     settings: &PublishedSphericalKmeansProfileSettings,
     artifacts: Option<&PlanningArtifactLedger>,
     embeddings: &[Vec<f32>],
+    embedding_spec: &EmbeddingSpec,
     materializability_bound: usize,
     stage_observer: &mut impl FnMut(HierarchyPlanningStatusEvent),
 ) -> Result<PlanningPassOutcome, StreamingIndexerError> {
@@ -4274,8 +4270,8 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
         materializability_bound,
     )
     .map_err(map_clustering_configuration_error)?;
-    let dimensions = if let Some(artifacts) = artifacts {
-        artifacts.load_embedding(0)?.len()
+    let dimensions = if artifacts.is_some() {
+        embedding_spec_dimensions(embedding_spec)?
     } else {
         embeddings.first().map_or(0, std::vec::Vec::len)
     };
@@ -4295,6 +4291,15 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                 (batch_start + ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE).min(embedding_count);
             let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
             let batch_embeddings = artifacts.load_embeddings(&batch_indices)?;
+            for embedding in &batch_embeddings {
+                if embedding.len() != dimensions {
+                    return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                        "planning artifact embedding had {} dimensions but expected {}",
+                        embedding.len(),
+                        dimensions
+                    )));
+                }
+            }
             trainer
                 .ingest_batch(batch_embeddings.as_slice())
                 .map_err(map_clustering_error)?;
@@ -4314,6 +4319,15 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                 (batch_start + ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE).min(embedding_count);
             let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
             let batch_embeddings = artifacts.load_embeddings(&batch_indices)?;
+            for embedding in &batch_embeddings {
+                if embedding.len() != dimensions {
+                    return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                        "planning artifact embedding had {} dimensions but expected {}",
+                        embedding.len(),
+                        dimensions
+                    )));
+                }
+            }
             assignments.extend(
                 classifier
                     .assign_batch(batch_embeddings.as_slice())
@@ -5378,14 +5392,19 @@ where
     let dimensions = embedding_spec_dimensions(embedding_spec)?;
     let mut selector_replay = ArtifactReplayCache::new(artifacts, indices)?;
     let algorithm = selector
-        .select_algorithm_with_embedding_replay(
+        .select_algorithm_with_embedding_replay_batches(
             indices.len(),
             indices.len(),
             dimensions,
-            |position| {
-                selector_replay.load(position).map_err(|error| {
-                    AdaptivePlanningError::DiagnosticComputation(error.to_string())
-                })
+            |positions| {
+                positions
+                    .iter()
+                    .map(|&position| {
+                        selector_replay.load(position).map_err(|error| {
+                            AdaptivePlanningError::DiagnosticComputation(error.to_string())
+                        })
+                    })
+                    .collect()
             },
         )
         .map_err(map_adaptive_planning_error)?;

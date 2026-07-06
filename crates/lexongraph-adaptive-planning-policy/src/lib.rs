@@ -201,6 +201,46 @@ impl AdaptivePlanningSelector {
         self.select_algorithm_from_diagnostics(diagnostics)
     }
 
+    pub fn select_algorithm_with_embedding_replay_batches<LoadBatch>(
+        &mut self,
+        represented_item_count: usize,
+        embedding_count: usize,
+        dimensions: usize,
+        mut load_embeddings: LoadBatch,
+    ) -> Result<ActivePlanningAlgorithm, AdaptivePlanningError>
+    where
+        LoadBatch: FnMut(&[usize]) -> Result<Vec<Vec<f32>>, AdaptivePlanningError>,
+    {
+        if self.switched_to_dcbc {
+            self.decision_records.push(AdaptiveSwitchDecisionRecord {
+                active_algorithm: ActivePlanningAlgorithm::Dcbc,
+                switch_boundary_occurred: false,
+                reason: AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc,
+                collapse_diagnostics: None,
+            });
+            return Ok(ActivePlanningAlgorithm::Dcbc);
+        }
+
+        if self.decision_records.is_empty() {
+            self.decision_records.push(AdaptiveSwitchDecisionRecord {
+                active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
+                switch_boundary_occurred: false,
+                reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
+                collapse_diagnostics: None,
+            });
+            return Ok(ActivePlanningAlgorithm::DirectionalPca);
+        }
+
+        let diagnostics = evaluate_collapse_diagnostics_with_embedding_replay_batches(
+            represented_item_count,
+            embedding_count,
+            dimensions,
+            &self.settings.directional_pca,
+            &mut load_embeddings,
+        )?;
+        self.select_algorithm_from_diagnostics(diagnostics)
+    }
+
     pub fn select_algorithm_from_diagnostics(
         &mut self,
         diagnostics: AdaptivePlanningDiagnostics,
@@ -400,10 +440,29 @@ fn evaluate_collapse_diagnostics_with_embedding_replay<Load>(
     embedding_count: usize,
     dimensions: usize,
     settings: &AdaptiveDirectionalPcaSettings,
-    mut load_embedding: &mut Load,
+    load_embedding: &mut Load,
 ) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError>
 where
     Load: FnMut(usize) -> Result<Vec<f32>, AdaptivePlanningError>,
+{
+    evaluate_collapse_diagnostics_with_embedding_replay_batches(
+        represented_item_count,
+        embedding_count,
+        dimensions,
+        settings,
+        &mut |indices| indices.iter().map(|&index| load_embedding(index)).collect(),
+    )
+}
+
+fn evaluate_collapse_diagnostics_with_embedding_replay_batches<LoadBatch>(
+    represented_item_count: usize,
+    embedding_count: usize,
+    dimensions: usize,
+    settings: &AdaptiveDirectionalPcaSettings,
+    load_embeddings: &mut LoadBatch,
+) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError>
+where
+    LoadBatch: FnMut(&[usize]) -> Result<Vec<Vec<f32>>, AdaptivePlanningError>,
 {
     if represented_item_count == 0 {
         return Err(AdaptivePlanningError::DiagnosticComputation(
@@ -441,14 +500,18 @@ where
         .map_err(map_streaming_clustering_error)?;
     for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
         let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
-        let batch = (batch_start..batch_end)
-            .map(&mut load_embedding)
-            .map(|embedding| {
-                let embedding = embedding?;
-                validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
-                Ok(embedding)
-            })
-            .collect::<Result<Vec<_>, AdaptivePlanningError>>()?;
+        let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
+        let batch = load_embeddings(&batch_indices)?;
+        if batch.len() != batch_indices.len() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                "replay loader returned {} embeddings for {} requested indices",
+                batch.len(),
+                batch_indices.len()
+            )));
+        }
+        for embedding in &batch {
+            validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
+        }
         trainer
             .ingest_batch(batch.as_slice())
             .map_err(map_streaming_clustering_error)?;
@@ -467,14 +530,18 @@ where
     let mut centroid_sums: BTreeMap<u32, (Vec<f64>, usize)> = BTreeMap::new();
     for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
         let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
-        let batch = (batch_start..batch_end)
-            .map(&mut load_embedding)
-            .map(|embedding| {
-                let embedding = embedding?;
-                validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
-                Ok(embedding)
-            })
-            .collect::<Result<Vec<_>, AdaptivePlanningError>>()?;
+        let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
+        let batch = load_embeddings(&batch_indices)?;
+        if batch.len() != batch_indices.len() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                "replay loader returned {} embeddings for {} requested indices",
+                batch.len(),
+                batch_indices.len()
+            )));
+        }
+        for embedding in &batch {
+            validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
+        }
         let batch_assignments = classifier
             .assign_batch(batch.as_slice())
             .map_err(map_streaming_clustering_error)?;
@@ -533,21 +600,34 @@ where
     }
 
     let mut cluster_radius_sums = BTreeMap::<u32, (f64, usize)>::new();
-    for (index, &cluster_id) in assignments.iter().enumerate() {
-        let embedding = load_embedding(index)?;
-        let centroid = centroids.get(&cluster_id).ok_or_else(|| {
-            AdaptivePlanningError::DiagnosticComputation(format!(
-                "cluster {cluster_id} did not have a computed centroid"
-            ))
-        })?;
-        let entry = cluster_radius_sums.entry(cluster_id).or_insert((0.0, 0));
-        entry.0 += euclidean_distance(&embedding, centroid)?;
-        if !entry.0.is_finite() {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "mean cluster radius accumulation became non-finite".into(),
-            ));
+    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
+        let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
+        let batch = load_embeddings(&batch_indices)?;
+        if batch.len() != batch_indices.len() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                "replay loader returned {} embeddings for {} requested indices",
+                batch.len(),
+                batch_indices.len()
+            )));
         }
-        entry.1 += 1;
+        for (offset, embedding) in batch.iter().enumerate() {
+            validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
+            let cluster_id = assignments[batch_start + offset];
+            let centroid = centroids.get(&cluster_id).ok_or_else(|| {
+                AdaptivePlanningError::DiagnosticComputation(format!(
+                    "cluster {cluster_id} did not have a computed centroid"
+                ))
+            })?;
+            let entry = cluster_radius_sums.entry(cluster_id).or_insert((0.0, 0));
+            entry.0 += euclidean_distance(embedding, centroid)?;
+            if !entry.0.is_finite() {
+                return Err(AdaptivePlanningError::DiagnosticComputation(
+                    "mean cluster radius accumulation became non-finite".into(),
+                ));
+            }
+            entry.1 += 1;
+        }
     }
 
     let mut total_cluster_radius = 0.0f64;
