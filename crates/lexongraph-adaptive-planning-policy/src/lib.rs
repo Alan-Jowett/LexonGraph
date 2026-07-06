@@ -13,6 +13,7 @@ use lexongraph_streaming_clustering::{
 };
 
 pub const DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD: f32 = 0.25;
+const REPLAY_BATCH_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdaptivePlanningDirection {
@@ -399,7 +400,7 @@ fn evaluate_collapse_diagnostics_with_embedding_replay<Load>(
     embedding_count: usize,
     dimensions: usize,
     settings: &AdaptiveDirectionalPcaSettings,
-    load_embedding: &mut Load,
+    mut load_embedding: &mut Load,
 ) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError>
 where
     Load: FnMut(usize) -> Result<Vec<f32>, AdaptivePlanningError>,
@@ -438,9 +439,18 @@ where
     };
     let mut trainer = DirectionalPcaStreamingTrainer::new(config, settings.params.clone())
         .map_err(map_streaming_clustering_error)?;
-    for index in 0..embedding_count {
+    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
+        let batch = (batch_start..batch_end)
+            .map(&mut load_embedding)
+            .map(|embedding| {
+                let embedding = embedding?;
+                validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
+                Ok(embedding)
+            })
+            .collect::<Result<Vec<_>, AdaptivePlanningError>>()?;
         trainer
-            .ingest_batch(&[load_embedding(index)?])
+            .ingest_batch(batch.as_slice())
             .map_err(map_streaming_clustering_error)?;
     }
     trainer
@@ -455,29 +465,39 @@ where
 
     let mut assignments = Vec::with_capacity(embedding_count);
     let mut centroid_sums: BTreeMap<u32, (Vec<f64>, usize)> = BTreeMap::new();
-    for index in 0..embedding_count {
-        let embedding = load_embedding(index)?;
-        let cluster_id = classifier
-            .assign(&embedding)
+    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
+        let batch = (batch_start..batch_end)
+            .map(&mut load_embedding)
+            .map(|embedding| {
+                let embedding = embedding?;
+                validate_replay_embedding_dimensions(embedding.as_slice(), dimensions)?;
+                Ok(embedding)
+            })
+            .collect::<Result<Vec<_>, AdaptivePlanningError>>()?;
+        let batch_assignments = classifier
+            .assign_batch(batch.as_slice())
             .map_err(map_streaming_clustering_error)?;
-        assignments.push(cluster_id);
-        let entry = centroid_sums
-            .entry(cluster_id)
-            .or_insert_with(|| (vec![0.0; embedding.len()], 0));
-        if entry.0.len() != embedding.len() {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "cluster members must all share one embedding dimensionality".into(),
-            ));
-        }
-        for (sum, value) in entry.0.iter_mut().zip(embedding.iter().copied()) {
-            *sum += f64::from(value);
-            if !sum.is_finite() {
+        for (embedding, cluster_id) in batch.iter().zip(batch_assignments.iter().copied()) {
+            assignments.push(cluster_id);
+            let entry = centroid_sums
+                .entry(cluster_id)
+                .or_insert_with(|| (vec![0.0; embedding.len()], 0));
+            if entry.0.len() != embedding.len() {
                 return Err(AdaptivePlanningError::DiagnosticComputation(
-                    "mean cluster radius centroid accumulation became non-finite".into(),
+                    "cluster members must all share one embedding dimensionality".into(),
                 ));
             }
+            for (sum, value) in entry.0.iter_mut().zip(embedding.iter().copied()) {
+                *sum += f64::from(value);
+                if !sum.is_finite() {
+                    return Err(AdaptivePlanningError::DiagnosticComputation(
+                        "mean cluster radius centroid accumulation became non-finite".into(),
+                    ));
+                }
+            }
+            entry.1 += 1;
         }
-        entry.1 += 1;
     }
     if centroid_sums.is_empty() {
         return Err(AdaptivePlanningError::DiagnosticComputation(
@@ -750,6 +770,20 @@ fn checked_f32_from_f64(value: f64, message: &'static str) -> Result<f32, Adapti
         return Err(AdaptivePlanningError::DiagnosticComputation(message.into()));
     }
     Ok(value)
+}
+
+fn validate_replay_embedding_dimensions(
+    embedding: &[f32],
+    expected_dimensions: usize,
+) -> Result<(), AdaptivePlanningError> {
+    if embedding.len() != expected_dimensions {
+        return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+            "replayed embedding dimension {} did not match expected {}",
+            embedding.len(),
+            expected_dimensions
+        )));
+    }
+    Ok(())
 }
 
 fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanningError> {

@@ -4253,7 +4253,7 @@ where
 }
 
 fn run_partition_planner_with_artifacts<T, OP>(
-    planner: PartitionPlanner<T>,
+    mut planner: PartitionPlanner<T>,
     artifacts: &PlanningArtifactLedger,
     indices: &[usize],
     observe_progress: &mut OP,
@@ -4262,12 +4262,25 @@ where
     T: StreamingClusterTrainer,
     OP: FnMut(),
 {
-    run_partition_planner_with_replay(
-        planner,
-        indices.len(),
-        &mut |position| artifacts.load_embedding(indices[position]),
-        observe_progress,
-    )
+    for batch_start in (0..indices.len()).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(indices.len());
+        let batch_embeddings = artifacts.load_embeddings(&indices[batch_start..batch_end])?;
+        planner.trainer.ingest_batch(batch_embeddings.as_slice())?;
+    }
+    observe_progress();
+    let pass_report = planner.trainer.finish_pass()?;
+    observe_progress();
+    planner.trainer.complete_training()?;
+    observe_progress();
+    let classifier = planner.trainer.into_classifier()?;
+    let mut assignments = Vec::with_capacity(indices.len());
+    for batch_start in (0..indices.len()).step_by(REPLAY_BATCH_SIZE) {
+        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(indices.len());
+        let batch_embeddings = artifacts.load_embeddings(&indices[batch_start..batch_end])?;
+        assignments.extend(classifier.assign_batch(batch_embeddings.as_slice())?);
+    }
+    observe_progress();
+    Ok((pass_report, assignments))
 }
 
 #[derive(Clone, Debug)]
@@ -4548,7 +4561,7 @@ where
     SO: FnMut(HierarchyPlanningStatusEvent),
 {
     let item_count = artifacts.len()?;
-    let mut nodes = (0..item_count)
+    let nodes = (0..item_count)
         .map(|index| AgglomerativeHierarchyNode {
             child_node_indices: Vec::new(),
             item_indices: vec![index],
@@ -4559,7 +4572,7 @@ where
         .collect::<Vec<_>>();
     derive_hierarchy_agglomeratively_with_artifact_nodes(
         artifacts,
-        nodes.as_mut_slice(),
+        nodes,
         materializability_bound,
         stage_observer,
         planner_builder,
@@ -4587,7 +4600,7 @@ fn load_agglomerative_representative_embedding(
 
 fn derive_hierarchy_agglomeratively_with_artifact_nodes<B, P, SO>(
     artifacts: &PlanningArtifactLedger,
-    nodes: &mut [AgglomerativeHierarchyNode],
+    mut nodes: Vec<AgglomerativeHierarchyNode>,
     materializability_bound: usize,
     stage_observer: &mut SO,
     mut planner_builder: B,
@@ -4614,7 +4627,6 @@ where
     }
 
     let mut accumulator = PlanningMetricAccumulator::default();
-    let mut nodes = nodes.to_vec();
     let mut current_layer = (0..nodes.len()).collect::<Vec<_>>();
 
     while current_layer.len() > 1 {
