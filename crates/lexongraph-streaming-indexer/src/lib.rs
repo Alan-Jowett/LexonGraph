@@ -375,7 +375,11 @@ impl PlanningArtifactLedger {
                 .push_original_embedding_vec_async_locked(embedding)
                 .await
             {
-                self.rollback_to_checkpoint_locked(checkpoint)?;
+                if let Err(rollback_error) = self.rollback_to_checkpoint_locked(checkpoint) {
+                    return Err(StreamingIndexerError::PlanningArtifactFailure(format!(
+                        "planning artifact append failed: {error}; rollback to the prior checkpoint also failed: {rollback_error}"
+                    )));
+                }
                 return Err(error);
             }
         }
@@ -2746,6 +2750,25 @@ where
     HPP: HierarchicalPlanningPolicy,
     HPP::Error: 'static,
 {
+    fn validate_current_pass_storage_mode(
+        &self,
+        uses_planning_artifacts: bool,
+    ) -> Result<(), StreamingIndexerError> {
+        if uses_planning_artifacts {
+            if !self.current_pass_f32_embeddings.is_empty() {
+                return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
+                    "planning policy enabled persisted artifacts but current pass still buffered {} in-memory embeddings",
+                    self.current_pass_f32_embeddings.len()
+                )));
+            }
+        } else if !self.current_pass_artifacts.is_empty()? {
+            return Err(StreamingIndexerError::InvalidLifecycleTransition(
+                "planning policy disabled persisted artifacts but current pass still contains planning artifacts".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn ingest_batch(
         &mut self,
         batch: &[IndexItem<R>],
@@ -2916,6 +2939,7 @@ where
 
         let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
         let uses_planning_artifacts = self.planning_policy.uses_planning_artifacts();
+        self.validate_current_pass_storage_mode(uses_planning_artifacts)?;
         let buffered = std::mem::take(&mut self.current_pass_artifacts);
         let materialized_embeddings = if uses_planning_artifacts {
             self.planning_policy
@@ -8610,12 +8634,14 @@ mod tests {
     use super::{
         AdaptiveDcbcSettings, AdaptiveDirectionalPcaSettings, AdaptivePlanningDirection,
         AdaptivePlanningSelector, AdaptivePlanningSettings, AdaptiveSwitchCriteria,
-        BuiltInPlanning, BuiltInPlanningDirection, BuiltInPlanningPhase, ChildSummaryInput,
-        Content, ContentResolver, DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
-        DirectionalPcaBuiltInPlanningSettings, DirectionalPcaClusterCardinalityMode,
-        DirectionalPcaRetainedAxisPolicy, IndexItem, ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
-        PlanningArtifactLedger, StreamingIndexerError, StreamingIndexingRun,
-        allocate_variable_bit_widths, derive_hierarchy_agglomeratively_from_artifacts_with_builder,
+        ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
+        BuiltInPlanningPhase, ChildSummaryInput, Content, ContentResolver,
+        DcbcStreamingClusteringFactory, DirectionalPcaAllocationPolicy,
+        DirectionalPcaBinningPolicy, DirectionalPcaBuiltInPlanningSettings,
+        DirectionalPcaClusterCardinalityMode, DirectionalPcaRetainedAxisPolicy, IndexItem,
+        ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE, PlanningArtifactLedger, StreamingIndexerError,
+        StreamingIndexingRun, allocate_variable_bit_widths,
+        derive_hierarchy_agglomeratively_from_artifacts_with_builder,
         derive_hierarchy_for_adaptive_built_in, derive_hierarchy_for_single_built_in_phase,
         directional_pca_published_profile_params, effective_directional_pca_cluster_count,
         exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
@@ -8902,6 +8928,65 @@ mod tests {
                     .is_empty()
             );
         });
+    }
+
+    #[test]
+    fn finish_pass_rejects_in_memory_embeddings_for_artifact_policies() {
+        let mut run = StreamingIndexingRun::with_builtin_planning(
+            TestResolver,
+            TestEmbeddingProvider,
+            BuiltInPlanning::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+                direction: BuiltInPlanningDirection::Divisive,
+                cluster_count: 2,
+                random_seed: Some(7),
+                params: directional_pca_published_profile_params(
+                    DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                    DirectionalPcaBinningPolicy::Quantile,
+                    DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                    1,
+                    0.0,
+                ),
+            }),
+            test_embedding_spec(),
+            256,
+        );
+        run.items_seen_in_current_pass = 1;
+        run.current_pass_f32_embeddings = vec![vec![1.0, 1.5]];
+
+        let error = run
+            .finish_pass()
+            .expect_err("artifact-backed planning should reject stray in-memory embeddings");
+        assert!(matches!(
+            error,
+            StreamingIndexerError::InvalidLifecycleTransition(_)
+        ));
+        assert!(error.to_string().contains("enabled persisted artifacts"));
+    }
+
+    #[test]
+    fn finish_pass_rejects_artifacts_for_in_memory_policies() {
+        let mut run = StreamingIndexingRun::with_streaming_clustering_factory(
+            TestResolver,
+            TestEmbeddingProvider,
+            ArithmeticMeanCanonicalEmbeddingPolicy,
+            DcbcStreamingClusteringFactory::new(2),
+            test_embedding_spec(),
+            256,
+        );
+        run.items_seen_in_current_pass = 1;
+        run.current_pass_artifacts
+            .push_original_embedding_vec(vec![1.0, 1.5])
+            .expect("test should be able to seed a persisted artifact");
+
+        let error = run
+            .finish_pass()
+            .expect_err("in-memory planning should reject stray persisted artifacts");
+        assert!(matches!(
+            error,
+            StreamingIndexerError::InvalidLifecycleTransition(_)
+        ));
+        assert!(error.to_string().contains("disabled persisted artifacts"));
     }
 
     fn test_directional_phase(direction: BuiltInPlanningDirection) -> BuiltInPlanningPhase {
