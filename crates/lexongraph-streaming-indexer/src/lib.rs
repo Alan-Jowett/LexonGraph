@@ -4317,15 +4317,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                 (batch_start + ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE).min(embedding_count);
             let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
             let batch_embeddings = artifacts.load_embeddings(&batch_indices)?;
-            for embedding in &batch_embeddings {
-                if embedding.len() != dimensions {
-                    return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
-                        "planning artifact embedding had {} dimensions but expected {}",
-                        embedding.len(),
-                        dimensions
-                    )));
-                }
-            }
+            validate_artifact_replay_embeddings(batch_embeddings.as_slice(), dimensions)?;
             trainer
                 .ingest_batch(batch_embeddings.as_slice())
                 .map_err(map_clustering_error)?;
@@ -4345,15 +4337,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
                 (batch_start + ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE).min(embedding_count);
             let batch_indices = (batch_start..batch_end).collect::<Vec<_>>();
             let batch_embeddings = artifacts.load_embeddings(&batch_indices)?;
-            for embedding in &batch_embeddings {
-                if embedding.len() != dimensions {
-                    return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
-                        "planning artifact embedding had {} dimensions but expected {}",
-                        embedding.len(),
-                        dimensions
-                    )));
-                }
-            }
+            validate_artifact_replay_embeddings(batch_embeddings.as_slice(), dimensions)?;
             assignments.extend(
                 classifier
                     .assign_batch(batch_embeddings.as_slice())
@@ -4569,6 +4553,10 @@ where
     for batch_start in (0..indices.len()).step_by(REPLAY_BATCH_SIZE) {
         let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(indices.len());
         let batch_embeddings = artifacts.load_embeddings(&indices[batch_start..batch_end])?;
+        validate_artifact_replay_embeddings(
+            batch_embeddings.as_slice(),
+            planner.trainer.config().dimensions,
+        )?;
         planner.trainer.ingest_batch(batch_embeddings.as_slice())?;
     }
     observe_progress();
@@ -4581,6 +4569,10 @@ where
     for batch_start in (0..indices.len()).step_by(REPLAY_BATCH_SIZE) {
         let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(indices.len());
         let batch_embeddings = artifacts.load_embeddings(&indices[batch_start..batch_end])?;
+        validate_artifact_replay_embeddings(
+            batch_embeddings.as_slice(),
+            classifier.config().dimensions,
+        )?;
         assignments.extend(classifier.assign_batch(batch_embeddings.as_slice())?);
     }
     observe_progress();
@@ -7628,6 +7620,29 @@ fn validate_embedding_bytes(
             spec.dims,
             spec.encoding
         ));
+    }
+    Ok(())
+}
+
+fn validate_artifact_replay_embeddings(
+    embeddings: &[Vec<f32>],
+    expected_dimensions: usize,
+) -> Result<(), StreamingIndexerError> {
+    for embedding in embeddings {
+        if embedding.len() != expected_dimensions {
+            return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                "planning artifact embedding had {} dimensions but expected {}",
+                embedding.len(),
+                expected_dimensions
+            )));
+        }
+        for (dimension, value) in embedding.iter().copied().enumerate() {
+            if !value.is_finite() {
+                return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning artifact embedding contained non-finite value at dimension {dimension}"
+                )));
+            }
+        }
     }
     Ok(())
 }
