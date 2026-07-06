@@ -173,7 +173,7 @@ impl PlanningArtifactStore {
     }
 
     fn backend(&self) -> Result<Arc<FilesystemBlockStore>, StreamingIndexerError> {
-        let mut state = self.state.lock().map_err(|_| {
+        let state = self.state.lock().map_err(|_| {
             StreamingIndexerError::PlanningArtifactFailure(
                 "planning artifact store state lock was poisoned".into(),
             )
@@ -181,20 +181,32 @@ impl PlanningArtifactStore {
         if let Some(backend) = &state.backend {
             return Ok(Arc::clone(backend));
         }
+        drop(state);
 
-        let storage_root = TempDirBuilder::new()
-            .prefix("lexongraph-planning-artifacts-")
-            .tempdir()
-            .map_err(|error| {
-                StreamingIndexerError::PlanningArtifactFailure(format!(
-                    "failed to create planning artifact store root: {error}"
-                ))
-            })?;
+        let storage_root = Arc::new(
+            TempDirBuilder::new()
+                .prefix("lexongraph-planning-artifacts-")
+                .tempdir()
+                .map_err(|error| {
+                    StreamingIndexerError::PlanningArtifactFailure(format!(
+                        "failed to create planning artifact store root: {error}"
+                    ))
+                })?,
+        );
         let backend = Arc::new(
             FilesystemBlockStore::new(storage_root.path())
                 .map_err(map_planning_artifact_store_error)?,
         );
-        state.storage_root = Some(Arc::new(storage_root));
+
+        let mut state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact store state lock was poisoned".into(),
+            )
+        })?;
+        if let Some(existing) = &state.backend {
+            return Ok(Arc::clone(existing));
+        }
+        state.storage_root = Some(storage_root);
         state.backend = Some(Arc::clone(&backend));
         Ok(backend)
     }
@@ -259,8 +271,11 @@ impl PlanningArtifactLedger {
             (pending.len() >= ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
                 .then(|| std::mem::take(&mut *pending))
         };
-        if let Some(pending_page) = pending_page {
-            self.persist_original_embedding_page(pending_page)?;
+        if let Some(pending_page) = pending_page
+            && let Err(error) = self.persist_original_embedding_page(&pending_page)
+        {
+            self.restore_pending_original_embeddings(pending_page)?;
+            return Err(error);
         }
         Ok(())
     }
@@ -348,32 +363,56 @@ impl PlanningArtifactLedger {
         indices: &[usize],
     ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
-        let artifact_refs = indices
+        let mut artifact_refs = indices
             .iter()
-            .map(|&index| self.original_item_artifact_ref(index))
+            .enumerate()
+            .map(|(output_index, &index)| {
+                Ok::<(usize, OriginalItemArtifactRef), StreamingIndexerError>((
+                    output_index,
+                    self.original_item_artifact_ref(index)?,
+                ))
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut page_embeddings = HashMap::<BlockHash, Vec<Vec<f32>>>::new();
-        for artifact_ref in &artifact_refs {
-            if let std::collections::hash_map::Entry::Vacant(entry) =
-                page_embeddings.entry(artifact_ref.block_id)
-            {
-                let page = self.load_original_embedding_page(&artifact_ref.block_id)?;
-                entry.insert(page);
-            }
-        }
+        artifact_refs.sort_by(|(_, left), (_, right)| {
+            left.block_id
+                .as_bytes()
+                .cmp(right.block_id.as_bytes())
+                .then(left.page_index.cmp(&right.page_index))
+        });
+        let mut embeddings = vec![None; artifact_refs.len()];
+        let mut cached_page = None::<(BlockHash, Vec<Vec<f32>>)>;
         artifact_refs
             .into_iter()
-            .map(|artifact_ref| {
-                let page = page_embeddings.get(&artifact_ref.block_id).ok_or_else(|| {
+            .try_for_each(|(output_index, artifact_ref)| {
+                let page = match &cached_page {
+                    Some((block_id, page)) if *block_id == artifact_ref.block_id => page,
+                    _ => {
+                        cached_page = Some((
+                            artifact_ref.block_id,
+                            self.load_original_embedding_page(&artifact_ref.block_id)?,
+                        ));
+                        &cached_page
+                            .as_ref()
+                            .expect("page cache was just populated")
+                            .1
+                    }
+                };
+                embeddings[output_index] =
+                    Some(page.get(artifact_ref.page_index).cloned().ok_or_else(|| {
+                        StreamingIndexerError::PlanningArtifactResolution(format!(
+                            "planning artifact {:?} is missing page index {}",
+                            artifact_ref.block_id, artifact_ref.page_index
+                        ))
+                    })?);
+                Ok::<(), StreamingIndexerError>(())
+            })?;
+        embeddings
+            .into_iter()
+            .enumerate()
+            .map(|(output_index, embedding)| {
+                embedding.ok_or_else(|| {
                     StreamingIndexerError::PlanningArtifactResolution(format!(
-                        "planning artifact {:?} did not remain cached while loading embeddings",
-                        artifact_ref.block_id
-                    ))
-                })?;
-                page.get(artifact_ref.page_index).cloned().ok_or_else(|| {
-                    StreamingIndexerError::PlanningArtifactResolution(format!(
-                        "planning artifact {:?} is missing page index {}",
-                        artifact_ref.block_id, artifact_ref.page_index
+                        "planning artifact load did not populate output slot {output_index}"
                     ))
                 })
             })
@@ -408,19 +447,22 @@ impl PlanningArtifactLedger {
                 Some(std::mem::take(&mut *pending))
             }
         };
-        if let Some(pending_page) = pending_page {
-            self.persist_original_embedding_page(pending_page)?;
+        if let Some(pending_page) = pending_page
+            && let Err(error) = self.persist_original_embedding_page(&pending_page)
+        {
+            self.restore_pending_original_embeddings(pending_page)?;
+            return Err(error);
         }
         Ok(())
     }
 
     fn persist_original_embedding_page(
         &self,
-        embeddings: Vec<Vec<f32>>,
+        embeddings: &[Vec<f32>],
     ) -> Result<(), StreamingIndexerError> {
         let block_id = self
             .store
-            .put_bytes(encode_f32_embedding_page(&embeddings)?)?;
+            .put_bytes(encode_f32_embedding_page(embeddings)?)?;
         let mut artifact_refs = self.original_item_artifact_refs.lock().map_err(|_| {
             StreamingIndexerError::PlanningArtifactFailure(
                 "planning artifact ledger lock was poisoned".into(),
@@ -432,6 +474,20 @@ impl PlanningArtifactLedger {
                 page_index,
             }),
         );
+        Ok(())
+    }
+
+    fn restore_pending_original_embeddings(
+        &self,
+        mut pending_page: Vec<Vec<f32>>,
+    ) -> Result<(), StreamingIndexerError> {
+        let mut pending = self.pending_original_embeddings.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact ledger pending buffer lock was poisoned".into(),
+            )
+        })?;
+        pending_page.append(&mut *pending);
+        *pending = pending_page;
         Ok(())
     }
 
@@ -5052,7 +5108,7 @@ where
         ));
         groups =
             fallback_partition_groups(indices.len(), materializability_bound, fallback_group_cap)
-                .map_err(StreamingIndexerError::InvalidHybridPlanningConfiguration)?;
+                .map_err(StreamingIndexerError::HierarchyValidation)?;
     }
 
     let child_ids = (0..groups.len())
@@ -8390,6 +8446,29 @@ mod tests {
                 .load_embedding(ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
                 .expect("paged artifact should remain readable"),
             embeddings[ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE]
+        );
+    }
+
+    #[test]
+    fn load_embeddings_preserves_requested_order_across_pages() {
+        let embeddings = (0..(ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE + 2))
+            .map(|index| vec![index as f32, index as f32 + 0.5])
+            .collect::<Vec<_>>();
+        let artifacts = seed_artifacts(&embeddings);
+        let loaded = artifacts
+            .load_embeddings(&[
+                ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE + 1,
+                0,
+                ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
+            ])
+            .expect("embedding replay should preserve requested ordering");
+        assert_eq!(
+            loaded,
+            vec![
+                embeddings[ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE + 1].clone(),
+                embeddings[0].clone(),
+                embeddings[ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE].clone(),
+            ]
         );
     }
 
