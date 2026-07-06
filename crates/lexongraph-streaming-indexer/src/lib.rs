@@ -137,6 +137,8 @@ struct PlanningArtifactStoreState {
     storage_root: Option<Arc<TempDir>>,
     #[cfg(test)]
     fail_next_put_error: Option<String>,
+    #[cfg(test)]
+    fail_put_after_successes: Option<(usize, String)>,
 }
 
 impl Clone for PlanningArtifactStore {
@@ -166,6 +168,14 @@ impl PlanningArtifactStore {
             })?;
             if let Some(message) = state.fail_next_put_error.take() {
                 return Err(StreamingIndexerError::PlanningArtifactFailure(message));
+            }
+            if let Some((remaining_successes, message)) = &mut state.fail_put_after_successes {
+                if *remaining_successes == 0 {
+                    let message = message.clone();
+                    state.fail_put_after_successes = None;
+                    return Err(StreamingIndexerError::PlanningArtifactFailure(message));
+                }
+                *remaining_successes -= 1;
             }
         }
         let backend = self.backend()?;
@@ -208,6 +218,21 @@ impl PlanningArtifactStore {
             )
         })?;
         state.fail_next_put_error = Some(message.to_owned());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn fail_put_after_successes_for_test(
+        &self,
+        successful_puts_before_failure: usize,
+        message: &str,
+    ) -> Result<(), StreamingIndexerError> {
+        let mut state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact store state lock was poisoned".into(),
+            )
+        })?;
+        state.fail_put_after_successes = Some((successful_puts_before_failure, message.to_owned()));
         Ok(())
     }
 
@@ -282,11 +307,11 @@ struct PlanningArtifactLedgerState {
     pending_original_embeddings: Vec<Vec<f32>>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct PlanningArtifactLedgerCheckpoint {
     original_item_artifact_page_len: usize,
     original_item_count: usize,
-    pending_original_embeddings_len: usize,
+    pending_original_embeddings: Vec<Vec<f32>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -314,7 +339,7 @@ impl PlanningArtifactLedger {
         Ok(PlanningArtifactLedgerCheckpoint {
             original_item_artifact_page_len: state.original_item_artifact_page_ids.len(),
             original_item_count: state.original_item_count,
-            pending_original_embeddings_len: state.pending_original_embeddings.len(),
+            pending_original_embeddings: state.pending_original_embeddings.clone(),
         })
     }
 
@@ -340,9 +365,7 @@ impl PlanningArtifactLedger {
                 .original_item_artifact_page_ids
                 .truncate(checkpoint.original_item_artifact_page_len);
             state.original_item_count = checkpoint.original_item_count;
-            state
-                .pending_original_embeddings
-                .truncate(checkpoint.pending_original_embeddings_len);
+            state.pending_original_embeddings = checkpoint.pending_original_embeddings.clone();
             (retained, removed)
         };
         let mut removed_once = HashSet::new();
@@ -9171,6 +9194,40 @@ mod tests {
                     .pending_original_embeddings
                     .is_empty()
             );
+        });
+    }
+
+    #[test]
+    fn append_original_embeddings_transactionally_restores_prior_pending_page_on_rollback() {
+        pollster::block_on(async {
+            let artifacts = PlanningArtifactLedger::default();
+            let original_pending = vec![9.0f32, 9.5];
+            artifacts
+                .push_original_embedding_vec(original_pending.clone())
+                .expect("test should seed one pending embedding without flushing");
+            artifacts
+                .store
+                .fail_put_after_successes_for_test(1, "injected second put failure")
+                .expect("test should be able to inject a later artifact-store failure");
+
+            let appended_embeddings = (0..(ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE * 2 - 1))
+                .map(|index| vec![index as f32, index as f32 + 0.25])
+                .collect::<Vec<_>>();
+            let error = artifacts
+                .append_original_embeddings_transactionally(appended_embeddings)
+                .await
+                .expect_err("later page persist failure should roll back the full transaction");
+            assert!(matches!(
+                error,
+                StreamingIndexerError::PlanningArtifactFailure(_)
+            ));
+            let state = artifacts
+                .state
+                .lock()
+                .expect("artifact state lock should remain usable");
+            assert!(state.original_item_artifact_page_ids.is_empty());
+            assert_eq!(state.original_item_count, 0);
+            assert_eq!(state.pending_original_embeddings, vec![original_pending]);
         });
     }
 

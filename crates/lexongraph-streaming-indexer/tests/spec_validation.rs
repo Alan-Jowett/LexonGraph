@@ -34,27 +34,27 @@ use lexongraph_streaming_indexer::{
 };
 use lexongraph_streaming_indexer::{
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
-    BuiltInPlanningPhase, CanonicalEmbeddingPolicy, ContentResolver, DcbcBuiltInPlanningSettings,
-    DirectionalPcaBuiltInPlanningSettings, ExactCentroidChildSummaryPolicy, FinalizedPartition,
-    FinalizedPartitionHierarchy, HierarchicalPlanningPolicy, IndexItem, PUBLISHED_PROFILE_V0_1_0,
-    PUBLISHED_PROFILE_V0_2_0, PUBLISHED_PROFILE_V0_3_0, PUBLISHED_PROFILE_V0_3_1,
-    PUBLISHED_PROFILE_V0_3_2, PUBLISHED_PROFILE_V0_3_3, PUBLISHED_PROFILE_V0_3_4,
-    PUBLISHED_PROFILE_V0_3_5, PUBLISHED_PROFILE_V0_3_6, PUBLISHED_PROFILE_V0_3_7,
-    PUBLISHED_PROFILE_V0_3_8, PUBLISHED_PROFILE_V0_3_9, PUBLISHED_PROFILE_V0_3_10,
-    PUBLISHED_PROFILE_V0_4_0, PUBLISHED_PROFILE_V0_4_1, PUBLISHED_PROFILE_V0_4_2,
-    PUBLISHED_PROFILE_V0_4_3, PUBLISHED_PROFILE_V0_4_4, PUBLISHED_PROFILE_V0_4_5,
-    PUBLISHED_PROFILE_V0_4_6, PUBLISHED_PROFILE_V0_4_7, PUBLISHED_PROFILE_V0_4_8,
-    PUBLISHED_PROFILE_V0_4_9, PUBLISHED_PROFILE_V0_5_0, PUBLISHED_PROFILE_V0_5_1,
-    PUBLISHED_PROFILE_V0_5_2, PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4,
-    PUBLISHED_PROFILE_V0_5_5, PUBLISHED_PROFILE_V0_6_0, PUBLISHED_PROFILE_V0_6_1,
-    PUBLISHED_PROFILE_V0_6_2, PUBLISHED_PROFILE_V0_6_3, PUBLISHED_PROFILE_V0_6_4,
-    PUBLISHED_PROFILE_V0_6_5, PlanningArtifactLedger, PlanningPassOutcome, PlanningStage,
-    PublishedBranchEncodingPolicy, PublishedHierarchyMetric, PublishedPlanningStrategy,
-    PublishedProfilePlanningPolicy, PublishedProfileVersion,
-    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
-    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
-    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
-    published_indexing_profile,
+    BuiltInPlanningPhase, BuiltInPlanningPolicy, CanonicalEmbeddingPolicy, ContentResolver,
+    DcbcBuiltInPlanningSettings, DirectionalPcaBuiltInPlanningSettings,
+    ExactCentroidChildSummaryPolicy, FinalizedPartition, FinalizedPartitionHierarchy,
+    HierarchicalPlanningPolicy, IndexItem, PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_2_0,
+    PUBLISHED_PROFILE_V0_3_0, PUBLISHED_PROFILE_V0_3_1, PUBLISHED_PROFILE_V0_3_2,
+    PUBLISHED_PROFILE_V0_3_3, PUBLISHED_PROFILE_V0_3_4, PUBLISHED_PROFILE_V0_3_5,
+    PUBLISHED_PROFILE_V0_3_6, PUBLISHED_PROFILE_V0_3_7, PUBLISHED_PROFILE_V0_3_8,
+    PUBLISHED_PROFILE_V0_3_9, PUBLISHED_PROFILE_V0_3_10, PUBLISHED_PROFILE_V0_4_0,
+    PUBLISHED_PROFILE_V0_4_1, PUBLISHED_PROFILE_V0_4_2, PUBLISHED_PROFILE_V0_4_3,
+    PUBLISHED_PROFILE_V0_4_4, PUBLISHED_PROFILE_V0_4_5, PUBLISHED_PROFILE_V0_4_6,
+    PUBLISHED_PROFILE_V0_4_7, PUBLISHED_PROFILE_V0_4_8, PUBLISHED_PROFILE_V0_4_9,
+    PUBLISHED_PROFILE_V0_5_0, PUBLISHED_PROFILE_V0_5_1, PUBLISHED_PROFILE_V0_5_2,
+    PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4, PUBLISHED_PROFILE_V0_5_5,
+    PUBLISHED_PROFILE_V0_6_0, PUBLISHED_PROFILE_V0_6_1, PUBLISHED_PROFILE_V0_6_2,
+    PUBLISHED_PROFILE_V0_6_3, PUBLISHED_PROFILE_V0_6_4, PUBLISHED_PROFILE_V0_6_5,
+    PlanningArtifactLedger, PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy,
+    PublishedHierarchyMetric, PublishedPlanningStrategy, PublishedProfilePlanningPolicy,
+    PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
+    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingStatusState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -788,6 +788,110 @@ impl HierarchicalPlanningPolicy for MissingArtifactPlanningPolicy {
         let missing = BlockHash::from_bytes(missing);
         let _ = artifacts.load_embedding_artifact(&missing)?;
         unreachable!("loading a missing artifact should fail explicitly")
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ArtifactModeObservation {
+    install_called: bool,
+    installed_artifact_page_count: usize,
+    finish_received_empty_embeddings: bool,
+}
+
+#[derive(Clone)]
+struct ArtifactModeRecordingPolicy {
+    inner: BuiltInPlanningPolicy,
+    observation: Arc<Mutex<ArtifactModeObservation>>,
+}
+
+impl ArtifactModeRecordingPolicy {
+    fn new(planning: BuiltInPlanning) -> (Self, Arc<Mutex<ArtifactModeObservation>>) {
+        let observation = Arc::new(Mutex::new(ArtifactModeObservation::default()));
+        (
+            Self {
+                inner: BuiltInPlanningPolicy::new(planning),
+                observation: Arc::clone(&observation),
+            },
+            observation,
+        )
+    }
+}
+
+impl HierarchicalPlanningPolicy for ArtifactModeRecordingPolicy {
+    type Error = StreamingIndexerError;
+
+    fn uses_planning_artifacts(&self) -> bool {
+        self.inner.uses_planning_artifacts()
+    }
+
+    fn install_planning_artifacts(&mut self, artifacts: PlanningArtifactLedger) {
+        let artifact_page_count = artifacts
+            .original_item_artifact_ids()
+            .expect("test should be able to inspect installed planning artifacts")
+            .len();
+        let mut observation = self
+            .observation
+            .lock()
+            .expect("artifact mode observation lock should remain usable");
+        observation.install_called = true;
+        observation.installed_artifact_page_count = artifact_page_count;
+        drop(observation);
+        self.inner.install_planning_artifacts(artifacts);
+    }
+
+    fn planning_artifacts_installed(&self) -> bool {
+        self.inner.planning_artifacts_installed()
+    }
+
+    fn declared_stages(&self) -> std::collections::BTreeSet<PlanningStage> {
+        self.inner.declared_stages()
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mut observation = self
+            .observation
+            .lock()
+            .expect("artifact mode observation lock should remain usable");
+        observation.finish_received_empty_embeddings = embeddings.is_empty();
+        drop(observation);
+        self.inner.finish_planning_pass(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+        )
+    }
+
+    fn finish_planning_pass_with_status_observer<SO>(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        embedding_spec: &EmbeddingSpec,
+        materializability_bound: usize,
+        block_size_target: usize,
+        observe_status: SO,
+    ) -> Result<PlanningPassOutcome, Self::Error>
+    where
+        SO: FnMut(lexongraph_streaming_indexer::HierarchyPlanningStatusEvent),
+    {
+        let mut observation = self
+            .observation
+            .lock()
+            .expect("artifact mode observation lock should remain usable");
+        observation.finish_received_empty_embeddings = embeddings.is_empty();
+        drop(observation);
+        self.inner.finish_planning_pass_with_status_observer(
+            embeddings,
+            embedding_spec,
+            materializability_bound,
+            block_size_target,
+            observe_status,
+        )
     }
 }
 
@@ -4852,13 +4956,29 @@ async fn val_stream_indexer_101_divisive_artifact_replay_supports_recursive_refi
     );
 
     let items = switch_trigger_items();
-    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160);
+    let (policy, observation) =
+        ArtifactModeRecordingPolicy::new(dcbc_planning(BuiltInPlanningDirection::Divisive));
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        policy,
+        embedding_spec(),
+        160,
+    );
     run.ingest_batch(&items[..4]).await.unwrap();
     run.ingest_batch(&items[4..]).await.unwrap();
     let report = run.finish_pass().unwrap();
     let hierarchy = run.finalized_partition_hierarchy().unwrap();
+    let observation = observation
+        .lock()
+        .expect("artifact mode observation lock should remain usable")
+        .clone();
 
     assert!(report.planned_partition_count > 1);
+    assert!(observation.install_called);
+    assert!(observation.installed_artifact_page_count > 0);
+    assert!(observation.finish_received_empty_embeddings);
     assert!(
         hierarchy
             .partitions
