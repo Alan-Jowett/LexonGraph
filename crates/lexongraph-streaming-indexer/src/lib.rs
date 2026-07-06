@@ -420,7 +420,7 @@ impl PlanningArtifactLedger {
     ) -> Result<(), StreamingIndexerError> {
         let block_id = self
             .store
-            .put_bytes(encode_f32_embedding_page(&embeddings))?;
+            .put_bytes(encode_f32_embedding_page(&embeddings)?)?;
         let mut artifact_refs = self.original_item_artifact_refs.lock().map_err(|_| {
             StreamingIndexerError::PlanningArtifactFailure(
                 "planning artifact ledger lock was poisoned".into(),
@@ -4686,6 +4686,11 @@ where
             represented_item_count,
             max_unit_item_count,
         )?;
+        let layer_embedding_positions = current_layer
+            .iter()
+            .enumerate()
+            .map(|(position, &node_index)| (node_index, position))
+            .collect::<HashMap<_, _>>();
         let stage = planner.stage();
         stage_observer(HierarchyPlanningStatusEvent::legacy(
             stage,
@@ -4730,24 +4735,16 @@ where
                 .flat_map(|&node_index| nodes[node_index].item_indices.iter().copied())
                 .collect::<Vec<_>>();
             item_indices.sort_unstable();
-            let child_representative_embeddings = child_node_indices
-                .iter()
-                .map(|&node_index| {
-                    load_agglomerative_representative_embedding(
-                        artifacts,
-                        &nodes[node_index],
-                        node_index,
+            let representative_embedding =
+                weighted_mean_f32_embeddings(child_node_indices.iter().map(|&node_index| {
+                    let local_index = *layer_embedding_positions
+                        .get(&node_index)
+                        .expect("child node indices are drawn from current_layer");
+                    (
+                        layer_embeddings[local_index].as_slice(),
+                        nodes[node_index].item_indices.len(),
                     )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let representative_embedding = weighted_mean_f32_embeddings(
-                child_node_indices
-                    .iter()
-                    .zip(child_representative_embeddings.iter())
-                    .map(|(&node_index, embedding)| {
-                        (embedding.as_slice(), nodes[node_index].item_indices.len())
-                    }),
-            )?;
+                }))?;
             let next_index = nodes.len();
             nodes.push(AgglomerativeHierarchyNode {
                 child_node_indices,
@@ -7041,14 +7038,26 @@ fn encode_f32_vec(values: &[f32]) -> Vec<u8> {
     bytes
 }
 
-fn encode_f32_embedding_page(embeddings: &[Vec<f32>]) -> Vec<u8> {
+fn encode_f32_embedding_page(embeddings: &[Vec<f32>]) -> Result<Vec<u8>, StreamingIndexerError> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&(embeddings.len() as u32).to_le_bytes());
+    let embedding_count = u32::try_from(embeddings.len()).map_err(|_| {
+        StreamingIndexerError::PlanningArtifactFailure(format!(
+            "planning artifact page cannot encode {} embeddings because it exceeds u32::MAX",
+            embeddings.len()
+        ))
+    })?;
+    bytes.extend_from_slice(&embedding_count.to_le_bytes());
     for embedding in embeddings {
-        bytes.extend_from_slice(&(embedding.len() as u32).to_le_bytes());
+        let value_count = u32::try_from(embedding.len()).map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(format!(
+                "planning artifact page cannot encode embedding length {} because it exceeds u32::MAX",
+                embedding.len()
+            ))
+        })?;
+        bytes.extend_from_slice(&value_count.to_le_bytes());
         bytes.extend_from_slice(&encode_f32_vec(embedding));
     }
-    bytes
+    Ok(bytes)
 }
 
 fn compute_quantization_scales(
