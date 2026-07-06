@@ -245,14 +245,17 @@ pub struct PlanningArtifactLedger {
 }
 
 impl PlanningArtifactLedger {
-    fn push_original_embedding(&self, embedding: &[f32]) -> Result<(), StreamingIndexerError> {
+    fn push_original_embedding_vec(
+        &self,
+        embedding: Vec<f32>,
+    ) -> Result<(), StreamingIndexerError> {
         let pending_page = {
             let mut pending = self.pending_original_embeddings.lock().map_err(|_| {
                 StreamingIndexerError::PlanningArtifactFailure(
                     "planning artifact ledger pending buffer lock was poisoned".into(),
                 )
             })?;
-            pending.push(embedding.to_vec());
+            pending.push(embedding);
             (pending.len() >= ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
                 .then(|| std::mem::take(&mut *pending))
         };
@@ -476,6 +479,17 @@ impl PlanningArtifactLedger {
 
 fn map_planning_artifact_store_error(error: BlockStoreError) -> StreamingIndexerError {
     StreamingIndexerError::PlanningArtifactFailure(error.to_string())
+}
+
+fn embedding_spec_dimensions(
+    embedding_spec: &EmbeddingSpec,
+) -> Result<usize, StreamingIndexerError> {
+    usize::try_from(embedding_spec.dims).map_err(|_| {
+        StreamingIndexerError::ClusteringFailure(format!(
+            "embedding spec dims {} exceeded usize",
+            embedding_spec.dims
+        ))
+    })
 }
 
 struct ArtifactReplayCache<'a> {
@@ -2582,7 +2596,7 @@ where
             let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
             if persist_planning_artifacts {
                 self.current_pass_artifacts
-                    .push_original_embedding(decoded.as_slice())?;
+                    .push_original_embedding_vec(decoded)?;
             } else {
                 self.current_pass_f32_embeddings.push(decoded);
             }
@@ -3462,6 +3476,7 @@ fn derive_hierarchy_from_built_in(
                 BuiltInPlanningDirection::Divisive => if let Some(artifacts) = artifacts {
                     derive_hierarchy_with_streaming_artifacts_and_fallback_group_cap(
                         artifacts,
+                        embedding_spec_dimensions(embedding_spec)?,
                         materializability_bound,
                         None,
                         stage_observer,
@@ -3587,6 +3602,7 @@ fn derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
             if let Some(artifacts) = artifacts {
                 derive_hierarchy_with_streaming_artifacts_and_fallback_group_cap(
                     artifacts,
+                    embedding_spec_dimensions(embedding_spec)?,
                     materializability_bound,
                     fallback_group_cap,
                     stage_observer,
@@ -4768,6 +4784,7 @@ where
 
 fn derive_hierarchy_with_streaming_artifacts_and_fallback_group_cap<SO, B>(
     artifacts: &PlanningArtifactLedger,
+    dimensions: usize,
     materializability_bound: usize,
     fallback_group_cap: Option<usize>,
     stage_observer: &mut SO,
@@ -4807,6 +4824,7 @@ where
         None,
         None,
         artifacts,
+        dimensions,
         materializability_bound,
         fallback_group_cap,
         stage_observer,
@@ -4940,6 +4958,7 @@ fn derive_partition_recursive_streaming_from_artifacts<SO, B>(
     parent_id: Option<String>,
     stage_hint: Option<PlanningStage>,
     artifacts: &PlanningArtifactLedger,
+    dimensions: usize,
     materializability_bound: usize,
     fallback_group_cap: Option<usize>,
     stage_observer: &mut SO,
@@ -4974,12 +4993,11 @@ where
         return Ok(());
     }
 
-    let first_index = *indices.first().ok_or_else(|| {
+    let _first_index = *indices.first().ok_or_else(|| {
         StreamingIndexerError::PlanningArtifactResolution(
             "active planning unit unexpectedly had no first item".into(),
         )
     })?;
-    let dimensions = artifacts.load_embedding(first_index)?.len();
     let planner = planner_builder(indices.len(), dimensions)?;
     let stage = planner.stage();
     telemetry.started_planner_invocation_count += 1;
@@ -5072,6 +5090,7 @@ where
             Some(partition_id.clone()),
             Some(stage),
             artifacts,
+            dimensions,
             materializability_bound,
             fallback_group_cap,
             stage_observer,
@@ -5122,12 +5141,12 @@ where
         return Ok(());
     }
 
-    let first_index = *indices.first().ok_or_else(|| {
+    let _first_index = *indices.first().ok_or_else(|| {
         StreamingIndexerError::PlanningArtifactResolution(
             "active planning unit unexpectedly had no first item".into(),
         )
     })?;
-    let dimensions = artifacts.load_embedding(first_index)?.len();
+    let dimensions = embedding_spec_dimensions(embedding_spec)?;
     let mut selector_replay = ArtifactReplayCache::new(artifacts, indices)?;
     let algorithm = selector
         .select_algorithm_with_embedding_replay(
@@ -8245,10 +8264,10 @@ mod tests {
         DirectionalPcaRetainedAxisPolicy, ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
         PlanningArtifactLedger, StreamingIndexerError, allocate_variable_bit_widths,
         derive_hierarchy_agglomeratively_from_artifacts_with_builder,
-        derive_hierarchy_for_single_built_in_phase, directional_pca_published_profile_params,
-        effective_directional_pca_cluster_count, exact_centroid_child_summary,
-        fallback_partition_groups, fit_ebcp_rotation, uses_root_branch_budget,
-        weighted_mean_f32_embeddings,
+        derive_hierarchy_for_adaptive_built_in, derive_hierarchy_for_single_built_in_phase,
+        directional_pca_published_profile_params, effective_directional_pca_cluster_count,
+        exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
+        uses_root_branch_budget, weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -8341,7 +8360,7 @@ mod tests {
         let ledger = PlanningArtifactLedger::default();
         for embedding in embeddings {
             ledger
-                .push_original_embedding(embedding)
+                .push_original_embedding_vec(embedding.clone())
                 .expect("test artifacts should persist to the block store");
         }
         ledger
@@ -8446,30 +8465,8 @@ mod tests {
     #[test]
     fn adaptive_selector_supports_embedding_replay() {
         let embeddings = test_embeddings();
-        let mut selector = AdaptivePlanningSelector::new(AdaptivePlanningSettings {
-            direction: AdaptivePlanningDirection::Divisive,
-            directional_pca: AdaptiveDirectionalPcaSettings {
-                cluster_count: 2,
-                random_seed: Some(11),
-                params: directional_pca_published_profile_params(
-                    DirectionalPcaRetainedAxisPolicy::FixedCount(1),
-                    DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-                    DirectionalPcaBinningPolicy::Quantile,
-                    DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
-                    1,
-                    0.0,
-                ),
-            },
-            dcbc: AdaptiveDcbcSettings {
-                cluster_count: 2,
-                balance_constraints: None,
-                random_seed: Some(11),
-            },
-            switch_criteria: AdaptiveSwitchCriteria {
-                mean_cluster_radius_threshold: 0.0,
-            },
-        })
-        .expect("adaptive settings should be valid");
+        let mut selector = AdaptivePlanningSelector::new(test_adaptive_settings())
+            .expect("adaptive settings should be valid");
         assert_eq!(
             selector
                 .select_algorithm_with_embedding_replay(
@@ -8491,6 +8488,55 @@ mod tests {
                 )
                 .expect("second replay segment should evaluate diagnostics"),
             super::ActivePlanningAlgorithm::Dcbc
+        );
+    }
+
+    fn test_adaptive_settings() -> AdaptivePlanningSettings {
+        AdaptivePlanningSettings {
+            direction: AdaptivePlanningDirection::Divisive,
+            directional_pca: AdaptiveDirectionalPcaSettings {
+                cluster_count: 2,
+                random_seed: Some(11),
+                params: directional_pca_published_profile_params(
+                    DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                    DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                    DirectionalPcaBinningPolicy::Quantile,
+                    DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                    1,
+                    0.0,
+                ),
+            },
+            dcbc: AdaptiveDcbcSettings {
+                cluster_count: 2,
+                balance_constraints: None,
+                random_seed: Some(11),
+            },
+            switch_criteria: AdaptiveSwitchCriteria {
+                mean_cluster_radius_threshold: 0.0,
+            },
+        }
+    }
+
+    #[test]
+    fn adaptive_divisive_artifact_path_succeeds() {
+        let artifacts = seed_artifacts(&test_embeddings());
+        let mut statuses = Vec::new();
+        let (outcome, decisions) = derive_hierarchy_for_adaptive_built_in(
+            &test_adaptive_settings(),
+            Some(&artifacts),
+            &[],
+            &test_embedding_spec(),
+            2,
+            &mut |event| statuses.push(event),
+        )
+        .expect("artifact-backed adaptive planning should succeed");
+        assert_eq!(outcome.hierarchy.root_partition_id, "p0");
+        assert!(!outcome.hierarchy.partitions.is_empty());
+        assert!(!decisions.is_empty());
+        assert!(
+            statuses
+                .iter()
+                .any(|event| event.stage == super::PlanningStage::Single)
         );
     }
 
