@@ -472,6 +472,56 @@ fn map_planning_artifact_store_error(error: BlockStoreError) -> StreamingIndexer
     StreamingIndexerError::PlanningArtifactFailure(error.to_string())
 }
 
+struct ArtifactReplayCache<'a> {
+    artifacts: &'a PlanningArtifactLedger,
+    indices: &'a [usize],
+    current_page_id: Option<BlockHash>,
+    current_page: Vec<Vec<f32>>,
+}
+
+impl<'a> ArtifactReplayCache<'a> {
+    fn new(
+        artifacts: &'a PlanningArtifactLedger,
+        indices: &'a [usize],
+    ) -> Result<Self, StreamingIndexerError> {
+        artifacts.flush_pending_original_embeddings()?;
+        Ok(Self {
+            artifacts,
+            indices,
+            current_page_id: None,
+            current_page: Vec::new(),
+        })
+    }
+
+    fn load(&mut self, position: usize) -> Result<Vec<f32>, StreamingIndexerError> {
+        let artifact_ref = self
+            .indices
+            .get(position)
+            .copied()
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning replay referenced missing position {position}"
+                ))
+            })
+            .and_then(|index| self.artifacts.original_item_artifact_ref(index))?;
+        if self.current_page_id != Some(artifact_ref.block_id) {
+            self.current_page = self
+                .artifacts
+                .load_original_embedding_page(&artifact_ref.block_id)?;
+            self.current_page_id = Some(artifact_ref.block_id);
+        }
+        self.current_page
+            .get(artifact_ref.page_index)
+            .cloned()
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning artifact {:?} is missing page index {}",
+                    artifact_ref.block_id, artifact_ref.page_index
+                ))
+            })
+    }
+}
+
 pub struct PlanningPassOutcome {
     pub hierarchy: FinalizedPartitionHierarchy,
     pub requested_cluster_count: Option<u32>,
@@ -4212,46 +4262,6 @@ where
     }
 }
 
-fn run_partition_planner_with_replay<T, OP, Load>(
-    mut planner: PartitionPlanner<T>,
-    embedding_count: usize,
-    mut load_embedding: &mut Load,
-    observe_progress: &mut OP,
-) -> Result<(PassReport, Vec<ClusterId>), StreamingIndexerError>
-where
-    T: StreamingClusterTrainer,
-    OP: FnMut(),
-    Load: FnMut(usize) -> Result<Vec<f32>, StreamingIndexerError>,
-{
-    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
-        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
-        let batch = (batch_start..batch_end)
-            .map(&mut load_embedding)
-            .collect::<Result<Vec<_>, _>>()?;
-        planner.trainer.ingest_batch(batch.as_slice())?;
-    }
-    observe_progress();
-    let pass_report = planner.trainer.finish_pass()?;
-    observe_progress();
-    planner.trainer.complete_training()?;
-    observe_progress();
-    let classifier = planner.trainer.into_classifier()?;
-    let mut assignments = Vec::with_capacity(embedding_count);
-    for batch_start in (0..embedding_count).step_by(REPLAY_BATCH_SIZE) {
-        let batch_end = (batch_start + REPLAY_BATCH_SIZE).min(embedding_count);
-        let batch = (batch_start..batch_end)
-            .map(&mut load_embedding)
-            .collect::<Result<Vec<_>, _>>()?;
-        assignments.extend(
-            classifier
-                .assign_batch(batch.as_slice())
-                .map_err(StreamingIndexerError::from)?,
-        );
-    }
-    observe_progress();
-    Ok((pass_report, assignments))
-}
-
 fn run_partition_planner_with_artifacts<T, OP>(
     mut planner: PartitionPlanner<T>,
     artifacts: &PlanningArtifactLedger,
@@ -5112,17 +5122,16 @@ where
         )
     })?;
     let dimensions = artifacts.load_embedding(first_index)?.len();
+    let mut selector_replay = ArtifactReplayCache::new(artifacts, indices)?;
     let algorithm = selector
         .select_algorithm_with_embedding_replay(
             indices.len(),
             indices.len(),
             dimensions,
             |position| {
-                artifacts
-                    .load_embedding(indices[position])
-                    .map_err(|error| {
-                        AdaptivePlanningError::DiagnosticComputation(error.to_string())
-                    })
+                selector_replay.load(position).map_err(|error| {
+                    AdaptivePlanningError::DiagnosticComputation(error.to_string())
+                })
             },
         )
         .map_err(map_adaptive_planning_error)?;
@@ -5151,25 +5160,21 @@ where
         &partition_id,
         StreamingIndexingStatusState::InProgress,
     ));
-    let (pass_report, assignments) = match run_partition_planner_with_replay(
-        planner,
-        indices.len(),
-        &mut |position| artifacts.load_embedding(indices[position]),
-        &mut || {
+    let (pass_report, assignments) =
+        match run_partition_planner_with_artifacts(planner, artifacts, indices, &mut || {
             stage_observer(telemetry.unit_event(
                 stage,
                 indices.len(),
                 &partition_id,
                 StreamingIndexingStatusState::InProgress,
             ));
-        },
-    ) {
-        Ok(result) => result,
-        Err(error) => {
-            telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
-            return Err(error);
-        }
-    };
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
+                return Err(error);
+            }
+        };
     if assignments.len() != indices.len() {
         telemetry.fail_unit(stage, indices.len(), &partition_id, stage_observer);
         return Err(StreamingIndexerError::ClusteringFailure(format!(
