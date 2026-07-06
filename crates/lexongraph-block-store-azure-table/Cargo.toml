@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-block-store-azure-table"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+# Azure Tables still requires the pre-v1 client here; keep the older SDK
+# isolated to this crate until the workspace has an equivalent v1 Tables client.
+azure_core = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_data_tables = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_storage = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+base64 = "0.22"
+futures = "0.3"
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time"] }
+url = "2"
+
+[dev-dependencies]
+lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }
+tokio = { version = "1", features = ["rt", "time"] }
