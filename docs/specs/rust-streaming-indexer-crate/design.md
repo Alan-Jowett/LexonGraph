@@ -1080,8 +1080,9 @@ block-store-backed artifact set containing original-item embedding records in
 replay order together with any lower-layer summary records needed for later
 agglomerative or adaptive planning work.
 
-Artifact identities derive from pass number, layer or partition ancestry, and
-replay order so reopened scans remain deterministic.
+Artifact identities are content-addressed from the serialized artifact bytes,
+while pass number, layer or partition ancestry, and replay order determine
+which artifacts are emitted and reopened so replay remains deterministic.
 
 ### DSG-STREAM-INDEXER-108 `Planning-unit descriptors`
 
