@@ -2526,6 +2526,7 @@ pub struct StreamingIndexingRun<R, CR, EP, CEP, HPP> {
     current_pass_items: Vec<BaselineItem>,
     current_pass_artifacts: PlanningArtifactLedger,
     current_pass_f32_embeddings: Vec<Vec<f32>>,
+    current_pass_uses_planning_artifacts: Option<bool>,
     items_seen_in_current_pass: usize,
     _item_ref: PhantomData<R>,
 }
@@ -2723,6 +2724,7 @@ impl<R, CR, EP, CEP, HPP> StreamingIndexingRun<R, CR, EP, CEP, HPP> {
             current_pass_items: Vec::new(),
             current_pass_artifacts: PlanningArtifactLedger::default(),
             current_pass_f32_embeddings: Vec::new(),
+            current_pass_uses_planning_artifacts: None,
             items_seen_in_current_pass: 0,
             _item_ref: PhantomData,
         }
@@ -2767,6 +2769,29 @@ where
             ));
         }
         Ok(())
+    }
+
+    fn latch_or_validate_current_pass_storage_mode(
+        &mut self,
+        uses_planning_artifacts: bool,
+        operation: &str,
+    ) -> Result<bool, StreamingIndexerError> {
+        match self.current_pass_uses_planning_artifacts {
+            Some(expected) if expected != uses_planning_artifacts => {
+                Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
+                    "planning policy changed persisted-artifact mode during {operation}: pass started with uses_planning_artifacts={expected} but now reports {uses_planning_artifacts}"
+                )))
+            }
+            Some(expected) => {
+                self.validate_current_pass_storage_mode(expected)?;
+                Ok(expected)
+            }
+            None => {
+                self.validate_current_pass_storage_mode(uses_planning_artifacts)?;
+                self.current_pass_uses_planning_artifacts = Some(uses_planning_artifacts);
+                Ok(uses_planning_artifacts)
+            }
+        }
     }
 
     pub async fn ingest_batch(
@@ -2857,7 +2882,11 @@ where
             }
         }
 
-        let persist_planning_artifacts = self.planning_policy.uses_planning_artifacts();
+        let policy_uses_planning_artifacts = self.planning_policy.uses_planning_artifacts();
+        let persist_planning_artifacts = self.latch_or_validate_current_pass_storage_mode(
+            policy_uses_planning_artifacts,
+            "ingest_batch",
+        )?;
         let mut decoded_embeddings = Vec::with_capacity(embeddings.len());
         for embedding in &embeddings {
             decoded_embeddings.push(decode_embedding_as_f32(embedding, &self.embedding_spec)?);
@@ -2937,9 +2966,12 @@ where
             pass_started,
         ));
 
+        let policy_uses_planning_artifacts = self.planning_policy.uses_planning_artifacts();
+        let uses_planning_artifacts = self.latch_or_validate_current_pass_storage_mode(
+            policy_uses_planning_artifacts,
+            "finish_pass",
+        )?;
         let mut stage_statuses = PlanningStageStatusTracker::new(&self.observer, pass_started);
-        let uses_planning_artifacts = self.planning_policy.uses_planning_artifacts();
-        self.validate_current_pass_storage_mode(uses_planning_artifacts)?;
         let buffered = std::mem::take(&mut self.current_pass_artifacts);
         let materialized_embeddings = if uses_planning_artifacts {
             self.planning_policy
@@ -3024,6 +3056,7 @@ where
         self.finalized_hierarchy = Some(outcome.hierarchy.clone());
         self.completed_passes += 1;
         self.items_seen_in_current_pass = 0;
+        self.current_pass_uses_planning_artifacts = None;
 
         emit_status(
             &self.observer,
@@ -8638,10 +8671,10 @@ mod tests {
         BuiltInPlanningPhase, ChildSummaryInput, Content, ContentResolver,
         DcbcStreamingClusteringFactory, DirectionalPcaAllocationPolicy,
         DirectionalPcaBinningPolicy, DirectionalPcaBuiltInPlanningSettings,
-        DirectionalPcaClusterCardinalityMode, DirectionalPcaRetainedAxisPolicy, IndexItem,
-        ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE, PlanningArtifactLedger, StreamingIndexerError,
-        StreamingIndexingRun, allocate_variable_bit_widths,
-        derive_hierarchy_agglomeratively_from_artifacts_with_builder,
+        DirectionalPcaClusterCardinalityMode, DirectionalPcaRetainedAxisPolicy,
+        HierarchicalPlanningPolicy, IndexItem, ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
+        PlanningArtifactLedger, PlanningPassOutcome, StreamingIndexerError, StreamingIndexingRun,
+        allocate_variable_bit_widths, derive_hierarchy_agglomeratively_from_artifacts_with_builder,
         derive_hierarchy_for_adaptive_built_in, derive_hierarchy_for_single_built_in_phase,
         directional_pca_published_profile_params, effective_directional_pca_cluster_count,
         exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
@@ -8650,6 +8683,10 @@ mod tests {
     use crate::{BlockHash, EmbeddingSpec, Metadata};
     use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
     use std::fmt;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn weighted_representative_embedding_uses_item_counts() {
@@ -8799,6 +8836,52 @@ mod tests {
                     TestEmbeddingProviderError("expected a one-byte test body".into())
                 })? as f32;
             Ok([value.to_le_bytes(), (value + 0.5).to_le_bytes()].concat())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct ToggleArtifactPolicy {
+        uses_artifacts: Arc<AtomicBool>,
+    }
+
+    impl ToggleArtifactPolicy {
+        fn new(uses_artifacts: bool) -> Self {
+            Self {
+                uses_artifacts: Arc::new(AtomicBool::new(uses_artifacts)),
+            }
+        }
+
+        fn set_uses_planning_artifacts(&self, uses_artifacts: bool) {
+            self.uses_artifacts.store(uses_artifacts, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    struct ToggleArtifactPolicyError;
+
+    impl fmt::Display for ToggleArtifactPolicyError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "toggle artifact policy should not reach planning")
+        }
+    }
+
+    impl std::error::Error for ToggleArtifactPolicyError {}
+
+    impl HierarchicalPlanningPolicy for ToggleArtifactPolicy {
+        type Error = ToggleArtifactPolicyError;
+
+        fn uses_planning_artifacts(&self) -> bool {
+            self.uses_artifacts.load(Ordering::Relaxed)
+        }
+
+        fn finish_planning_pass(
+            &mut self,
+            _embeddings: &[Vec<f32>],
+            _embedding_spec: &EmbeddingSpec,
+            _materializability_bound: usize,
+            _block_size_target: usize,
+        ) -> Result<PlanningPassOutcome, Self::Error> {
+            panic!("finish_planning_pass should not be reached when storage mode drifts");
         }
     }
 
@@ -8987,6 +9070,83 @@ mod tests {
             StreamingIndexerError::InvalidLifecycleTransition(_)
         ));
         assert!(error.to_string().contains("disabled persisted artifacts"));
+    }
+
+    #[test]
+    fn ingest_batch_rejects_mid_pass_storage_mode_drift() {
+        pollster::block_on(async {
+            let policy = ToggleArtifactPolicy::new(true);
+            let mut run = StreamingIndexingRun::new(
+                TestResolver,
+                TestEmbeddingProvider,
+                ArithmeticMeanCanonicalEmbeddingPolicy,
+                policy.clone(),
+                test_embedding_spec(),
+                256,
+            );
+            let first_batch = [IndexItem {
+                metadata: Metadata::default(),
+                content_ref: 1,
+            }];
+            run.ingest_batch(&first_batch)
+                .await
+                .expect("first batch should establish the pass storage mode");
+
+            policy.set_uses_planning_artifacts(false);
+            let second_batch = [IndexItem {
+                metadata: Metadata::default(),
+                content_ref: 2,
+            }];
+            let error = run
+                .ingest_batch(&second_batch)
+                .await
+                .expect_err("mid-pass storage mode drift should be rejected");
+            assert!(matches!(
+                error,
+                StreamingIndexerError::InvalidLifecycleTransition(_)
+            ));
+            assert!(
+                error
+                    .to_string()
+                    .contains("changed persisted-artifact mode during ingest_batch")
+            );
+        });
+    }
+
+    #[test]
+    fn finish_pass_rejects_mid_pass_storage_mode_drift() {
+        pollster::block_on(async {
+            let policy = ToggleArtifactPolicy::new(true);
+            let mut run = StreamingIndexingRun::new(
+                TestResolver,
+                TestEmbeddingProvider,
+                ArithmeticMeanCanonicalEmbeddingPolicy,
+                policy.clone(),
+                test_embedding_spec(),
+                256,
+            );
+            let batch = [IndexItem {
+                metadata: Metadata::default(),
+                content_ref: 1,
+            }];
+            run.ingest_batch(&batch)
+                .await
+                .expect("first batch should establish the pass storage mode");
+
+            policy.set_uses_planning_artifacts(false);
+            let error = run
+                .finish_pass()
+                .expect_err("finish_pass should reject a policy that flips storage mode");
+            assert!(matches!(
+                error,
+                StreamingIndexerError::InvalidLifecycleTransition(_)
+            ));
+            assert!(
+                error
+                    .to_string()
+                    .contains("changed persisted-artifact mode during finish_pass")
+            );
+        });
     }
 
     fn test_directional_phase(direction: BuiltInPlanningDirection) -> BuiltInPlanningPhase {
