@@ -122,8 +122,8 @@ entities or another backend.
 ### VAL-AZURE-TABLE-STORE-011
 
 Store and retrieve a valid typed block whose canonical bytes exceed one Azure
-Table binary property's limit but still fit within one Azure Table entity in
-this revision.
+Table string property's limit in this base64-encoded representation but still
+fit within one Azure Table entity in this revision.
 
 **Pass condition:** `put` succeeds, `get` succeeds, and the retrieved block
 matches the original logical block and block ID, proving the multi-property

@@ -28,6 +28,13 @@ The Azure Table block-store crate depends on:
 - an Azure Table client surface capable of SAS-authenticated entity insert,
   lookup, and query operations
 
+This revision keeps the Azure Table production client on the pre-v1
+`azure_data_tables`/`azure_storage` stack because the workspace's current v1
+Azure SDK usage covers Blob Storage rather than SAS-authenticated Table entity
+operations. The older Table client is intentionally isolated to this crate, and
+the dependency configuration uses rustls-backed HTTP support to avoid adding a
+native OpenSSL requirement.
+
 The crate does not redefine block validation, parent trait semantics, deletion,
 or compaction behavior.
 
