@@ -3865,6 +3865,7 @@ fn derive_hierarchy_from_built_in(
                 BuiltInPlanningDirection::Agglomerative => if let Some(artifacts) = artifacts {
                     derive_hierarchy_agglomeratively_from_artifacts_with_builder(
                         artifacts,
+                        embedding_spec_dimensions(embedding_spec)?,
                         materializability_bound,
                         stage_observer,
                         |layer_embeddings, _represented_item_count, max_unit_item_count| {
@@ -3990,6 +3991,7 @@ fn derive_hierarchy_for_single_built_in_phase_with_fallback_group_cap(
             if let Some(artifacts) = artifacts {
                 derive_hierarchy_agglomeratively_from_artifacts_with_builder(
                     artifacts,
+                    embedding_spec_dimensions(embedding_spec)?,
                     materializability_bound,
                     stage_observer,
                     |layer_embeddings, _represented_item_count, _max_unit_item_count| {
@@ -4160,6 +4162,7 @@ fn derive_hierarchy_for_adaptive_built_in(
             if let Some(artifacts) = artifacts {
                 derive_hierarchy_agglomeratively_from_artifacts_with_builder(
                     artifacts,
+                    embedding_spec_dimensions(embedding_spec)?,
                     materializability_bound,
                     stage_observer,
                     |layer_embeddings, represented_item_count, _max_unit_item_count| {
@@ -4247,10 +4250,32 @@ fn map_adaptive_planning_error(error: AdaptivePlanningError) -> StreamingIndexer
             StreamingIndexerError::InvalidAdaptivePlanningConfiguration(message)
         }
         AdaptivePlanningError::DiagnosticComputation(message) => {
+            if let Some(message) = message.strip_prefix("planning_artifact_failure:") {
+                return StreamingIndexerError::PlanningArtifactFailure(message.into());
+            }
+            if let Some(message) = message.strip_prefix("planning_artifact_resolution:") {
+                return StreamingIndexerError::PlanningArtifactResolution(message.into());
+            }
             StreamingIndexerError::ClusteringFailure(format!(
                 "adaptive planning diagnostics failed: {message}"
             ))
         }
+    }
+}
+
+fn map_adaptive_artifact_replay_error(error: StreamingIndexerError) -> AdaptivePlanningError {
+    match error {
+        StreamingIndexerError::PlanningArtifactFailure(message) => {
+            AdaptivePlanningError::DiagnosticComputation(format!(
+                "planning_artifact_failure:{message}"
+            ))
+        }
+        StreamingIndexerError::PlanningArtifactResolution(message) => {
+            AdaptivePlanningError::DiagnosticComputation(format!(
+                "planning_artifact_resolution:{message}"
+            ))
+        }
+        other => AdaptivePlanningError::DiagnosticComputation(other.to_string()),
     }
 }
 
@@ -4941,6 +4966,7 @@ where
 
 fn derive_hierarchy_agglomeratively_from_artifacts_with_builder<B, P, SO>(
     artifacts: &PlanningArtifactLedger,
+    expected_dimensions: usize,
     materializability_bound: usize,
     stage_observer: &mut SO,
     planner_builder: B,
@@ -4963,6 +4989,7 @@ where
     derive_hierarchy_agglomeratively_with_artifact_nodes(
         artifacts,
         nodes,
+        expected_dimensions,
         materializability_bound,
         stage_observer,
         planner_builder,
@@ -4973,6 +5000,7 @@ fn load_agglomerative_layer_embeddings(
     artifacts: &PlanningArtifactLedger,
     nodes: &[AgglomerativeHierarchyNode],
     current_layer: &[usize],
+    expected_dimensions: usize,
 ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
     let mut layer_embeddings = vec![None; current_layer.len()];
     let mut leaf_positions = Vec::new();
@@ -5001,7 +5029,7 @@ fn load_agglomerative_layer_embeddings(
         }
     }
 
-    layer_embeddings
+    let layer_embeddings = layer_embeddings
         .into_iter()
         .enumerate()
         .map(|(position, embedding)| {
@@ -5011,12 +5039,15 @@ fn load_agglomerative_layer_embeddings(
                 ))
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_artifact_replay_embeddings(layer_embeddings.as_slice(), expected_dimensions)?;
+    Ok(layer_embeddings)
 }
 
 fn derive_hierarchy_agglomeratively_with_artifact_nodes<B, P, SO>(
     artifacts: &PlanningArtifactLedger,
     mut nodes: Vec<AgglomerativeHierarchyNode>,
+    expected_dimensions: usize,
     materializability_bound: usize,
     stage_observer: &mut SO,
     mut planner_builder: B,
@@ -5059,6 +5090,7 @@ where
             artifacts,
             nodes.as_slice(),
             current_layer.as_slice(),
+            expected_dimensions,
         )?;
         let planner = planner_builder(
             &layer_embeddings,
@@ -5533,9 +5565,9 @@ where
                 positions
                     .iter()
                     .map(|&position| {
-                        selector_replay.load(position).map_err(|error| {
-                            AdaptivePlanningError::DiagnosticComputation(error.to_string())
-                        })
+                        selector_replay
+                            .load(position)
+                            .map_err(map_adaptive_artifact_replay_error)
                     })
                     .collect()
             },
@@ -9356,6 +9388,7 @@ mod tests {
         let outcome = derive_hierarchy_agglomeratively_from_artifacts_with_builder(
             &artifacts,
             2,
+            2,
             &mut |event| statuses.push(event),
             |layer_embeddings, _, _| {
                 Ok(super::PartitionPlanner::new(
@@ -9456,6 +9489,84 @@ mod tests {
                 .iter()
                 .any(|event| event.stage == super::PlanningStage::Single)
         );
+    }
+
+    #[test]
+    fn adaptive_divisive_artifact_path_preserves_artifact_failures() {
+        let artifacts = seed_artifacts(&test_embeddings());
+        let missing = artifacts
+            .original_item_artifact_ids()
+            .expect("artifact ids should be readable")[0];
+        artifacts
+            .store
+            .remove_bytes(&missing)
+            .expect("test should be able to remove a seeded artifact");
+
+        let error = match derive_hierarchy_for_adaptive_built_in(
+            &test_adaptive_settings(),
+            Some(&artifacts),
+            &[],
+            &test_embedding_spec(),
+            2,
+            &mut |_| {},
+        ) {
+            Ok(_) => panic!("missing adaptive planning artifact should fail explicitly"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            StreamingIndexerError::PlanningArtifactResolution(_)
+        ));
+    }
+
+    #[test]
+    fn agglomerative_artifact_path_rejects_corrupt_representative_embeddings() {
+        let artifacts = PlanningArtifactLedger::default();
+        let corrupt_block_id = artifacts
+            .store
+            .put_bytes(vec![0u8; 12])
+            .expect("test should persist a corrupt representative artifact");
+        let nodes = vec![
+            super::AgglomerativeHierarchyNode {
+                child_node_indices: Vec::new(),
+                item_indices: vec![0],
+                representative_embedding: None,
+                representative_artifact_id: Some(corrupt_block_id),
+                planning_stage: super::PlanningStage::Single,
+            },
+            super::AgglomerativeHierarchyNode {
+                child_node_indices: Vec::new(),
+                item_indices: vec![1],
+                representative_embedding: Some(vec![1.0, 2.0]),
+                representative_artifact_id: None,
+                planning_stage: super::PlanningStage::Single,
+            },
+        ];
+        let error = match super::derive_hierarchy_agglomeratively_with_artifact_nodes(
+            &artifacts,
+            nodes,
+            2,
+            2,
+            &mut |_| {},
+            |_layer_embeddings,
+             _,
+             _|
+             -> Result<
+                super::PartitionPlanner<super::BuiltInStreamingClusterTrainer>,
+                StreamingIndexerError,
+            > {
+                panic!("planner builder should not run when artifact embeddings are corrupt")
+            },
+        ) {
+            Ok(_) => {
+                panic!("corrupt agglomerative representative artifact should fail explicitly")
+            }
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            StreamingIndexerError::PlanningArtifactResolution(_)
+        ));
     }
 
     #[test]

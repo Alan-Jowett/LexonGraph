@@ -4834,6 +4834,155 @@ fn val_stream_indexer_100_all_profiles_resolve_deterministically_with_0_6_ladder
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_101_divisive_artifact_replay_supports_recursive_refit() {
+    let validation = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap()
+            .join("docs")
+            .join("specs")
+            .join("rust-streaming-indexer-crate")
+            .join("validation.md"),
+    )
+    .unwrap();
+    assert!(
+        markdown_section(&validation, "VAL-STREAM-INDEXER-101")
+            .contains("stable partition descriptors")
+    );
+
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Divisive), 160);
+    run.ingest_batch(&items[..4]).await.unwrap();
+    run.ingest_batch(&items[4..]).await.unwrap();
+    let report = run.finish_pass().unwrap();
+    let hierarchy = run.finalized_partition_hierarchy().unwrap();
+
+    assert!(report.planned_partition_count > 1);
+    assert!(
+        hierarchy
+            .partitions
+            .iter()
+            .any(|partition| !partition.terminal)
+    );
+    assert!(
+        hierarchy
+            .partitions
+            .iter()
+            .any(|partition| partition.terminal)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_102_agglomerative_artifact_replay_supports_layer_regrouping() {
+    let validation = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap()
+            .join("docs")
+            .join("specs")
+            .join("rust-streaming-indexer-crate")
+            .join("validation.md"),
+    )
+    .unwrap();
+    assert!(
+        markdown_section(&validation, "VAL-STREAM-INDEXER-102")
+            .contains("higher-layer grouping step")
+    );
+
+    let items = switch_trigger_items();
+    let mut run = run_with_builtin(dcbc_planning(BuiltInPlanningDirection::Agglomerative), 160);
+    run.ingest_batch(&items).await.unwrap();
+    let report = run.finish_pass().unwrap();
+    let hierarchy = run.finalized_partition_hierarchy().unwrap();
+
+    assert!(report.planned_partition_count > 1);
+    assert!(hierarchy.partitions.len() >= 3);
+    assert!(
+        hierarchy
+            .partitions
+            .iter()
+            .any(|partition| !partition.terminal)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_103_adaptive_artifact_replay_keeps_switch_boundary_deterministic() {
+    let validation = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap()
+            .join("docs")
+            .join("specs")
+            .join("rust-streaming-indexer-crate")
+            .join("validation.md"),
+    )
+    .unwrap();
+    assert!(
+        markdown_section(&validation, "VAL-STREAM-INDEXER-103")
+            .contains("selected built-in direction")
+    );
+
+    let items = switch_trigger_items();
+    let mut first = run_with_builtin(
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
+        160,
+    );
+    first.ingest_batch(&items).await.unwrap();
+    first.finish_pass().unwrap();
+    let first_decisions = first.adaptive_decision_records().to_vec();
+
+    let mut second = run_with_builtin(
+        adaptive_planning(
+            BuiltInPlanningDirection::Divisive,
+            DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+        ),
+        160,
+    );
+    second.ingest_batch(&items).await.unwrap();
+    second.finish_pass().unwrap();
+    let second_decisions = second.adaptive_decision_records().to_vec();
+
+    assert!(!first_decisions.is_empty());
+    let first_algorithm_sequence: Vec<_> = first_decisions
+        .iter()
+        .map(|record| record.active_algorithm)
+        .collect();
+    let second_algorithm_sequence: Vec<_> = second_decisions
+        .iter()
+        .map(|record| record.active_algorithm)
+        .collect();
+    let first_switch_boundaries: Vec<_> = first_decisions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
+        .collect();
+    let second_switch_boundaries: Vec<_> = second_decisions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| record.switch_boundary_occurred.then_some(index))
+        .collect();
+
+    assert_eq!(first_algorithm_sequence, second_algorithm_sequence);
+    assert_eq!(first_switch_boundaries, second_switch_boundaries);
+    assert!(
+        first_decisions
+            .iter()
+            .any(|record| record.active_algorithm == ActivePlanningAlgorithm::Dcbc)
+    );
+    assert!(
+        first_decisions
+            .iter()
+            .any(|record| record.switch_boundary_occurred)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_104_missing_planning_artifacts_fail_explicitly() {
     let validation = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
