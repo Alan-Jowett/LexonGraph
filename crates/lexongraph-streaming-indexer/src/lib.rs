@@ -64,6 +64,7 @@ use lexongraph_streaming_clustering::{
 };
 use sha2::{Digest, Sha256};
 use tempfile::{Builder as TempDirBuilder, TempDir};
+use tokio::task;
 
 // ─────────────────────────────────────────────────────────────
 // Public input / output types
@@ -185,6 +186,20 @@ impl PlanningArtifactStore {
             })
     }
 
+    async fn put_bytes_async(&self, bytes: Vec<u8>) -> Result<BlockHash, StreamingIndexerError> {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return self.put_bytes(bytes);
+        }
+        let store = self.clone();
+        task::spawn_blocking(move || store.put_bytes(bytes))
+            .await
+            .map_err(|error| {
+                StreamingIndexerError::PlanningArtifactFailure(format!(
+                    "planning artifact store task failed: {error}"
+                ))
+            })?
+    }
+
     #[cfg(test)]
     fn fail_next_put_for_test(&self, message: &str) -> Result<(), StreamingIndexerError> {
         let mut state = self.state.lock().map_err(|_| {
@@ -235,7 +250,6 @@ impl PlanningArtifactStore {
         Ok(backend)
     }
 
-    #[cfg(test)]
     fn remove_bytes(&self, block_id: &BlockHash) -> Result<(), StreamingIndexerError> {
         let state = self.state.lock().map_err(|_| {
             StreamingIndexerError::PlanningArtifactFailure(
@@ -267,93 +281,110 @@ impl PlanningArtifactStore {
 const ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE: usize = 256;
 const REPLAY_BATCH_SIZE: usize = 256;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OriginalItemArtifactRef {
-    block_id: BlockHash,
-    page_index: usize,
+#[derive(Debug, Default)]
+struct PlanningArtifactLedgerState {
+    original_item_artifact_page_ids: Vec<BlockHash>,
+    original_item_count: usize,
+    pending_original_embeddings: Vec<Vec<f32>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct PlanningArtifactLedgerCheckpoint {
-    original_item_artifact_ref_len: usize,
+    original_item_artifact_page_len: usize,
+    original_item_count: usize,
     pending_original_embeddings_len: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct PlanningArtifactLedger {
     store: PlanningArtifactStore,
-    original_item_artifact_refs: Arc<Mutex<Vec<OriginalItemArtifactRef>>>,
-    pending_original_embeddings: Arc<Mutex<Vec<Vec<f32>>>>,
+    state: Arc<Mutex<PlanningArtifactLedgerState>>,
+    mutation_lock: Arc<Mutex<()>>,
 }
 
 impl PlanningArtifactLedger {
-    fn checkpoint(&self) -> Result<PlanningArtifactLedgerCheckpoint, StreamingIndexerError> {
-        let original_item_artifact_ref_len = self
-            .original_item_artifact_refs
-            .lock()
-            .map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger lock was poisoned".into(),
-                )
-            })?
-            .len();
-        let pending_original_embeddings_len = self
-            .pending_original_embeddings
-            .lock()
-            .map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger pending buffer lock was poisoned".into(),
-                )
-            })?
-            .len();
-        Ok(PlanningArtifactLedgerCheckpoint {
-            original_item_artifact_ref_len,
-            pending_original_embeddings_len,
+    fn mutation_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, StreamingIndexerError> {
+        self.mutation_lock.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact ledger mutation lock was poisoned".into(),
+            )
         })
     }
 
-    fn rollback_to_checkpoint(
+    fn checkpoint_locked(&self) -> Result<PlanningArtifactLedgerCheckpoint, StreamingIndexerError> {
+        let state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact ledger lock was poisoned".into(),
+            )
+        })?;
+        Ok(PlanningArtifactLedgerCheckpoint {
+            original_item_artifact_page_len: state.original_item_artifact_page_ids.len(),
+            original_item_count: state.original_item_count,
+            pending_original_embeddings_len: state.pending_original_embeddings.len(),
+        })
+    }
+
+    fn rollback_to_checkpoint_locked(
         &self,
         checkpoint: PlanningArtifactLedgerCheckpoint,
     ) -> Result<(), StreamingIndexerError> {
-        self.original_item_artifact_refs
-            .lock()
-            .map_err(|_| {
+        let (retained_page_ids, removed_page_ids) = {
+            let mut state = self.state.lock().map_err(|_| {
                 StreamingIndexerError::PlanningArtifactFailure(
                     "planning artifact ledger lock was poisoned".into(),
                 )
-            })?
-            .truncate(checkpoint.original_item_artifact_ref_len);
-        self.pending_original_embeddings
-            .lock()
-            .map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger pending buffer lock was poisoned".into(),
-                )
-            })?
-            .truncate(checkpoint.pending_original_embeddings_len);
+            })?;
+            let retained = state.original_item_artifact_page_ids
+                [..checkpoint.original_item_artifact_page_len]
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>();
+            let removed = state.original_item_artifact_page_ids
+                [checkpoint.original_item_artifact_page_len..]
+                .to_vec();
+            state
+                .original_item_artifact_page_ids
+                .truncate(checkpoint.original_item_artifact_page_len);
+            state.original_item_count = checkpoint.original_item_count;
+            state
+                .pending_original_embeddings
+                .truncate(checkpoint.pending_original_embeddings_len);
+            (retained, removed)
+        };
+        let mut removed_once = HashSet::new();
+        for block_id in removed_page_ids {
+            if retained_page_ids.contains(&block_id) || !removed_once.insert(block_id) {
+                continue;
+            }
+            self.store.remove_bytes(&block_id)?;
+        }
         Ok(())
     }
 
+    #[cfg(test)]
     fn push_original_embedding_vec(
         &self,
         embedding: Vec<f32>,
     ) -> Result<(), StreamingIndexerError> {
-        let pending_page = {
-            let mut pending = self.pending_original_embeddings.lock().map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger pending buffer lock was poisoned".into(),
-                )
-            })?;
-            pending.push(embedding);
-            (pending.len() >= ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
-                .then(|| std::mem::take(&mut *pending))
-        };
-        if let Some(pending_page) = pending_page
-            && let Err(error) = self.persist_original_embedding_page(&pending_page)
-        {
-            self.restore_pending_original_embeddings(pending_page)?;
-            return Err(error);
+        let _mutation_guard = self.mutation_guard()?;
+        self.push_original_embedding_vec_locked(embedding)
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    async fn append_original_embeddings_transactionally(
+        &self,
+        embeddings: Vec<Vec<f32>>,
+    ) -> Result<(), StreamingIndexerError> {
+        let _mutation_guard = self.mutation_guard()?;
+        let checkpoint = self.checkpoint_locked()?;
+        for embedding in embeddings {
+            if let Err(error) = self
+                .push_original_embedding_vec_async_locked(embedding)
+                .await
+            {
+                self.rollback_to_checkpoint_locked(checkpoint)?;
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -361,14 +392,14 @@ impl PlanningArtifactLedger {
     pub fn len(&self) -> Result<usize, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
         Ok(self
-            .original_item_artifact_refs
+            .state
             .lock()
             .map_err(|_| {
                 StreamingIndexerError::PlanningArtifactFailure(
                     "planning artifact ledger lock was poisoned".into(),
                 )
             })?
-            .len())
+            .original_item_count)
     }
 
     pub fn is_empty(&self) -> Result<bool, StreamingIndexerError> {
@@ -377,63 +408,43 @@ impl PlanningArtifactLedger {
 
     pub fn original_item_artifact_ids(&self) -> Result<Vec<BlockHash>, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
-        let artifact_refs = self
-            .original_item_artifact_refs
+        Ok(self
+            .state
             .lock()
             .map_err(|_| {
                 StreamingIndexerError::PlanningArtifactFailure(
                     "planning artifact ledger lock was poisoned".into(),
                 )
             })?
-            .clone();
-        let mut seen = HashSet::new();
-        Ok(artifact_refs
-            .into_iter()
-            .filter_map(|artifact_ref| {
-                seen.insert(artifact_ref.block_id)
-                    .then_some(artifact_ref.block_id)
-            })
-            .collect())
+            .original_item_artifact_page_ids
+            .clone())
     }
 
     pub fn load_all_embeddings(&self) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
-        let artifact_refs = self
-            .original_item_artifact_refs
-            .lock()
-            .map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger lock was poisoned".into(),
-                )
-            })?
-            .clone();
-        let mut embeddings = Vec::with_capacity(artifact_refs.len());
-        let mut current_page_id = None;
-        let mut current_page = Vec::new();
-        for artifact_ref in artifact_refs {
-            if current_page_id != Some(artifact_ref.block_id) {
-                current_page = self.load_original_embedding_page(&artifact_ref.block_id)?;
-                current_page_id = Some(artifact_ref.block_id);
+        let (page_ids, original_item_count) = self.original_item_artifact_layout()?;
+        let mut embeddings = Vec::with_capacity(original_item_count);
+        for (page_number, block_id) in page_ids.iter().copied().enumerate() {
+            let page = self.load_original_embedding_page(&block_id)?;
+            let remaining = original_item_count
+                .saturating_sub(page_number.saturating_mul(ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE));
+            let expected_len = remaining.min(ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE);
+            for page_index in 0..expected_len {
+                embeddings.push(page.get(page_index).cloned().ok_or_else(|| {
+                    StreamingIndexerError::PlanningArtifactResolution(format!(
+                        "planning artifact {:?} is missing page index {}",
+                        block_id, page_index
+                    ))
+                })?);
             }
-            embeddings.push(
-                current_page
-                    .get(artifact_ref.page_index)
-                    .cloned()
-                    .ok_or_else(|| {
-                        StreamingIndexerError::PlanningArtifactResolution(format!(
-                            "planning artifact {:?} is missing page index {}",
-                            artifact_ref.block_id, artifact_ref.page_index
-                        ))
-                    })?,
-            );
         }
         Ok(embeddings)
     }
 
     pub fn load_embedding(&self, index: usize) -> Result<Vec<f32>, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
-        let artifact_ref = self.original_item_artifact_ref(index)?;
-        self.load_original_embedding_artifact(&artifact_ref)
+        let (block_id, page_index) = self.original_item_artifact_ref(index)?;
+        self.load_original_embedding_artifact(block_id, page_index)
     }
 
     pub fn load_embeddings(
@@ -445,30 +456,30 @@ impl PlanningArtifactLedger {
             .iter()
             .enumerate()
             .map(|(output_index, &index)| {
-                Ok::<(usize, OriginalItemArtifactRef), StreamingIndexerError>((
+                let (block_id, page_index) = self.original_item_artifact_ref(index)?;
+                Ok::<(usize, usize, usize, BlockHash), StreamingIndexerError>((
                     output_index,
-                    self.original_item_artifact_ref(index)?,
+                    index / ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
+                    page_index,
+                    block_id,
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        artifact_refs.sort_by(|(_, left), (_, right)| {
-            left.block_id
-                .as_bytes()
-                .cmp(right.block_id.as_bytes())
-                .then(left.page_index.cmp(&right.page_index))
-        });
+        artifact_refs.sort_by(
+            |(_, left_page, left_index, _), (_, right_page, right_index, _)| {
+                left_page.cmp(right_page).then(left_index.cmp(right_index))
+            },
+        );
         let mut embeddings = vec![None; artifact_refs.len()];
         let mut cached_page = None::<(BlockHash, Vec<Vec<f32>>)>;
         artifact_refs
             .into_iter()
-            .try_for_each(|(output_index, artifact_ref)| {
+            .try_for_each(|(output_index, _, page_index, block_id)| {
                 let page = match &cached_page {
-                    Some((block_id, page)) if *block_id == artifact_ref.block_id => page,
+                    Some((cached_block_id, page)) if *cached_block_id == block_id => page,
                     _ => {
-                        cached_page = Some((
-                            artifact_ref.block_id,
-                            self.load_original_embedding_page(&artifact_ref.block_id)?,
-                        ));
+                        cached_page =
+                            Some((block_id, self.load_original_embedding_page(&block_id)?));
                         &cached_page
                             .as_ref()
                             .expect("page cache was just populated")
@@ -476,10 +487,10 @@ impl PlanningArtifactLedger {
                     }
                 };
                 embeddings[output_index] =
-                    Some(page.get(artifact_ref.page_index).cloned().ok_or_else(|| {
+                    Some(page.get(page_index).cloned().ok_or_else(|| {
                         StreamingIndexerError::PlanningArtifactResolution(format!(
                             "planning artifact {:?} is missing page index {}",
-                            artifact_ref.block_id, artifact_ref.page_index
+                            block_id, page_index
                         ))
                     })?);
                 Ok::<(), StreamingIndexerError>(())
@@ -513,25 +524,8 @@ impl PlanningArtifactLedger {
     }
 
     fn flush_pending_original_embeddings(&self) -> Result<(), StreamingIndexerError> {
-        let pending_page = {
-            let mut pending = self.pending_original_embeddings.lock().map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger pending buffer lock was poisoned".into(),
-                )
-            })?;
-            if pending.is_empty() {
-                None
-            } else {
-                Some(std::mem::take(&mut *pending))
-            }
-        };
-        if let Some(pending_page) = pending_page
-            && let Err(error) = self.persist_original_embedding_page(&pending_page)
-        {
-            self.restore_pending_original_embeddings(pending_page)?;
-            return Err(error);
-        }
-        Ok(())
+        let _mutation_guard = self.mutation_guard()?;
+        self.flush_pending_original_embeddings_locked()
     }
 
     fn persist_original_embedding_page(
@@ -541,31 +535,31 @@ impl PlanningArtifactLedger {
         let block_id = self
             .store
             .put_bytes(encode_f32_embedding_page(embeddings)?)?;
-        let mut artifact_refs = self.original_item_artifact_refs.lock().map_err(|_| {
-            StreamingIndexerError::PlanningArtifactFailure(
-                "planning artifact ledger lock was poisoned".into(),
-            )
-        })?;
-        artifact_refs.extend(
-            (0..embeddings.len()).map(|page_index| OriginalItemArtifactRef {
-                block_id,
-                page_index,
-            }),
-        );
-        Ok(())
+        self.record_persisted_original_embedding_page(block_id, embeddings.len())
+    }
+
+    async fn persist_original_embedding_page_async(
+        &self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<(), StreamingIndexerError> {
+        let block_id = self
+            .store
+            .put_bytes_async(encode_f32_embedding_page(embeddings)?)
+            .await?;
+        self.record_persisted_original_embedding_page(block_id, embeddings.len())
     }
 
     fn restore_pending_original_embeddings(
         &self,
         mut pending_page: Vec<Vec<f32>>,
     ) -> Result<(), StreamingIndexerError> {
-        let mut pending = self.pending_original_embeddings.lock().map_err(|_| {
+        let mut state = self.state.lock().map_err(|_| {
             StreamingIndexerError::PlanningArtifactFailure(
-                "planning artifact ledger pending buffer lock was poisoned".into(),
+                "planning artifact ledger lock was poisoned".into(),
             )
         })?;
-        pending_page.append(&mut *pending);
-        *pending = pending_page;
+        pending_page.append(&mut state.pending_original_embeddings);
+        state.pending_original_embeddings = pending_page;
         Ok(())
     }
 
@@ -579,13 +573,14 @@ impl PlanningArtifactLedger {
 
     fn load_original_embedding_artifact(
         &self,
-        artifact_ref: &OriginalItemArtifactRef,
+        block_id: BlockHash,
+        page_index: usize,
     ) -> Result<Vec<f32>, StreamingIndexerError> {
-        let page = self.load_original_embedding_page(&artifact_ref.block_id)?;
-        page.get(artifact_ref.page_index).cloned().ok_or_else(|| {
+        let page = self.load_original_embedding_page(&block_id)?;
+        page.get(page_index).cloned().ok_or_else(|| {
             StreamingIndexerError::PlanningArtifactResolution(format!(
                 "planning artifact {:?} is missing page index {}",
-                artifact_ref.block_id, artifact_ref.page_index
+                block_id, page_index
             ))
         })
     }
@@ -593,21 +588,124 @@ impl PlanningArtifactLedger {
     fn original_item_artifact_ref(
         &self,
         index: usize,
-    ) -> Result<OriginalItemArtifactRef, StreamingIndexerError> {
-        self.original_item_artifact_refs
-            .lock()
-            .map_err(|_| {
-                StreamingIndexerError::PlanningArtifactFailure(
-                    "planning artifact ledger lock was poisoned".into(),
-                )
-            })?
-            .get(index)
+    ) -> Result<(BlockHash, usize), StreamingIndexerError> {
+        let (page_ids, original_item_count) = self.original_item_artifact_layout()?;
+        if index >= original_item_count {
+            return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                "planning unit referenced missing original-item artifact at index {index}"
+            )));
+        }
+        let page_number = index / ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE;
+        let page_index = index % ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE;
+        page_ids
+            .get(page_number)
             .copied()
+            .map(|block_id| (block_id, page_index))
             .ok_or_else(|| {
                 StreamingIndexerError::PlanningArtifactResolution(format!(
                     "planning unit referenced missing original-item artifact at index {index}"
                 ))
             })
+    }
+
+    fn original_item_artifact_layout(
+        &self,
+    ) -> Result<(Vec<BlockHash>, usize), StreamingIndexerError> {
+        let state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact ledger lock was poisoned".into(),
+            )
+        })?;
+        Ok((
+            state.original_item_artifact_page_ids.clone(),
+            state.original_item_count,
+        ))
+    }
+
+    fn record_persisted_original_embedding_page(
+        &self,
+        block_id: BlockHash,
+        embedding_count: usize,
+    ) -> Result<(), StreamingIndexerError> {
+        let mut state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact ledger lock was poisoned".into(),
+            )
+        })?;
+        state.original_item_artifact_page_ids.push(block_id);
+        state.original_item_count += embedding_count;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn push_original_embedding_vec_locked(
+        &self,
+        embedding: Vec<f32>,
+    ) -> Result<(), StreamingIndexerError> {
+        let pending_page = {
+            let mut state = self.state.lock().map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?;
+            state.pending_original_embeddings.push(embedding);
+            (state.pending_original_embeddings.len() >= ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
+                .then(|| std::mem::take(&mut state.pending_original_embeddings))
+        };
+        if let Some(pending_page) = pending_page
+            && let Err(error) = self.persist_original_embedding_page(&pending_page)
+        {
+            self.restore_pending_original_embeddings(pending_page)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn push_original_embedding_vec_async_locked(
+        &self,
+        embedding: Vec<f32>,
+    ) -> Result<(), StreamingIndexerError> {
+        let pending_page = {
+            let mut state = self.state.lock().map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?;
+            state.pending_original_embeddings.push(embedding);
+            (state.pending_original_embeddings.len() >= ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
+                .then(|| std::mem::take(&mut state.pending_original_embeddings))
+        };
+        if let Some(pending_page) = pending_page
+            && let Err(error) = self
+                .persist_original_embedding_page_async(&pending_page)
+                .await
+        {
+            self.restore_pending_original_embeddings(pending_page)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn flush_pending_original_embeddings_locked(&self) -> Result<(), StreamingIndexerError> {
+        let pending_page = {
+            let mut state = self.state.lock().map_err(|_| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "planning artifact ledger lock was poisoned".into(),
+                )
+            })?;
+            if state.pending_original_embeddings.is_empty() {
+                None
+            } else {
+                Some(std::mem::take(&mut state.pending_original_embeddings))
+            }
+        };
+        if let Some(pending_page) = pending_page
+            && let Err(error) = self.persist_original_embedding_page(&pending_page)
+        {
+            self.restore_pending_original_embeddings(pending_page)?;
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
@@ -658,21 +756,17 @@ impl<'a> ArtifactReplayCache<'a> {
                 ))
             })
             .and_then(|index| self.artifacts.original_item_artifact_ref(index))?;
-        if self.current_page_id != Some(artifact_ref.block_id) {
-            self.current_page = self
-                .artifacts
-                .load_original_embedding_page(&artifact_ref.block_id)?;
-            self.current_page_id = Some(artifact_ref.block_id);
+        let (block_id, page_index) = artifact_ref;
+        if self.current_page_id != Some(block_id) {
+            self.current_page = self.artifacts.load_original_embedding_page(&block_id)?;
+            self.current_page_id = Some(block_id);
         }
-        self.current_page
-            .get(artifact_ref.page_index)
-            .cloned()
-            .ok_or_else(|| {
-                StreamingIndexerError::PlanningArtifactResolution(format!(
-                    "planning artifact {:?} is missing page index {}",
-                    artifact_ref.block_id, artifact_ref.page_index
-                ))
-            })
+        self.current_page.get(page_index).cloned().ok_or_else(|| {
+            StreamingIndexerError::PlanningArtifactResolution(format!(
+                "planning artifact {:?} is missing page index {}",
+                block_id, page_index
+            ))
+        })
     }
 }
 
@@ -2732,17 +2826,9 @@ where
             decoded_embeddings.push(decode_embedding_as_f32(embedding, &self.embedding_spec)?);
         }
         if persist_planning_artifacts {
-            let checkpoint = self.current_pass_artifacts.checkpoint()?;
-            for decoded in decoded_embeddings {
-                if let Err(error) = self
-                    .current_pass_artifacts
-                    .push_original_embedding_vec(decoded)
-                {
-                    self.current_pass_artifacts
-                        .rollback_to_checkpoint(checkpoint)?;
-                    return Err(error);
-                }
-            }
+            self.current_pass_artifacts
+                .append_original_embeddings_transactionally(decoded_embeddings)
+                .await?;
         } else {
             self.current_pass_f32_embeddings.extend(decoded_embeddings);
         }
@@ -8703,16 +8789,18 @@ mod tests {
             );
             assert!(
                 run.current_pass_artifacts
-                    .original_item_artifact_refs
+                    .state
                     .lock()
-                    .expect("artifact refs lock should remain usable")
+                    .expect("artifact state lock should remain usable")
+                    .original_item_artifact_page_ids
                     .is_empty()
             );
             assert!(
                 run.current_pass_artifacts
-                    .pending_original_embeddings
+                    .state
                     .lock()
-                    .expect("pending artifact lock should remain usable")
+                    .expect("artifact state lock should remain usable")
+                    .pending_original_embeddings
                     .is_empty()
             );
         });
