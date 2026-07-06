@@ -19,7 +19,7 @@
 //! ```
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -281,7 +281,7 @@ impl PlanningArtifactLedger {
 
     pub fn original_item_artifact_ids(&self) -> Result<Vec<BlockHash>, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
-        Ok(self
+        let artifact_refs = self
             .original_item_artifact_refs
             .lock()
             .map_err(|_| {
@@ -289,8 +289,14 @@ impl PlanningArtifactLedger {
                     "planning artifact ledger lock was poisoned".into(),
                 )
             })?
-            .iter()
-            .map(|artifact_ref| artifact_ref.block_id)
+            .clone();
+        let mut seen = HashSet::new();
+        Ok(artifact_refs
+            .into_iter()
+            .filter_map(|artifact_ref| {
+                seen.insert(artifact_ref.block_id)
+                    .then_some(artifact_ref.block_id)
+            })
             .collect())
     }
 
@@ -5200,7 +5206,7 @@ where
             StreamingIndexingStatusState::InProgress,
         ));
         groups = fallback_partition_groups(indices.len(), materializability_bound, None)
-            .map_err(map_clustering_configuration_error)?;
+            .map_err(StreamingIndexerError::HierarchyValidation)?;
     }
 
     let child_ids = (0..groups.len())
@@ -8350,11 +8356,7 @@ mod tests {
         let artifact_ids = artifacts
             .original_item_artifact_ids()
             .expect("artifact ids should be readable");
-        let unique_ids = artifact_ids
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        assert_eq!(unique_ids.len(), 2);
+        assert_eq!(artifact_ids.len(), 2);
         assert_eq!(
             artifacts
                 .load_embedding(ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE)
