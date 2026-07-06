@@ -449,14 +449,19 @@ impl PlanningArtifactLedger {
         indices: &[usize],
     ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
         self.flush_pending_original_embeddings()?;
+        let (page_ids, original_item_count) = self.original_item_artifact_layout()?;
         let mut artifact_refs = indices
             .iter()
             .enumerate()
             .map(|(output_index, &index)| {
-                let (block_id, page_index) = self.original_item_artifact_ref(index)?;
+                let (page_number, page_index, block_id) = Self::resolve_original_item_artifact_ref(
+                    index,
+                    page_ids.as_slice(),
+                    original_item_count,
+                )?;
                 Ok::<(usize, usize, usize, BlockHash), StreamingIndexerError>((
                     output_index,
-                    index / ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE,
+                    page_number,
                     page_index,
                     block_id,
                 ))
@@ -586,23 +591,17 @@ impl PlanningArtifactLedger {
         &self,
         index: usize,
     ) -> Result<(BlockHash, usize), StreamingIndexerError> {
-        let (page_ids, original_item_count) = self.original_item_artifact_layout()?;
-        if index >= original_item_count {
-            return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
-                "planning unit referenced missing original-item artifact at index {index}"
-            )));
-        }
-        let page_number = index / ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE;
-        let page_index = index % ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE;
-        page_ids
-            .get(page_number)
-            .copied()
-            .map(|block_id| (block_id, page_index))
-            .ok_or_else(|| {
-                StreamingIndexerError::PlanningArtifactResolution(format!(
-                    "planning unit referenced missing original-item artifact at index {index}"
-                ))
-            })
+        let state = self.state.lock().map_err(|_| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "planning artifact ledger lock was poisoned".into(),
+            )
+        })?;
+        let (_, page_index, block_id) = Self::resolve_original_item_artifact_ref(
+            index,
+            state.original_item_artifact_page_ids.as_slice(),
+            state.original_item_count,
+        )?;
+        Ok((block_id, page_index))
     }
 
     fn original_item_artifact_layout(
@@ -617,6 +616,29 @@ impl PlanningArtifactLedger {
             state.original_item_artifact_page_ids.clone(),
             state.original_item_count,
         ))
+    }
+
+    fn resolve_original_item_artifact_ref(
+        index: usize,
+        page_ids: &[BlockHash],
+        original_item_count: usize,
+    ) -> Result<(usize, usize, BlockHash), StreamingIndexerError> {
+        if index >= original_item_count {
+            return Err(StreamingIndexerError::PlanningArtifactResolution(format!(
+                "planning unit referenced missing original-item artifact at index {index}"
+            )));
+        }
+        let page_number = index / ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE;
+        let page_index = index % ORIGINAL_EMBEDDINGS_PER_ARTIFACT_PAGE;
+        page_ids
+            .get(page_number)
+            .copied()
+            .map(|block_id| (page_number, page_index, block_id))
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactResolution(format!(
+                    "planning unit referenced missing original-item artifact at index {index}"
+                ))
+            })
     }
 
     fn record_persisted_original_embedding_page(
@@ -724,6 +746,8 @@ fn embedding_spec_dimensions(
 struct ArtifactReplayCache<'a> {
     artifacts: &'a PlanningArtifactLedger,
     indices: &'a [usize],
+    page_ids: Vec<BlockHash>,
+    original_item_count: usize,
     current_page_id: Option<BlockHash>,
     current_page: Vec<Vec<f32>>,
 }
@@ -734,9 +758,12 @@ impl<'a> ArtifactReplayCache<'a> {
         indices: &'a [usize],
     ) -> Result<Self, StreamingIndexerError> {
         artifacts.flush_pending_original_embeddings()?;
+        let (page_ids, original_item_count) = artifacts.original_item_artifact_layout()?;
         Ok(Self {
             artifacts,
             indices,
+            page_ids,
+            original_item_count,
             current_page_id: None,
             current_page: Vec::new(),
         })
@@ -752,8 +779,14 @@ impl<'a> ArtifactReplayCache<'a> {
                     "planning replay referenced missing position {position}"
                 ))
             })
-            .and_then(|index| self.artifacts.original_item_artifact_ref(index))?;
-        let (block_id, page_index) = artifact_ref;
+            .and_then(|index| {
+                PlanningArtifactLedger::resolve_original_item_artifact_ref(
+                    index,
+                    self.page_ids.as_slice(),
+                    self.original_item_count,
+                )
+            })?;
+        let (_, page_index, block_id) = artifact_ref;
         if self.current_page_id != Some(block_id) {
             self.current_page = self.artifacts.load_original_embedding_page(&block_id)?;
             self.current_page_id = Some(block_id);

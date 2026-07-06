@@ -48,12 +48,13 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_5_2, PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4,
     PUBLISHED_PROFILE_V0_5_5, PUBLISHED_PROFILE_V0_6_0, PUBLISHED_PROFILE_V0_6_1,
     PUBLISHED_PROFILE_V0_6_2, PUBLISHED_PROFILE_V0_6_3, PUBLISHED_PROFILE_V0_6_4,
-    PUBLISHED_PROFILE_V0_6_5, PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy,
-    PublishedHierarchyMetric, PublishedPlanningStrategy, PublishedProfilePlanningPolicy,
-    PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
-    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
-    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, published_indexing_profile,
+    PUBLISHED_PROFILE_V0_6_5, PlanningArtifactLedger, PlanningPassOutcome, PlanningStage,
+    PublishedBranchEncodingPolicy, PublishedHierarchyMetric, PublishedPlanningStrategy,
+    PublishedProfilePlanningPolicy, PublishedProfileVersion,
+    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
+    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
+    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -738,6 +739,55 @@ impl HierarchicalPlanningPolicy for FixedHierarchyPlanningPolicy {
             planning_balance_direction: MetricDirection::SmallerIsBetter,
             stages_used: [PlanningStage::Custom].into_iter().collect(),
         })
+    }
+}
+
+#[derive(Default)]
+struct MissingArtifactPlanningPolicy {
+    planning_artifacts: Option<PlanningArtifactLedger>,
+}
+
+impl HierarchicalPlanningPolicy for MissingArtifactPlanningPolicy {
+    type Error = StreamingIndexerError;
+
+    fn uses_planning_artifacts(&self) -> bool {
+        true
+    }
+
+    fn install_planning_artifacts(&mut self, artifacts: PlanningArtifactLedger) {
+        self.planning_artifacts = Some(artifacts);
+    }
+
+    fn planning_artifacts_installed(&self) -> bool {
+        self.planning_artifacts.is_some()
+    }
+
+    fn finish_planning_pass(
+        &mut self,
+        _embeddings: &[Vec<f32>],
+        _embedding_spec: &EmbeddingSpec,
+        _materializability_bound: usize,
+        _block_size_target: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let artifacts = self.planning_artifacts.as_ref().ok_or_else(|| {
+            StreamingIndexerError::PlanningArtifactFailure(
+                "missing planning artifacts in test policy".into(),
+            )
+        })?;
+        let mut missing = artifacts
+            .original_item_artifact_ids()?
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                StreamingIndexerError::PlanningArtifactFailure(
+                    "expected at least one persisted planning artifact".into(),
+                )
+            })?
+            .into_bytes();
+        missing[0] ^= 0xFF;
+        let missing = BlockHash::from_bytes(missing);
+        let _ = artifacts.load_embedding_artifact(&missing)?;
+        unreachable!("loading a missing artifact should fail explicitly")
     }
 }
 
@@ -4781,6 +4831,43 @@ fn val_stream_indexer_100_all_profiles_resolve_deterministically_with_0_6_ladder
             published_indexing_profile(version).unwrap()
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_104_missing_planning_artifacts_fail_explicitly() {
+    let validation = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap()
+            .join("docs")
+            .join("specs")
+            .join("rust-streaming-indexer-crate")
+            .join("validation.md"),
+    )
+    .unwrap();
+    assert!(
+        markdown_section(&validation, "VAL-STREAM-INDEXER-104")
+            .contains("fails explicitly before claiming successful")
+    );
+
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        MissingArtifactPlanningPolicy::default(),
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&[item("alpha"), item("bravo")])
+        .await
+        .unwrap();
+
+    let error = run.finish_pass().unwrap_err();
+    assert!(matches!(
+        error,
+        StreamingIndexerError::PlanningArtifactResolution(_)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
