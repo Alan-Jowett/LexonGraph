@@ -5010,22 +5010,22 @@ async fn val_stream_indexer_105_v0_7_0_cluster_count_override_preserves_branch_e
     }
 }
 
-#[test]
-fn val_stream_indexer_106_derived_profile_execution_does_not_mutate_published_mapping() {
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_106_derived_profile_execution_does_not_mutate_published_mapping() {
     let baseline = published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap();
-    let mut expected = baseline.clone();
-    expected.version = PublishedProfileVersion::new(0, 7, 99);
     let derived = override_profile_cluster_count(baseline.clone(), 32);
 
     assert_ne!(derived, baseline);
+    let _ = materialize_resolved_profile_root(derived).await;
     assert_eq!(
         published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
         baseline
     );
-    assert_ne!(
-        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
-        expected
-    );
+    assert!(matches!(
+        published_indexing_profile(PublishedProfileVersion::new(0, 7, 99)),
+        Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version))
+            if version == PublishedProfileVersion::new(0, 7, 99)
+    ));
 }
 
 #[test]
@@ -5063,6 +5063,35 @@ fn val_stream_indexer_107_derived_profiles_enforce_materializability_constraints
         message.contains("block-size/materializability bound"),
         "unexpected error: {message}"
     );
+}
+
+#[test]
+fn regression_resolved_published_profile_requires_supported_version() {
+    let mut profile = published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap();
+    profile.version = PublishedProfileVersion::new(9, 9, 9);
+
+    let error = match StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_resolved_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        profile,
+        embedding_spec_f32(),
+        6000,
+    ) {
+        Ok(_) => panic!("resolved published profile path should reject unsupported versions"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(version)
+            if version == PublishedProfileVersion::new(9, 9, 9)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]

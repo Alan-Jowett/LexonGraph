@@ -1913,6 +1913,7 @@ impl<R, CR, EP>
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
     ) -> Result<Self, StreamingIndexerError> {
+        let _ = published_indexing_profile(profile.version)?;
         validate_published_profile_configuration(&profile, &embedding_spec, block_size_target)?;
         let branch_encoding_policy = branch_encoding_policy_for_profile(&profile);
         Ok(Self::new_with_branch_encoding(
