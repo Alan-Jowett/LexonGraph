@@ -48,12 +48,13 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_5_2, PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4,
     PUBLISHED_PROFILE_V0_5_5, PUBLISHED_PROFILE_V0_6_0, PUBLISHED_PROFILE_V0_6_1,
     PUBLISHED_PROFILE_V0_6_2, PUBLISHED_PROFILE_V0_6_3, PUBLISHED_PROFILE_V0_6_4,
-    PUBLISHED_PROFILE_V0_6_5, PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy,
-    PublishedHierarchyMetric, PublishedPlanningStrategy, PublishedProfilePlanningPolicy,
-    PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
-    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
-    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, published_indexing_profile,
+    PUBLISHED_PROFILE_V0_6_5, PUBLISHED_PROFILE_V0_7_0, PlanningPassOutcome, PlanningStage,
+    PublishedBranchEncodingPolicy, PublishedHierarchyMetric, PublishedPlanningStrategy,
+    PublishedProfilePlanningPolicy, PublishedProfileVersion,
+    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
+    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
+    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -4781,6 +4782,128 @@ fn val_stream_indexer_100_all_profiles_resolve_deterministically_with_0_6_ladder
             published_indexing_profile(version).unwrap()
         );
     }
+}
+
+#[test]
+fn val_stream_indexer_101_published_profile_v0_7_0_matches_v0_6_5_contract() {
+    let baseline = published_indexing_profile(PUBLISHED_PROFILE_V0_6_5).unwrap();
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap();
+    let mut expected = baseline.clone();
+    expected.version = PUBLISHED_PROFILE_V0_7_0;
+
+    assert_directional_pca_published_profile(
+        PUBLISHED_PROFILE_V0_7_0,
+        64,
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+            binning_policy: DirectionalPcaBinningPolicy::Quantile,
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+            variance_exponent: 1.0,
+            temperature: 1.0,
+            min_input_count: 2,
+            min_effective_rank: 1,
+            min_cumulative_variance: 0.0,
+        },
+    );
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_7_0,
+        PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+            root_bits: 12,
+            interior_bits: 8,
+            lowest_routing_bits: 6,
+        },
+    );
+    assert_eq!(profile, expected);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_102_published_profile_v0_7_0_uses_ambient_uniform_quantization_budget()
+{
+    assert_directional_pca_profile_branch_policy(
+        PUBLISHED_PROFILE_V0_7_0,
+        PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+            root_bits: 12,
+            interior_bits: 8,
+            lowest_routing_bits: 6,
+        },
+    );
+    let (store, result) = materialize_profile_root(PUBLISHED_PROFILE_V0_7_0).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "ambient-delta-uq");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert!(descriptor.rotation.is_none());
+            match descriptor.quantization.unwrap() {
+                EbcpQuantization::Uniform { bit_width, .. } => assert_eq!(bit_width, 12),
+                other => panic!("unexpected quantization: {other:?}"),
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[test]
+fn val_stream_indexer_103_all_profiles_resolve_deterministically_with_v0_7_0_included() {
+    let baseline_0_6_5 = published_indexing_profile(PUBLISHED_PROFILE_V0_6_5).unwrap();
+    let baseline_0_5_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_5_0).unwrap();
+
+    for version in [
+        PUBLISHED_PROFILE_V0_1_0,
+        PUBLISHED_PROFILE_V0_2_0,
+        PUBLISHED_PROFILE_V0_3_0,
+        PUBLISHED_PROFILE_V0_3_1,
+        PUBLISHED_PROFILE_V0_3_2,
+        PUBLISHED_PROFILE_V0_3_3,
+        PUBLISHED_PROFILE_V0_3_4,
+        PUBLISHED_PROFILE_V0_3_5,
+        PUBLISHED_PROFILE_V0_3_6,
+        PUBLISHED_PROFILE_V0_3_7,
+        PUBLISHED_PROFILE_V0_3_8,
+        PUBLISHED_PROFILE_V0_3_9,
+        PUBLISHED_PROFILE_V0_3_10,
+        PUBLISHED_PROFILE_V0_4_0,
+        PUBLISHED_PROFILE_V0_4_1,
+        PUBLISHED_PROFILE_V0_4_2,
+        PUBLISHED_PROFILE_V0_4_3,
+        PUBLISHED_PROFILE_V0_4_4,
+        PUBLISHED_PROFILE_V0_4_5,
+        PUBLISHED_PROFILE_V0_4_6,
+        PUBLISHED_PROFILE_V0_4_7,
+        PUBLISHED_PROFILE_V0_4_8,
+        PUBLISHED_PROFILE_V0_4_9,
+        PUBLISHED_PROFILE_V0_5_0,
+        PUBLISHED_PROFILE_V0_5_1,
+        PUBLISHED_PROFILE_V0_5_2,
+        PUBLISHED_PROFILE_V0_5_3,
+        PUBLISHED_PROFILE_V0_5_4,
+        PUBLISHED_PROFILE_V0_5_5,
+        PUBLISHED_PROFILE_V0_6_0,
+        PUBLISHED_PROFILE_V0_6_1,
+        PUBLISHED_PROFILE_V0_6_2,
+        PUBLISHED_PROFILE_V0_6_3,
+        PUBLISHED_PROFILE_V0_6_4,
+        PUBLISHED_PROFILE_V0_6_5,
+        PUBLISHED_PROFILE_V0_7_0,
+    ] {
+        assert_eq!(
+            published_indexing_profile(version).unwrap(),
+            published_indexing_profile(version).unwrap()
+        );
+    }
+
+    assert_eq!(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_6_5).unwrap(),
+        baseline_0_6_5
+    );
+    assert_eq!(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_5_0).unwrap(),
+        baseline_0_5_0
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

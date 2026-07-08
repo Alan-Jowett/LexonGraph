@@ -624,6 +624,7 @@ pub const PUBLISHED_PROFILE_V0_6_2: PublishedProfileVersion = PublishedProfileVe
 pub const PUBLISHED_PROFILE_V0_6_3: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 3);
 pub const PUBLISHED_PROFILE_V0_6_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 4);
 pub const PUBLISHED_PROFILE_V0_6_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 5);
+pub const PUBLISHED_PROFILE_V0_7_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 7, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -1263,6 +1264,23 @@ pub fn published_indexing_profile(
             },
         )),
         PUBLISHED_PROFILE_V0_6_5 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
+        PUBLISHED_PROFILE_V0_7_0 => Ok(directional_pca_published_profile(
             version,
             64,
             directional_pca_published_profile_params(

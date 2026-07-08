@@ -1109,6 +1109,36 @@ When a `0.6.x` profile emits an EBCP-encoded non-leaf block, the emitted block
 shall conform to both `docs/protocol/blocks.md` and `docs/protocol/ebcp.md`,
 including the required `ext` metadata for the selected EBCP encoding.
 
+### REQ-STREAM-INDEXER-113
+
+The repository shall publish indexing profile `0.7.0` alongside the existing
+published indexing profiles.
+
+Published profile `0.7.0` shall remain explicitly resolvable through the stable
+published-profile selector and shall not mutate the declared mapping of any
+`0.1.x` through `0.6.x` published profile.
+
+### REQ-STREAM-INDEXER-114
+
+Published indexing profile `0.7.0` shall define the baseline contract for the
+`0.7.x` line.
+
+It shall preserve the `0.6.5` fanout-capped topology contract, the same
+directional-PCA planning parameters, the EBCP encoding `ambient-delta-uq`, the
+uniform non-leaf quantization widths `12`, `8`, and `6` bits on the root,
+interior, and lowest routing non-leaf levels respectively, and the absence of
+rotation metadata.
+
+### REQ-STREAM-INDEXER-115
+
+When published profile `0.7.0` emits an EBCP-encoded non-leaf block, the
+emitted block shall conform to both `docs/protocol/blocks.md` and
+`docs/protocol/ebcp.md`, including the required `ext` metadata for the selected
+EBCP encoding.
+
+Repeated resolution of published profile `0.7.0` shall remain deterministic and
+independently addressable alongside the `0.6.x` ladder.
+
 ## Out of Scope
 
 This crate does not define or own:

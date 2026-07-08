@@ -1194,3 +1194,36 @@ and selecting any `0.6.x` profile does not mutate the declared mapping of
 `0.5.0` or any earlier published profile.
 
 **Traces to:** REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-111
+
+### VAL-STREAM-INDEXER-101
+
+Resolve published indexing profiles `0.6.5` and `0.7.0` through the convenience
+surface.
+
+**Pass condition:** the selected `0.7.0` profile resolves successfully and
+exposes the same directional-PCA planning parameters, fanout-capped topology
+contract, and ambient `12/8/6` non-leaf branch encoding contract as `0.6.5`.
+
+**Traces to:** REQ-STREAM-INDEXER-114
+
+### VAL-STREAM-INDEXER-102
+
+Materialize a representative root under published indexing profile `0.7.0`.
+
+**Pass condition:** the authored branch block uses EBCP `ambient-delta-uq`,
+emits no rotation metadata, and uses the expected root-level uniform
+quantization width.
+
+**Traces to:** REQ-STREAM-INDEXER-114, REQ-STREAM-INDEXER-115
+
+### VAL-STREAM-INDEXER-103
+
+Resolve the full published profile set, including `0.7.0`, more than once under
+identical conditions.
+
+**Pass condition:** `0.7.0` resolution remains deterministic, the profile
+remains explicitly addressable alongside the `0.6.x` ladder, and selecting
+`0.7.0` does not mutate the declared mapping of `0.6.5` or any earlier
+published profile.
+
+**Traces to:** REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-115

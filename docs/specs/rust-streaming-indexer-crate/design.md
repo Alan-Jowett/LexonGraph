@@ -1066,6 +1066,33 @@ the indexer writes blocks that remain valid under `docs/protocol/blocks.md` and
 carry all protocol-required EBCP metadata in `ext` so a search reader can
 interpret the branch embeddings without out-of-band state.
 
+### DSG-STREAM-INDEXER-107 `0.7.0 publication boundary`
+
+Published indexing profile `0.7.0` is added alongside the existing ladders
+rather than replacing them.
+
+The published-profile resolver therefore remains an explicit exact-match catalog
+whose `0.7.0` entry is independently addressable without rewriting any `0.6.x`
+mapping.
+
+### DSG-STREAM-INDEXER-108 `Indexing profile 0.7.0 mapping`
+
+Published indexing profile `0.7.0` resolves to the `0.6.5` contract.
+
+It preserves the same directional-PCA planning parameters, fanout-capped
+topology rule, EBCP encoding `ambient-delta-uq`, uniform per-dimension
+quantization widths of `12`, `8`, and `6` bits on the root, interior, and
+lowest routing non-leaf levels respectively, and absence of rotation metadata.
+
+### DSG-STREAM-INDEXER-109 `0.7.0 protocol and determinism contract`
+
+When the selected `0.7.0` published profile emits EBCP-encoded branch blocks,
+the indexer writes blocks that remain valid under `docs/protocol/blocks.md` and
+carry all protocol-required EBCP metadata in `ext`.
+
+Repeated resolution of `0.7.0` remains deterministic and does not mutate the
+declared mapping of `0.6.5` or any earlier published profile.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1162,4 +1189,7 @@ interpret the branch embeddings without out-of-band state.
 | DSG-STREAM-INDEXER-104 | REQ-STREAM-INDEXER-109, REQ-STREAM-INDEXER-111 |
 | DSG-STREAM-INDEXER-105 | REQ-STREAM-INDEXER-103, REQ-STREAM-INDEXER-111 |
 | DSG-STREAM-INDEXER-106 | REQ-STREAM-INDEXER-111, REQ-STREAM-INDEXER-112 |
+| DSG-STREAM-INDEXER-107 | REQ-STREAM-INDEXER-113 |
+| DSG-STREAM-INDEXER-108 | REQ-STREAM-INDEXER-114 |
+| DSG-STREAM-INDEXER-109 | REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-115 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |
