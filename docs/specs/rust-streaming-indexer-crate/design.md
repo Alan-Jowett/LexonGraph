@@ -1093,6 +1093,39 @@ carry all protocol-required EBCP metadata in `ext`.
 Repeated resolution of `0.7.0` remains deterministic and does not mutate the
 declared mapping of `0.6.5` or any earlier published profile.
 
+### DSG-STREAM-INDEXER-110 `Derived published-profile execution surface`
+
+The crate exposes a caller-visible execution surface that accepts a
+caller-supplied `PublishedIndexingProfile` value derived from an already
+resolved published profile.
+
+That surface routes the supplied profile through the same repository-owned
+planning and materialization pipeline used by version-selected published
+profiles.
+
+### DSG-STREAM-INDEXER-111 `Cluster-count override preservation rule`
+
+For a derived configuration whose planning strategy includes `cluster_count`,
+the execution surface preserves the originating profile's branch-encoding
+policy, summary policy, hierarchy strategy, and materialization flow while
+applying the caller-supplied `cluster_count` override to the planning settings
+that own it.
+
+### DSG-STREAM-INDEXER-112 `Published-contract isolation for derived variants`
+
+Derived variants are treated as caller-owned runtime configurations rather than
+implicit new published profiles.
+
+Exact-match published profile resolution therefore remains deterministic, and
+executing a derived variant does not rewrite the meaning of the originating
+published profile version.
+
+### DSG-STREAM-INDEXER-113 `Derived-profile validation parity`
+
+The derived-profile execution surface applies the same compatibility and
+materializability checks as the version-selected published-profile surface,
+using the caller-supplied overridden values where applicable.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1192,4 +1225,8 @@ declared mapping of `0.6.5` or any earlier published profile.
 | DSG-STREAM-INDEXER-107 | REQ-STREAM-INDEXER-113 |
 | DSG-STREAM-INDEXER-108 | REQ-STREAM-INDEXER-114 |
 | DSG-STREAM-INDEXER-109 | REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-115 |
+| DSG-STREAM-INDEXER-110 | REQ-STREAM-INDEXER-116 |
+| DSG-STREAM-INDEXER-111 | REQ-STREAM-INDEXER-117 |
+| DSG-STREAM-INDEXER-112 | REQ-STREAM-INDEXER-118 |
+| DSG-STREAM-INDEXER-113 | REQ-STREAM-INDEXER-119 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |

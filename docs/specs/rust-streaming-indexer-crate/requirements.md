@@ -1139,6 +1139,41 @@ EBCP encoding.
 Repeated resolution of published profile `0.7.0` shall remain deterministic and
 independently addressable alongside the `0.6.x` ladder.
 
+### REQ-STREAM-INDEXER-116
+
+The crate shall provide a caller-visible API path that accepts a caller-owned
+indexing configuration derived from a resolved published profile.
+
+That path shall allow downstream callers to execute local experiments without
+manually re-specifying the originating profile's planning, packing, summary, or
+branch-encoding behavior.
+
+### REQ-STREAM-INDEXER-117
+
+For published profiles whose planning strategy includes `cluster_count`, the
+caller-visible derived-profile path shall allow the caller to override
+`cluster_count` while preserving the originating profile's remaining published
+semantics unless the caller changes them explicitly.
+
+This includes preserving the originating profile's branch-encoding policy,
+finalized-partition abstraction, and materialization behavior.
+
+### REQ-STREAM-INDEXER-118
+
+Caller-local overrides derived from a resolved published profile shall not
+mutate the declared mapping of the originating published profile version and
+shall not silently redefine any published contract.
+
+They shall remain caller-owned experimental configurations rather than new
+implicit published profiles.
+
+### REQ-STREAM-INDEXER-119
+
+When the crate executes a caller-derived configuration based on a resolved
+published profile, it shall enforce the same compatibility and materializability
+constraints that would apply to the originating published semantics, except
+where the caller's explicit override changes the checked value itself.
+
 ## Out of Scope
 
 This crate does not define or own:
