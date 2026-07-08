@@ -1897,6 +1897,22 @@ impl<R, CR, EP>
         block_size_target: usize,
     ) -> Result<Self, StreamingIndexerError> {
         let profile = published_indexing_profile(profile_version)?;
+        Self::with_resolved_published_profile(
+            resolver,
+            embedding_provider,
+            profile,
+            embedding_spec,
+            block_size_target,
+        )
+    }
+
+    pub fn with_resolved_published_profile(
+        resolver: CR,
+        embedding_provider: EP,
+        profile: PublishedIndexingProfile,
+        embedding_spec: EmbeddingSpec,
+        block_size_target: usize,
+    ) -> Result<Self, StreamingIndexerError> {
         validate_published_profile_configuration(&profile, &embedding_spec, block_size_target)?;
         let branch_encoding_policy = branch_encoding_policy_for_profile(&profile);
         Ok(Self::new_with_branch_encoding(
@@ -1925,7 +1941,7 @@ fn validate_published_profile_configuration(
             profile.version
         )));
     }
-    if !matches!((major, minor), (0, 4) | (0, 5) | (0, 6)) {
+    if !matches!((major, minor), (0, 4) | (0, 5) | (0, 6) | (0, 7)) {
         return Ok(());
     }
 

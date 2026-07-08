@@ -49,8 +49,8 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_5_5, PUBLISHED_PROFILE_V0_6_0, PUBLISHED_PROFILE_V0_6_1,
     PUBLISHED_PROFILE_V0_6_2, PUBLISHED_PROFILE_V0_6_3, PUBLISHED_PROFILE_V0_6_4,
     PUBLISHED_PROFILE_V0_6_5, PUBLISHED_PROFILE_V0_7_0, PlanningPassOutcome, PlanningStage,
-    PublishedBranchEncodingPolicy, PublishedHierarchyMetric, PublishedPlanningStrategy,
-    PublishedProfilePlanningPolicy, PublishedProfileVersion,
+    PublishedBranchEncodingPolicy, PublishedHierarchyMetric, PublishedIndexingProfile,
+    PublishedPlanningStrategy, PublishedProfilePlanningPolicy, PublishedProfileVersion,
     SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
     StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
@@ -3425,6 +3425,53 @@ async fn materialize_profile_root(
     (store, result)
 }
 
+async fn materialize_resolved_profile_root(
+    profile: PublishedIndexingProfile,
+) -> (
+    MemoryBlockStore,
+    lexongraph_streaming_indexer::StreamingIndexingResult,
+) {
+    let items = vec![item("aa"), item("bb"), item("cc"), item("dd")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_resolved_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        profile,
+        embedding_spec_f32(),
+        6000,
+    )
+    .unwrap();
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    (store, result)
+}
+
+fn override_profile_cluster_count(
+    mut profile: PublishedIndexingProfile,
+    cluster_count: u32,
+) -> PublishedIndexingProfile {
+    match &mut profile.planning_strategy {
+        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
+            settings.cluster_count = cluster_count;
+        }
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+            settings.cluster_count = cluster_count;
+        }
+    }
+    profile
+}
+
 async fn materialize_string_profile(
     version: PublishedProfileVersion,
     items: &[IndexItem<String>],
@@ -4903,6 +4950,118 @@ fn val_stream_indexer_103_all_profiles_resolve_deterministically_with_v0_7_0_inc
     assert_eq!(
         published_indexing_profile(PUBLISHED_PROFILE_V0_5_0).unwrap(),
         baseline_0_5_0
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_104_resolved_profile_variants_execute_without_manual_policy_rewiring() {
+    let profile = override_profile_cluster_count(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
+        32,
+    );
+    let items = (0..220)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: format!("item-{index:03}"),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRun::<
+        String,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_resolved_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        profile,
+        embedding_spec_f32(),
+        6000,
+    )
+    .unwrap();
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let report = run.finish_pass().unwrap();
+    assert_eq!(report.requested_planning_cluster_count, Some(32));
+    assert_eq!(report.realized_planning_cluster_count, Some(32));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_105_v0_7_0_cluster_count_override_preserves_branch_encoding() {
+    let profile = override_profile_cluster_count(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
+        4,
+    );
+    let (store, result) = materialize_resolved_profile_root(profile).await;
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "ambient-delta-uq");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert!(descriptor.rotation.is_none());
+            match descriptor.quantization.unwrap() {
+                EbcpQuantization::Uniform { bit_width, .. } => assert_eq!(bit_width, 12),
+                other => panic!("unexpected quantization: {other:?}"),
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[test]
+fn val_stream_indexer_106_derived_profile_execution_does_not_mutate_published_mapping() {
+    let baseline = published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap();
+    let mut expected = baseline.clone();
+    expected.version = PublishedProfileVersion::new(0, 7, 99);
+    let derived = override_profile_cluster_count(baseline.clone(), 32);
+
+    assert_ne!(derived, baseline);
+    assert_eq!(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
+        baseline
+    );
+    assert_ne!(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn val_stream_indexer_107_derived_profiles_enforce_materializability_constraints() {
+    let profile = override_profile_cluster_count(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
+        128,
+    );
+    let result = StreamingIndexingRun::<
+        &'static str,
+        _,
+        _,
+        ExactCentroidChildSummaryPolicy,
+        PublishedProfilePlanningPolicy,
+    >::with_resolved_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        profile,
+        embedding_spec_f32(),
+        128,
+    );
+    let error: StreamingIndexerError = match result {
+        Ok(_) => {
+            panic!("derived 0.7.0 variant should fail when cluster_count exceeds materializability")
+        }
+        Err(error) => error,
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("published profile 0.7.0 requires cluster_count 128"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("block-size/materializability bound"),
+        "unexpected error: {message}"
     );
 }
 

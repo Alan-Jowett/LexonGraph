@@ -1227,3 +1227,48 @@ remains explicitly addressable alongside the `0.6.x` ladder, and selecting
 published profile.
 
 **Traces to:** REQ-STREAM-INDEXER-113, REQ-STREAM-INDEXER-115
+
+### VAL-STREAM-INDEXER-104
+
+Resolve a published indexing profile, derive a caller-owned variant from it,
+and execute that derived variant through the caller-visible surface.
+
+**Pass condition:** the derived variant is accepted without requiring the caller
+to restate the originating profile's branch-encoding, summary, or
+materialization policies manually.
+
+**Traces to:** REQ-STREAM-INDEXER-116
+
+### VAL-STREAM-INDEXER-105
+
+Start from published indexing profile `0.7.0`, override only `cluster_count`,
+and materialize a representative fixture.
+
+**Pass condition:** the run preserves `0.7.0`'s non-overridden semantics,
+including `ambient-delta-uq` branch encoding and the existing fanout-capped
+topology/materialization behavior, while reflecting the caller-supplied
+effective planning cluster count.
+
+**Traces to:** REQ-STREAM-INDEXER-117
+
+### VAL-STREAM-INDEXER-106
+
+Resolve a published indexing profile before and after executing one or more
+caller-derived variants from it.
+
+**Pass condition:** the original published profile still resolves
+deterministically to the same declared mapping, and the derived variants are
+not treated as new implicit published versions.
+
+**Traces to:** REQ-STREAM-INDEXER-118
+
+### VAL-STREAM-INDEXER-107
+
+Execute a caller-derived variant whose overridden `cluster_count` conflicts with
+the applicable materializability bound or profile compatibility rules.
+
+**Pass condition:** the derived-profile path fails explicitly under the same
+class of compatibility and materializability checks as the version-selected
+published-profile path, rather than bypassing validation.
+
+**Traces to:** REQ-STREAM-INDEXER-119
