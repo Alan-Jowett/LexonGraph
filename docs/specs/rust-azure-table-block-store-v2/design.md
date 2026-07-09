@@ -11,7 +11,7 @@ Draft design specification for `lexongraph-block-store-azure-table-v2`.
 The crate design is intended to be:
 
 - subordinate to the backend-neutral `BlockStore` contract
-- deterministic in its mapping from block ID to Azure Table entity keys
+- deterministic in its mapping from block ID to Azure Table row keys
 - compatible with real Azure Table responses for single-block reads and writes
 - explicit about backend failures and deterministic multi-row oversized-block
   support

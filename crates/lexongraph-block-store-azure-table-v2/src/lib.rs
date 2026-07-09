@@ -35,8 +35,8 @@ const AZURE_TABLE_API_VERSION: &str = "2019-02-02";
 const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
 
-static ROOT_ROW_CAPACITY_BYTES: OnceLock<usize> = OnceLock::new();
-static CONTINUATION_ROW_CAPACITY_BYTES: OnceLock<usize> = OnceLock::new();
+static ROOT_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
+static CONTINUATION_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct AzureTableBlockStoreV2 {
@@ -800,7 +800,13 @@ impl TableBlockEntityMetadata {
                 self.partition_key, self.row_key
             )
         })?;
-        if row_count == 0 || row_count > MAX_ROW_COUNT {
+        if row_count == 0 {
+            return Err(format!(
+                "failed to inspect Azure Table row {} / {}: RowCount must be positive",
+                self.partition_key, self.row_key
+            ));
+        }
+        if row_count > MAX_ROW_COUNT {
             return Err(format!(
                 "failed to inspect Azure Table row {} / {}: RowCount exceeds the supported limit",
                 self.partition_key, self.row_key
@@ -1373,14 +1379,17 @@ fn chunk_property_name(index: usize) -> String {
 
 fn max_supported_row_payload_bytes(row_index: usize, max_chunks: usize) -> usize {
     let cache = if row_index == 0 {
-        &ROOT_ROW_CAPACITY_BYTES
+        &ROOT_ROW_CAPACITY_BY_CHUNK_COUNT
     } else {
-        &CONTINUATION_ROW_CAPACITY_BYTES
+        &CONTINUATION_ROW_CAPACITY_BY_CHUNK_COUNT
     };
-    if max_chunks == MAX_CHUNK_PROPERTY_COUNT {
-        return *cache.get_or_init(|| simulated_row_capacity_bytes(row_index, max_chunks));
-    }
-    simulated_row_capacity_bytes(row_index, max_chunks)
+    cache.get_or_init(|| precompute_row_capacity_bytes(row_index))[max_chunks]
+}
+
+fn precompute_row_capacity_bytes(row_index: usize) -> Vec<usize> {
+    (0..=MAX_CHUNK_PROPERTY_COUNT)
+        .map(|max_chunks| simulated_row_capacity_bytes(row_index, max_chunks))
+        .collect()
 }
 
 fn simulated_row_capacity_bytes(row_index: usize, max_chunks: usize) -> usize {
@@ -2051,6 +2060,26 @@ mod tests {
             format!("{zero_len_error}")
                 .contains("zero ByteLen requires a single zero-chunk root row")
         );
+
+        let zero_row_count_backend = Arc::new(MockTableBackend::default());
+        let zero_row_count_store = test_store(zero_row_count_backend.clone());
+        zero_row_count_backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![TableBlockEntityMetadata {
+                    partition_key: "cdef".into(),
+                    row_key: format!("cdef{}", "22".repeat(30)),
+                    schema_version: Some(ENTITY_SCHEMA_VERSION),
+                    byte_len: Some(1),
+                    row_count: Some(0),
+                    row_index: Some(0),
+                    chunk_count: Some(1),
+                }],
+                continuation: None,
+            },
+        );
+        let zero_row_count_error = block_on(zero_row_count_store.list_block_ids()).unwrap_err();
+        assert!(format!("{zero_row_count_error}").contains("RowCount must be positive"));
 
         let missing_row_backend = Arc::new(MockTableBackend::default());
         let missing_row_store = test_store(missing_row_backend.clone());

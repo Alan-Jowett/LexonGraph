@@ -24,7 +24,7 @@ fn live_azure_round_trip_missing_enumeration_multi_chunk_and_multi_row_match_the
     let first = sample_leaf_block("live-first");
     let second = sample_leaf_block("live-second");
     let multi_chunk = sample_leaf_block(&"m".repeat(50_000));
-    let multi_row = sample_leaf_block(&"r".repeat(700_000));
+    let multi_row = sample_leaf_block(&"r".repeat(900_000));
     let first_id = block_on(store.put(&first)).unwrap();
     let second_id = block_on(store.put(&second)).unwrap();
     let multi_chunk_id = block_on(store.put(&multi_chunk)).unwrap();
