@@ -699,6 +699,12 @@ impl TableBlockEntityMetadata {
                 self.partition_key, self.row_key
             ));
         }
+        if expected_len == 0 && chunk_count != 0 {
+            return Err(format!(
+                "failed to inspect Azure Table entity {} / {}: zero ByteLen requires zero chunks",
+                self.partition_key, self.row_key
+            ));
+        }
         if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
             return Err(format!(
                 "failed to inspect Azure Table entity {} / {}: ChunkCount exceeds the supported per-entity limit",
@@ -839,6 +845,11 @@ impl TableBlockEntity {
         if chunk_count == 0 && expected_len != 0 {
             return Err(decode_failure(
                 "Azure Table block entity declared non-zero ByteLen with zero chunks",
+            ));
+        }
+        if expected_len == 0 && chunk_count != 0 {
+            return Err(decode_failure(
+                "Azure Table block entity declared zero ByteLen with non-zero chunks",
             ));
         }
         if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
@@ -1426,6 +1437,24 @@ mod tests {
         );
         let missing_error = block_on(missing_store.list_block_ids()).unwrap_err();
         assert!(format!("{missing_error}").contains("missing SchemaVersion"));
+
+        let zero_len_backend = Arc::new(MockTableBackend::default());
+        let zero_len_store = test_store(zero_len_backend.clone());
+        zero_len_backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![TableBlockEntityMetadata {
+                    partition_key: "dcba".into(),
+                    row_key: format!("dcba{}", "11".repeat(30)),
+                    schema_version: Some(ENTITY_SCHEMA_VERSION),
+                    byte_len: Some(0),
+                    chunk_count: Some(1),
+                }],
+                continuation: None,
+            },
+        );
+        let zero_len_error = block_on(zero_len_store.list_block_ids()).unwrap_err();
+        assert!(format!("{zero_len_error}").contains("zero ByteLen requires zero chunks"));
     }
 
     #[test]
@@ -1586,6 +1615,14 @@ mod tests {
         entity.byte_len = i64::try_from(RAW_CHUNK_SIZE + 1).unwrap();
         assert!(matches!(
             entity.decode_block_bytes(&block_id).unwrap_err(),
+            BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
+        ));
+
+        let mut zero_len_entity = TableBlockEntity::from_block_bytes(&block_id, b"ok").unwrap();
+        zero_len_entity.chunk_count = 1;
+        zero_len_entity.byte_len = 0;
+        assert!(matches!(
+            zero_len_entity.decode_block_bytes(&block_id).unwrap_err(),
             BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
         ));
     }
