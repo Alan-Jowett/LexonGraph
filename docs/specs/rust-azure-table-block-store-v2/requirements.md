@@ -30,23 +30,29 @@ Storage URL that addresses a specific table root and carries one or more
 shared-access-signature query parameters, including a non-empty signature
 parameter.
 
-`Recognized block-entity candidate` means an Azure Table entity whose key shape
-matches the deterministic block layout for this crate:
+`Recognized block-root candidate` means an Azure Table entity whose key shape
+matches the deterministic root-row layout for this crate:
 
 - `PartitionKey`: the first four lowercase hexadecimal characters of the block
   ID
 - `RowKey`: the full lowercase hexadecimal block ID
 
-A recognized block-entity candidate becomes a recognized block entity only when
-the `RowKey` is a full valid lowercase block ID and the `PartitionKey` matches
-the first four lowercase hexadecimal characters of that block ID.
+A recognized block-root candidate becomes a recognized block root only when the
+`RowKey` is a full valid lowercase block ID and the `PartitionKey` matches the
+first four lowercase hexadecimal characters of that block ID.
 
-`v2 chunked entity format` means the single-entity representation owned by this
+`v2 chunked row-set format` means the multi-row representation owned by this
 crate revision:
 
-- metadata properties sufficient to reconstruct the canonical block bytes
-- deterministic payload properties named `chunk0`, `chunk1`, `chunk2`, ...
-- chunk ordering defined by ascending numeric suffix
+- one deterministic root row identified directly by the block ID
+- zero or more deterministic continuation rows identified by the block ID plus a
+  row ordinal suffix
+- metadata sufficient to reconstruct the canonical block bytes across the full
+  row set
+- deterministic payload properties named `chunk0`, `chunk1`, `chunk2`, ... in
+  each physical row
+- row ordering defined by ascending row ordinal
+- intra-row chunk ordering defined by ascending numeric chunk suffix
 
 ## Requirements
 
@@ -87,34 +93,44 @@ SAS URL.
 ### REQ-AZURE-TABLE-STORE-V2-004
 
 `put` shall derive the canonical block bytes and block ID through the block
-crate and map that block ID to exactly one deterministic Azure Table entity key
+crate and map that block ID to exactly one deterministic Azure Table row set
 within the configured table.
 
 ### REQ-AZURE-TABLE-STORE-V2-005
 
-This revision shall use the deterministic entity-key layout:
+This revision shall use the deterministic row-key layout:
 
 - `PartitionKey`: first four lowercase hexadecimal characters of the block ID
 - `RowKey`: full lowercase hexadecimal block ID
 
+For continuation rows in the same logical block row set:
+
+- `PartitionKey`: the same first four lowercase hexadecimal characters of the
+  block ID
+- `RowKey`: the full lowercase hexadecimal block ID followed by a deterministic
+  row ordinal suffix
+
 The consumer-facing runtime contract shall not require callers to know that
-entity-key layout.
+row-key layout.
 
 ### REQ-AZURE-TABLE-STORE-V2-006
 
-`get` shall return `Ok(None)` when the mapped block entity is absent.
+`get` shall return `Ok(None)` when the mapped block root is absent, including
+when orphan continuation rows exist without that root row.
 
-When the mapped block entity is present, `get` shall reconstruct the stored
-canonical bytes from the v2 chunked entity format and validate those bytes
+When the mapped block root is present, `get` shall reconstruct the stored
+canonical bytes from the v2 chunked row-set format and validate those bytes
 against the requested block ID before reporting success.
 
-`get` shall be total over the mapped entity state:
+`get` shall be total over the mapped recognized row-set state:
 
 - present readable valid content for the requested block ID shall return
   `Ok(Some(validated_block))`
-- present readable malformed entity payload, including missing `chunkN`
-  properties, malformed chunk values, malformed chunk metadata, or inconsistent
-  reconstructed byte length, shall fail explicitly as malformed content
+- present readable malformed row-set payload, including missing expected
+  continuation rows, duplicate or out-of-range row ordinals, missing `chunkN`
+  properties within a row, malformed chunk values, malformed cross-row
+  metadata, or inconsistent reconstructed byte length, shall fail explicitly as
+  malformed content
 - present readable content whose verified identity differs from the requested
   block ID shall fail explicitly as an integrity-mismatch condition
 - present unreadable or otherwise inaccessible content shall fail explicitly as
@@ -123,16 +139,20 @@ against the requested block ID before reporting success.
 ### REQ-AZURE-TABLE-STORE-V2-007
 
 `put` shall attempt a create-without-overwrite publication of the canonical
-block bytes to the deterministic entity key, and it shall not overwrite any
-previously published entity for that block ID.
+block bytes to the deterministic row set, and it shall not overwrite any
+previously published row in that row set for that block ID.
 
-If publication observes that the deterministic entity already exists, whether
+If publication observes that the deterministic root row already exists, whether
 before or after a concurrent publication race, `put` shall return success.
 
 This success outcome does not require `put` to re-read or re-validate the
-existing entity bytes against the requested block ID. Any later `get` remains
+existing row-set bytes against the requested block ID. Any later `get` remains
 responsible for validating that the reconstructed bytes hash to the requested
 block ID and shall fail explicitly if they do not.
+
+This revision shall treat the root row as the publication commit point for a
+recognized block. Continuation rows written without a corresponding root row do
+not constitute a published block and shall not be enumerated as one.
 
 ### REQ-AZURE-TABLE-STORE-V2-008
 
@@ -146,13 +166,13 @@ succeeded.
 ### REQ-AZURE-TABLE-STORE-V2-009
 
 Concurrent publishers of the same logical block to the same Azure table may
-race, but the implementation shall converge on one valid published entity for
+race, but the implementation shall converge on one valid published row set for
 that block ID.
 
 ### REQ-AZURE-TABLE-STORE-V2-010
 
 The Azure Table-backed implementation shall implement the parent trait's
-streaming block-ID enumeration over recognized block entities rooted at the
+streaming block-ID enumeration over recognized block roots rooted at the
 configured table.
 
 ### REQ-AZURE-TABLE-STORE-V2-011
@@ -163,35 +183,42 @@ other Azure-specific addressing details.
 
 ### REQ-AZURE-TABLE-STORE-V2-012
 
-Azure Table enumeration shall report only recognized block entities.
+Azure Table enumeration shall report only recognized block roots.
 
 It shall not report unrelated entities or other table artifacts as stored block
 IDs.
 
+It shall not report continuation rows as independent stored blocks.
+
 ### REQ-AZURE-TABLE-STORE-V2-013
 
 Azure Table enumeration shall surface explicit backend failure when entity
-listing, payload inspection, or decoding of a recognized block-entity candidate
+listing, payload inspection, or decoding of a recognized block-root candidate
 into a valid block ID cannot be completed.
 
 This explicit failure rule includes malformed candidate keys, shard-prefix
-mismatches, and malformed v2 chunked-entity metadata encountered during
-enumeration.
+mismatches, malformed continuation-row layout, and malformed v2 chunked row-set
+metadata encountered during enumeration.
 
 ### REQ-AZURE-TABLE-STORE-V2-014
 
-This revision shall store each logical block entirely within one Azure Table
-entity using the v2 chunked entity format.
+This revision shall store each logical block as one deterministic Azure Table
+row set using the v2 chunked row-set format.
 
-The implementation shall not fragment one logical block across multiple Azure
-Table entities and shall not silently fall back to a different backend for
-oversized blocks.
+The row set shall contain one root row plus zero or more continuation rows.
+
+Small supported blocks may fit entirely within the root row. Larger supported
+blocks may span multiple rows. The implementation shall not silently fall back
+to a different backend for oversized blocks.
 
 ### REQ-AZURE-TABLE-STORE-V2-015
 
-The v2 chunked entity format shall use deterministic payload properties named
-`chunk0`, `chunk1`, `chunk2`, ... and a chunk ordering defined by ascending
-numeric suffix.
+The v2 chunked row-set format shall use deterministic payload properties named
+`chunk0`, `chunk1`, `chunk2`, ... within each row and a chunk ordering defined
+by ascending numeric suffix.
+
+The format shall also use deterministic row ordering across the root row and
+continuation rows.
 
 For any successful publication, each stored chunk property value shall conform
 to the real Azure Table service limits applicable to accepted property values
@@ -200,11 +227,11 @@ for this representation.
 ### REQ-AZURE-TABLE-STORE-V2-016
 
 `put` shall fail explicitly before publication when the canonical block bytes
-and required storage metadata, encoded using this revision's v2 chunked entity
-format, cannot fit within one Azure Table entity under the documented Azure
-Table service limits applicable to this revision, including the per-entity size
-limit and the accepted per-property value-size limit for the stored
-representation.
+and required storage metadata, encoded using this revision's v2 chunked row-set
+format, cannot fit within the supported deterministic row-set layout under the
+documented Azure Table service limits applicable to this revision, including
+the per-row property-count limit, the per-row entity/property-footprint limit,
+and the accepted per-property value-size limit for the stored representation.
 
 ### REQ-AZURE-TABLE-STORE-V2-017
 
@@ -224,25 +251,28 @@ the shared `BlockStore` contract by exercising:
 - construction from a valid table SAS URL
 - successful publication of a valid block through `put`
 - successful retrieval of that block through `get`
-- `Ok(None)` for a block whose mapped entity is absent
+- `Ok(None)` for a block whose mapped root row is absent
 - streaming block-ID enumeration for blocks published by the test
 - successful publication and retrieval of a block whose canonical bytes require
-  more than one `chunkN` property in the v2 chunked entity format
+  more than one `chunkN` property within one row in the v2 chunked row-set
+  format
+- successful publication and retrieval of a block whose canonical bytes require
+  more than one Azure Table row in the v2 chunked row-set format
 - idempotent success when re-publishing a block that is already present
 
 ### REQ-AZURE-TABLE-STORE-V2-019
 
-If Azure publish transport fails before `put` receives a backend response, the
-implementation shall retry that same deterministic insert request using a
-bounded retry policy.
+If Azure publish transport fails before `put` receives a backend response for a
+deterministic row insert, the implementation shall retry that same deterministic
+row insert using a bounded retry policy.
 
 If a later retry reaches a backend response, `put` shall continue applying the
 same success, idempotence, already-published, and explicit-failure rules that
-govern a single publish attempt.
+govern row-set publication.
 
-If the bounded retry policy is exhausted without any publish attempt reaching a
-backend response, `put` shall fail explicitly as a backend failure and shall
-not report success for that block ID.
+If the bounded retry policy is exhausted before the publication commit point is
+reached, `put` shall fail explicitly as a backend failure and shall not report
+success for that block ID.
 
 ### REQ-AZURE-TABLE-STORE-V2-020
 
@@ -278,7 +308,7 @@ already-exists, and explicit backend-failure outcomes.
 The repository shall provide a mock-backed verification surface for
 `lexongraph-block-store-azure-table-v2` that can simulate Azure publish, read,
 and query outcomes; inject malformed or integrity-mismatched recognized block
-entities in the v2 chunked entity format; and observe constructor behavior
+row sets in the v2 chunked row-set format; and observe constructor behavior
 without requiring a live Azure table.
 
 This mock-backed verification surface shall remain internal or test-only and
@@ -291,10 +321,9 @@ This crate does not define or own:
 - block canonicalization, block validity, or block-ID derivation rules
 - changes to the parent `BlockStore` API
 - consumer-visible Azure-specific table layout beyond the inherited block-ID
-  contract and the v2 chunked entity format owned by this crate
+  contract and the v2 chunked row-set format owned by this crate
 - deletion, mutation, compaction, lease management, or lifecycle policy
 - automatic table creation or other IaC concerns
-- multi-entity block fragmentation
 - compatibility with, migration from, or mutation of entities owned by
   `lexongraph-block-store-azure-table`
 - non-Azure storage backends
