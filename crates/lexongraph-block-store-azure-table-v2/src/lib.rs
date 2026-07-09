@@ -20,7 +20,7 @@ use tokio::time::sleep;
 use url::Url;
 
 const ENTITY_SCHEMA_VERSION: i32 = 2;
-const MAX_ENTITY_SERIALIZED_BYTES: usize = 1_048_576;
+const MAX_ENTITY_PROPERTY_BYTES: usize = 1_048_576;
 const MAX_PROPERTY_COUNT: usize = 255;
 const FIXED_ENTITY_PROPERTY_COUNT: usize = 5;
 const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ENTITY_PROPERTY_COUNT;
@@ -754,7 +754,7 @@ impl TableBlockEntity {
             let encoded = BASE64.encode(chunk);
             if encoded.len() > MAX_STRING_PROPERTY_CHARS {
                 return Err(backend_failure(format!(
-                    "block {} cannot be encoded into one Azure Table entity in {}: chunk {} requires {} characters and exceeds the per-property limit of {}",
+                    "block {} cannot be encoded into one Azure Table entity under PartitionKey={}: chunk {} requires {} characters and exceeds the per-property limit of {}",
                     block_id,
                     partition_key,
                     index,
@@ -792,18 +792,16 @@ impl TableBlockEntity {
             )));
         }
 
-        let serialized = serde_json::to_vec(&entity).map_err(|error| {
+        let property_bytes = entity.encoded_property_bytes().map_err(|message| {
             backend_failure(format!(
-                "failed to encode Azure Table entity for block {}: {}",
-                block_id, error
+                "failed to estimate Azure Table entity size for block {}: {}",
+                block_id, message
             ))
         })?;
-        if serialized.len() > MAX_ENTITY_SERIALIZED_BYTES {
+        if property_bytes > MAX_ENTITY_PROPERTY_BYTES {
             return Err(backend_failure(format!(
-                "block {} cannot fit within one Azure Table entity because the encoded entity requires {} bytes and the limit is {}",
-                block_id,
-                serialized.len(),
-                MAX_ENTITY_SERIALIZED_BYTES
+                "block {} cannot fit within one Azure Table entity because the property data requires {} bytes and the limit is {}",
+                block_id, property_bytes, MAX_ENTITY_PROPERTY_BYTES
             )));
         }
 
@@ -905,6 +903,38 @@ impl TableBlockEntity {
     fn recognized_block_id(&self) -> Result<Option<BlockHash>, String> {
         decode_recognized_block_entity_keys(&self.partition_key, &self.row_key)
     }
+
+    fn encoded_property_bytes(&self) -> Result<usize, &'static str> {
+        let mut total = 0usize;
+        total = checked_entity_property_bytes(
+            total,
+            string_property_bytes("PartitionKey", &self.partition_key),
+        )?;
+        total =
+            checked_entity_property_bytes(total, string_property_bytes("RowKey", &self.row_key))?;
+        if let Some(schema_version) = self.schema_version {
+            total = checked_entity_property_bytes(
+                total,
+                primitive_property_bytes("SchemaVersion", std::mem::size_of_val(&schema_version)),
+            )?;
+        }
+        if let Some(byte_len) = self.byte_len {
+            total = checked_entity_property_bytes(
+                total,
+                primitive_property_bytes("ByteLen", std::mem::size_of_val(&byte_len)),
+            )?;
+        }
+        if let Some(chunk_count) = self.chunk_count {
+            total = checked_entity_property_bytes(
+                total,
+                primitive_property_bytes("ChunkCount", std::mem::size_of_val(&chunk_count)),
+            )?;
+        }
+        for (name, value) in &self.chunk_properties {
+            total = checked_entity_property_bytes(total, string_property_bytes(name, value))?;
+        }
+        Ok(total)
+    }
 }
 
 fn decode_recognized_block_entity_keys(
@@ -927,6 +957,24 @@ fn decode_recognized_block_entity_keys(
 
 fn chunk_property_name(index: usize) -> String {
     format!("chunk{index}")
+}
+
+fn checked_entity_property_bytes(current: usize, additional: usize) -> Result<usize, &'static str> {
+    current
+        .checked_add(additional)
+        .ok_or("Azure Table entity property size overflowed usize")
+}
+
+fn string_property_bytes(name: &str, value: &str) -> usize {
+    utf16_bytes(name) + utf16_bytes(value)
+}
+
+fn primitive_property_bytes(name: &str, value_bytes: usize) -> usize {
+    utf16_bytes(name) + value_bytes
+}
+
+fn utf16_bytes(value: &str) -> usize {
+    value.encode_utf16().count() * 2
 }
 
 fn has_non_empty_query_param(url: &Url, name: &str) -> bool {
@@ -1572,6 +1620,14 @@ mod tests {
         block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
         let loaded = block_on(store.get_block_bytes(&block_id)).unwrap().unwrap();
         assert_eq!(loaded, bytes);
+    }
+
+    #[test]
+    fn entity_size_limit_uses_azure_property_footprint() {
+        let block_id = BlockHash::from_bytes([0x78; 32]);
+        let bytes = vec![0xab; RAW_CHUNK_SIZE * 16];
+        let error = TableBlockEntity::from_block_bytes(&block_id, &bytes).unwrap_err();
+        assert!(format!("{error}").contains("property data requires"));
     }
 
     #[test]

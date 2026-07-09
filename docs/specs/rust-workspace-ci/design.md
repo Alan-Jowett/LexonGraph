@@ -150,6 +150,11 @@ retrieve a key for the isolated temporary storage account after successful OIDC
 authentication and use it only to derive the temporary test SAS needed for that
 run.
 
+For the current Azure Table live-test surface, the workflow uses that temporary
+account key only to create the isolated table and to mint a table-scoped SAS
+with the minimum permissions required by the test flow, avoiding additional
+table-specific data-plane RBAC assumptions for the federated identity.
+
 ### DSG-CI-024 `Ephemeral resource lifecycle`
 
 After authenticating to Azure, the live-verification job provisions isolated

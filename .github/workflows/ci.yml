@@ -222,6 +222,14 @@ jobs:
             --https-only true \
             --output none
 
+          account_key="$(
+            az storage account keys list \
+              --account-name "$storage_account" \
+              --resource-group "$resource_group" \
+              --query '[0].value' \
+              --output tsv
+          )"
+
           az storage container create \
             --account-name "$storage_account" \
             --name "$container_name" \
@@ -231,7 +239,7 @@ jobs:
           az storage table create \
             --account-name "$storage_account" \
             --name "$table_name" \
-            --auth-mode login \
+            --account-key "$account_key" \
             --output none
 
           expiry="$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%MZ')"
@@ -247,20 +255,12 @@ jobs:
               --output tsv
           )"
           blob_sas_url="https://${storage_account}.blob.core.windows.net/${container_name}?${blob_sas}"
-          account_key="$(
-            az storage account keys list \
-              --account-name "$storage_account" \
-              --resource-group "$resource_group" \
-              --query '[0].value' \
-              --output tsv
-          )"
           table_sas="$(
-            az storage account generate-sas \
+            az storage table generate-sas \
               --account-name "$storage_account" \
+              --name "$table_name" \
               --account-key "$account_key" \
-              --services t \
-              --resource-types o \
-              --permissions rau \
+              --permissions ra \
               --expiry "$expiry" \
               --https-only \
               --output tsv
