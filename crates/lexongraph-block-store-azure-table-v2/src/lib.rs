@@ -83,6 +83,13 @@ impl AzureTableBlockStoreV2 {
         block_id: &BlockHash,
         row: &TableBlockEntity,
     ) -> Result<(), BlockStoreError> {
+        let row_context = describe_row_context(
+            row.row_index
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or_default(),
+            &row.partition_key,
+            &row.row_key,
+        );
         let mut attempts = 0usize;
         let mut delay = RETRY_INITIAL_DELAY;
         loop {
@@ -96,14 +103,14 @@ impl AzureTableBlockStoreV2 {
                 }
                 Err(TableBackendAttemptError::Transport(message)) => {
                     return Err(backend_failure(format!(
-                        "failed to publish block {} to Azure table {}: retry policy expired after {} attempts: {}",
-                        block_id, self.table_display, attempts, message
+                        "failed to publish block {} {} to Azure table {}: retry policy expired after {} attempts: {}",
+                        block_id, row_context, self.table_display, attempts, message
                     )));
                 }
                 Err(TableBackendAttemptError::Response(message)) => {
                     return Err(backend_failure(format!(
-                        "failed to publish block {} to Azure table {}: {}",
-                        block_id, self.table_display, message
+                        "failed to publish block {} {} to Azure table {}: {}",
+                        block_id, row_context, self.table_display, message
                     )));
                 }
             }
@@ -117,6 +124,7 @@ impl AzureTableBlockStoreV2 {
     ) -> Result<Option<TableBlockEntity>, BlockStoreError> {
         let partition_key = Self::partition_key(block_id);
         let row_key = row_key_for(block_id, row_index);
+        let row_context = describe_row_context(row_index, &partition_key, &row_key);
         let mut attempts = 0usize;
         let mut delay = RETRY_INITIAL_DELAY;
         loop {
@@ -130,20 +138,20 @@ impl AzureTableBlockStoreV2 {
                 }
                 Err(TableBackendAttemptError::Transport(message)) => {
                     return Err(backend_failure(format!(
-                        "failed to read block {} from Azure table {}: retry policy expired after {} attempts: {}",
-                        block_id, self.table_display, attempts, message
+                        "failed to read block {} {} from Azure table {}: retry policy expired after {} attempts: {}",
+                        block_id, row_context, self.table_display, attempts, message
                     )));
                 }
                 Err(TableBackendAttemptError::Response(message)) => {
                     return Err(backend_failure(format!(
-                        "failed to read block {} from Azure table {}: {}",
-                        block_id, self.table_display, message
+                        "failed to read block {} {} from Azure table {}: {}",
+                        block_id, row_context, self.table_display, message
                     )));
                 }
                 Err(TableBackendAttemptError::AlreadyExists(message)) => {
                     return Err(backend_failure(format!(
-                        "unexpected already-existing result while reading block {} from Azure table {}: {}",
-                        block_id, self.table_display, message
+                        "unexpected already-existing result while reading block {} {} from Azure table {}: {}",
+                        block_id, row_context, self.table_display, message
                     )));
                 }
             }
@@ -924,23 +932,32 @@ impl TableBlockEntity {
         let total_len = block_bytes.len();
         let mut chunk_rows: Vec<Vec<&[u8]>> = Vec::new();
         let mut current_row: Vec<&[u8]> = Vec::new();
+        let mut current_row_property_bytes = fixed_row_property_bytes(block_id, 0);
         for chunk in all_chunks {
-            current_row.push(chunk);
-            if Self::from_row_chunks(block_id, total_len, 1, chunk_rows.len(), &current_row).is_ok()
-            {
+            if let Some(next_row_property_bytes) = try_extend_row_property_bytes(
+                current_row_property_bytes,
+                current_row.len(),
+                chunk.len(),
+            ) {
+                current_row.push(chunk);
+                current_row_property_bytes = next_row_property_bytes;
                 continue;
             }
-            let overflow_chunk = current_row
-                .pop()
-                .expect("current_row is non-empty after push");
             if current_row.is_empty() {
-                return Err(backend_failure(format!(
-                    "block {} cannot fit within one Azure Table row because a single chunk exceeds the row limits",
-                    block_id
-                )));
+                Self::from_row_chunks(block_id, total_len, 1, chunk_rows.len(), &[chunk])?;
+                unreachable!("single-row validation unexpectedly accepted oversized chunk");
             }
             chunk_rows.push(current_row);
-            current_row = vec![overflow_chunk];
+            current_row = Vec::new();
+            current_row_property_bytes = fixed_row_property_bytes(block_id, chunk_rows.len());
+            let Some(next_row_property_bytes) =
+                try_extend_row_property_bytes(current_row_property_bytes, 0, chunk.len())
+            else {
+                Self::from_row_chunks(block_id, total_len, 1, chunk_rows.len(), &[chunk])?;
+                unreachable!("single-row validation unexpectedly accepted oversized chunk");
+            };
+            current_row.push(chunk);
+            current_row_property_bytes = next_row_property_bytes;
         }
         chunk_rows.push(current_row);
         if chunk_rows.len() > MAX_ROW_COUNT {
@@ -1355,6 +1372,10 @@ fn row_key_for(block_id: &BlockHash, row_index: usize) -> String {
     }
 }
 
+fn describe_row_context(row_index: usize, partition_key: &str, row_key: &str) -> String {
+    format!("row {} ({}/{})", row_index, partition_key, row_key)
+}
+
 fn decode_recognized_block_root_keys(
     partition_key: &str,
     row_key: &str,
@@ -1377,6 +1398,40 @@ fn chunk_property_name(index: usize) -> String {
     format!("chunk{index}")
 }
 
+fn fixed_row_property_bytes(block_id: &BlockHash, row_index: usize) -> usize {
+    let partition_key = partition_key_for(block_id);
+    let row_key = row_key_for(block_id, row_index);
+    string_property_bytes("PartitionKey", &partition_key)
+        + string_property_bytes("RowKey", &row_key)
+        + primitive_property_bytes("SchemaVersion", std::mem::size_of::<i32>())
+        + primitive_property_bytes("ByteLen", std::mem::size_of::<i64>())
+        + primitive_property_bytes("RowCount", std::mem::size_of::<i32>())
+        + primitive_property_bytes("RowIndex", std::mem::size_of::<i32>())
+        + primitive_property_bytes("ChunkCount", std::mem::size_of::<i32>())
+}
+
+fn base64_encoded_len(raw_len: usize) -> usize {
+    raw_len.div_ceil(3) * 4
+}
+
+fn additional_chunk_property_bytes(chunk_index: usize, raw_len: usize) -> Option<usize> {
+    let encoded_len = base64_encoded_len(raw_len);
+    if encoded_len > MAX_STRING_PROPERTY_CHARS {
+        return None;
+    }
+    Some(utf16_bytes(&chunk_property_name(chunk_index)) + (encoded_len * 2))
+}
+
+fn try_extend_row_property_bytes(
+    current_bytes: usize,
+    chunk_index: usize,
+    raw_len: usize,
+) -> Option<usize> {
+    let additional = additional_chunk_property_bytes(chunk_index, raw_len)?;
+    let candidate = current_bytes.checked_add(additional)?;
+    (candidate <= MAX_ROW_PROPERTY_BYTES).then_some(candidate)
+}
+
 fn max_supported_row_payload_bytes(row_index: usize, max_chunks: usize) -> usize {
     let cache = if row_index == 0 {
         &ROOT_ROW_CAPACITY_BY_CHUNK_COUNT
@@ -1394,29 +1449,22 @@ fn precompute_row_capacity_bytes(row_index: usize) -> Vec<usize> {
 
 fn simulated_row_capacity_bytes(row_index: usize, max_chunks: usize) -> usize {
     let block_id = BlockHash::from_bytes([0_u8; BlockHash::LEN]);
-    let full_chunk = vec![0_u8; RAW_CHUNK_SIZE];
-    let mut row_chunks: Vec<&[u8]> = Vec::new();
     let mut total_len = 0usize;
+    let mut property_bytes = fixed_row_property_bytes(&block_id, row_index);
+    let mut chunk_count = 0usize;
 
-    while row_chunks.len() < max_chunks {
-        row_chunks.push(full_chunk.as_slice());
-        if TableBlockEntity::from_row_chunks(
-            &block_id,
-            total_len + RAW_CHUNK_SIZE,
-            1,
-            row_index,
-            &row_chunks,
-        )
-        .is_ok()
-        {
-            total_len += RAW_CHUNK_SIZE;
-            continue;
-        }
-        row_chunks.pop();
-        break;
+    while chunk_count < max_chunks {
+        let Some(next_bytes) =
+            try_extend_row_property_bytes(property_bytes, chunk_count, RAW_CHUNK_SIZE)
+        else {
+            break;
+        };
+        property_bytes = next_bytes;
+        chunk_count += 1;
+        total_len += RAW_CHUNK_SIZE;
     }
 
-    if row_chunks.len() == max_chunks {
+    if chunk_count == max_chunks {
         return total_len;
     }
 
@@ -1424,18 +1472,7 @@ fn simulated_row_capacity_bytes(row_index: usize, max_chunks: usize) -> usize {
     let mut high = RAW_CHUNK_SIZE;
     while low < high {
         let candidate = (low + high).div_ceil(2);
-        let partial_chunk = vec![0_u8; candidate];
-        let mut candidate_chunks = row_chunks.clone();
-        candidate_chunks.push(partial_chunk.as_slice());
-        if TableBlockEntity::from_row_chunks(
-            &block_id,
-            total_len + candidate,
-            1,
-            row_index,
-            &candidate_chunks,
-        )
-        .is_ok()
-        {
+        if try_extend_row_property_bytes(property_bytes, chunk_count, candidate).is_some() {
             low = candidate;
         } else {
             high = candidate - 1;
@@ -1886,6 +1923,34 @@ mod tests {
             block_on(store.put_block_bytes(&BlockHash::from_bytes([0x11; 32]), &too_large))
                 .unwrap_err();
         assert!(format!("{too_large_error}").contains("supported Azure Table row-set layout"));
+    }
+
+    #[test]
+    fn publish_and_read_failures_include_row_context() {
+        let multi_row_block_id = BlockHash::from_bytes([0x13; 32]);
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let multi_row_bytes = vec![0xaa; single_row_limit + 1];
+
+        let publish_backend = Arc::new(MockTableBackend::default());
+        publish_backend.state.lock().unwrap().deny_insert = true;
+        let publish_store = test_store(publish_backend);
+        let publish_error =
+            block_on(publish_store.put_block_bytes(&multi_row_block_id, &multi_row_bytes))
+                .unwrap_err();
+        assert!(format!("{publish_error}").contains("row 1"));
+        assert!(format!("{publish_error}").contains(&format!("{multi_row_block_id}-0001")));
+
+        let read_backend = Arc::new(MockTableBackend::default());
+        let read_store = test_store(read_backend.clone());
+        for row in
+            TableBlockEntity::rows_from_block_bytes(&multi_row_block_id, &multi_row_bytes).unwrap()
+        {
+            read_backend.insert_entity(row);
+        }
+        read_backend.state.lock().unwrap().deny_get = true;
+        let read_error = block_on(read_store.get_block_bytes(&multi_row_block_id)).unwrap_err();
+        assert!(format!("{read_error}").contains("row 0"));
+        assert!(format!("{read_error}").contains(&multi_row_block_id.to_string()));
     }
 
     #[test]
