@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -34,6 +34,9 @@ const RETRY_MAX_ATTEMPTS: usize = 6;
 const AZURE_TABLE_API_VERSION: &str = "2019-02-02";
 const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
+
+static ROOT_ROW_CAPACITY_BYTES: OnceLock<usize> = OnceLock::new();
+static CONTINUATION_ROW_CAPACITY_BYTES: OnceLock<usize> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct AzureTableBlockStoreV2 {
@@ -156,7 +159,6 @@ impl AzureTableBlockStoreV2 {
             .validate_enumeration_payload()
             .map_err(backend_failure)?;
         let row_count = metadata.root_row_count().map_err(backend_failure)?;
-        let mut rows = Vec::with_capacity(row_count);
         for row_index in 0..row_count {
             let Some(row) = self.get_row_with_retries(block_id, row_index).await? else {
                 return Err(backend_failure(format!(
@@ -164,16 +166,24 @@ impl AzureTableBlockStoreV2 {
                     block_id, row_index
                 )));
             };
-            rows.push(row);
+            row.validate_row_identity(block_id, row_index)?;
+            let chunk_count = row
+                .validate_row_metadata(row_index, row_count, metadata.byte_len()?)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to inspect Azure Table block {} during enumeration: {}",
+                        block_id, error
+                    ))
+                })?;
+            row.validate_chunk_property_presence(chunk_count)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to inspect Azure Table block {} during enumeration: {}",
+                        block_id, error
+                    ))
+                })?;
         }
-        TableBlockEntity::decode_block_bytes(block_id, &rows)
-            .map(|_| ())
-            .map_err(|error| {
-                backend_failure(format!(
-                    "failed to inspect Azure Table block {} during enumeration: {}",
-                    block_id, error
-                ))
-            })
+        Ok(())
     }
 
     async fn fetch_page_with_retries(
@@ -863,6 +873,14 @@ impl TableBlockEntityMetadata {
             )
         })
     }
+
+    fn byte_len(&self) -> Result<usize, BlockStoreError> {
+        usize::try_from(
+            self.byte_len
+                .ok_or_else(|| decode_failure("Azure Table block row is missing ByteLen"))?,
+        )
+        .map_err(|_| decode_failure("Azure Table ByteLen must be non-negative and fit in usize"))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1149,7 +1167,7 @@ impl TableBlockEntity {
         let expected_row_key = row_key_for(expected_block_id, expected_row_index);
         if self.partition_key != expected_partition_key || self.row_key != expected_row_key {
             return Err(backend_failure(format!(
-                "Azure Table lookup for block {} row {} returned unrelated entity keys {} / {}",
+                "Azure Table lookup for block {} row {} returned unexpected row keys {} / {}",
                 expected_block_id, expected_row_index, self.partition_key, self.row_key
             )));
         }
@@ -1224,12 +1242,24 @@ impl TableBlockEntity {
                 "Azure Table non-zero block rows must declare at least one chunk",
             ));
         }
+        Ok(chunk_count)
+    }
+
+    fn validate_chunk_property_presence(&self, chunk_count: usize) -> Result<(), BlockStoreError> {
         if self.chunk_properties.len() < chunk_count {
             return Err(decode_failure(
                 "Azure Table block row is missing a required chunk property",
             ));
         }
-        Ok(chunk_count)
+        for index in 0..chunk_count {
+            let property_name = chunk_property_name(index);
+            if !self.chunk_properties.contains_key(&property_name) {
+                return Err(decode_failure(
+                    "Azure Table block row is missing a required chunk property",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn extend_decoded_row_bytes(
@@ -1237,6 +1267,7 @@ impl TableBlockEntity {
         chunk_count: usize,
         block_bytes: &mut Vec<u8>,
     ) -> Result<(), BlockStoreError> {
+        self.validate_chunk_property_presence(chunk_count)?;
         for index in 0..chunk_count {
             let property_name = chunk_property_name(index);
             let encoded = self.chunk_properties.get(&property_name).ok_or_else(|| {
@@ -1341,6 +1372,18 @@ fn chunk_property_name(index: usize) -> String {
 }
 
 fn max_supported_row_payload_bytes(row_index: usize, max_chunks: usize) -> usize {
+    let cache = if row_index == 0 {
+        &ROOT_ROW_CAPACITY_BYTES
+    } else {
+        &CONTINUATION_ROW_CAPACITY_BYTES
+    };
+    if max_chunks == MAX_CHUNK_PROPERTY_COUNT {
+        return *cache.get_or_init(|| simulated_row_capacity_bytes(row_index, max_chunks));
+    }
+    simulated_row_capacity_bytes(row_index, max_chunks)
+}
+
+fn simulated_row_capacity_bytes(row_index: usize, max_chunks: usize) -> usize {
     let block_id = BlockHash::from_bytes([0_u8; BlockHash::LEN]);
     let full_chunk = vec![0_u8; RAW_CHUNK_SIZE];
     let mut row_chunks: Vec<&[u8]> = Vec::new();
