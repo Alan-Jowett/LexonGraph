@@ -268,7 +268,7 @@ impl BlockStore for AzureTableBlockStoreV2 {
             return Ok(None);
         };
         let root_metadata = root_row.decode_root_metadata(block_id)?;
-        let mut rows = Vec::with_capacity(root_metadata.row_count);
+        let mut rows = Vec::new();
         rows.push(root_row);
         for row_index in 1..root_metadata.row_count {
             let Some(row) = self.get_row_with_retries(block_id, row_index).await? else {
@@ -837,6 +837,12 @@ impl TableBlockEntityMetadata {
                 self.partition_key, self.row_key
             ));
         }
+        if row_count > maximum_possible_rows(expected_len) {
+            return Err(format!(
+                "failed to inspect Azure Table row {} / {}: RowCount exceeds the maximum possible rows for ByteLen",
+                self.partition_key, self.row_key
+            ));
+        }
         let root_capacity = max_supported_row_payload_bytes(0, chunk_count);
         let continuation_capacity = row_count
             .checked_sub(1)
@@ -1103,6 +1109,11 @@ impl TableBlockEntity {
         if total_len != 0 && root_chunk_count == 0 {
             return Err(decode_failure(
                 "Azure Table non-zero block must include at least one root-row chunk",
+            ));
+        }
+        if row_count > maximum_possible_rows(total_len) {
+            return Err(decode_failure(
+                "Azure Table RowCount exceeds the maximum possible rows for ByteLen",
             ));
         }
         let root_capacity = max_supported_row_payload_bytes(0, root_chunk_count);
@@ -1415,6 +1426,14 @@ fn try_extend_row_property_bytes(
     let additional = additional_chunk_property_bytes(chunk_index, raw_len)?;
     let candidate = current_bytes.checked_add(additional)?;
     (candidate <= MAX_ROW_PROPERTY_BYTES).then_some(candidate)
+}
+
+fn maximum_possible_rows(total_len: usize) -> usize {
+    if total_len == 0 {
+        1
+    } else {
+        total_len.div_ceil(RAW_CHUNK_SIZE)
+    }
 }
 
 fn max_supported_row_payload_bytes(row_index: usize, max_chunks: usize) -> usize {
@@ -1888,7 +1907,7 @@ mod tests {
     }
 
     #[test]
-    fn put_handles_idempotence_permissions_and_oversized_blocks() {
+    fn put_handles_idempotence_and_permission_failures() {
         let backend = Arc::new(MockTableBackend::default());
         let store = test_store(backend.clone());
         let block = sample_leaf_block(10);
@@ -2120,6 +2139,30 @@ mod tests {
         );
         let zero_row_count_error = block_on(zero_row_count_store.list_block_ids()).unwrap_err();
         assert!(format!("{zero_row_count_error}").contains("RowCount must be positive"));
+
+        let impossible_row_count_backend = Arc::new(MockTableBackend::default());
+        let impossible_row_count_store = test_store(impossible_row_count_backend.clone());
+        impossible_row_count_backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![TableBlockEntityMetadata {
+                    partition_key: "beef".into(),
+                    row_key: format!("beef{}", "33".repeat(30)),
+                    schema_version: Some(ENTITY_SCHEMA_VERSION),
+                    byte_len: Some(1),
+                    row_count: Some(2),
+                    row_index: Some(0),
+                    chunk_count: Some(1),
+                }],
+                continuation: None,
+            },
+        );
+        let impossible_row_count_error =
+            block_on(impossible_row_count_store.list_block_ids()).unwrap_err();
+        assert!(
+            format!("{impossible_row_count_error}")
+                .contains("RowCount exceeds the maximum possible rows for ByteLen")
+        );
 
         let missing_row_backend = Arc::new(MockTableBackend::default());
         let missing_row_store = test_store(missing_row_backend.clone());
@@ -2359,6 +2402,16 @@ mod tests {
         missing_len_entity.byte_len = None;
         assert!(matches!(
             TableBlockEntity::decode_block_bytes(&block_id, &[missing_len_entity]).unwrap_err(),
+            BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
+        ));
+
+        let mut impossible_row_count_entity =
+            TableBlockEntity::from_block_bytes(&block_id, b"x").unwrap();
+        impossible_row_count_entity.row_count = Some(2);
+        assert!(matches!(
+            impossible_row_count_entity
+                .decode_root_metadata(&block_id)
+                .unwrap_err(),
             BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
         ));
     }
