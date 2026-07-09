@@ -22,6 +22,8 @@ use url::Url;
 const ENTITY_SCHEMA_VERSION: i32 = 2;
 const MAX_ENTITY_SERIALIZED_BYTES: usize = 1_048_576;
 const MAX_PROPERTY_COUNT: usize = 255;
+const FIXED_ENTITY_PROPERTY_COUNT: usize = 5;
+const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ENTITY_PROPERTY_COUNT;
 const MAX_STRING_PROPERTY_CHARS: usize = 32 * 1024;
 const RAW_CHUNK_SIZE: usize = 24_576;
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(250);
@@ -623,11 +625,11 @@ struct TableBlockEntityMetadata {
     #[serde(rename = "RowKey")]
     row_key: String,
     #[serde(rename = "SchemaVersion")]
-    schema_version: i32,
+    schema_version: Option<i32>,
     #[serde(rename = "ByteLen")]
-    byte_len: i64,
+    byte_len: Option<i64>,
     #[serde(rename = "ChunkCount")]
-    chunk_count: i32,
+    chunk_count: Option<i32>,
 }
 
 impl TableBlockEntityMetadata {
@@ -636,9 +638,9 @@ impl TableBlockEntityMetadata {
         Self {
             partition_key: entity.partition_key.clone(),
             row_key: entity.row_key.clone(),
-            schema_version: entity.schema_version,
-            byte_len: entity.byte_len,
-            chunk_count: entity.chunk_count,
+            schema_version: Some(entity.schema_version),
+            byte_len: Some(entity.byte_len),
+            chunk_count: Some(entity.chunk_count),
         }
     }
 
@@ -655,19 +657,37 @@ impl TableBlockEntityMetadata {
     }
 
     fn validate_enumeration_payload(&self) -> Result<(), String> {
-        if self.schema_version != ENTITY_SCHEMA_VERSION {
+        let schema_version = self.schema_version.ok_or_else(|| {
+            format!(
+                "failed to inspect Azure Table entity {} / {}: missing SchemaVersion",
+                self.partition_key, self.row_key
+            )
+        })?;
+        if schema_version != ENTITY_SCHEMA_VERSION {
             return Err(format!(
                 "failed to inspect Azure Table entity {} / {}: unsupported schema version {}",
-                self.partition_key, self.row_key, self.schema_version
+                self.partition_key, self.row_key, schema_version
             ));
         }
-        let expected_len = usize::try_from(self.byte_len).map_err(|_| {
+        let expected_len = usize::try_from(self.byte_len.ok_or_else(|| {
+            format!(
+                "failed to inspect Azure Table entity {} / {}: missing ByteLen",
+                self.partition_key, self.row_key
+            )
+        })?)
+        .map_err(|_| {
             format!(
                 "failed to inspect Azure Table entity {} / {}: ByteLen must be non-negative",
                 self.partition_key, self.row_key
             )
         })?;
-        let chunk_count = usize::try_from(self.chunk_count).map_err(|_| {
+        let chunk_count = usize::try_from(self.chunk_count.ok_or_else(|| {
+            format!(
+                "failed to inspect Azure Table entity {} / {}: missing ChunkCount",
+                self.partition_key, self.row_key
+            )
+        })?)
+        .map_err(|_| {
             format!(
                 "failed to inspect Azure Table entity {} / {}: ChunkCount must be non-negative",
                 self.partition_key, self.row_key
@@ -676,6 +696,26 @@ impl TableBlockEntityMetadata {
         if chunk_count == 0 && expected_len != 0 {
             return Err(format!(
                 "failed to inspect Azure Table entity {} / {}: non-zero ByteLen requires at least one chunk",
+                self.partition_key, self.row_key
+            ));
+        }
+        if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
+            return Err(format!(
+                "failed to inspect Azure Table entity {} / {}: ChunkCount exceeds the supported per-entity limit",
+                self.partition_key, self.row_key
+            ));
+        }
+        let max_possible_len = chunk_count
+            .checked_mul(RAW_CHUNK_SIZE)
+            .ok_or_else(|| {
+                format!(
+                    "failed to inspect Azure Table entity {} / {}: ChunkCount exceeds the supported per-entity limit",
+                    self.partition_key, self.row_key
+                )
+            })?;
+        if expected_len > max_possible_len {
+            return Err(format!(
+                "failed to inspect Azure Table entity {} / {}: ByteLen exceeds the capacity implied by ChunkCount",
                 self.partition_key, self.row_key
             ));
         }
@@ -738,7 +778,7 @@ impl TableBlockEntity {
             chunk_properties,
         };
 
-        let property_count = entity.chunk_properties.len() + 5;
+        let property_count = entity.chunk_properties.len() + FIXED_ENTITY_PROPERTY_COUNT;
         if property_count > MAX_PROPERTY_COUNT {
             return Err(backend_failure(format!(
                 "block {} cannot fit within one Azure Table entity because it requires {} properties and the limit is {}",
@@ -799,6 +839,24 @@ impl TableBlockEntity {
         if chunk_count == 0 && expected_len != 0 {
             return Err(decode_failure(
                 "Azure Table block entity declared non-zero ByteLen with zero chunks",
+            ));
+        }
+        if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
+            return Err(decode_failure(
+                "Azure Table block entity declared too many chunks",
+            ));
+        }
+        let max_possible_len = chunk_count
+            .checked_mul(RAW_CHUNK_SIZE)
+            .ok_or_else(|| decode_failure("Azure Table ChunkCount exceeds the supported limit"))?;
+        if expected_len > max_possible_len {
+            return Err(decode_failure(
+                "Azure Table block entity declared a ByteLen larger than ChunkCount can contain",
+            ));
+        }
+        if self.chunk_properties.len() < chunk_count {
+            return Err(decode_failure(
+                "Azure Table block entity is missing a required chunk property",
             ));
         }
 
@@ -868,7 +926,7 @@ fn http_date_now() -> String {
 }
 
 fn redact_reqwest_error(error: reqwest::Error) -> String {
-    error.to_string()
+    error.without_url().to_string()
 }
 
 fn describe_http_response(status: StatusCode, body: &str) -> String {
@@ -1079,9 +1137,9 @@ mod tests {
                     .map(|entity| TableBlockEntityMetadata {
                         partition_key: entity.partition_key.clone(),
                         row_key: entity.row_key.clone(),
-                        schema_version: entity.schema_version,
-                        byte_len: entity.byte_len,
-                        chunk_count: entity.chunk_count,
+                        schema_version: Some(entity.schema_version),
+                        byte_len: Some(entity.byte_len),
+                        chunk_count: Some(entity.chunk_count),
                     })
                     .collect()
             } else {
@@ -1305,17 +1363,26 @@ mod tests {
     fn enumeration_filters_unrelated_entities_and_fails_on_malformed_recognized_candidates() {
         let backend = Arc::new(MockTableBackend::default());
         let store = test_store(backend.clone());
-        let good = TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0x55; 32]), b"good")
-            .unwrap();
-        backend.insert_entity(good);
-        backend.insert_entity(TableBlockEntity {
-            partition_key: "notes".into(),
-            row_key: "freeform".into(),
-            schema_version: ENTITY_SCHEMA_VERSION,
-            byte_len: 0,
-            chunk_count: 0,
-            chunk_properties: BTreeMap::new(),
-        });
+        let good = TableBlockEntityMetadata::from_entity(
+            &TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0x55; 32]), b"good")
+                .unwrap(),
+        );
+        backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![
+                    TableBlockEntityMetadata {
+                        partition_key: "notes".into(),
+                        row_key: "freeform".into(),
+                        schema_version: None,
+                        byte_len: None,
+                        chunk_count: None,
+                    },
+                    good,
+                ],
+                continuation: None,
+            },
+        );
         let ids = block_on(store.list_block_ids()).unwrap();
         assert_eq!(ids, vec![BlockHash::from_bytes([0x55; 32])]);
 
@@ -1341,6 +1408,24 @@ mod tests {
         schema_backend.insert_entity(schema_entity);
         let schema_error = block_on(schema_store.list_block_ids()).unwrap_err();
         assert!(format!("{schema_error}").contains("unsupported schema version"));
+
+        let missing_backend = Arc::new(MockTableBackend::default());
+        let missing_store = test_store(missing_backend.clone());
+        missing_backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![TableBlockEntityMetadata {
+                    partition_key: "abcd".into(),
+                    row_key: format!("abcd{}", "00".repeat(30)),
+                    schema_version: None,
+                    byte_len: Some(3),
+                    chunk_count: Some(1),
+                }],
+                continuation: None,
+            },
+        );
+        let missing_error = block_on(missing_store.list_block_ids()).unwrap_err();
+        assert!(format!("{missing_error}").contains("missing SchemaVersion"));
     }
 
     #[test]
@@ -1477,5 +1562,31 @@ mod tests {
             describe_http_response(StatusCode::NO_CONTENT, ""),
             "HTTP 204 No Content"
         );
+    }
+
+    #[test]
+    fn redact_reqwest_error_removes_sas_urls() {
+        let error = block_on(async {
+            Client::new()
+                .get("http://127.0.0.1:9/blocks?sig=secret")
+                .send()
+                .await
+                .unwrap_err()
+        });
+        let redacted = redact_reqwest_error(error);
+        assert!(!redacted.contains("sig=secret"));
+        assert!(!redacted.contains("/blocks?"));
+    }
+
+    #[test]
+    fn decode_rejects_impossible_lengths_before_allocation() {
+        let block_id = BlockHash::from_bytes([0x33; 32]);
+        let mut entity = TableBlockEntity::from_block_bytes(&block_id, b"ok").unwrap();
+        entity.chunk_count = 1;
+        entity.byte_len = i64::try_from(RAW_CHUNK_SIZE + 1).unwrap();
+        assert!(matches!(
+            entity.decode_block_bytes(&block_id).unwrap_err(),
+            BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
+        ));
     }
 }
