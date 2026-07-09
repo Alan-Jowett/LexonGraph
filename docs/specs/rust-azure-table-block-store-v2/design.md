@@ -11,9 +11,10 @@ Draft design specification for `lexongraph-block-store-azure-table-v2`.
 The crate design is intended to be:
 
 - subordinate to the backend-neutral `BlockStore` contract
-- deterministic in its mapping from block ID to Azure Table entity keys
+- deterministic in its mapping from block ID to Azure Table row keys
 - compatible with real Azure Table responses for single-block reads and writes
-- explicit about backend failures and oversized-block rejection
+- explicit about backend failures and deterministic multi-row oversized-block
+  support
 - narrow at the public API boundary
 - separate from, not a mutation of, the existing Azure Table predecessor crate
 
@@ -59,30 +60,40 @@ Construction:
 Construction does not create the table and does not perform an eager existence
 or permission probe.
 
-## Entity Mapping
+## Row-Set Mapping
 
-### DSG-AZURE-TABLE-STORE-V2-004 `Deterministic entity keys`
+### DSG-AZURE-TABLE-STORE-V2-004 `Deterministic row keys`
 
-Each block ID maps to exactly one deterministic entity key:
+Each block ID maps to exactly one deterministic root-row key:
 
 - `PartitionKey`: first four lowercase hexadecimal characters of the block ID
 - `RowKey`: full lowercase hexadecimal block ID
 
+If a block requires more than one row, each continuation row uses:
+
+- the same `PartitionKey`
+- a `RowKey` equal to the full lowercase hexadecimal block ID plus a
+  deterministic zero-padded row ordinal suffix
+
 This keyed layout remains an implementation detail of the Azure backend and is
 not promoted into the parent trait boundary.
 
-### DSG-AZURE-TABLE-STORE-V2-005 `v2 chunked entity format`
+### DSG-AZURE-TABLE-STORE-V2-005 `v2 chunked row-set format`
 
-Each logical block is stored in one Azure Table entity whose payload properties
-encode the canonical block bytes plus the metadata needed to reconstruct those
-bytes deterministically.
+Each logical block is stored in one Azure Table row set whose payload
+properties encode the canonical block bytes plus the metadata needed to
+reconstruct those bytes deterministically.
 
-The v2 chunked entity format stores:
+The v2 chunked row-set format stores:
 
-1. deterministic metadata sufficient to validate schema version, total byte
-   length, and chunk count
-2. deterministic payload properties named `chunk0`, `chunk1`, `chunk2`, ...
-3. chunk ordering defined by ascending numeric suffix
+1. deterministic root-row metadata sufficient to validate schema version, total
+   byte length, and total row count
+2. deterministic per-row metadata sufficient to validate row ordinal and the
+   number of `chunkN` properties stored in that row
+3. deterministic payload properties named `chunk0`, `chunk1`, `chunk2`, ...
+   within each physical row
+4. row ordering defined by ascending row ordinal
+5. chunk ordering within a row defined by ascending numeric suffix
 
 Chunk sizing is derived from the real Azure Table property-value limits that
 govern accepted writes for this representation, not merely from local encoding
@@ -91,8 +102,9 @@ assumptions.
 The stored representation must be sufficient to:
 
 1. reconstruct the exact canonical bytes for `get`
-2. reject malformed or incomplete entity payloads explicitly
-3. determine before publication whether the logical block fits within one entity
+2. reject malformed or incomplete row-set payloads explicitly
+3. determine before publication whether the logical block fits within the
+   supported row-set layout for this revision
 
 ## Runtime Behavior
 
@@ -103,9 +115,9 @@ interprets Azure outcomes from the HTTP status line, response payload, and only
 the response metadata required to distinguish:
 
 1. successful publication
-2. already-existing entity
-3. successful entity read
-4. absent entity
+2. already-existing row
+3. successful row read
+4. absent row
 5. explicit backend failure
 
 The v2 design does not rely on a response-conversion path that rejects
@@ -117,21 +129,26 @@ non-decisive common storage headers are absent.
 `put`:
 
 1. canonicalizes the input block through the block crate
-2. derives the deterministic entity key from the returned block ID
-3. encodes the canonical bytes into the v2 chunked entity format
-4. rejects the write explicitly before publication if the encoded entity would
+2. derives the deterministic root-row key and any required continuation-row keys
+   from the returned block ID
+3. encodes the canonical bytes into the v2 chunked row-set format
+4. rejects the write explicitly before publication if the encoded row set would
    exceed Azure Table limits for this revision
-5. attempts to insert the entity using create-without-overwrite semantics
+5. attempts to insert continuation rows first, then inserts the root row last
+   using create-without-overwrite semantics for each row
 6. returns the block ID on successful publication
-7. treats already-existing-entity outcomes as successful convergence
+7. treats already-existing root-row outcomes as successful convergence
 8. maps other denied or failed publish outcomes to explicit backend failures
 
-This revision does not fragment one logical block across multiple entities and
-does not fall back to blob storage or any other backend.
+The root row acts as the publication commit point for a recognized block. A
+transport or backend failure may leave orphan continuation rows behind, but
+those rows are not treated as a published block until the root row exists.
 
-If the Azure client reports a transport failure while issuing the insert
-request, before any backend response has been received, the implementation
-retries that same deterministic insert request with a bounded retry policy.
+This revision does not fall back to blob storage or any other backend.
+
+If the Azure client reports a transport failure while issuing a deterministic
+row insert, before any backend response has been received, the implementation
+retries that same deterministic row insert with a bounded retry policy.
 
 If a later retry reaches a backend response, `put` resumes the normal success,
 already-existing, and explicit-failure handling for that response.
@@ -143,15 +160,18 @@ attempt, `put` reports an explicit backend failure and does not claim success.
 
 `get`:
 
-1. derives the deterministic entity key from the requested block ID
-2. attempts to retrieve that entity directly
-3. returns `Ok(None)` when the entity is absent
-4. reconstructs canonical bytes from the v2 chunked entity format when the
-   entity is present
-5. validates the reconstructed bytes through the block crate before returning
+1. derives the deterministic root-row key from the requested block ID
+2. attempts to retrieve that root row directly
+3. returns `Ok(None)` when the root row is absent
+4. uses the root-row metadata to derive the deterministic continuation-row keys
+   required for the logical block
+5. retrieves those continuation rows directly when required
+6. reconstructs canonical bytes from the v2 chunked row-set format when the
+   root row is present
+7. validates the reconstructed bytes through the block crate before returning
    success
 
-Malformed entity payloads and malformed reconstructed bytes map to
+Malformed row-set payloads and malformed reconstructed bytes map to
 malformed-content failures, block-ID mismatches map to integrity-mismatch
 failures, and inaccessible reads map to backend failures.
 
@@ -169,23 +189,22 @@ success or absence.
 ### DSG-AZURE-TABLE-STORE-V2-009 `iter_block_ids`
 
 `iter_block_ids` queries the configured table and streams block identifiers for
-recognized block entities that match the deterministic entity-key layout.
+recognized block roots that match the deterministic root-row key layout.
 
 The enumeration realization:
 
 1. issues table queries without exposing Azure query details at the trait
    boundary
-2. recognizes block entities by the deterministic `PartitionKey`/`RowKey`
-   layout
-3. validates the minimal v2 metadata needed to confirm the recognized stored
+2. recognizes block roots by the deterministic `PartitionKey`/`RowKey` layout
+3. ignores continuation rows and unrelated entities
+4. validates the minimal v2 metadata needed to confirm the recognized stored
    state is inspectable
-4. decodes each recognized entity key back into its block ID
-5. yields only decoded block IDs to callers
-6. ignores unrelated entities that do not conform to the recognized key layout
+5. decodes each recognized root key back into its block ID
+6. yields only decoded block IDs to callers
 
-Malformed recognized candidates, including shard-prefix mismatches or malformed
-required metadata encountered during enumeration, are surfaced as explicit
-backend failures.
+Malformed recognized candidates, including shard-prefix mismatches, malformed
+root metadata, or malformed continuation-row layout referenced by a recognized
+root, are surfaced as explicit backend failures.
 
 If the Azure client reports a transport failure while issuing the table query,
 before any backend response has been received, the implementation retries that
@@ -205,9 +224,9 @@ that querying completed successfully.
 
 ### DSG-AZURE-TABLE-STORE-V2-010 `Concurrency`
 
-Concurrent publishers rely on deterministic entity keys plus insert-without-
+Concurrent publishers rely on deterministic row keys plus insert-without-
 overwrite publication so that multiple writers of the same block converge on one
-published entity.
+published row set.
 
 ### DSG-AZURE-TABLE-STORE-V2-011 `Error mapping`
 
@@ -215,7 +234,7 @@ Azure client construction, authorization, serialization-limit rejection, and
 query or transport failures map to explicit backend failures through the parent
 error taxonomy.
 
-Entity-payload decoding failures and reconstructed block-ID mismatches continue
+Row-set payload decoding failures and reconstructed block-ID mismatches continue
 to map to the parent crate's malformed-content and integrity-mismatch errors.
 
 ## Verification Strategy
@@ -227,20 +246,22 @@ Table-focused tests for:
 
 - constructor acceptance and rejection cases
 - constructor non-creation and no-preflight behavior
-- deterministic entity-key mapping
+- deterministic root-row and continuation-row key mapping
 - round-trip `put`/`get`
 - round-trip `put`/`get` for a block that requires multiple `chunkN`
-  properties within one entity
-- explicit oversized-block rejection before publication
-- conflict-success handling for already-existing entities
-- `get` integrity-mismatch failure when stored entity bytes decode to a
+  properties within one row
+- round-trip `put`/`get` for a block that requires multiple rows
+- explicit oversized-block rejection before publication when the block exceeds
+  the supported row-set layout
+- conflict-success handling for already-existing root rows
+- `get` integrity-mismatch failure when stored row-set bytes decode to a
   different block ID
-- `get` malformed-content failure when stored entity payload metadata, `chunkN`
-  properties, or reconstructed bytes are malformed
-- explicit backend failure for `put` when SAS permissions deny the table entity
+- `get` malformed-content failure when stored row-set payload metadata,
+  continuation rows, `chunkN` properties, or reconstructed bytes are malformed
+- explicit backend failure for `put` when SAS permissions deny the required row
   insert
-- explicit backend failure for `get` when the entity is inaccessible or the
-  backend denies the read
+- explicit backend failure for `get` when the root row or a required
+  continuation row is inaccessible or the backend denies the read
 - explicit backend failure for enumeration when SAS permissions deny table query
 - transient publish, read, and query retries
 - response-parsing compatibility cases where otherwise valid Azure outcomes omit
@@ -251,8 +272,9 @@ Table-focused tests for:
 
 The crate provides an ignored live Azure integration test that consumes a real
 table SAS URL from the environment and proves constructor success, publication,
-retrieval, absence handling, enumeration, multi-chunk payload publication, and
-idempotent re-publication against a real provisioned table.
+retrieval, absence handling, enumeration, multi-chunk single-row publication,
+multi-row publication, and idempotent re-publication against a real provisioned
+table.
 
 The live test assumes the table already exists through the repository's IaC
 flow; the crate itself does not create that table.
@@ -264,8 +286,8 @@ replaceable internal client interface so mock-backed test doubles can:
 
 - observe constructor behavior without changing the public API
 - simulate publish, read, and query authorization outcomes
-- inject malformed or integrity-mismatched recognized block entities in the v2
-  chunked entity format
+- inject malformed or integrity-mismatched recognized block row sets in the v2
+  chunked row-set format
 - simulate transient transport failures, including paginated query retries
 - simulate otherwise valid Azure outcomes whose responses omit non-decisive
   common storage headers

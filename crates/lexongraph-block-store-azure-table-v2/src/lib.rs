@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -19,19 +19,24 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use url::Url;
 
-const ENTITY_SCHEMA_VERSION: i32 = 2;
-const MAX_ENTITY_PROPERTY_BYTES: usize = 1_048_576;
+const ENTITY_SCHEMA_VERSION: i32 = 3;
+const MAX_ROW_PROPERTY_BYTES: usize = 1_048_576;
 const MAX_PROPERTY_COUNT: usize = 255;
-const FIXED_ENTITY_PROPERTY_COUNT: usize = 5;
-const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ENTITY_PROPERTY_COUNT;
+const FIXED_ROW_PROPERTY_COUNT: usize = 7;
+const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ROW_PROPERTY_COUNT;
 const MAX_STRING_PROPERTY_CHARS: usize = 32 * 1024;
 const RAW_CHUNK_SIZE: usize = 24_576;
+const MAX_ROW_COUNT: usize = 8;
+const CONTINUATION_ROW_SUFFIX_WIDTH: usize = 4;
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(250);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(4);
 const RETRY_MAX_ATTEMPTS: usize = 6;
 const AZURE_TABLE_API_VERSION: &str = "2019-02-02";
 const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
+
+static ROOT_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
+static CONTINUATION_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct AzureTableBlockStoreV2 {
@@ -70,12 +75,123 @@ impl AzureTableBlockStoreV2 {
     }
 
     fn partition_key(block_id: &BlockHash) -> String {
-        let hex = block_id.to_string();
-        hex[..4].to_string()
+        partition_key_for(block_id)
     }
 
-    fn row_key(block_id: &BlockHash) -> String {
-        block_id.to_string()
+    async fn insert_row_with_retries(
+        &self,
+        block_id: &BlockHash,
+        row: &TableBlockEntity,
+    ) -> Result<(), BlockStoreError> {
+        let row_context = describe_row_context(
+            row.row_index
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or_default(),
+            &row.partition_key,
+            &row.row_key,
+        );
+        let mut attempts = 0usize;
+        let mut delay = RETRY_INITIAL_DELAY;
+        loop {
+            attempts += 1;
+            match self.backend.insert_entity_once(row).await {
+                Ok(()) | Err(TableBackendAttemptError::AlreadyExists(_)) => return Ok(()),
+                Err(TableBackendAttemptError::Transport(_)) if attempts < RETRY_MAX_ATTEMPTS => {
+                    sleep(delay).await;
+                    delay = next_retry_delay(delay);
+                    continue;
+                }
+                Err(TableBackendAttemptError::Transport(message)) => {
+                    return Err(backend_failure(format!(
+                        "failed to publish block {} {} to Azure table {}: retry policy expired after {} attempts: {}",
+                        block_id, row_context, self.table_display, attempts, message
+                    )));
+                }
+                Err(TableBackendAttemptError::Response(message)) => {
+                    return Err(backend_failure(format!(
+                        "failed to publish block {} {} to Azure table {}: {}",
+                        block_id, row_context, self.table_display, message
+                    )));
+                }
+            }
+        }
+    }
+
+    async fn get_row_with_retries(
+        &self,
+        block_id: &BlockHash,
+        row_index: usize,
+    ) -> Result<Option<TableBlockEntity>, BlockStoreError> {
+        let partition_key = Self::partition_key(block_id);
+        let row_key = row_key_for(block_id, row_index);
+        let row_context = describe_row_context(row_index, &partition_key, &row_key);
+        let mut attempts = 0usize;
+        let mut delay = RETRY_INITIAL_DELAY;
+        loop {
+            attempts += 1;
+            match self.backend.get_entity_once(&partition_key, &row_key).await {
+                Ok(row) => return Ok(row),
+                Err(TableBackendAttemptError::Transport(_)) if attempts < RETRY_MAX_ATTEMPTS => {
+                    sleep(delay).await;
+                    delay = next_retry_delay(delay);
+                    continue;
+                }
+                Err(TableBackendAttemptError::Transport(message)) => {
+                    return Err(backend_failure(format!(
+                        "failed to read block {} {} from Azure table {}: retry policy expired after {} attempts: {}",
+                        block_id, row_context, self.table_display, attempts, message
+                    )));
+                }
+                Err(TableBackendAttemptError::Response(message)) => {
+                    return Err(backend_failure(format!(
+                        "failed to read block {} {} from Azure table {}: {}",
+                        block_id, row_context, self.table_display, message
+                    )));
+                }
+                Err(TableBackendAttemptError::AlreadyExists(message)) => {
+                    return Err(backend_failure(format!(
+                        "unexpected already-existing result while reading block {} {} from Azure table {}: {}",
+                        block_id, row_context, self.table_display, message
+                    )));
+                }
+            }
+        }
+    }
+
+    async fn verify_enumerated_block(
+        &self,
+        metadata: &TableBlockEntityMetadata,
+        block_id: &BlockHash,
+    ) -> Result<(), BlockStoreError> {
+        metadata
+            .validate_enumeration_payload()
+            .map_err(backend_failure)?;
+        let row_count = metadata.root_row_count().map_err(backend_failure)?;
+        for row_index in 0..row_count {
+            let Some(row) = self.get_row_with_retries(block_id, row_index).await? else {
+                return Err(backend_failure(format!(
+                    "failed to inspect Azure Table block {} during enumeration: missing row {}",
+                    block_id, row_index
+                )));
+            };
+            row.validate_row_identity(block_id, row_index)?;
+            let chunk_count = row
+                .validate_row_metadata(row_index, row_count, metadata.byte_len()?)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to inspect Azure Table block {} during enumeration: {}",
+                        block_id, error
+                    ))
+                })?;
+            row.validate_chunk_property_presence(chunk_count)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to inspect Azure Table block {} during enumeration: {}",
+                        block_id, error
+                    ))
+                })?;
+        }
+        Ok(())
     }
 
     async fn fetch_page_with_retries(
@@ -135,72 +251,35 @@ impl BlockStore for AzureTableBlockStoreV2 {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        let entity = TableBlockEntity::from_block_bytes(block_id, block_bytes)?;
-        let mut attempts = 0usize;
-        let mut delay = RETRY_INITIAL_DELAY;
-        loop {
-            attempts += 1;
-            match self.backend.insert_entity_once(&entity).await {
-                Ok(()) | Err(TableBackendAttemptError::AlreadyExists(_)) => return Ok(()),
-                Err(TableBackendAttemptError::Transport(_)) if attempts < RETRY_MAX_ATTEMPTS => {
-                    sleep(delay).await;
-                    delay = next_retry_delay(delay);
-                    continue;
-                }
-                Err(TableBackendAttemptError::Transport(message)) => {
-                    return Err(backend_failure(format!(
-                        "failed to publish block {} to Azure table {}: retry policy expired after {} attempts: {}",
-                        block_id, self.table_display, attempts, message
-                    )));
-                }
-                Err(TableBackendAttemptError::Response(message)) => {
-                    return Err(backend_failure(format!(
-                        "failed to publish block {} to Azure table {}: {}",
-                        block_id, self.table_display, message
-                    )));
-                }
-            }
+        let rows = TableBlockEntity::rows_from_block_bytes(block_id, block_bytes)?;
+        for row in rows.iter().skip(1) {
+            self.insert_row_with_retries(block_id, row).await?;
         }
+        if let Some(root_row) = rows.first() {
+            self.insert_row_with_retries(block_id, root_row).await?;
+        }
+        Ok(())
     }
 
     async fn get_block_bytes(
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        let partition_key = Self::partition_key(block_id);
-        let row_key = Self::row_key(block_id);
-        let mut attempts = 0usize;
-        let mut delay = RETRY_INITIAL_DELAY;
-        loop {
-            attempts += 1;
-            match self.backend.get_entity_once(&partition_key, &row_key).await {
-                Ok(None) => return Ok(None),
-                Ok(Some(entity)) => return entity.decode_block_bytes(block_id).map(Some),
-                Err(TableBackendAttemptError::Transport(_)) if attempts < RETRY_MAX_ATTEMPTS => {
-                    sleep(delay).await;
-                    delay = next_retry_delay(delay);
-                    continue;
-                }
-                Err(TableBackendAttemptError::Transport(message)) => {
-                    return Err(backend_failure(format!(
-                        "failed to read block {} from Azure table {}: retry policy expired after {} attempts: {}",
-                        block_id, self.table_display, attempts, message
-                    )));
-                }
-                Err(TableBackendAttemptError::Response(message)) => {
-                    return Err(backend_failure(format!(
-                        "failed to read block {} from Azure table {}: {}",
-                        block_id, self.table_display, message
-                    )));
-                }
-                Err(TableBackendAttemptError::AlreadyExists(message)) => {
-                    return Err(backend_failure(format!(
-                        "unexpected already-existing result while reading block {} from Azure table {}: {}",
-                        block_id, self.table_display, message
-                    )));
-                }
-            }
+        let Some(root_row) = self.get_row_with_retries(block_id, 0).await? else {
+            return Ok(None);
+        };
+        let root_metadata = root_row.decode_root_metadata(block_id)?;
+        let mut rows = Vec::with_capacity(root_metadata.row_count);
+        rows.push(root_row);
+        for row_index in 1..root_metadata.row_count {
+            let Some(row) = self.get_row_with_retries(block_id, row_index).await? else {
+                return Err(decode_failure(
+                    "Azure Table block row set is missing a required continuation row",
+                ));
+            };
+            rows.push(row);
         }
+        TableBlockEntity::decode_block_bytes(block_id, &rows).map(Some)
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
@@ -217,7 +296,13 @@ impl BlockStore for AzureTableBlockStoreV2 {
                 loop {
                     if let Some(entity) = state.pending.pop_front() {
                         match entity.enumerated_block_id() {
-                            Ok(Some(block_id)) => return Ok(Some((block_id, state))),
+                            Ok(Some(block_id)) => {
+                                state
+                                    .store
+                                    .verify_enumerated_block(&entity, &block_id)
+                                    .await?;
+                                return Ok(Some((block_id, state)));
+                            }
                             Ok(None) => continue,
                             Err(message) => return Err(backend_failure(message)),
                         }
@@ -467,7 +552,7 @@ impl ReqwestTableBackend {
     ) -> Result<QueryResponse<TableBlockEntityMetadata>, TableBackendAttemptError> {
         let extra = [(
             "$select",
-            "PartitionKey,RowKey,SchemaVersion,ByteLen,ChunkCount".to_string(),
+            "PartitionKey,RowKey,SchemaVersion,ByteLen,RowCount,RowIndex,ChunkCount".to_string(),
         )];
         self.query_page(continuation, &extra).await
     }
@@ -628,6 +713,10 @@ struct TableBlockEntityMetadata {
     schema_version: Option<i32>,
     #[serde(rename = "ByteLen")]
     byte_len: Option<i64>,
+    #[serde(rename = "RowCount")]
+    row_count: Option<i32>,
+    #[serde(rename = "RowIndex")]
+    row_index: Option<i32>,
     #[serde(rename = "ChunkCount")]
     chunk_count: Option<i32>,
 }
@@ -640,6 +729,8 @@ impl TableBlockEntityMetadata {
             row_key: entity.row_key.clone(),
             schema_version: entity.schema_version,
             byte_len: entity.byte_len,
+            row_count: entity.row_count,
+            row_index: entity.row_index,
             chunk_count: entity.chunk_count,
         }
     }
@@ -653,79 +744,156 @@ impl TableBlockEntityMetadata {
     }
 
     fn recognized_block_id(&self) -> Result<Option<BlockHash>, String> {
-        decode_recognized_block_entity_keys(&self.partition_key, &self.row_key)
+        decode_recognized_block_root_keys(&self.partition_key, &self.row_key)
     }
 
     fn validate_enumeration_payload(&self) -> Result<(), String> {
         let schema_version = self.schema_version.ok_or_else(|| {
             format!(
-                "failed to inspect Azure Table entity {} / {}: missing SchemaVersion",
+                "failed to inspect Azure Table row {} / {}: missing SchemaVersion",
                 self.partition_key, self.row_key
             )
         })?;
         if schema_version != ENTITY_SCHEMA_VERSION {
             return Err(format!(
-                "failed to inspect Azure Table entity {} / {}: unsupported schema version {}",
+                "failed to inspect Azure Table row {} / {}: unsupported schema version {}",
                 self.partition_key, self.row_key, schema_version
             ));
         }
         let expected_len = usize::try_from(self.byte_len.ok_or_else(|| {
             format!(
-                "failed to inspect Azure Table entity {} / {}: missing ByteLen",
+                "failed to inspect Azure Table row {} / {}: missing ByteLen",
                 self.partition_key, self.row_key
             )
         })?)
         .map_err(|_| {
             format!(
-                "failed to inspect Azure Table entity {} / {}: ByteLen must be non-negative",
+                "failed to inspect Azure Table row {} / {}: ByteLen must be non-negative",
+                self.partition_key, self.row_key
+            )
+        })?;
+        let row_count = usize::try_from(self.row_count.ok_or_else(|| {
+            format!(
+                "failed to inspect Azure Table row {} / {}: missing RowCount",
+                self.partition_key, self.row_key
+            )
+        })?)
+        .map_err(|_| {
+            format!(
+                "failed to inspect Azure Table row {} / {}: RowCount must be positive",
+                self.partition_key, self.row_key
+            )
+        })?;
+        let row_index = usize::try_from(self.row_index.ok_or_else(|| {
+            format!(
+                "failed to inspect Azure Table row {} / {}: missing RowIndex",
+                self.partition_key, self.row_key
+            )
+        })?)
+        .map_err(|_| {
+            format!(
+                "failed to inspect Azure Table row {} / {}: RowIndex must be non-negative",
                 self.partition_key, self.row_key
             )
         })?;
         let chunk_count = usize::try_from(self.chunk_count.ok_or_else(|| {
             format!(
-                "failed to inspect Azure Table entity {} / {}: missing ChunkCount",
+                "failed to inspect Azure Table row {} / {}: missing ChunkCount",
                 self.partition_key, self.row_key
             )
         })?)
         .map_err(|_| {
             format!(
-                "failed to inspect Azure Table entity {} / {}: ChunkCount must be non-negative",
+                "failed to inspect Azure Table row {} / {}: ChunkCount must be non-negative",
                 self.partition_key, self.row_key
             )
         })?;
-        if chunk_count == 0 && expected_len != 0 {
+        if row_count == 0 {
             return Err(format!(
-                "failed to inspect Azure Table entity {} / {}: non-zero ByteLen requires at least one chunk",
+                "failed to inspect Azure Table row {} / {}: RowCount must be positive",
                 self.partition_key, self.row_key
             ));
         }
-        if expected_len == 0 && chunk_count != 0 {
+        if row_count > MAX_ROW_COUNT {
             return Err(format!(
-                "failed to inspect Azure Table entity {} / {}: zero ByteLen requires zero chunks",
+                "failed to inspect Azure Table row {} / {}: RowCount exceeds the supported limit",
+                self.partition_key, self.row_key
+            ));
+        }
+        if row_index != 0 {
+            return Err(format!(
+                "failed to inspect Azure Table row {} / {}: recognized block roots must use RowIndex 0",
                 self.partition_key, self.row_key
             ));
         }
         if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
             return Err(format!(
-                "failed to inspect Azure Table entity {} / {}: ChunkCount exceeds the supported per-entity limit",
+                "failed to inspect Azure Table row {} / {}: ChunkCount exceeds the supported per-row limit",
                 self.partition_key, self.row_key
             ));
         }
-        let max_possible_len = chunk_count
-            .checked_mul(RAW_CHUNK_SIZE)
+        if expected_len == 0 && (row_count != 1 || chunk_count != 0) {
+            return Err(format!(
+                "failed to inspect Azure Table row {} / {}: zero ByteLen requires a single zero-chunk root row",
+                self.partition_key, self.row_key
+            ));
+        }
+        if expected_len != 0 && chunk_count == 0 {
+            return Err(format!(
+                "failed to inspect Azure Table row {} / {}: non-zero ByteLen requires at least one root-row chunk",
+                self.partition_key, self.row_key
+            ));
+        }
+        let root_capacity = max_supported_row_payload_bytes(0, chunk_count);
+        let continuation_capacity = row_count
+            .checked_sub(1)
+            .and_then(|count| {
+                count.checked_mul(max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT))
+            })
             .ok_or_else(|| {
                 format!(
-                    "failed to inspect Azure Table entity {} / {}: ChunkCount exceeds the supported per-entity limit",
+                    "failed to inspect Azure Table row {} / {}: RowCount exceeds the supported layout capacity",
+                    self.partition_key, self.row_key
+                )
+            })?;
+        let max_possible_len = root_capacity
+            .checked_add(continuation_capacity)
+            .ok_or_else(|| {
+                format!(
+                    "failed to inspect Azure Table row {} / {}: RowCount exceeds the supported layout capacity",
                     self.partition_key, self.row_key
                 )
             })?;
         if expected_len > max_possible_len {
             return Err(format!(
-                "failed to inspect Azure Table entity {} / {}: ByteLen exceeds the capacity implied by ChunkCount",
+                "failed to inspect Azure Table row {} / {}: ByteLen exceeds the capacity implied by RowCount and ChunkCount",
                 self.partition_key, self.row_key
             ));
         }
         Ok(())
+    }
+
+    fn root_row_count(&self) -> Result<usize, String> {
+        usize::try_from(self.row_count.ok_or_else(|| {
+            format!(
+                "failed to inspect Azure Table row {} / {}: missing RowCount",
+                self.partition_key, self.row_key
+            )
+        })?)
+        .map_err(|_| {
+            format!(
+                "failed to inspect Azure Table row {} / {}: RowCount must be positive",
+                self.partition_key, self.row_key
+            )
+        })
+    }
+
+    fn byte_len(&self) -> Result<usize, BlockStoreError> {
+        usize::try_from(
+            self.byte_len
+                .ok_or_else(|| decode_failure("Azure Table block row is missing ByteLen"))?,
+        )
+        .map_err(|_| decode_failure("Azure Table ByteLen must be non-negative and fit in usize"))
     }
 }
 
@@ -739,6 +907,10 @@ struct TableBlockEntity {
     schema_version: Option<i32>,
     #[serde(rename = "ByteLen")]
     byte_len: Option<i64>,
+    #[serde(rename = "RowCount")]
+    row_count: Option<i32>,
+    #[serde(rename = "RowIndex")]
+    row_index: Option<i32>,
     #[serde(rename = "ChunkCount")]
     chunk_count: Option<i32>,
     #[serde(flatten)]
@@ -746,15 +918,81 @@ struct TableBlockEntity {
 }
 
 impl TableBlockEntity {
+    #[cfg(test)]
     fn from_block_bytes(block_id: &BlockHash, block_bytes: &[u8]) -> Result<Self, BlockStoreError> {
-        let row_key = block_id.to_string();
-        let partition_key = row_key[..4].to_string();
+        let chunks = block_bytes.chunks(RAW_CHUNK_SIZE).collect::<Vec<_>>();
+        Self::from_row_chunks(block_id, block_bytes.len(), 1, 0, &chunks)
+    }
+
+    fn rows_from_block_bytes(
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<Vec<Self>, BlockStoreError> {
+        let all_chunks = block_bytes.chunks(RAW_CHUNK_SIZE).collect::<Vec<_>>();
+        let total_len = block_bytes.len();
+        let mut chunk_rows: Vec<Vec<&[u8]>> = Vec::new();
+        let mut current_row: Vec<&[u8]> = Vec::new();
+        let mut current_row_property_bytes = fixed_row_property_bytes(block_id, 0);
+        for chunk in all_chunks {
+            if let Some(next_row_property_bytes) = try_extend_row_property_bytes(
+                current_row_property_bytes,
+                current_row.len(),
+                chunk.len(),
+            ) {
+                current_row.push(chunk);
+                current_row_property_bytes = next_row_property_bytes;
+                continue;
+            }
+            if current_row.is_empty() {
+                Self::from_row_chunks(block_id, total_len, 1, chunk_rows.len(), &[chunk])?;
+                unreachable!("single-row validation unexpectedly accepted oversized chunk");
+            }
+            chunk_rows.push(current_row);
+            current_row = Vec::new();
+            current_row_property_bytes = fixed_row_property_bytes(block_id, chunk_rows.len());
+            let Some(next_row_property_bytes) =
+                try_extend_row_property_bytes(current_row_property_bytes, 0, chunk.len())
+            else {
+                Self::from_row_chunks(block_id, total_len, 1, chunk_rows.len(), &[chunk])?;
+                unreachable!("single-row validation unexpectedly accepted oversized chunk");
+            };
+            current_row.push(chunk);
+            current_row_property_bytes = next_row_property_bytes;
+        }
+        chunk_rows.push(current_row);
+        if chunk_rows.len() > MAX_ROW_COUNT {
+            return Err(backend_failure(format!(
+                "block {} cannot fit within the supported Azure Table row-set layout because it requires {} rows and the limit is {}",
+                block_id,
+                chunk_rows.len(),
+                MAX_ROW_COUNT
+            )));
+        }
+        let row_count = chunk_rows.len();
+        chunk_rows
+            .into_iter()
+            .enumerate()
+            .map(|(row_index, row_chunks)| {
+                Self::from_row_chunks(block_id, total_len, row_count, row_index, &row_chunks)
+            })
+            .collect()
+    }
+
+    fn from_row_chunks(
+        block_id: &BlockHash,
+        total_len: usize,
+        row_count: usize,
+        row_index: usize,
+        row_chunks: &[&[u8]],
+    ) -> Result<Self, BlockStoreError> {
+        let row_key = row_key_for(block_id, row_index);
+        let partition_key = partition_key_for(block_id);
         let mut chunk_properties = BTreeMap::new();
-        for (index, chunk) in block_bytes.chunks(RAW_CHUNK_SIZE).enumerate() {
+        for (index, chunk) in row_chunks.iter().enumerate() {
             let encoded = BASE64.encode(chunk);
             if encoded.len() > MAX_STRING_PROPERTY_CHARS {
                 return Err(backend_failure(format!(
-                    "block {} cannot be encoded into one Azure Table entity under PartitionKey={}: chunk {} requires {} characters and exceeds the per-property limit of {}",
+                    "block {} cannot be encoded into one Azure Table row under PartitionKey={}: chunk {} requires {} characters and exceeds the per-property limit of {}",
                     block_id,
                     partition_key,
                     index,
@@ -769,9 +1007,21 @@ impl TableBlockEntity {
             partition_key,
             row_key,
             schema_version: Some(ENTITY_SCHEMA_VERSION),
-            byte_len: Some(i64::try_from(block_bytes.len()).map_err(|_| {
+            byte_len: Some(i64::try_from(total_len).map_err(|_| {
                 backend_failure(format!(
-                    "block {} length does not fit the Azure Table entity metadata representation",
+                    "block {} length does not fit the Azure Table row metadata representation",
+                    block_id
+                ))
+            })?),
+            row_count: Some(i32::try_from(row_count).map_err(|_| {
+                backend_failure(format!(
+                    "block {} requires too many Azure Table rows",
+                    block_id
+                ))
+            })?),
+            row_index: Some(i32::try_from(row_index).map_err(|_| {
+                backend_failure(format!(
+                    "block {} row index does not fit the Azure Table row metadata representation",
                     block_id
                 ))
             })?),
@@ -784,126 +1034,275 @@ impl TableBlockEntity {
             chunk_properties,
         };
 
-        let property_count = entity.chunk_properties.len() + FIXED_ENTITY_PROPERTY_COUNT;
+        let property_count = entity.chunk_properties.len() + FIXED_ROW_PROPERTY_COUNT;
         if property_count > MAX_PROPERTY_COUNT {
             return Err(backend_failure(format!(
-                "block {} cannot fit within one Azure Table entity because it requires {} properties and the limit is {}",
+                "block {} cannot fit within one Azure Table row because it requires {} properties and the limit is {}",
                 block_id, property_count, MAX_PROPERTY_COUNT
             )));
         }
 
         let property_bytes = entity.encoded_property_bytes().map_err(|message| {
             backend_failure(format!(
-                "failed to estimate Azure Table entity size for block {}: {}",
+                "failed to estimate Azure Table row size for block {}: {}",
                 block_id, message
             ))
         })?;
-        if property_bytes > MAX_ENTITY_PROPERTY_BYTES {
+        if property_bytes > MAX_ROW_PROPERTY_BYTES {
             return Err(backend_failure(format!(
-                "block {} cannot fit within one Azure Table entity because the property data requires {} bytes and the limit is {}",
-                block_id, property_bytes, MAX_ENTITY_PROPERTY_BYTES
+                "block {} cannot fit within one Azure Table row because the property data requires {} bytes and the limit is {}",
+                block_id, property_bytes, MAX_ROW_PROPERTY_BYTES
             )));
         }
 
         Ok(entity)
     }
 
-    fn decode_block_bytes(
+    fn decode_root_metadata(
         &self,
         expected_block_id: &BlockHash,
-    ) -> Result<Vec<u8>, BlockStoreError> {
-        match self.recognized_block_id() {
-            Ok(Some(block_id)) if &block_id == expected_block_id => {}
-            Ok(Some(block_id)) => {
-                return Err(backend_failure(format!(
-                    "Azure Table entity keys {} / {} resolved to block {} instead of requested {}",
-                    self.partition_key, self.row_key, block_id, expected_block_id
-                )));
-            }
-            Ok(None) => {
-                return Err(backend_failure(format!(
-                    "Azure Table lookup for {} returned unrelated entity keys {} / {}",
-                    expected_block_id, self.partition_key, self.row_key
-                )));
-            }
-            Err(_) => return Err(decode_failure("invalid Azure Table entity key mapping")),
-        }
-
-        let expected_len = usize::try_from(
+    ) -> Result<RowSetMetadata, BlockStoreError> {
+        self.validate_row_identity(expected_block_id, 0)?;
+        let total_len = usize::try_from(
             self.byte_len
-                .ok_or_else(|| decode_failure("Azure Table block entity is missing ByteLen"))?,
+                .ok_or_else(|| decode_failure("Azure Table block row is missing ByteLen"))?,
         )
         .map_err(|_| decode_failure("Azure Table ByteLen must be non-negative and fit in usize"))?;
-        let chunk_count = usize::try_from(
+        let row_count = usize::try_from(
+            self.row_count
+                .ok_or_else(|| decode_failure("Azure Table block row is missing RowCount"))?,
+        )
+        .map_err(|_| decode_failure("Azure Table RowCount must be positive and fit in usize"))?;
+        let row_index = usize::try_from(
+            self.row_index
+                .ok_or_else(|| decode_failure("Azure Table block row is missing RowIndex"))?,
+        )
+        .map_err(|_| {
+            decode_failure("Azure Table RowIndex must be non-negative and fit in usize")
+        })?;
+        let root_chunk_count = usize::try_from(
             self.chunk_count
-                .ok_or_else(|| decode_failure("Azure Table block entity is missing ChunkCount"))?,
+                .ok_or_else(|| decode_failure("Azure Table block row is missing ChunkCount"))?,
         )
         .map_err(|_| {
             decode_failure("Azure Table ChunkCount must be non-negative and fit in usize")
         })?;
         let schema_version = self
             .schema_version
-            .ok_or_else(|| decode_failure("Azure Table block entity is missing SchemaVersion"))?;
+            .ok_or_else(|| decode_failure("Azure Table block row is missing SchemaVersion"))?;
         if schema_version != ENTITY_SCHEMA_VERSION {
             return Err(decode_failure(
-                "unsupported Azure Table block entity schema version",
+                "unsupported Azure Table block row schema version",
             ));
         }
-        if chunk_count == 0 && expected_len != 0 {
+        if row_count == 0 || row_count > MAX_ROW_COUNT {
             return Err(decode_failure(
-                "Azure Table block entity declared non-zero ByteLen with zero chunks",
+                "Azure Table block row declared an unsupported RowCount",
             ));
         }
-        if expected_len == 0 && chunk_count != 0 {
+        if row_index != 0 {
             return Err(decode_failure(
-                "Azure Table block entity declared zero ByteLen with non-zero chunks",
+                "Azure Table block root must declare RowIndex 0",
             ));
         }
-        if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
+        if root_chunk_count > MAX_CHUNK_PROPERTY_COUNT {
             return Err(decode_failure(
-                "Azure Table block entity declared too many chunks",
+                "Azure Table block row declared too many chunks",
             ));
         }
-        let max_possible_len = chunk_count
-            .checked_mul(RAW_CHUNK_SIZE)
-            .ok_or_else(|| decode_failure("Azure Table ChunkCount exceeds the supported limit"))?;
-        if expected_len > max_possible_len {
+        if total_len == 0 && (row_count != 1 || root_chunk_count != 0) {
             return Err(decode_failure(
-                "Azure Table block entity declared a ByteLen larger than ChunkCount can contain",
+                "Azure Table zero-length block must use a single zero-chunk root row",
             ));
         }
-        if self.chunk_properties.len() < chunk_count {
+        if total_len != 0 && root_chunk_count == 0 {
             return Err(decode_failure(
-                "Azure Table block entity is missing a required chunk property",
+                "Azure Table non-zero block must include at least one root-row chunk",
+            ));
+        }
+        let root_capacity = max_supported_row_payload_bytes(0, root_chunk_count);
+        let continuation_capacity = row_count
+            .checked_sub(1)
+            .and_then(|count| {
+                count.checked_mul(max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT))
+            })
+            .ok_or_else(|| {
+                decode_failure("Azure Table RowCount exceeds the supported layout capacity")
+            })?;
+        let max_possible_len = root_capacity
+            .checked_add(continuation_capacity)
+            .ok_or_else(|| {
+                decode_failure("Azure Table RowCount exceeds the supported layout capacity")
+            })?;
+        if total_len > max_possible_len {
+            return Err(decode_failure(
+                "Azure Table block row declared a ByteLen larger than RowCount and ChunkCount can contain",
+            ));
+        }
+        Ok(RowSetMetadata {
+            total_len,
+            row_count,
+        })
+    }
+
+    fn decode_block_bytes(
+        expected_block_id: &BlockHash,
+        rows: &[TableBlockEntity],
+    ) -> Result<Vec<u8>, BlockStoreError> {
+        let Some(root_row) = rows.first() else {
+            return Err(decode_failure(
+                "Azure Table block row set is missing the root row",
+            ));
+        };
+        let metadata = root_row.decode_root_metadata(expected_block_id)?;
+        if rows.len() != metadata.row_count {
+            return Err(decode_failure(
+                "Azure Table block row set reconstructed an unexpected number of rows",
             ));
         }
 
-        let mut block_bytes = Vec::with_capacity(expected_len);
-        for index in 0..chunk_count {
-            let property_name = chunk_property_name(index);
-            let encoded = self.chunk_properties.get(&property_name).ok_or_else(|| {
-                decode_failure("Azure Table block entity is missing a required chunk property")
-            })?;
-            let decoded = BASE64.decode(encoded).map_err(|error| {
-                let _ = error;
-                decode_failure("Azure Table block entity chunk is not valid base64")
-            })?;
-            block_bytes.extend_from_slice(&decoded);
+        let mut block_bytes = Vec::with_capacity(metadata.total_len);
+        for (expected_row_index, row) in rows.iter().enumerate() {
+            row.validate_row_identity(expected_block_id, expected_row_index)?;
+            let row_chunk_count = row.validate_row_metadata(
+                expected_row_index,
+                metadata.row_count,
+                metadata.total_len,
+            )?;
+            row.extend_decoded_row_bytes(row_chunk_count, &mut block_bytes)?;
         }
 
-        if block_bytes.len() != expected_len {
+        if block_bytes.len() != metadata.total_len {
             return Err(decode_failure(
-                "Azure Table block entity reconstructed an unexpected number of bytes",
+                "Azure Table block row set reconstructed an unexpected number of bytes",
             ));
         }
 
         Ok(block_bytes)
     }
 
-    fn recognized_block_id(&self) -> Result<Option<BlockHash>, String> {
-        decode_recognized_block_entity_keys(&self.partition_key, &self.row_key)
+    fn validate_row_identity(
+        &self,
+        expected_block_id: &BlockHash,
+        expected_row_index: usize,
+    ) -> Result<(), BlockStoreError> {
+        let expected_partition_key = partition_key_for(expected_block_id);
+        let expected_row_key = row_key_for(expected_block_id, expected_row_index);
+        if self.partition_key != expected_partition_key || self.row_key != expected_row_key {
+            return Err(backend_failure(format!(
+                "Azure Table lookup for block {} row {} returned unexpected row keys {} / {}",
+                expected_block_id, expected_row_index, self.partition_key, self.row_key
+            )));
+        }
+        Ok(())
     }
 
+    fn validate_row_metadata(
+        &self,
+        expected_row_index: usize,
+        expected_row_count: usize,
+        expected_total_len: usize,
+    ) -> Result<usize, BlockStoreError> {
+        let schema_version = self
+            .schema_version
+            .ok_or_else(|| decode_failure("Azure Table block row is missing SchemaVersion"))?;
+        if schema_version != ENTITY_SCHEMA_VERSION {
+            return Err(decode_failure(
+                "unsupported Azure Table block row schema version",
+            ));
+        }
+        let total_len = usize::try_from(
+            self.byte_len
+                .ok_or_else(|| decode_failure("Azure Table block row is missing ByteLen"))?,
+        )
+        .map_err(|_| decode_failure("Azure Table ByteLen must be non-negative and fit in usize"))?;
+        if total_len != expected_total_len {
+            return Err(decode_failure(
+                "Azure Table block rows disagree about ByteLen",
+            ));
+        }
+        let row_count = usize::try_from(
+            self.row_count
+                .ok_or_else(|| decode_failure("Azure Table block row is missing RowCount"))?,
+        )
+        .map_err(|_| decode_failure("Azure Table RowCount must be positive and fit in usize"))?;
+        if row_count != expected_row_count {
+            return Err(decode_failure(
+                "Azure Table block rows disagree about RowCount",
+            ));
+        }
+        let row_index = usize::try_from(
+            self.row_index
+                .ok_or_else(|| decode_failure("Azure Table block row is missing RowIndex"))?,
+        )
+        .map_err(|_| {
+            decode_failure("Azure Table RowIndex must be non-negative and fit in usize")
+        })?;
+        if row_index != expected_row_index {
+            return Err(decode_failure(
+                "Azure Table block row declared an unexpected RowIndex",
+            ));
+        }
+        let chunk_count = usize::try_from(
+            self.chunk_count
+                .ok_or_else(|| decode_failure("Azure Table block row is missing ChunkCount"))?,
+        )
+        .map_err(|_| {
+            decode_failure("Azure Table ChunkCount must be non-negative and fit in usize")
+        })?;
+        if chunk_count > MAX_CHUNK_PROPERTY_COUNT {
+            return Err(decode_failure(
+                "Azure Table block row declared too many chunks",
+            ));
+        }
+        if expected_total_len == 0 && chunk_count != 0 {
+            return Err(decode_failure(
+                "Azure Table zero-length block rows must declare zero chunks",
+            ));
+        }
+        if expected_total_len != 0 && chunk_count == 0 {
+            return Err(decode_failure(
+                "Azure Table non-zero block rows must declare at least one chunk",
+            ));
+        }
+        Ok(chunk_count)
+    }
+
+    fn validate_chunk_property_presence(&self, chunk_count: usize) -> Result<(), BlockStoreError> {
+        if self.chunk_properties.len() < chunk_count {
+            return Err(decode_failure(
+                "Azure Table block row is missing a required chunk property",
+            ));
+        }
+        for index in 0..chunk_count {
+            let property_name = chunk_property_name(index);
+            if !self.chunk_properties.contains_key(&property_name) {
+                return Err(decode_failure(
+                    "Azure Table block row is missing a required chunk property",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn extend_decoded_row_bytes(
+        &self,
+        chunk_count: usize,
+        block_bytes: &mut Vec<u8>,
+    ) -> Result<(), BlockStoreError> {
+        self.validate_chunk_property_presence(chunk_count)?;
+        for index in 0..chunk_count {
+            let property_name = chunk_property_name(index);
+            let encoded = self.chunk_properties.get(&property_name).ok_or_else(|| {
+                decode_failure("Azure Table block row is missing a required chunk property")
+            })?;
+            let decoded = BASE64
+                .decode(encoded)
+                .map_err(|_| decode_failure("Azure Table block row chunk is not valid base64"))?;
+            block_bytes.extend_from_slice(&decoded);
+        }
+        Ok(())
+    }
     fn encoded_property_bytes(&self) -> Result<usize, &'static str> {
         let mut total = 0usize;
         total = checked_entity_property_bytes(
@@ -924,6 +1323,18 @@ impl TableBlockEntity {
                 primitive_property_bytes("ByteLen", std::mem::size_of_val(&byte_len)),
             )?;
         }
+        if let Some(row_count) = self.row_count {
+            total = checked_entity_property_bytes(
+                total,
+                primitive_property_bytes("RowCount", std::mem::size_of_val(&row_count)),
+            )?;
+        }
+        if let Some(row_index) = self.row_index {
+            total = checked_entity_property_bytes(
+                total,
+                primitive_property_bytes("RowIndex", std::mem::size_of_val(&row_index)),
+            )?;
+        }
         if let Some(chunk_count) = self.chunk_count {
             total = checked_entity_property_bytes(
                 total,
@@ -937,7 +1348,35 @@ impl TableBlockEntity {
     }
 }
 
-fn decode_recognized_block_entity_keys(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RowSetMetadata {
+    total_len: usize,
+    row_count: usize,
+}
+
+fn partition_key_for(block_id: &BlockHash) -> String {
+    let hex = block_id.to_string();
+    hex[..4].to_string()
+}
+
+fn row_key_for(block_id: &BlockHash, row_index: usize) -> String {
+    if row_index == 0 {
+        block_id.to_string()
+    } else {
+        format!(
+            "{}-{:0width$}",
+            block_id,
+            row_index,
+            width = CONTINUATION_ROW_SUFFIX_WIDTH
+        )
+    }
+}
+
+fn describe_row_context(row_index: usize, partition_key: &str, row_key: &str) -> String {
+    format!("row {} ({}/{})", row_index, partition_key, row_key)
+}
+
+fn decode_recognized_block_root_keys(
     partition_key: &str,
     row_key: &str,
 ) -> Result<Option<BlockHash>, String> {
@@ -957,6 +1396,90 @@ fn decode_recognized_block_entity_keys(
 
 fn chunk_property_name(index: usize) -> String {
     format!("chunk{index}")
+}
+
+fn fixed_row_property_bytes(block_id: &BlockHash, row_index: usize) -> usize {
+    let partition_key = partition_key_for(block_id);
+    let row_key = row_key_for(block_id, row_index);
+    string_property_bytes("PartitionKey", &partition_key)
+        + string_property_bytes("RowKey", &row_key)
+        + primitive_property_bytes("SchemaVersion", std::mem::size_of::<i32>())
+        + primitive_property_bytes("ByteLen", std::mem::size_of::<i64>())
+        + primitive_property_bytes("RowCount", std::mem::size_of::<i32>())
+        + primitive_property_bytes("RowIndex", std::mem::size_of::<i32>())
+        + primitive_property_bytes("ChunkCount", std::mem::size_of::<i32>())
+}
+
+fn base64_encoded_len(raw_len: usize) -> usize {
+    raw_len.div_ceil(3) * 4
+}
+
+fn additional_chunk_property_bytes(chunk_index: usize, raw_len: usize) -> Option<usize> {
+    let encoded_len = base64_encoded_len(raw_len);
+    if encoded_len > MAX_STRING_PROPERTY_CHARS {
+        return None;
+    }
+    Some(utf16_bytes(&chunk_property_name(chunk_index)) + (encoded_len * 2))
+}
+
+fn try_extend_row_property_bytes(
+    current_bytes: usize,
+    chunk_index: usize,
+    raw_len: usize,
+) -> Option<usize> {
+    let additional = additional_chunk_property_bytes(chunk_index, raw_len)?;
+    let candidate = current_bytes.checked_add(additional)?;
+    (candidate <= MAX_ROW_PROPERTY_BYTES).then_some(candidate)
+}
+
+fn max_supported_row_payload_bytes(row_index: usize, max_chunks: usize) -> usize {
+    let cache = if row_index == 0 {
+        &ROOT_ROW_CAPACITY_BY_CHUNK_COUNT
+    } else {
+        &CONTINUATION_ROW_CAPACITY_BY_CHUNK_COUNT
+    };
+    cache.get_or_init(|| precompute_row_capacity_bytes(row_index))[max_chunks]
+}
+
+fn precompute_row_capacity_bytes(row_index: usize) -> Vec<usize> {
+    (0..=MAX_CHUNK_PROPERTY_COUNT)
+        .map(|max_chunks| simulated_row_capacity_bytes(row_index, max_chunks))
+        .collect()
+}
+
+fn simulated_row_capacity_bytes(row_index: usize, max_chunks: usize) -> usize {
+    let block_id = BlockHash::from_bytes([0_u8; BlockHash::LEN]);
+    let mut total_len = 0usize;
+    let mut property_bytes = fixed_row_property_bytes(&block_id, row_index);
+    let mut chunk_count = 0usize;
+
+    while chunk_count < max_chunks {
+        let Some(next_bytes) =
+            try_extend_row_property_bytes(property_bytes, chunk_count, RAW_CHUNK_SIZE)
+        else {
+            break;
+        };
+        property_bytes = next_bytes;
+        chunk_count += 1;
+        total_len += RAW_CHUNK_SIZE;
+    }
+
+    if chunk_count == max_chunks {
+        return total_len;
+    }
+
+    let mut low = 0usize;
+    let mut high = RAW_CHUNK_SIZE;
+    while low < high {
+        let candidate = (low + high).div_ceil(2);
+        if try_extend_row_property_bytes(property_bytes, chunk_count, candidate).is_some() {
+            low = candidate;
+        } else {
+            high = candidate - 1;
+        }
+    }
+
+    total_len + low
 }
 
 fn checked_entity_property_bytes(current: usize, additional: usize) -> Result<usize, &'static str> {
@@ -1207,6 +1730,8 @@ mod tests {
                         row_key: entity.row_key.clone(),
                         schema_version: entity.schema_version,
                         byte_len: entity.byte_len,
+                        row_count: entity.row_count,
+                        row_index: entity.row_index,
                         chunk_count: entity.chunk_count,
                     })
                     .collect()
@@ -1286,7 +1811,7 @@ mod tests {
     #[test]
     fn round_trip_missing_and_multi_property_payloads_match_the_contract() {
         let backend = Arc::new(MockTableBackend::default());
-        let store = test_store(backend);
+        let store = test_store(backend.clone());
         let block = sample_leaf_block(70_000);
         let block_id = block_on(store.put(&block)).unwrap();
         let loaded = block_on(store.get(&block_id)).unwrap().unwrap();
@@ -1296,6 +1821,18 @@ mod tests {
             block_on(store.get(&BlockHash::from_bytes([0x44; 32]))).unwrap(),
             None
         );
+
+        let orphan_hash = BlockHash::from_bytes([0x45; 32]);
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let orphan_rows = TableBlockEntity::rows_from_block_bytes(
+            &orphan_hash,
+            &vec![0xcc; single_row_limit + 1],
+        )
+        .unwrap();
+        for row in orphan_rows.into_iter().skip(1) {
+            backend.insert_entity(row);
+        }
+        assert_eq!(block_on(store.get(&orphan_hash)).unwrap(), None);
     }
 
     #[test]
@@ -1347,6 +1884,19 @@ mod tests {
             BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
         ));
 
+        let missing_row_hash = BlockHash::from_bytes([0x68; 32]);
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let mut rows = TableBlockEntity::rows_from_block_bytes(
+            &missing_row_hash,
+            &vec![0xaa; single_row_limit + 1],
+        )
+        .unwrap();
+        backend.insert_entity(rows.remove(0));
+        assert!(matches!(
+            block_on(store.get(&missing_row_hash)).unwrap_err(),
+            BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
+        ));
+
         backend.state.lock().unwrap().deny_get = true;
         let backend_error = block_on(store.get(&first.hash)).unwrap_err();
         assert!(format!("{backend_error}").contains("HTTP 403"));
@@ -1364,11 +1914,43 @@ mod tests {
         let denied = block_on(store.put(&sample_leaf_block(12))).unwrap_err();
         assert!(format!("{denied}").contains("HTTP 403"));
 
-        let too_large = vec![0_u8; 900_000];
+        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
+        let max_supported_block_len =
+            root_row_limit + ((MAX_ROW_COUNT - 1) * continuation_row_limit);
+        let too_large = vec![0_u8; max_supported_block_len + 1];
         let too_large_error =
             block_on(store.put_block_bytes(&BlockHash::from_bytes([0x11; 32]), &too_large))
                 .unwrap_err();
-        assert!(format!("{too_large_error}").contains("cannot fit within one Azure Table entity"));
+        assert!(format!("{too_large_error}").contains("supported Azure Table row-set layout"));
+    }
+
+    #[test]
+    fn publish_and_read_failures_include_row_context() {
+        let multi_row_block_id = BlockHash::from_bytes([0x13; 32]);
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let multi_row_bytes = vec![0xaa; single_row_limit + 1];
+
+        let publish_backend = Arc::new(MockTableBackend::default());
+        publish_backend.state.lock().unwrap().deny_insert = true;
+        let publish_store = test_store(publish_backend);
+        let publish_error =
+            block_on(publish_store.put_block_bytes(&multi_row_block_id, &multi_row_bytes))
+                .unwrap_err();
+        assert!(format!("{publish_error}").contains("row 1"));
+        assert!(format!("{publish_error}").contains(&format!("{multi_row_block_id}-0001")));
+
+        let read_backend = Arc::new(MockTableBackend::default());
+        let read_store = test_store(read_backend.clone());
+        for row in
+            TableBlockEntity::rows_from_block_bytes(&multi_row_block_id, &multi_row_bytes).unwrap()
+        {
+            read_backend.insert_entity(row);
+        }
+        read_backend.state.lock().unwrap().deny_get = true;
+        let read_error = block_on(read_store.get_block_bytes(&multi_row_block_id)).unwrap_err();
+        assert!(format!("{read_error}").contains("row 0"));
+        assert!(format!("{read_error}").contains(&multi_row_block_id.to_string()));
     }
 
     #[test]
@@ -1387,14 +1969,14 @@ mod tests {
             partition_key: Some("eeee".into()),
             row_key: Some("eeee0000".into()),
         };
-        let page1_entity = TableBlockEntityMetadata::from_entity(
-            &TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0xaa; 32]), b"one")
-                .unwrap(),
-        );
-        let page2_entity = TableBlockEntityMetadata::from_entity(
-            &TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0xbb; 32]), b"two")
-                .unwrap(),
-        );
+        let page1_row =
+            TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0xaa; 32]), b"one").unwrap();
+        let page2_row =
+            TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0xbb; 32]), b"two").unwrap();
+        backend.insert_entity(page1_row.clone());
+        backend.insert_entity(page2_row.clone());
+        let page1_entity = TableBlockEntityMetadata::from_entity(&page1_row);
+        let page2_entity = TableBlockEntityMetadata::from_entity(&page2_row);
         backend.set_query_page(
             None,
             EntityPage {
@@ -1441,10 +2023,11 @@ mod tests {
     fn enumeration_filters_unrelated_entities_and_fails_on_malformed_recognized_candidates() {
         let backend = Arc::new(MockTableBackend::default());
         let store = test_store(backend.clone());
-        let good = TableBlockEntityMetadata::from_entity(
-            &TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0x55; 32]), b"good")
-                .unwrap(),
-        );
+        let good_row =
+            TableBlockEntity::from_block_bytes(&BlockHash::from_bytes([0x55; 32]), b"good")
+                .unwrap();
+        backend.insert_entity(good_row.clone());
+        let good = TableBlockEntityMetadata::from_entity(&good_row);
         backend.set_query_page(
             None,
             EntityPage {
@@ -1454,7 +2037,18 @@ mod tests {
                         row_key: "freeform".into(),
                         schema_version: None,
                         byte_len: None,
+                        row_count: None,
+                        row_index: None,
                         chunk_count: None,
+                    },
+                    TableBlockEntityMetadata {
+                        partition_key: "5555".into(),
+                        row_key: format!("{}-0001", BlockHash::from_bytes([0x55; 32])),
+                        schema_version: Some(ENTITY_SCHEMA_VERSION),
+                        byte_len: Some(8),
+                        row_count: Some(2),
+                        row_index: Some(1),
+                        chunk_count: Some(1),
                     },
                     good,
                 ],
@@ -1471,6 +2065,8 @@ mod tests {
             row_key: format!("bbbb{}", "00".repeat(30)),
             schema_version: Some(ENTITY_SCHEMA_VERSION),
             byte_len: Some(3),
+            row_count: Some(1),
+            row_index: Some(0),
             chunk_count: Some(1),
             chunk_properties: BTreeMap::from([(String::from("chunk0"), BASE64.encode(b"bad"))]),
         });
@@ -1497,6 +2093,8 @@ mod tests {
                     row_key: format!("abcd{}", "00".repeat(30)),
                     schema_version: None,
                     byte_len: Some(3),
+                    row_count: Some(1),
+                    row_index: Some(0),
                     chunk_count: Some(1),
                 }],
                 continuation: None,
@@ -1515,13 +2113,58 @@ mod tests {
                     row_key: format!("dcba{}", "11".repeat(30)),
                     schema_version: Some(ENTITY_SCHEMA_VERSION),
                     byte_len: Some(0),
+                    row_count: Some(1),
+                    row_index: Some(0),
                     chunk_count: Some(1),
                 }],
                 continuation: None,
             },
         );
         let zero_len_error = block_on(zero_len_store.list_block_ids()).unwrap_err();
-        assert!(format!("{zero_len_error}").contains("zero ByteLen requires zero chunks"));
+        assert!(
+            format!("{zero_len_error}")
+                .contains("zero ByteLen requires a single zero-chunk root row")
+        );
+
+        let zero_row_count_backend = Arc::new(MockTableBackend::default());
+        let zero_row_count_store = test_store(zero_row_count_backend.clone());
+        zero_row_count_backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![TableBlockEntityMetadata {
+                    partition_key: "cdef".into(),
+                    row_key: format!("cdef{}", "22".repeat(30)),
+                    schema_version: Some(ENTITY_SCHEMA_VERSION),
+                    byte_len: Some(1),
+                    row_count: Some(0),
+                    row_index: Some(0),
+                    chunk_count: Some(1),
+                }],
+                continuation: None,
+            },
+        );
+        let zero_row_count_error = block_on(zero_row_count_store.list_block_ids()).unwrap_err();
+        assert!(format!("{zero_row_count_error}").contains("RowCount must be positive"));
+
+        let missing_row_backend = Arc::new(MockTableBackend::default());
+        let missing_row_store = test_store(missing_row_backend.clone());
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let mut multi_row_entities = TableBlockEntity::rows_from_block_bytes(
+            &BlockHash::from_bytes([0x91; 32]),
+            &vec![0xdd; single_row_limit + 1],
+        )
+        .unwrap();
+        let root_only = multi_row_entities.remove(0);
+        missing_row_backend.insert_entity(root_only.clone());
+        missing_row_backend.set_query_page(
+            None,
+            EntityPage {
+                entities: vec![TableBlockEntityMetadata::from_entity(&root_only)],
+                continuation: None,
+            },
+        );
+        let missing_row_error = block_on(missing_row_store.list_block_ids()).unwrap_err();
+        assert!(format!("{missing_row_error}").contains("missing row 1"));
     }
 
     #[test]
@@ -1588,9 +2231,11 @@ mod tests {
             block_id: &BlockHash,
             bytes: &[u8],
         ) -> Result<(), String> {
-            let entity = TableBlockEntity::from_block_bytes(block_id, bytes)
+            let rows = TableBlockEntity::rows_from_block_bytes(block_id, bytes)
                 .map_err(|error| error.to_string())?;
-            store.backend.insert_entity(entity);
+            for row in rows {
+                store.backend.insert_entity(row);
+            }
             Ok(())
         }
     }
@@ -1612,11 +2257,12 @@ mod tests {
     }
 
     #[test]
-    fn repository_can_round_trip_raw_bytes_above_the_single_property_limit() {
+    fn repository_can_round_trip_raw_bytes_across_multiple_rows() {
         let backend = Arc::new(MockTableBackend::default());
         let store = test_store(backend);
         let block_id = BlockHash::from_bytes([0x77; 32]);
-        let bytes = vec![0xab; RAW_CHUNK_SIZE + 123];
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let bytes = vec![0xab; single_row_limit + 123];
         block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
         let loaded = block_on(store.get_block_bytes(&block_id)).unwrap().unwrap();
         assert_eq!(loaded, bytes);
@@ -1631,20 +2277,26 @@ mod tests {
     }
 
     #[test]
-    fn published_entities_use_deterministic_partition_and_row_keys() {
+    fn published_rows_use_deterministic_partition_and_row_keys() {
         let backend = Arc::new(MockTableBackend::default());
         let store = test_store(backend.clone());
         let block_id = BlockHash::from_bytes([0x99; 32]);
-        block_on(store.put_block_bytes(&block_id, b"keys")).unwrap();
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let bytes = vec![0xee; single_row_limit + 123];
+        block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
 
         let row_key = block_id.to_string();
         let state = backend.state.lock().unwrap();
-        let entity = state
+        let root_row = state
             .entities
             .get(&(row_key[..4].to_string(), row_key.clone()))
             .unwrap();
-        assert_eq!(entity.partition_key, row_key[..4].to_string());
-        assert_eq!(entity.row_key, row_key);
+        assert_eq!(root_row.partition_key, row_key[..4].to_string());
+        assert_eq!(root_row.row_key, row_key);
+        assert!(state.entities.contains_key(&(
+            block_id.to_string()[..4].to_string(),
+            format!("{block_id}-0001")
+        )));
     }
 
     #[test]
@@ -1689,7 +2341,7 @@ mod tests {
         entity.chunk_count = Some(1);
         entity.byte_len = Some(i64::try_from(RAW_CHUNK_SIZE + 1).unwrap());
         assert!(matches!(
-            entity.decode_block_bytes(&block_id).unwrap_err(),
+            TableBlockEntity::decode_block_bytes(&block_id, &[entity]).unwrap_err(),
             BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
         ));
 
@@ -1697,16 +2349,14 @@ mod tests {
         zero_len_entity.chunk_count = Some(1);
         zero_len_entity.byte_len = Some(0);
         assert!(matches!(
-            zero_len_entity.decode_block_bytes(&block_id).unwrap_err(),
+            TableBlockEntity::decode_block_bytes(&block_id, &[zero_len_entity]).unwrap_err(),
             BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
         ));
 
         let mut missing_len_entity = TableBlockEntity::from_block_bytes(&block_id, b"ok").unwrap();
         missing_len_entity.byte_len = None;
         assert!(matches!(
-            missing_len_entity
-                .decode_block_bytes(&block_id)
-                .unwrap_err(),
+            TableBlockEntity::decode_block_bytes(&block_id, &[missing_len_entity]).unwrap_err(),
             BlockStoreError::DecodeFailure(BlockError::InvalidEntryShape(_))
         ));
     }

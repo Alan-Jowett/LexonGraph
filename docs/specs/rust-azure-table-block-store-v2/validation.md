@@ -24,7 +24,7 @@ backend-neutral `BlockStore` contract remain normatively defined by
 Construct the Azure Table-backed v2 store with a caller-supplied table SAS URL.
 
 **Pass condition:** construction succeeds for a valid table-root SAS URL, and
-the consumer is not required to know any implementation-specific entity-key
+the consumer is not required to know any implementation-specific row-key
 layout.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-003
@@ -53,7 +53,7 @@ same logical meaning and block ID.
 ### VAL-AZURE-TABLE-STORE-V2-004
 
 Store the same logical block multiple times through `put`, including a case in
-which another publisher has already created the same deterministic entity.
+which another publisher has already created the same deterministic root row.
 
 **Pass condition:** each successful call returns the same block ID and the store
 does not present divergent content under that identifier.
@@ -62,7 +62,8 @@ does not present divergent content under that identifier.
 
 ### VAL-AZURE-TABLE-STORE-V2-005
 
-Request a block ID whose mapped entity is not present in the table.
+Request a block ID whose mapped root row is not present in the table, including
+a case where orphan continuation rows exist without that root row.
 
 **Pass condition:** `get` returns `Ok(None)`.
 
@@ -70,7 +71,7 @@ Request a block ID whose mapped entity is not present in the table.
 
 ### VAL-AZURE-TABLE-STORE-V2-006
 
-Populate the mapped entity for a requested block ID with bytes whose verified
+Populate the mapped row set for a requested block ID with bytes whose verified
 identity differs from that block ID.
 
 **Pass condition:** `get` fails explicitly with an integrity-mismatch error.
@@ -79,9 +80,9 @@ identity differs from that block ID.
 
 ### VAL-AZURE-TABLE-STORE-V2-007
 
-Populate the mapped entity for a requested block ID with malformed v2 chunked
-payload metadata, missing `chunkN` properties, malformed `chunkN` values, or
-protocol-invalid reconstructed bytes.
+Populate the mapped row set for a requested block ID with malformed v2 chunked
+row-set metadata, missing continuation rows, missing `chunkN` properties,
+malformed `chunkN` values, or protocol-invalid reconstructed bytes.
 
 **Pass condition:** `get` fails explicitly with a malformed-content error and
 does not report absence.
@@ -91,7 +92,7 @@ does not report absence.
 ### VAL-AZURE-TABLE-STORE-V2-008
 
 Attempt `put` through a v2 store constructed from a SAS URL that lacks the
-permissions required to publish the deterministic entity.
+permissions required to publish the deterministic row set.
 
 **Pass condition:** `put` fails explicitly as a backend failure, and
 construction itself was not required to reject the SAS URL beforehand.
@@ -112,27 +113,27 @@ to the operations that require backend access.
 
 ### VAL-AZURE-TABLE-STORE-V2-010
 
-Attempt `put` for canonical block bytes whose encoded payload would exceed the
-Azure Table limits for one entity in this revision.
+Store and retrieve a valid typed block whose canonical bytes exceed the
+supported one-row limit in this revision but fit within the supported
+deterministic multi-row layout.
 
-**Pass condition:** `put` fails explicitly before publication, does not create
-partial state, and does not silently fragment the block across multiple
-entities or another backend.
+**Pass condition:** `put` succeeds, `get` succeeds, enumeration reports exactly
+one block ID for the stored state, and the retrieved block matches the original
+logical block and block ID.
 
-**Traces to:** REQ-AZURE-TABLE-STORE-V2-014, REQ-AZURE-TABLE-STORE-V2-016
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-014
 
 ### VAL-AZURE-TABLE-STORE-V2-011
 
 Store and retrieve a valid typed block whose canonical bytes require more than
-one deterministic `chunkN` property in the v2 chunked entity format but still
-fit within one Azure Table entity in this revision.
+one deterministic `chunkN` property within one row in the v2 chunked row-set
+format while still fitting within the supported single-row path.
 
 **Pass condition:** `put` succeeds, `get` succeeds, and the retrieved block
 matches the original logical block and block ID, proving the multi-chunk
-single-entity payload path works for supported larger blocks.
+single-row payload path works for supported larger blocks.
 
-**Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-015,
-REQ-AZURE-TABLE-STORE-V2-016
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-015
 
 ### VAL-AZURE-TABLE-STORE-V2-012
 
@@ -156,19 +157,21 @@ table URLs, partition keys, or row keys at the trait boundary.
 
 ### VAL-AZURE-TABLE-STORE-V2-014
 
-Populate the table with recognized block entities and unrelated entities, then
+Populate the table with recognized block roots, continuation rows, and
+unrelated entities, then
 enumerate block IDs.
 
 **Pass condition:** enumeration reports only recognized block IDs and does not
-report unrelated entities or other table artifacts.
+report continuation rows, unrelated entities, or other table artifacts.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-012
 
 ### VAL-AZURE-TABLE-STORE-V2-015
 
 Cause entity listing, payload inspection, or decoding of a malformed recognized
-block-entity candidate such as a shard-prefix-mismatched key pair or malformed
-required v2 metadata to fail during enumeration.
+block-root candidate such as a shard-prefix-mismatched key pair, malformed
+required root metadata, or malformed continuation-row layout to fail during
+enumeration.
 
 **Pass condition:** enumeration fails explicitly as a backend failure rather
 than silently omitting the affected stored state.
@@ -177,20 +180,23 @@ than silently omitting the affected stored state.
 
 ### VAL-AZURE-TABLE-STORE-V2-016
 
-Store a valid typed block through `put`, then inspect the Azure Table entity
-keys and payload-property names used for the published state.
+Store a valid typed block through `put`, then inspect the Azure Table row keys
+and payload-property names used for the published state.
 
 **Pass condition:** the implementation derives the deterministic
-`PartitionKey`/`RowKey` pair from the returned block ID and stores the
-canonical bytes in one entity using deterministic `chunkN` payload properties.
+root `PartitionKey`/`RowKey` pair from the returned block ID, uses
+deterministic continuation-row keys when additional rows are required, and
+stores canonical bytes using deterministic `chunkN` payload properties within
+each row.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-004, REQ-AZURE-TABLE-STORE-V2-005,
 REQ-AZURE-TABLE-STORE-V2-014, REQ-AZURE-TABLE-STORE-V2-015
 
 ### VAL-AZURE-TABLE-STORE-V2-017
 
-Populate the mapped entity for a requested block ID with valid content, then
-make the entity unreadable or otherwise inaccessible before calling `get`.
+Populate the mapped row set for a requested block ID with valid content, then
+make the root row or a required continuation row unreadable or otherwise
+inaccessible before calling `get`.
 
 **Pass condition:** `get` fails explicitly as a backend failure and does not
 report absence.
@@ -200,8 +206,8 @@ report absence.
 ### VAL-AZURE-TABLE-STORE-V2-018
 
 Attempt identifier enumeration through a v2 store constructed from a SAS URL
-that lacks the permissions required to query or list the deterministic
-entities.
+that lacks the permissions required to query or list the deterministic root
+rows.
 
 **Pass condition:** identifier enumeration fails explicitly as a backend
 failure, and construction itself was not required to reject the SAS URL
@@ -215,7 +221,7 @@ Cause a transient transport failure during `put` before Azure returns any
 backend response, including both a case that later succeeds on retry and a case
 that continues failing until the bounded retry policy is exhausted.
 
-**Pass condition:** `put` retries the deterministic entity insert after the
+**Pass condition:** `put` retries the deterministic row insert after the
 transient transport failure, succeeds when a later retry reaches a successful
 backend response, and otherwise fails explicitly as a backend failure.
 
@@ -229,7 +235,7 @@ retry and a case that continues failing until the bounded retry policy is
 exhausted.
 
 **Pass condition:** `get` and identifier enumeration retry the deterministic
-entity read or table query after the transient transport failure, succeed when a
+row read or table query after the transient transport failure, succeed when a
 later retry reaches a successful backend response, retries a mid-stream paged
 query without restarting from the beginning, and otherwise fails explicitly as
 backend failures without claiming success or absence.
@@ -278,13 +284,13 @@ SAS URL.
 
 Run the dedicated live Azure verification mode against a fresh real Azure Table
 Storage table using a valid table SAS URL, including a block large enough to
-require multiple `chunkN` properties and a repeated publish of an already
-present block.
+require multiple `chunkN` properties within one row, a block large enough to
+require multiple rows, and a repeated publish of an already present block.
 
 **Pass condition:** the live verification succeeds after proving constructor
 success, `put` publication, `get` round-trip retrieval, `get` absence handling,
-block-ID enumeration, multi-chunk payload storage, and idempotent re-publish
-success against the real backend.
+block-ID enumeration, multi-chunk single-row payload storage, multi-row payload
+storage, and idempotent re-publish success against the real backend.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-018
 
@@ -295,8 +301,19 @@ Table v2 simulation.
 
 **Pass condition:** the repository provides a mock-backed surface that can
 observe constructor behavior, simulate publish/read/query outcomes, inject
-malformed or integrity-mismatched recognized block entities in the v2 chunked
-entity format, and simulate responses that omit non-decisive common storage
+malformed or integrity-mismatched recognized block row sets in the v2 chunked
+row-set format, and simulate responses that omit non-decisive common storage
 headers without broadening the production `BlockStore` API.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-022
+
+### VAL-AZURE-TABLE-STORE-V2-026
+
+Attempt `put` for canonical block bytes whose encoded payload and required
+metadata cannot fit within the supported deterministic multi-row layout for this
+revision.
+
+**Pass condition:** `put` fails explicitly before publication, does not create a
+recognized published block, and does not silently fall back to another backend.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-016
