@@ -610,9 +610,9 @@ fn find_end_of_central_directory(tail_bytes: &[u8]) -> Option<EndOfCentralDirect
             continue;
         }
 
-        let comment_len = match read_u16_le(tail_bytes, eocd_offset + 20) {
-            Some(value) => usize::from(value),
-            None => return None,
+        let comment_len = {
+            let value = read_u16_le(tail_bytes, eocd_offset + 20)?;
+            usize::from(value)
         };
         let Some(record_end) = eocd_offset
             .checked_add(EOCD_LEN)

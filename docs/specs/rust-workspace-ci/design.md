@@ -24,7 +24,7 @@ The repository quality gates own:
 - formatting verification
 - lint verification
 - Rust test execution
-- Azure live integration verification for `lexongraph-block-store-azure`
+- Azure live integration verification for the Azure-backed live-test crates
 - Rust coverage execution and publication
 - README surfacing of repository quality/status badges and repository navigation
 - SPDX header verification
@@ -103,8 +103,12 @@ The workflow contains a test job that restores Cargo cache and runs:
 
 ### DSG-CI-022 `Azure live verification job`
 
-The workflow contains a dedicated Azure live-verification job for
-`lexongraph-block-store-azure` in `.github/workflows/ci.yml`.
+The workflow contains a dedicated Azure live-verification job in
+`.github/workflows/ci.yml` for:
+
+- `lexongraph-block-store-azure`
+- `lexongraph-block-store-azure-sdk`
+- `lexongraph-block-store-azure-table-v2`
 
 That job:
 
@@ -120,9 +124,13 @@ That job:
 The Azure-live-test-relevant paths are:
 
 - `crates/lexongraph-block-store-azure/**`
+- `crates/lexongraph-block-store-azure-sdk/**`
+- `crates/lexongraph-block-store-azure-table-v2/**`
 - `Cargo.toml`
 - `Cargo.lock`
 - `docs/specs/rust-azure-blob-block-store/**`
+- `docs/specs/rust-azure-blob-block-store-sdk/**`
+- `docs/specs/rust-azure-table-block-store-v2/**`
 - `docs/specs/rust-workspace-ci/**`
 - `.github/workflows/ci.yml`
 
@@ -132,26 +140,42 @@ The Azure live-verification job grants only the GitHub Actions permissions
 needed for checkout and OIDC token exchange, then authenticates to Azure via a
 federated GitHub identity before provisioning any test resources.
 
-The workflow does not mint or store long-lived storage-account keys, account
+The workflow does not use repository-stored storage-account keys, account
 connection strings, or repository-managed SAS tokens as the primary
 authentication path for this job.
+
+If a selected live-test surface requires a service-specific SAS that cannot be
+minted directly through the Azure CLI with OIDC alone, the workflow may
+retrieve a key for the isolated temporary storage account after successful OIDC
+authentication and use it only to derive the temporary test SAS needed for that
+run.
+
+For the current Azure Table live-test surface, the workflow uses that temporary
+account key only to create the isolated table and to mint a table-scoped SAS
+with the minimum permissions required by the test flow, avoiding additional
+table-specific data-plane RBAC assumptions for the federated identity.
 
 ### DSG-CI-024 `Ephemeral resource lifecycle`
 
 After authenticating to Azure, the live-verification job provisions isolated
-temporary Azure Blob test resources for the current workflow run, derives a
-container SAS URL for the test-owned container, passes that SAS URL only to the
-selected live test invocation, and then cleans up the temporary Azure resources
-even when the live test fails.
+temporary Azure storage test resources for the current workflow run, derives the
+SAS URLs needed by the selected live tests, passes those SAS URLs only to the
+selected live test invocations, and then cleans up the temporary Azure
+resources even when a live test fails.
+
+For the current repository surface, this includes an isolated Azure Blob
+container for the blob-backed crates and an isolated Azure Table for
+`lexongraph-block-store-azure-table-v2`.
 
 The provisioned scope remains limited to the minimum resource boundary needed to
-obtain an isolated Azure Blob container and to clean it up deterministically.
+obtain the isolated test-owned blob and table resources and to clean them up
+deterministically.
 
 ### DSG-CI-025 `Explicit live test invocation`
 
-The Azure live-verification job invokes only the crate's dedicated live-test
-surface by explicit Cargo test selection rather than broad workspace test
-execution.
+The Azure live-verification job invokes only each selected crate's dedicated
+live-test surface by explicit Cargo test selection rather than broad workspace
+test execution.
 
 The default `cargo test --workspace --locked` job remains the routine
 repository-wide fast path and does not require live Azure credentials.

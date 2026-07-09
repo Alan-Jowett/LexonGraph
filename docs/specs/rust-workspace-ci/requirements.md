@@ -152,16 +152,24 @@ duplicating their normative behavior in full.
 ### REQ-CI-022
 
 The repository CI workflow shall include a dedicated Azure live-verification
-job for `lexongraph-block-store-azure` within `.github/workflows/ci.yml`.
+job within `.github/workflows/ci.yml` for the Azure-backed live-test crates:
+
+- `lexongraph-block-store-azure`
+- `lexongraph-block-store-azure-sdk`
+- `lexongraph-block-store-azure-table-v2`
 
 That job shall run on the same workflow events as the main CI workflow but
 shall execute only when the change set touches Azure-live-test-relevant
 surfaces, including:
 
 - `crates/lexongraph-block-store-azure/**`
+- `crates/lexongraph-block-store-azure-sdk/**`
+- `crates/lexongraph-block-store-azure-table-v2/**`
 - `Cargo.toml`
 - `Cargo.lock`
 - `docs/specs/rust-azure-blob-block-store/**`
+- `docs/specs/rust-azure-blob-block-store-sdk/**`
+- `docs/specs/rust-azure-table-block-store-v2/**`
 - `docs/specs/rust-workspace-ci/**`
 - `.github/workflows/ci.yml`
 
@@ -179,11 +187,13 @@ credentials or repository-stored SAS tokens.
 ### REQ-CI-024
 
 The Azure live-verification job shall create and clean up isolated temporary
-Azure storage resources for each run and shall not depend on a shared
-pre-provisioned test container.
+Azure storage resources for each run and shall not depend on shared
+pre-provisioned blob or table test resources.
 
-If the live job provisions more than a container, it shall keep the provisioned
-resource scope limited to what is needed to run and clean up the verification.
+If the live job provisions more than a blob container, it shall keep the
+provisioned resource scope limited to what is needed to run and clean up the
+verification, including any temporary Azure Table needed for the selected live
+tests.
 
 ### REQ-CI-025
 

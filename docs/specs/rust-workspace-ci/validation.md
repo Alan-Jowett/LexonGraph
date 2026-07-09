@@ -213,12 +213,13 @@ long-lived storage-account credential as its primary authentication path.
 
 ### VAL-CI-021
 
-Observe a live-verification job run that provisions temporary Azure Blob test
-resources.
+Observe a live-verification job run that provisions temporary Azure Blob and
+Table test resources when the selected change set includes the corresponding
+live-test surfaces.
 
 **Pass condition:** the job creates isolated temporary Azure storage resources,
-uses them for the live test, and then cleans them up even when the live test
-step fails.
+uses them for the selected live tests, and then cleans them up even when a live
+test step fails.
 
 **Traces to:** REQ-CI-024
 
@@ -229,7 +230,7 @@ live-verification run.
 
 **Pass condition:** the default workspace test job continues to run
 `cargo test --workspace --locked` without live Azure credentials, while the
-Azure live-verification job explicitly selects only the crate's dedicated live
-test mode.
+Azure live-verification job explicitly selects only the dedicated live test
+modes for the Azure-backed crates whose live surfaces are owned by the job.
 
 **Traces to:** REQ-CI-025

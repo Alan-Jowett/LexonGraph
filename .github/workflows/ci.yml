@@ -89,7 +89,7 @@ jobs:
         run: cargo test --workspace --locked
 
   azure-live:
-    name: Azure live block-store test
+    name: Azure live block-store tests
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
@@ -112,8 +112,10 @@ jobs:
           relevant_prefixes=(
             "crates/lexongraph-block-store-azure/"
             "crates/lexongraph-block-store-azure-sdk/"
+            "crates/lexongraph-block-store-azure-table-v2/"
             "docs/specs/rust-azure-blob-block-store/"
             "docs/specs/rust-azure-blob-block-store-sdk/"
+            "docs/specs/rust-azure-table-block-store-v2/"
             "docs/specs/rust-workspace-ci/"
           )
           relevant_files=(
@@ -190,7 +192,7 @@ jobs:
         with:
           key: azure-live
 
-      - name: Provision temporary Azure Blob test resources
+      - name: Provision temporary Azure Blob and Table test resources
         if: steps.changes.outputs.run_live_tests == 'true'
         shell: bash
         run: |
@@ -202,6 +204,7 @@ jobs:
           )"
           storage_account="lgaz${storage_suffix}"
           container_name="blocks"
+          table_name="blocks"
 
           echo "AZURE_TEST_RESOURCE_GROUP=$resource_group" >> "$GITHUB_ENV"
 
@@ -219,14 +222,28 @@ jobs:
             --https-only true \
             --output none
 
+          account_key="$(
+            az storage account keys list \
+              --account-name "$storage_account" \
+              --resource-group "$resource_group" \
+              --query '[0].value' \
+              --output tsv
+          )"
+
           az storage container create \
             --account-name "$storage_account" \
             --name "$container_name" \
             --auth-mode login \
             --output none
 
+          az storage table create \
+            --account-name "$storage_account" \
+            --name "$table_name" \
+            --account-key "$account_key" \
+            --output none
+
           expiry="$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%MZ')"
-          sas="$(
+          blob_sas="$(
             az storage container generate-sas \
               --account-name "$storage_account" \
               --name "$container_name" \
@@ -237,11 +254,26 @@ jobs:
               --https-only \
               --output tsv
           )"
-          sas_url="https://${storage_account}.blob.core.windows.net/${container_name}?${sas}"
+          blob_sas_url="https://${storage_account}.blob.core.windows.net/${container_name}?${blob_sas}"
+          table_sas="$(
+            az storage table generate-sas \
+              --account-name "$storage_account" \
+              --name "$table_name" \
+              --account-key "$account_key" \
+              --permissions ra \
+              --expiry "$expiry" \
+              --https-only \
+              --output tsv
+          )"
+          table_sas_url="https://${storage_account}.table.core.windows.net/${table_name}?${table_sas}"
 
-          echo "::add-mask::$sas"
-          echo "::add-mask::$sas_url"
-          echo "LEXONGRAPH_AZURE_TEST_CONTAINER_SAS_URL=$sas_url" >> "$GITHUB_ENV"
+          echo "::add-mask::$blob_sas"
+          echo "::add-mask::$blob_sas_url"
+          echo "::add-mask::$account_key"
+          echo "::add-mask::$table_sas"
+          echo "::add-mask::$table_sas_url"
+          echo "LEXONGRAPH_AZURE_TEST_CONTAINER_SAS_URL=$blob_sas_url" >> "$GITHUB_ENV"
+          echo "LEXONGRAPH_AZURE_TEST_TABLE_SAS_URL=$table_sas_url" >> "$GITHUB_ENV"
 
       - name: Run live Azure block-store tests
         if: steps.changes.outputs.run_live_tests == 'true'
@@ -250,6 +282,7 @@ jobs:
         run: |
           cargo test -p lexongraph-block-store-azure --locked --test live_azure -- --ignored
           cargo test -p lexongraph-block-store-azure-sdk --locked --test live_azure -- --ignored
+          cargo test -p lexongraph-block-store-azure-table-v2 --locked --test live_azure -- --ignored
 
       - name: Clean up temporary Azure resources
         if: always() && steps.changes.outputs.run_live_tests == 'true'
