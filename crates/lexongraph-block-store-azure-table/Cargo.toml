@@ -11,7 +11,7 @@ async-trait = "0.1"
 # isolated to this crate until the workspace has an equivalent v1 Tables client.
 azure_core = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
 azure_data_tables = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
-azure_storage = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_storage = { version = "0.21", default-features = false, features = ["enable_reqwest_rustls"] }
 base64 = "0.22"
 futures = "0.3"
 lexongraph-block = { path = "../lexongraph-block" }
