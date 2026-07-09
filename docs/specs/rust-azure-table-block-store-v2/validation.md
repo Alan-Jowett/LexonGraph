@@ -115,7 +115,8 @@ to the operations that require backend access.
 
 Store and retrieve a valid typed block whose canonical bytes exceed the
 supported one-row limit in this revision but fit within the supported
-deterministic multi-row layout.
+deterministic multi-row layout, including a case that requires more rows than
+the earlier fixed per-block cap.
 
 **Pass condition:** `put` succeeds, `get` succeeds, enumeration reports exactly
 one block ID for the stored state, and the retrieved block matches the original
@@ -311,7 +312,8 @@ headers without broadening the production `BlockStore` API.
 
 Attempt `put` for canonical block bytes whose encoded payload and required
 metadata cannot fit within the supported deterministic multi-row layout for this
-revision.
+revision because of actual Azure Table row/property limits or metadata-encoding
+limits rather than because of a fixed artificial per-block row cap.
 
 **Pass condition:** `put` fails explicitly before publication, does not create a
 recognized published block, and does not silently fall back to another backend.

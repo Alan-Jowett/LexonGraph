@@ -26,7 +26,6 @@ const FIXED_ROW_PROPERTY_COUNT: usize = 7;
 const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ROW_PROPERTY_COUNT;
 const MAX_STRING_PROPERTY_CHARS: usize = 32 * 1024;
 const RAW_CHUNK_SIZE: usize = 24_576;
-const MAX_ROW_COUNT: usize = 8;
 const CONTINUATION_ROW_SUFFIX_WIDTH: usize = 4;
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(250);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(4);
@@ -814,12 +813,6 @@ impl TableBlockEntityMetadata {
                 self.partition_key, self.row_key
             ));
         }
-        if row_count > MAX_ROW_COUNT {
-            return Err(format!(
-                "failed to inspect Azure Table row {} / {}: RowCount exceeds the supported limit",
-                self.partition_key, self.row_key
-            ));
-        }
         if row_index != 0 {
             return Err(format!(
                 "failed to inspect Azure Table row {} / {}: recognized block roots must use RowIndex 0",
@@ -960,14 +953,6 @@ impl TableBlockEntity {
             current_row_property_bytes = next_row_property_bytes;
         }
         chunk_rows.push(current_row);
-        if chunk_rows.len() > MAX_ROW_COUNT {
-            return Err(backend_failure(format!(
-                "block {} cannot fit within the supported Azure Table row-set layout because it requires {} rows and the limit is {}",
-                block_id,
-                chunk_rows.len(),
-                MAX_ROW_COUNT
-            )));
-        }
         let row_count = chunk_rows.len();
         chunk_rows
             .into_iter()
@@ -1095,9 +1080,9 @@ impl TableBlockEntity {
                 "unsupported Azure Table block row schema version",
             ));
         }
-        if row_count == 0 || row_count > MAX_ROW_COUNT {
+        if row_count == 0 {
             return Err(decode_failure(
-                "Azure Table block row declared an unsupported RowCount",
+                "Azure Table block row declared a non-positive RowCount",
             ));
         }
         if row_index != 0 {
@@ -1913,16 +1898,6 @@ mod tests {
         backend.state.lock().unwrap().deny_insert = true;
         let denied = block_on(store.put(&sample_leaf_block(12))).unwrap_err();
         assert!(format!("{denied}").contains("HTTP 403"));
-
-        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
-        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
-        let max_supported_block_len =
-            root_row_limit + ((MAX_ROW_COUNT - 1) * continuation_row_limit);
-        let too_large = vec![0_u8; max_supported_block_len + 1];
-        let too_large_error =
-            block_on(store.put_block_bytes(&BlockHash::from_bytes([0x11; 32]), &too_large))
-                .unwrap_err();
-        assert!(format!("{too_large_error}").contains("supported Azure Table row-set layout"));
     }
 
     #[test]
@@ -2269,11 +2244,38 @@ mod tests {
     }
 
     #[test]
+    fn repository_can_round_trip_raw_bytes_across_more_than_eight_rows() {
+        let backend = Arc::new(MockTableBackend::default());
+        let store = test_store(backend);
+        let block_id = BlockHash::from_bytes([0x79; 32]);
+        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
+        let bytes = vec![0xcd; root_row_limit + (continuation_row_limit * 8) + 123];
+
+        block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
+
+        let loaded = block_on(store.get_block_bytes(&block_id)).unwrap().unwrap();
+        assert_eq!(loaded, bytes);
+
+        let enumerated = block_on(store.list_block_ids()).unwrap();
+        assert!(enumerated.contains(&block_id));
+    }
+
+    #[test]
     fn entity_size_limit_uses_azure_property_footprint() {
         let block_id = BlockHash::from_bytes([0x78; 32]);
         let bytes = vec![0xab; RAW_CHUNK_SIZE * 16];
         let error = TableBlockEntity::from_block_bytes(&block_id, &bytes).unwrap_err();
         assert!(format!("{error}").contains("property data requires"));
+    }
+
+    #[test]
+    fn row_count_metadata_limit_is_explicit() {
+        let block_id = BlockHash::from_bytes([0x7a; 32]);
+        let error =
+            TableBlockEntity::from_row_chunks(&block_id, 0, (i32::MAX as usize) + 1, 0, &[])
+                .unwrap_err();
+        assert!(format!("{error}").contains("requires too many Azure Table rows"));
     }
 
     #[test]

@@ -208,8 +208,9 @@ row set using the v2 chunked row-set format.
 The row set shall contain one root row plus zero or more continuation rows.
 
 Small supported blocks may fit entirely within the root row. Larger supported
-blocks may span multiple rows. The implementation shall not silently fall back
-to a different backend for oversized blocks.
+blocks may span multiple rows, including more rows than any earlier
+implementation-specific fixed per-block row-count cap. The implementation shall
+not silently fall back to a different backend for oversized blocks.
 
 ### REQ-AZURE-TABLE-STORE-V2-015
 
@@ -229,9 +230,14 @@ for this representation.
 `put` shall fail explicitly before publication when the canonical block bytes
 and required storage metadata, encoded using this revision's v2 chunked row-set
 format, cannot fit within the supported deterministic row-set layout under the
-documented Azure Table service limits applicable to this revision, including
-the per-row property-count limit, the per-row entity/property-footprint limit,
-and the accepted per-property value-size limit for the stored representation.
+documented Azure Table service limits and metadata-encoding limits applicable to
+this revision, including the per-row property-count limit, the per-row
+entity/property-footprint limit, the accepted per-property value-size limit for
+the stored representation, and any metadata field-width limit inherent in the
+stored row-set format.
+
+This revision shall not reject an otherwise representable block solely because
+it spans more than a fixed implementation-defined number of Azure Table rows.
 
 ### REQ-AZURE-TABLE-STORE-V2-017
 
