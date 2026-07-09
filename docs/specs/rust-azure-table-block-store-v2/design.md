@@ -106,6 +106,11 @@ The stored representation must be sufficient to:
 3. determine before publication whether the logical block fits within the
    supported row-set layout for this revision
 
+This revision's row-set layout is not bounded by a fixed artificial maximum
+number of Azure Table rows per logical block. Instead, support is bounded only
+by the real per-row Azure Table limits and the row-set metadata representation
+chosen by this crate revision.
+
 ## Runtime Behavior
 
 ### DSG-AZURE-TABLE-STORE-V2-006 `Real-Azure response-compatible client behavior`
@@ -251,8 +256,11 @@ Table-focused tests for:
 - round-trip `put`/`get` for a block that requires multiple `chunkN`
   properties within one row
 - round-trip `put`/`get` for a block that requires multiple rows
+- round-trip `put`/`get` for a block that requires more rows than the earlier
+  fixed per-block cap and still fits the actual representational limits
 - explicit oversized-block rejection before publication when the block exceeds
-  the supported row-set layout
+  the supported row-set layout because of real Azure or metadata-encoding
+  limits rather than an artificial fixed row cap
 - conflict-success handling for already-existing root rows
 - `get` integrity-mismatch failure when stored row-set bytes decode to a
   different block ID
