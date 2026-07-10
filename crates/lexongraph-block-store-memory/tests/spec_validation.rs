@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::future::Future;
 
+use futures::TryStreamExt;
 use lexongraph_block::BlockHash;
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
@@ -190,6 +191,24 @@ fn val_mem_store_014_cache_mode_rejects_blocks_larger_than_total_budget() {
 
     expect_backend_failure_contains(error, "exceeds cache capacity");
     assert!(resident_ids(&store).is_empty());
+}
+
+#[test]
+fn val_mem_store_015_cache_mode_operates_through_ordinary_block_store_boundary() {
+    let store = MemoryBlockStore::new_cache_mb(1).unwrap();
+    let block_id = BlockHash::from_bytes([0x55; 32]);
+    let block_bytes = vec![0xaa; 256];
+
+    store.put_block_bytes(&block_id, &block_bytes).unwrap();
+
+    assert_eq!(
+        store.get_block_bytes(&block_id).unwrap().unwrap(),
+        block_bytes
+    );
+    assert_eq!(
+        pollster::block_on(store.iter_block_ids().unwrap().try_collect::<HashSet<_>>()).unwrap(),
+        HashSet::from_iter([block_id]),
+    );
 }
 
 #[test]

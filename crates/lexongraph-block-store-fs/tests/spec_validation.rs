@@ -330,7 +330,7 @@ fn val_fs_store_023_cache_mode_eviction_uses_payload_bytes_and_lru_recency() {
 }
 
 #[test]
-fn val_fs_store_024_cache_mode_rejects_blocks_larger_than_total_budget_without_publish() {
+fn val_fs_store_025_cache_mode_rejects_blocks_larger_than_total_budget_without_publish() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
     let oversized = sample_leaf_block(&"x".repeat(1_100_000));
@@ -344,7 +344,7 @@ fn val_fs_store_024_cache_mode_rejects_blocks_larger_than_total_budget_without_p
 }
 
 #[test]
-fn val_fs_store_025_cache_mode_constructor_evicts_oldest_existing_blocks_until_budget_fits() {
+fn val_fs_store_024_cache_mode_constructor_evicts_oldest_existing_blocks_until_budget_fits() {
     let temp_dir = tempfile::tempdir().unwrap();
     let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
     let first = sample_leaf_block(&"a".repeat(700_000));
@@ -373,7 +373,7 @@ fn val_fs_store_025_cache_mode_constructor_evicts_oldest_existing_blocks_until_b
 
 #[cfg(feature = "inject")]
 #[test]
-fn val_fs_store_026_cache_mode_constructor_surfaces_injected_metadata_failures() {
+fn cache_mode_constructor_surfaces_injected_metadata_failures() {
     let temp_dir = tempfile::tempdir().unwrap();
     let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
     let block = sample_leaf_block("metadata-failure");
@@ -400,7 +400,7 @@ fn val_fs_store_026_cache_mode_constructor_surfaces_injected_metadata_failures()
 
 #[cfg(feature = "inject")]
 #[test]
-fn val_fs_store_027_cache_mode_constructor_surfaces_injected_eviction_failures() {
+fn cache_mode_constructor_surfaces_injected_eviction_failures() {
     let temp_dir = tempfile::tempdir().unwrap();
     let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
     let first = sample_leaf_block(&"a".repeat(700_000));
