@@ -4,9 +4,9 @@
 
 ## Status
 
-Draft design specification for a Rust crate that realizes PCA projection +
-deterministic sort + exact chunking through the shared LexonGraph streaming
-clustering contract.
+Draft design specification for a Rust crate that realizes streaming PCA
+projection + deterministic sort + exact chunking through the shared LexonGraph
+streaming clustering contract.
 
 ## Design Goals
 
@@ -16,6 +16,7 @@ The crate design is intended to be:
 - conformant to the shared streaming clustering contract
 - deterministic at the observable API boundary
 - explicit about exact chunk-formation behavior
+- true streaming with respect to full logical dataset size
 - minimal in its public surface
 
 ## Crate Boundary
@@ -24,9 +25,9 @@ The crate owns:
 
 - a concrete streaming trainer implementation
 - a concrete streaming classifier implementation
-- projection-key derivation and deterministic sort behavior
+- replay-based PCA accumulation and deterministic boundary discovery
 - deterministic exact chunk formation and chunk-boundary classification
-- the minimal retained pass-scoped state needed for same-dataset multi-pass
+- only bounded implementation-owned state needed for same-dataset multi-pass
   refinement
 
 The crate does not own:
@@ -52,13 +53,19 @@ The crate does not redefine those sources.
 The crate exposes one trainer type implementing `StreamingClusterTrainer` and
 one classifier type implementing `StreamingClusterClassifier`.
 
-### DSG-PCA-CHUNK-003 `Pass-scoped realization`
+### DSG-PCA-CHUNK-003 `True streaming pass realization`
 
-`ingest_batch()` validates embeddings through the shared malformed-input surface
-and appends them to the current pass dataset order.
+`ingest_batch()` validates embeddings through the shared malformed-input
+surface.
 
-The implementation may retain one completed pass internally when required to
-fit PCA, derive deterministic ordering, and produce the chunk-boundary model.
+During the PCA-analysis phase, the implementation streams embeddings into a
+mergeable PCA accumulator and a pass fingerprint without retaining the full
+logical dataset.
+
+During boundary-discovery and ready replay phases, the implementation streams
+the replayed pass while retaining only bounded state for the currently best
+candidate classifier-visible sort key group and the already discovered boundary
+keys.
 
 ### DSG-PCA-CHUNK-004 `Cross-pass continuity`
 
@@ -67,52 +74,57 @@ Each later pass is validated against that baseline for identical observed count
 and identical ordered embedding content before the trainer claims conformant
 refinement of the same run.
 
-### DSG-PCA-CHUNK-005 `Projection-key realization`
+### DSG-PCA-CHUNK-005 `Streaming PCA realization`
 
-Each successful completed pass fits PCA through the repository PCA crate,
-truncates to the retained dimensionality configured for the crate, and projects
-each embedding into retained PCA coordinates.
+The first completed pass finalizes PCA through the repository PCA crate by
+using the streaming accumulator path, truncates to the retained dimensionality
+configured for the crate, and derives per-dimension projection weights from the
+explained variance raised to the configured variance exponent.
 
-The crate then derives one scalar projection key per embedding by taking the
-weighted sum of retained coordinates, where each coordinate is weighted by the
-corresponding explained variance raised to the configured variance exponent.
+No design path may require a full-pass `fit(...)` call over a retained logical
+dataset.
 
-### DSG-PCA-CHUNK-006 `Deterministic total ordering`
+### DSG-PCA-CHUNK-006 `Deterministic classifier-visible ordering`
 
-The pass realization deterministically sorts embeddings by:
+For any embedding, the crate derives one scalar projection key by taking the
+weighted sum of retained PCA coordinates, where each coordinate is weighted by
+the corresponding explained variance raised to the configured variance
+exponent.
+
+The classifier-visible total order is determined by:
 
 1. scalar projection key
 2. retained PCA coordinates under lexicographic comparison
 3. the original embedding values under lexicographic comparison
-4. original pass dataset order as the final tie-break
 
-This ordering remains valid even when many embeddings share equal projection
-keys because the pass-order tie-break defines a total order.
+If exact chunking would require splitting members whose classifier-visible sort
+keys remain fully identical, the crate fails explicitly instead of learning a
+boundary the classifier cannot replay.
 
-The classifier boundary model is defined only over the reproducible portion of
-that ordering. If exact chunking would require splitting members whose
-classifier sort keys remain fully identical after removing pass-order position,
-the crate fails explicitly instead of learning a boundary the classifier cannot
-replay.
+### DSG-PCA-CHUNK-007 `Replay-based exact contiguous chunk formation`
 
-### DSG-PCA-CHUNK-007 `Exact contiguous chunk formation`
+After the first PCA-analysis pass, the trainer computes the target cumulative
+ranks for exact contiguous chunk boundaries.
 
-After sorting, the crate partitions the ordered pass into exactly `K`
-contiguous chunks.
+Each later caller-visible replay pass discovers at most one next
+classifier-visible boundary key above the prior lower bound. If that key group's
+occupancy exactly reaches the required cumulative rank, the boundary is fixed.
+If the key group would overshoot the required cumulative rank, the trainer fails
+explicitly because exact classifier-replayable chunking is impossible for that
+dataset.
 
-If `N % K == 0`, all chunks have identical occupancy. Otherwise, the crate
-assigns the remainder deterministically to the earliest chunks in sorted order
-so chunk sizes differ by at most one while still covering all members exactly
+This design intentionally trades additional caller-visible passes for bounded
+implementation-owned state.
+
+### DSG-PCA-CHUNK-008 `Remainder allocation and stable cluster identity`
+
+When `N % K != 0`, the earlier chunks in sorted order receive the remainder so
+that chunk sizes differ by at most one while still covering all members exactly
 once.
-
-### DSG-PCA-CHUNK-008 `Stable cluster identity`
 
 Externally visible cluster IDs correspond to deterministic chunk position in the
 sorted order, beginning at the first chunk and increasing monotonically through
 the last chunk.
-
-Repeated identical passes therefore preserve stable cluster IDs without needing
-an independent cross-pass matching algorithm.
 
 ### DSG-PCA-CHUNK-009 `Classifier realization`
 
@@ -121,12 +133,11 @@ a classifier that reuses:
 
 - the learned retained PCA transform
 - the configured projection-key weighting rule
-- the learned scalar chunk boundaries
+- the discovered classifier-visible chunk upper bounds
 
-The classifier maps valid embeddings into `[0, K)` by computing the same scalar
-projection key plus the same classifier-visible lexicographic tie-break fields
-and applying the learned chunk upper bounds. Boundary ties are resolved toward
-the earliest matching chunk.
+The classifier maps valid embeddings into `[0, K)` by computing the same
+classifier-visible sort key and applying the learned chunk upper bounds.
+Boundary ties are resolved toward the earliest matching chunk.
 
 ### DSG-PCA-CHUNK-010 `Pass reports`
 
@@ -137,7 +148,11 @@ Each completed pass yields a deterministic `PassReport` whose:
   same candidate
 - `balance_metric` is zero when no explicit balance constraints are configured
 - metric directions remain fixed for the run
-- `cluster_ids` enumerate the stable chunk IDs
+- `readiness` reports whether the pass is still analysis-only or is now
+  partition-ready
+
+Analysis-only passes omit partition outputs. Partition-ready passes enumerate
+the stable chunk IDs and realized cluster count.
 
 ### DSG-PCA-CHUNK-011 `Unsupported balance constraints`
 
@@ -163,20 +178,30 @@ The repository includes automated tests that exercise both the crate's
 algorithm-specific observable behavior and the shared streaming clustering
 conformance helpers.
 
+### DSG-PCA-CHUNK-014 `Bounded implementation-owned state`
+
+The implementation shall not retain, materialize, or spill the full logical
+dataset, projected pass coordinates, or full sort tables.
+
+Implementation-owned state may grow with the currently ingested batch, the
+current classifier-visible sort-key group, or the small set of discovered
+boundary keys, but not with the full logical dataset size.
+
 ## Traceability
 
 | Design ID | Satisfies |
 |---|---|
 | DSG-PCA-CHUNK-001 | REQ-PCA-CHUNK-001, REQ-PCA-CHUNK-002 |
 | DSG-PCA-CHUNK-002 | REQ-PCA-CHUNK-003 |
-| DSG-PCA-CHUNK-003 | REQ-PCA-CHUNK-010, REQ-PCA-CHUNK-014 |
+| DSG-PCA-CHUNK-003 | REQ-PCA-CHUNK-010, REQ-PCA-CHUNK-017, REQ-PCA-CHUNK-018 |
 | DSG-PCA-CHUNK-004 | REQ-PCA-CHUNK-010 |
 | DSG-PCA-CHUNK-005 | REQ-PCA-CHUNK-004, REQ-PCA-CHUNK-005 |
 | DSG-PCA-CHUNK-006 | REQ-PCA-CHUNK-008, REQ-PCA-CHUNK-009 |
-| DSG-PCA-CHUNK-007 | REQ-PCA-CHUNK-006, REQ-PCA-CHUNK-007 |
-| DSG-PCA-CHUNK-008 | REQ-PCA-CHUNK-013 |
+| DSG-PCA-CHUNK-007 | REQ-PCA-CHUNK-005, REQ-PCA-CHUNK-006, REQ-PCA-CHUNK-007 |
+| DSG-PCA-CHUNK-008 | REQ-PCA-CHUNK-007, REQ-PCA-CHUNK-013 |
 | DSG-PCA-CHUNK-009 | REQ-PCA-CHUNK-012, REQ-PCA-CHUNK-013 |
 | DSG-PCA-CHUNK-010 | REQ-PCA-CHUNK-011 |
 | DSG-PCA-CHUNK-011 | REQ-PCA-CHUNK-015 |
 | DSG-PCA-CHUNK-012 | REQ-PCA-CHUNK-014 |
 | DSG-PCA-CHUNK-013 | REQ-PCA-CHUNK-016 |
+| DSG-PCA-CHUNK-014 | REQ-PCA-CHUNK-017, REQ-PCA-CHUNK-018 |
