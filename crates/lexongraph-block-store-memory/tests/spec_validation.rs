@@ -7,7 +7,7 @@ use lexongraph_block::BlockHash;
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreExt};
-use lexongraph_block_store_memory::{MemoryBlockStore, MemoryBlockStoreBuildError};
+use lexongraph_block_store_memory::{BYTES_PER_MB, MemoryBlockStore, MemoryBlockStoreBuildError};
 
 mod support;
 
@@ -145,7 +145,24 @@ fn val_mem_store_010_public_surface_keeps_backend_volatile_and_bounded() {
 }
 
 #[test]
-fn val_mem_store_011_cache_mode_evicts_least_recently_used_entries_by_payload_bytes() {
+fn val_mem_store_012_cache_mode_constructor_uses_binary_mb_budget() {
+    let store = MemoryBlockStore::new_cache_mb(1).unwrap();
+    let exact_limit_id = BlockHash::from_bytes([0x31; 32]);
+    let over_limit_id = BlockHash::from_bytes([0x32; 32]);
+
+    store
+        .put_block_bytes(&exact_limit_id, &vec![0xaa; BYTES_PER_MB])
+        .unwrap();
+    let error = store
+        .put_block_bytes(&over_limit_id, &vec![0xbb; BYTES_PER_MB + 1])
+        .unwrap_err();
+
+    expect_backend_failure_contains(error, "exceeds cache capacity");
+    assert_eq!(resident_ids(&store), HashSet::from_iter([exact_limit_id]));
+}
+
+#[test]
+fn val_mem_store_013_cache_mode_evicts_least_recently_used_entries_by_payload_bytes() {
     let store = MemoryBlockStore::new_cache_mb(1).unwrap();
     let first = sample_leaf_block(&"a".repeat(700_000));
     let second = sample_leaf_block(&"b".repeat(300_000));
@@ -165,7 +182,7 @@ fn val_mem_store_011_cache_mode_evicts_least_recently_used_entries_by_payload_by
 }
 
 #[test]
-fn val_mem_store_012_cache_mode_rejects_blocks_larger_than_total_budget() {
+fn val_mem_store_014_cache_mode_rejects_blocks_larger_than_total_budget() {
     let store = MemoryBlockStore::new_cache_mb(1).unwrap();
     let oversized = sample_leaf_block(&"x".repeat(1_100_000));
 
@@ -176,7 +193,7 @@ fn val_mem_store_012_cache_mode_rejects_blocks_larger_than_total_budget() {
 }
 
 #[test]
-fn val_mem_store_013_cache_mode_replacement_evicts_other_entries_before_growing_bytes() {
+fn cache_mode_replacement_evicts_other_entries_before_growing_bytes() {
     let store = MemoryBlockStore::new_cache_mb(1).unwrap();
     let first_id = BlockHash::from_bytes([0x11; 32]);
     let second_id = BlockHash::from_bytes([0x22; 32]);

@@ -27,7 +27,9 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_fs::StoredFileMetadata;
 #[cfg(feature = "inject")]
 use lexongraph_block_store_fs::inject::{FsOps, StagedFile};
-use lexongraph_block_store_fs::{FilesystemBlockStore, FilesystemBlockStoreBuildError};
+use lexongraph_block_store_fs::{
+    BYTES_PER_MB, FilesystemBlockStore, FilesystemBlockStoreBuildError,
+};
 #[cfg(feature = "inject")]
 use tempfile::NamedTempFile;
 use tempfile::TempDir;
@@ -289,7 +291,20 @@ fn val_fs_store_022_cache_mode_constructor_enforces_positive_mb_capacity() {
         FilesystemBlockStoreBuildError::ZeroCacheCapacity
     );
 
-    FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let exact_limit_id = BlockHash::from_bytes([0x41; 32]);
+    let over_limit_id = BlockHash::from_bytes([0x42; 32]);
+
+    store
+        .put_block_bytes(&exact_limit_id, &vec![0xaa; BYTES_PER_MB])
+        .unwrap();
+    let error = store
+        .put_block_bytes(&over_limit_id, &vec![0xbb; BYTES_PER_MB + 1])
+        .unwrap_err();
+
+    expect_backend_failure_contains(error, "exceeds cache capacity");
+    assert!(expected_block_path(temp_dir.path(), &exact_limit_id).exists());
+    assert!(!expected_block_path(temp_dir.path(), &over_limit_id).exists());
 }
 
 #[test]
