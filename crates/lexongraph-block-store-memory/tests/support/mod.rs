@@ -3,8 +3,6 @@
 #[cfg(feature = "inject")]
 use async_trait::async_trait;
 #[cfg(feature = "inject")]
-use futures::stream;
-#[cfg(feature = "inject")]
 use lexongraph_block::BlockHash;
 use lexongraph_block::{
     Block, Content, EmbeddingSpec, LeafEntry, VERSION_1, ValidatedBlock, build_leaf_block,
@@ -12,8 +10,6 @@ use lexongraph_block::{
 };
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::{BlockStoreConformanceHarness, BlockStoreFactory};
-#[cfg(feature = "inject")]
-use lexongraph_block_store::{BlockStore, BlockStoreError};
 #[cfg(feature = "inject")]
 use lexongraph_block_store_memory::MemoryBlockStore;
 

@@ -71,6 +71,12 @@ The crate exposes a constructor that accepts `max_resident_blocks`.
 
 Construction fails explicitly when `max_resident_blocks` is zero.
 
+The crate also exposes an opt-in cache-mode constructor that accepts an MB
+budget and converts it to a payload-byte budget using `1 MB = 1,048,576 bytes`.
+
+Cache-mode construction fails explicitly when the requested MB budget is zero or
+cannot be converted to the corresponding byte budget.
+
 ## Runtime Behavior
 
 ### DSG-MEM-STORE-005 `put`
@@ -117,7 +123,20 @@ least-recently-used resident entry is evicted before success is reported.
 Recency is refreshed by successful direct `get`, successful direct `put`, and
 successful overlay-notified `get` hit promotion.
 
-### DSG-MEM-STORE-009 `Overlay notification integration`
+In cache mode, capacity is instead measured in canonical payload bytes retained
+for resident entries.
+
+When a direct cache-mode `put` would exceed the configured byte budget, the
+implementation repeatedly evicts the least-recently-used resident entry until
+the incoming block fits or the resident set is exhausted.
+
+### DSG-MEM-STORE-009 `Oversize direct-write rejection`
+
+If one block's canonical payload bytes exceed the total configured cache-mode
+byte budget, the direct cache write fails explicitly without mutating the
+resident set.
+
+### DSG-MEM-STORE-010 `Overlay notification integration`
 
 Overlay compositions interact with this crate through ordinary `put`, `get`,
 and `iter_block_ids` only.
@@ -125,7 +144,7 @@ and `iter_block_ids` only.
 If an overlay chooses to refill a higher-level cache after a lower-layer read
 hit, it does so by calling the ordinary `put` contract owned by this crate.
 
-### DSG-MEM-STORE-010 `Durability boundary`
+### DSG-MEM-STORE-011 `Durability boundary`
 
 `MemoryBlockStore` remains a standalone volatile backend.
 
@@ -135,7 +154,7 @@ guarantees remain owned by overlay composition choices outside this crate.
 
 ## Verification Strategy
 
-### DSG-MEM-STORE-011 `Conformance and cache verification`
+### DSG-MEM-STORE-012 `Conformance and cache verification`
 
 The crate reuses the parent block-store conformance helpers to verify the shared
 `put`, `get`, and identifier-enumeration contract.
@@ -145,6 +164,8 @@ The crate adds backend-specific tests for:
 - zero-capacity constructor failure
 - resident enumeration
 - least-recently-used eviction under direct access
+- cache-mode byte-budget eviction under direct access
+- cache-mode rejection of direct writes larger than the total byte budget
 - absence of any overlay-specific callback surface on the store itself
 
 ## Traceability
@@ -152,11 +173,12 @@ The crate adds backend-specific tests for:
 | Design ID | Satisfies |
 |---|---|
 | DSG-MEM-STORE-001 | REQ-MEM-STORE-001, REQ-MEM-STORE-002 |
-| DSG-MEM-STORE-002..004 | REQ-MEM-STORE-001, REQ-MEM-STORE-003, REQ-MEM-STORE-004 |
+| DSG-MEM-STORE-002..004 | REQ-MEM-STORE-001, REQ-MEM-STORE-003, REQ-MEM-STORE-004, REQ-MEM-STORE-013 |
 | DSG-MEM-STORE-005 | REQ-MEM-STORE-005, REQ-MEM-STORE-008 |
 | DSG-MEM-STORE-006 | REQ-MEM-STORE-006, REQ-MEM-STORE-008 |
 | DSG-MEM-STORE-007 | REQ-MEM-STORE-007 |
-| DSG-MEM-STORE-008 | REQ-MEM-STORE-008, REQ-MEM-STORE-009 |
-| DSG-MEM-STORE-009 | REQ-MEM-STORE-010, REQ-MEM-STORE-011 |
-| DSG-MEM-STORE-010 | REQ-MEM-STORE-004, REQ-MEM-STORE-010 |
-| DSG-MEM-STORE-011 | REQ-MEM-STORE-012 |
+| DSG-MEM-STORE-008 | REQ-MEM-STORE-008, REQ-MEM-STORE-009, REQ-MEM-STORE-014, REQ-MEM-STORE-015 |
+| DSG-MEM-STORE-009 | REQ-MEM-STORE-016 |
+| DSG-MEM-STORE-010 | REQ-MEM-STORE-010, REQ-MEM-STORE-011, REQ-MEM-STORE-017 |
+| DSG-MEM-STORE-011 | REQ-MEM-STORE-004, REQ-MEM-STORE-010 |
+| DSG-MEM-STORE-012 | REQ-MEM-STORE-012 |

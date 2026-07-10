@@ -125,6 +125,9 @@ Cache-refill attempts are best-effort in this revision.
 Failure to refill one or more higher-priority cache layers does not alter the
 successful `get` result returned to the caller.
 
+This includes bounded cache layers that reject refill because the resolved block
+would exceed the cache layer's configured payload-byte budget.
+
 ### DSG-OVERLAY-011 `Inherited integrity boundary`
 
 The overlay reuses the parent trait's `ValidatedBlock`, `BlockHash`, and
@@ -156,7 +159,7 @@ crates to duplicate overlay dispatch behavior.
 | DSG-OVERLAY-005 | REQ-OVERLAY-STORE-003, REQ-OVERLAY-STORE-004, REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-006 | REQ-OVERLAY-STORE-005, REQ-OVERLAY-STORE-006, REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-007..008 | REQ-OVERLAY-STORE-007, REQ-OVERLAY-STORE-008, REQ-OVERLAY-STORE-011 |
-| DSG-OVERLAY-009..010 | REQ-OVERLAY-STORE-010 |
+| DSG-OVERLAY-009..010 | REQ-OVERLAY-STORE-010, REQ-OVERLAY-STORE-014 |
 | DSG-OVERLAY-011 | REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-012 | REQ-OVERLAY-STORE-012 |
 | DSG-OVERLAY-013 | REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-013 |

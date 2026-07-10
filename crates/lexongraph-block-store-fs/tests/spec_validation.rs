@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -21,9 +22,9 @@ use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_full_suite,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
-use lexongraph_block_store_fs::FilesystemBlockStore;
 #[cfg(feature = "inject")]
 use lexongraph_block_store_fs::inject::{FsOps, StagedFile};
+use lexongraph_block_store_fs::{FilesystemBlockStore, FilesystemBlockStoreBuildError};
 #[cfg(feature = "inject")]
 use tempfile::NamedTempFile;
 use tempfile::TempDir;
@@ -274,6 +275,75 @@ fn val_fs_store_021_path_decoding_failures_are_explicit_during_enumeration() {
     let error = pollster::block_on(error).unwrap_err();
 
     expect_backend_failure_contains(error, "failed to decode an enumerated block ID candidate");
+}
+
+#[test]
+fn val_fs_store_022_cache_mode_constructor_enforces_positive_mb_capacity() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    assert_eq!(
+        FilesystemBlockStore::new_cache_mb(temp_dir.path(), 0).unwrap_err(),
+        FilesystemBlockStoreBuildError::ZeroCacheCapacity
+    );
+
+    FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+}
+
+#[test]
+fn val_fs_store_023_cache_mode_eviction_uses_payload_bytes_and_lru_recency() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let first = sample_leaf_block(&"a".repeat(700_000));
+    let second = sample_leaf_block(&"b".repeat(300_000));
+    let third = sample_leaf_block(&"c".repeat(300_000));
+
+    let first_id = store.put(&first).unwrap();
+    let second_id = store.put(&second).unwrap();
+
+    assert_eq!(store.get(&first_id).unwrap().unwrap().hash, first_id);
+    let third_id = store.put(&third).unwrap();
+
+    assert_eq!(
+        collect_block_ids(store.iter_block_ids().unwrap()).unwrap(),
+        HashSet::from([first_id, third_id]),
+    );
+    assert_eq!(store.get(&second_id).unwrap(), None);
+    assert!(!expected_block_path(temp_dir.path(), &second_id).exists());
+}
+
+#[test]
+fn val_fs_store_024_cache_mode_rejects_blocks_larger_than_total_budget_without_publish() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let oversized = sample_leaf_block(&"x".repeat(1_100_000));
+    let oversized_hash = serialize_block(&oversized).unwrap().hash;
+    let oversized_path = expected_block_path(temp_dir.path(), &oversized_hash);
+
+    let error = store.put(&oversized).unwrap_err();
+
+    expect_backend_failure_contains(error, "exceeds cache capacity");
+    assert!(!oversized_path.exists());
+}
+
+#[test]
+fn val_fs_store_025_cache_mode_constructor_evicts_oldest_existing_blocks_until_budget_fits() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block(&"a".repeat(700_000));
+    let second = sample_leaf_block(&"b".repeat(700_000));
+
+    let first_id = priming_store.put(&first).unwrap();
+    std::thread::sleep(Duration::from_millis(25));
+    let second_id = priming_store.put(&second).unwrap();
+
+    let bounded_store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+
+    assert_eq!(
+        collect_block_ids(bounded_store.iter_block_ids().unwrap()).unwrap(),
+        HashSet::from([second_id]),
+    );
+    assert!(!expected_block_path(temp_dir.path(), &first_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
 }
 
 #[cfg(feature = "inject")]

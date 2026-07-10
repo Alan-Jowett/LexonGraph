@@ -21,6 +21,14 @@ trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
     {
         pollster::block_on(self).unwrap()
     }
+
+    fn unwrap_err(self) -> E
+    where
+        T: std::fmt::Debug,
+        E: std::fmt::Debug,
+    {
+        pollster::block_on(self).unwrap_err()
+    }
 }
 
 impl<F, T, E> BlockingResultFutureExt<T, E> for F where F: Future<Output = Result<T, E>> {}
@@ -31,9 +39,14 @@ fn val_mem_store_001_and_002_constructor_enforces_positive_capacity() {
         MemoryBlockStore::new(0).unwrap_err(),
         MemoryBlockStoreBuildError::ZeroCapacity
     );
+    assert_eq!(
+        MemoryBlockStore::new_cache_mb(0).unwrap_err(),
+        MemoryBlockStoreBuildError::ZeroCapacity
+    );
 
     let store = MemoryBlockStore::new(2).unwrap();
     assert_eq!(store.max_resident_blocks(), 2);
+    MemoryBlockStore::new_cache_mb(1).unwrap();
 }
 
 #[test]
@@ -130,10 +143,56 @@ fn val_mem_store_010_public_surface_keeps_backend_volatile_and_bounded() {
     assert_eq!(store.get(&block_id).unwrap().unwrap().hash, block_id);
 }
 
+#[test]
+fn val_mem_store_011_cache_mode_evicts_least_recently_used_entries_by_payload_bytes() {
+    let store = MemoryBlockStore::new_cache_mb(1).unwrap();
+    let first = sample_leaf_block(&"a".repeat(700_000));
+    let second = sample_leaf_block(&"b".repeat(300_000));
+    let third = sample_leaf_block(&"c".repeat(300_000));
+
+    let first_id = store.put(&first).unwrap();
+    let second_id = store.put(&second).unwrap();
+
+    assert_eq!(store.get(&first_id).unwrap().unwrap().hash, first_id);
+    let third_id = store.put(&third).unwrap();
+
+    assert_eq!(
+        resident_ids(&store),
+        HashSet::from_iter([first_id, third_id]),
+    );
+    assert_eq!(store.get(&second_id).unwrap(), None);
+}
+
+#[test]
+fn val_mem_store_012_cache_mode_rejects_blocks_larger_than_total_budget() {
+    let store = MemoryBlockStore::new_cache_mb(1).unwrap();
+    let oversized = sample_leaf_block(&"x".repeat(1_100_000));
+
+    let error = store.put(&oversized).unwrap_err();
+
+    expect_backend_failure_contains(error, "exceeds cache capacity");
+    assert!(resident_ids(&store).is_empty());
+}
+
 fn resident_ids(store: &MemoryBlockStore) -> HashSet<lexongraph_block::BlockHash> {
     store
         .list_block_ids()
         .unwrap()
         .into_iter()
         .collect::<HashSet<_>>()
+}
+
+fn expect_backend_failure_contains(
+    error: lexongraph_block_store::BlockStoreError,
+    expected_fragment: &str,
+) {
+    match error {
+        lexongraph_block_store::BlockStoreError::BackendFailure(message) => {
+            assert!(
+                message.contains(expected_fragment),
+                "expected backend failure containing {expected_fragment:?}, got {message:?}"
+            );
+        }
+        other => panic!("expected backend failure, got {other:?}"),
+    }
 }

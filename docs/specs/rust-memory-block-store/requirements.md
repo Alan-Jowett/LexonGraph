@@ -107,13 +107,51 @@ The repository shall include automated verification artifacts that realize the
 validation surface defined in `docs/specs/rust-memory-block-store/`, including
 reuse of the parent trait crate's conformance helpers where applicable.
 
+### REQ-MEM-STORE-013
+
+The memory block-store crate shall offer an opt-in cache-mode construction path
+outside the `BlockStore` trait boundary that configures a payload-byte budget in
+MB, where `1 MB = 1,048,576 bytes`.
+
+Construction shall fail explicitly when the requested cache-mode MB budget is
+zero or cannot be converted into the corresponding byte budget.
+
+### REQ-MEM-STORE-014
+
+The cache-mode memory block-store shall account only canonical block payload
+bytes retained in resident entries against the configured byte budget.
+
+The byte budget shall not include allocator overhead, hash-map bookkeeping, or
+other process-local metadata.
+
+### REQ-MEM-STORE-015
+
+When a direct cache-mode `put` would exceed the configured byte budget, the
+implementation shall evict least-recently-used resident entries until the new
+ block fits and success can be reported.
+
+### REQ-MEM-STORE-016
+
+If one block's canonical payload bytes exceed the entire configured cache-mode
+byte budget, the implementation shall reject that direct cache write
+explicitly, shall not cache the block, and shall leave the existing resident set
+unchanged.
+
+### REQ-MEM-STORE-017
+
+The cache-mode construction path shall remain usable as an overlay cache layer
+through the ordinary `BlockStore` contract only.
+
+This crate shall not require overlay-specific notification, delete, or eviction
+callbacks beyond ordinary `put`, `get`, and `iter_block_ids`.
+
 ## Out of Scope
 
 This crate does not define or own:
 
 - durable write-through or write-back propagation to lower layers
 - negative caching
-- byte-budgeted eviction
+- byte-budgeted eviction outside the opt-in cache-mode construction path
 - cross-process or shared-memory cache coherence
 - background refresh or prefetch behavior
 - changes to the parent `BlockStore` trait

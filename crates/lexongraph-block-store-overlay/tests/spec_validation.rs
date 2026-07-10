@@ -351,6 +351,24 @@ fn val_overlay_store_017_memory_filesystem_and_azure_backends_compose_without_du
     assert_eq!(cache.get(&block_id).unwrap().unwrap().hash, block_id);
 }
 
+#[test]
+fn val_overlay_store_018_cache_capacity_failures_during_refill_remain_non_fatal() {
+    let cache = MemoryBlockStore::new_cache_mb(1).unwrap();
+    let source = SharedMemoryBlockStore::default();
+    let block = sample_leaf_block(&"z".repeat(1_100_000));
+    let block_id = source.put(&block).unwrap();
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::cache(cache.clone())),
+        Box::new(PassiveLayer::read_only(source)),
+    ])
+    .unwrap();
+
+    let loaded = overlay.get(&block_id).unwrap().unwrap();
+
+    assert_eq!(loaded.hash, block_id);
+    assert_eq!(cache.get(&block_id).unwrap(), None);
+}
+
 struct OverlayHarness;
 
 struct HarnessStore {

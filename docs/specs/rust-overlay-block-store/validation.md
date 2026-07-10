@@ -168,3 +168,15 @@ code reimplementing overlay read ordering, write ordering, or enumeration
 de-duplication behavior.
 
 **Traces to:** REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-009, REQ-OVERLAY-STORE-013
+
+### VAL-OVERLAY-018
+
+Complete a `get` from a lower-priority layer while a higher-priority bounded
+cache layer sits above it, and make the resolved block too large to fit within
+that cache layer's configured payload-byte budget.
+
+**Pass condition:** the lower-layer `get` still succeeds, the oversized block is
+not admitted into the bounded cache layer, and the cache-admission failure
+remains non-fatal to the overall `get`.
+
+**Traces to:** REQ-OVERLAY-STORE-014
