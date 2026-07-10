@@ -408,7 +408,7 @@ impl FilesystemBlockStore {
         entries.sort_by(|left, right| {
             left.modified
                 .cmp(&right.modified)
-                .then_with(|| left.block_id.to_string().cmp(&right.block_id.to_string()))
+                .then_with(|| left.block_id.as_bytes().cmp(right.block_id.as_bytes()))
         });
 
         let mut resident_bytes = 0_usize;
@@ -760,21 +760,11 @@ impl CacheState {
             .saturating_add(payload_bytes);
     }
 
-    fn observe_read(&mut self, block_id: BlockHash, payload_bytes: usize) {
+    fn observe_read(&mut self, block_id: BlockHash, _payload_bytes: usize) {
         let recency = self.next_recency();
         if let Some(entry) = self.entries.get_mut(&block_id) {
             entry.recency = recency;
-            return;
         }
-
-        self.entries.insert(
-            block_id,
-            CacheEntry {
-                payload_bytes,
-                recency,
-            },
-        );
-        self.resident_bytes = self.resident_bytes.saturating_add(payload_bytes);
     }
 }
 

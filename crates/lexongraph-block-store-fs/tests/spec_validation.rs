@@ -330,6 +330,31 @@ fn val_fs_store_023_cache_mode_eviction_uses_payload_bytes_and_lru_recency() {
 }
 
 #[test]
+fn cache_mode_get_does_not_admit_untracked_on_disk_blocks_into_budget_accounting() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let tracked = sample_leaf_block(&"a".repeat(600_000));
+    let untracked = sample_leaf_block(&"b".repeat(500_000));
+    let third = sample_leaf_block(&"c".repeat(300_000));
+
+    let tracked_id = store.put(&tracked).unwrap();
+    let untracked_serialized = serialize_block(&untracked).unwrap();
+    let untracked_path = expected_block_path(temp_dir.path(), &untracked_serialized.hash);
+    std::fs::create_dir_all(untracked_path.parent().unwrap()).unwrap();
+    std::fs::write(&untracked_path, &untracked_serialized.bytes).unwrap();
+
+    assert_eq!(
+        store.get(&untracked_serialized.hash).unwrap().unwrap().hash,
+        untracked_serialized.hash
+    );
+    let third_id = store.put(&third).unwrap();
+
+    assert!(expected_block_path(temp_dir.path(), &tracked_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &third_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &untracked_serialized.hash).exists());
+}
+
+#[test]
 fn val_fs_store_025_cache_mode_rejects_blocks_larger_than_total_budget_without_publish() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
