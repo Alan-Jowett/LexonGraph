@@ -472,39 +472,6 @@ impl FilesystemBlockStore {
         Ok(entries)
     }
 
-    fn prepare_cache_write(
-        &self,
-        block_id: &BlockHash,
-        block_bytes_len: usize,
-    ) -> Result<(), BlockStoreError> {
-        let Some(cache_state) = &self.cache_state else {
-            return Ok(());
-        };
-
-        let evictions = {
-            let cache_state = cache_state.lock().unwrap();
-            cache_state.plan_evictions(*block_id, block_bytes_len)?
-        };
-
-        let mut removed = Vec::new();
-        for evicted_block_id in evictions {
-            match self.remove_cached_file(&evicted_block_id) {
-                Ok(()) => removed.push(evicted_block_id),
-                Err(error) => {
-                    if !removed.is_empty() {
-                        cache_state.lock().unwrap().apply_evictions(&removed);
-                    }
-                    return Err(error);
-                }
-            }
-        }
-
-        if !removed.is_empty() {
-            cache_state.lock().unwrap().apply_evictions(&removed);
-        }
-        Ok(())
-    }
-
     fn remove_cached_file(&self, block_id: &BlockHash) -> Result<(), BlockStoreError> {
         let path = self.block_path(block_id);
         match self.remove_file(&path) {
@@ -518,18 +485,60 @@ impl FilesystemBlockStore {
         }
     }
 
-    fn record_cache_write(&self, block_id: &BlockHash, payload_bytes: usize) {
-        if let Some(cache_state) = &self.cache_state {
-            cache_state.lock().unwrap().upsert(*block_id, payload_bytes);
-        }
-    }
-
     fn record_cache_read(&self, block_id: &BlockHash, payload_bytes: usize) {
         if let Some(cache_state) = &self.cache_state {
             cache_state
                 .lock()
                 .unwrap()
                 .observe_read(*block_id, payload_bytes);
+        }
+    }
+
+    fn publish_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        let published_path = self.block_path(block_id);
+        let parent = published_path
+            .parent()
+            .expect("published block paths are always rooted below the store root");
+        self.create_dir_all(parent).map_err(|error| {
+            backend_failure(format!(
+                "failed to create block directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+
+        let mut staged = self.create_staged_file(parent).map_err(|error| {
+            backend_failure(format!(
+                "failed to create staging file in {}: {error}",
+                parent.display()
+            ))
+        })?;
+        staged.write_all(block_bytes).map_err(|error| {
+            backend_failure(format!(
+                "failed to stage block {} in {}: {error}",
+                block_id,
+                parent.display()
+            ))
+        })?;
+        staged.flush().map_err(|error| {
+            backend_failure(format!(
+                "failed to flush staged block {} in {}: {error}",
+                block_id,
+                parent.display()
+            ))
+        })?;
+
+        match persist_staged_file(staged, &published_path) {
+            Ok(_) => Ok(()),
+            Err(error) => self.read_existing_or_map_publish_error(
+                &published_path,
+                block_id,
+                block_bytes,
+                error,
+            ),
         }
     }
 
@@ -617,50 +626,18 @@ impl BlockStore for FilesystemBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.prepare_cache_write(block_id, block_bytes.len())?;
-        let published_path = self.block_path(block_id);
-        let parent = published_path
-            .parent()
-            .expect("published block paths are always rooted below the store root");
-        self.create_dir_all(parent).map_err(|error| {
-            backend_failure(format!(
-                "failed to create block directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-
-        let mut staged = self.create_staged_file(parent).map_err(|error| {
-            backend_failure(format!(
-                "failed to create staging file in {}: {error}",
-                parent.display()
-            ))
-        })?;
-        staged.write_all(block_bytes).map_err(|error| {
-            backend_failure(format!(
-                "failed to stage block {} in {}: {error}",
-                block_id,
-                parent.display()
-            ))
-        })?;
-        staged.flush().map_err(|error| {
-            backend_failure(format!(
-                "failed to flush staged block {} in {}: {error}",
-                block_id,
-                parent.display()
-            ))
-        })?;
-
-        match persist_staged_file(staged, &published_path) {
-            Ok(_) => {
-                self.record_cache_write(block_id, block_bytes.len());
-                Ok(())
+        if let Some(cache_state) = &self.cache_state {
+            let mut cache_state = cache_state.lock().unwrap();
+            let evictions = cache_state.plan_evictions(*block_id, block_bytes.len())?;
+            for evicted_block_id in &evictions {
+                self.remove_cached_file(evicted_block_id)?;
             }
-            Err(error) => self.read_existing_or_map_publish_error(
-                &published_path,
-                block_id,
-                block_bytes,
-                error,
-            ),
+            cache_state.apply_evictions(&evictions);
+            self.publish_block_bytes(block_id, block_bytes)?;
+            cache_state.upsert(*block_id, block_bytes.len());
+            Ok(())
+        } else {
+            self.publish_block_bytes(block_id, block_bytes)
         }
     }
 
