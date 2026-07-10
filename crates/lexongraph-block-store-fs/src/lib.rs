@@ -415,16 +415,21 @@ impl FilesystemBlockStore {
             sum.saturating_add(entry.payload_bytes)
         });
 
+        let mut evict_count = 0_usize;
         while resident_bytes > max_cache_bytes {
-            let evicted = entries.remove(0);
+            let evicted = &entries[evict_count];
+            resident_bytes = resident_bytes.saturating_sub(evicted.payload_bytes);
+            evict_count += 1;
+        }
+
+        for evicted in &entries[..evict_count] {
             self.remove_cached_file(&evicted.block_id)
                 .map_err(FilesystemBlockStoreBuildError::CacheInitialization)?;
-            resident_bytes = resident_bytes.saturating_sub(evicted.payload_bytes);
         }
 
         let mut next_recency = 0_u64;
         let mut retained = HashMap::new();
-        for entry in entries {
+        for entry in entries.into_iter().skip(evict_count) {
             retained.insert(
                 entry.block_id,
                 CacheEntry {

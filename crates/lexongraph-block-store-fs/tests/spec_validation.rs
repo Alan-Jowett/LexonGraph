@@ -641,7 +641,8 @@ fn collect_block_ids(
 
 fn set_last_modified(path: &Path, modified: SystemTime) {
     let file = File::options().write(true).open(path).unwrap();
-    file.set_modified(modified).unwrap();
+    file.set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
 }
 
 #[cfg(feature = "inject")]
