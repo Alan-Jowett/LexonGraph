@@ -411,9 +411,15 @@ impl FilesystemBlockStore {
                 .then_with(|| left.block_id.to_string().cmp(&right.block_id.to_string()))
         });
 
-        let mut resident_bytes = entries.iter().fold(0_usize, |sum, entry| {
-            sum.saturating_add(entry.payload_bytes)
-        });
+        let mut resident_bytes = 0_usize;
+        for entry in &entries {
+            resident_bytes = resident_bytes.checked_add(entry.payload_bytes).ok_or_else(|| {
+                FilesystemBlockStoreBuildError::CacheInitialization(backend_failure(
+                    "existing cached blocks exceed platform usize accounting during cache initialization"
+                        .into(),
+                ))
+            })?;
+        }
 
         let mut evict_count = 0_usize;
         while resident_bytes > max_cache_bytes {

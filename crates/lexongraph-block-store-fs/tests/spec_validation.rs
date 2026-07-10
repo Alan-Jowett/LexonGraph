@@ -439,6 +439,38 @@ fn cache_mode_constructor_surfaces_injected_eviction_failures() {
 
 #[cfg(feature = "inject")]
 #[test]
+fn cache_mode_constructor_surfaces_existing_cache_accounting_overflow() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block("overflow-a");
+    let second = sample_leaf_block("overflow-b");
+
+    priming_store.put(&first).unwrap();
+    priming_store.put(&second).unwrap();
+
+    let error = FilesystemBlockStore::new_cache_mb_with_ops(
+        temp_dir.path(),
+        Arc::new(ScriptedFsOps::with_metadata_lengths(vec![
+            usize::MAX as u64,
+            1,
+        ])),
+        1,
+    )
+    .unwrap_err();
+
+    match error {
+        FilesystemBlockStoreBuildError::CacheInitialization(error) => {
+            expect_backend_failure_contains(
+                error,
+                "existing cached blocks exceed platform usize accounting during cache initialization",
+            );
+        }
+        other => panic!("expected cache initialization failure, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "inject")]
+#[test]
 fn val_fs_store_021_directory_traversal_failures_are_explicit_during_enumeration() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = FilesystemBlockStore::new_with_ops(
@@ -716,6 +748,7 @@ struct ScriptState {
     read_dir_failure: Option<IndexedFailure>,
     metadata_calls: usize,
     metadata_failure: Option<IndexedFailure>,
+    metadata_len_overrides: Vec<u64>,
     read_calls: usize,
     read_failure: Option<IndexedFailure>,
     remove_file_calls: usize,
@@ -767,6 +800,12 @@ impl ScriptedFsOps {
     fn with_metadata_failure(call: usize, error: ErrorSpec) -> Self {
         let ops = Self::default();
         ops.state.lock().unwrap().metadata_failure = Some(IndexedFailure { call, error });
+        ops
+    }
+
+    fn with_metadata_lengths(lengths: Vec<u64>) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().metadata_len_overrides = lengths;
         ops
     }
 
@@ -866,6 +905,10 @@ impl FsOps for ScriptedFsOps {
     fn metadata(&self, path: &Path) -> io::Result<StoredFileMetadata> {
         let mut state = self.state.lock().unwrap();
         state.metadata_calls += 1;
+        let metadata_len_override = state
+            .metadata_len_overrides
+            .get(state.metadata_calls - 1)
+            .copied();
         if let Some(failure) = state.metadata_failure.as_ref()
             && failure.call == state.metadata_calls
         {
@@ -874,7 +917,7 @@ impl FsOps for ScriptedFsOps {
         drop(state);
         let metadata = std::fs::metadata(path)?;
         Ok(StoredFileMetadata {
-            len: metadata.len(),
+            len: metadata_len_override.unwrap_or(metadata.len()),
             modified: metadata.modified()?,
         })
     }
