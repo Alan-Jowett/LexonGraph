@@ -145,6 +145,15 @@ through the ordinary `BlockStore` contract only.
 This crate shall not require overlay-specific notification, delete, or eviction
 callbacks beyond ordinary `put`, `get`, and `iter_block_ids`.
 
+### REQ-MEM-STORE-018
+
+The memory block-store crate shall expose a public capacity-introspection surface
+that distinguishes count-bounded and byte-bounded construction modes.
+
+That surface shall report the configured resident-block count for ordinary
+construction and the configured resident-byte budget for cache-mode
+construction without requiring callers to infer mode from sentinel values.
+
 ## Out of Scope
 
 This crate does not define or own:

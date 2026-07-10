@@ -111,10 +111,12 @@ Inspect the implementation's public and behavioral boundary.
 remains subordinate to `docs/protocol/blocks.md`,
 `docs/specs/rust-block-crate/`, and `docs/specs/rust-block-storage-trait/` for
 their owned concerns, and does not claim overlay-managed cache refill policy as
-part of its own API boundary.
+part of its own API boundary. Its public capacity-introspection surface also
+distinguishes count-bounded and byte-bounded construction modes without
+requiring callers to infer mode from sentinel values.
 
 **Traces to:** REQ-MEM-STORE-002, REQ-MEM-STORE-004, REQ-MEM-STORE-010,
-REQ-MEM-STORE-011, REQ-MEM-STORE-012
+REQ-MEM-STORE-011, REQ-MEM-STORE-012, REQ-MEM-STORE-018
 
 ### VAL-MEM-STORE-012
 

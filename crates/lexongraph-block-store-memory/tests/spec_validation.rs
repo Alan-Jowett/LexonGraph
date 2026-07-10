@@ -8,7 +8,9 @@ use lexongraph_block::BlockHash;
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreExt};
-use lexongraph_block_store_memory::{BYTES_PER_MB, MemoryBlockStore, MemoryBlockStoreBuildError};
+use lexongraph_block_store_memory::{
+    BYTES_PER_MB, MemoryBlockStore, MemoryBlockStoreBuildError, MemoryBlockStoreCapacity,
+};
 
 mod support;
 
@@ -48,7 +50,16 @@ fn val_mem_store_001_and_002_constructor_enforces_positive_capacity() {
 
     let store = MemoryBlockStore::new(2).unwrap();
     assert_eq!(store.max_resident_blocks(), 2);
-    MemoryBlockStore::new_cache_mb(1).unwrap();
+    assert_eq!(
+        store.capacity(),
+        MemoryBlockStoreCapacity::ResidentBlocks(2)
+    );
+
+    let cache_store = MemoryBlockStore::new_cache_mb(1).unwrap();
+    assert_eq!(
+        cache_store.capacity(),
+        MemoryBlockStoreCapacity::ResidentBytes(BYTES_PER_MB)
+    );
 }
 
 #[test]
@@ -142,6 +153,10 @@ fn val_mem_store_010_public_surface_keeps_backend_volatile_and_bounded() {
     let block_id = store.put(&block).unwrap();
 
     assert_eq!(store.max_resident_blocks(), 2);
+    assert_eq!(
+        store.capacity(),
+        MemoryBlockStoreCapacity::ResidentBlocks(2)
+    );
     assert_eq!(store.get(&block_id).unwrap().unwrap().hash, block_id);
 }
 

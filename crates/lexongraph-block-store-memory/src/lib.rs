@@ -16,6 +16,12 @@ pub struct MemoryBlockStore {
     state: Arc<Mutex<State>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryBlockStoreCapacity {
+    ResidentBlocks(usize),
+    ResidentBytes(usize),
+}
+
 struct State {
     capacity: Capacity,
     resident_bytes: usize,
@@ -108,6 +114,17 @@ impl MemoryBlockStore {
         match self.state.lock().unwrap().capacity {
             Capacity::ResidentBlocks(max_resident_blocks) => max_resident_blocks,
             Capacity::ResidentBytes(_) => 0,
+        }
+    }
+
+    pub fn capacity(&self) -> MemoryBlockStoreCapacity {
+        match self.state.lock().unwrap().capacity {
+            Capacity::ResidentBlocks(max_resident_blocks) => {
+                MemoryBlockStoreCapacity::ResidentBlocks(max_resident_blocks)
+            }
+            Capacity::ResidentBytes(max_resident_bytes) => {
+                MemoryBlockStoreCapacity::ResidentBytes(max_resident_bytes)
+            }
         }
     }
 

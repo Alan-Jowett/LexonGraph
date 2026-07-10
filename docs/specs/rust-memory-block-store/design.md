@@ -77,6 +77,10 @@ budget and converts it to a payload-byte budget using `1 MB = 1,048,576 bytes`.
 Cache-mode construction fails explicitly when the requested MB budget is zero or
 cannot be converted to the corresponding byte budget.
 
+The crate exposes a public capacity accessor that reports either resident-block
+capacity or resident-byte capacity according to the construction path used for
+that store instance.
+
 ## Runtime Behavior
 
 ### DSG-MEM-STORE-005 `put`
@@ -173,7 +177,7 @@ The crate adds backend-specific tests for:
 | Design ID | Satisfies |
 |---|---|
 | DSG-MEM-STORE-001 | REQ-MEM-STORE-001, REQ-MEM-STORE-002 |
-| DSG-MEM-STORE-002..004 | REQ-MEM-STORE-001, REQ-MEM-STORE-003, REQ-MEM-STORE-004, REQ-MEM-STORE-013 |
+| DSG-MEM-STORE-002..004 | REQ-MEM-STORE-001, REQ-MEM-STORE-003, REQ-MEM-STORE-004, REQ-MEM-STORE-013, REQ-MEM-STORE-018 |
 | DSG-MEM-STORE-005 | REQ-MEM-STORE-005, REQ-MEM-STORE-008 |
 | DSG-MEM-STORE-006 | REQ-MEM-STORE-006, REQ-MEM-STORE-008 |
 | DSG-MEM-STORE-007 | REQ-MEM-STORE-007 |
