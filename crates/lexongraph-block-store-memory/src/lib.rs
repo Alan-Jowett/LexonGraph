@@ -156,19 +156,18 @@ impl State {
             .get(&block_id)
             .map(|entry| entry.bytes.len())
             .unwrap_or(0);
+        while !self.capacity.allows_insert(
+            self.entries.len(),
+            self.resident_bytes.saturating_sub(old_len),
+            new_len,
+            replacing_existing,
+        ) {
+            self.evict_lru_excluding(Some(block_id));
+        }
         if let Some(entry) = self.entries.get_mut(&block_id) {
             entry.bytes = bytes;
             entry.recency = recency;
         } else {
-            while !self.capacity.allows_insert(
-                self.entries.len(),
-                self.resident_bytes.saturating_sub(old_len),
-                new_len,
-                replacing_existing,
-            ) {
-                self.evict_lru_excluding(Some(block_id));
-            }
-
             self.entries
                 .insert(block_id, ResidentEntry { bytes, recency });
         }

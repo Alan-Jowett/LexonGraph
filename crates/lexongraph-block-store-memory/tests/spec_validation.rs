@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::future::Future;
 
+use lexongraph_block::BlockHash;
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreExt};
@@ -172,6 +173,30 @@ fn val_mem_store_012_cache_mode_rejects_blocks_larger_than_total_budget() {
 
     expect_backend_failure_contains(error, "exceeds cache capacity");
     assert!(resident_ids(&store).is_empty());
+}
+
+#[test]
+fn val_mem_store_013_cache_mode_replacement_evicts_other_entries_before_growing_bytes() {
+    let store = MemoryBlockStore::new_cache_mb(1).unwrap();
+    let first_id = BlockHash::from_bytes([0x11; 32]);
+    let second_id = BlockHash::from_bytes([0x22; 32]);
+
+    store
+        .put_block_bytes(&first_id, &vec![0xaa; 200_000])
+        .unwrap();
+    store
+        .put_block_bytes(&second_id, &vec![0xbb; 700_000])
+        .unwrap();
+
+    store
+        .put_block_bytes(&first_id, &vec![0xcc; 400_000])
+        .unwrap();
+
+    assert_eq!(
+        store.get_block_bytes(&first_id).unwrap().unwrap().len(),
+        400_000
+    );
+    assert_eq!(store.get_block_bytes(&second_id).unwrap(), None);
 }
 
 fn resident_ids(store: &MemoryBlockStore) -> HashSet<lexongraph_block::BlockHash> {

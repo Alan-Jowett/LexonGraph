@@ -17,6 +17,7 @@ use tempfile::{Builder, NamedTempFile};
 
 #[cfg(feature = "inject")]
 pub mod inject {
+    use super::StoredFileMetadata;
     use std::io;
     use std::path::{Path, PathBuf};
 
@@ -25,7 +26,9 @@ pub mod inject {
         fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
         fn is_dir(&self, path: &Path) -> io::Result<bool>;
         fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
+        fn metadata(&self, path: &Path) -> io::Result<StoredFileMetadata>;
         fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+        fn remove_file(&self, path: &Path) -> io::Result<()>;
         fn create_staged_file(&self, dir: &Path) -> io::Result<Box<dyn StagedFile>>;
     }
 
@@ -66,6 +69,18 @@ impl inject::FsOps for RealFsOps {
         fs::read_dir(path)?
             .map(|entry| entry.map(|entry| entry.path()))
             .collect()
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<StoredFileMetadata> {
+        let metadata = fs::metadata(path)?;
+        Ok(StoredFileMetadata {
+            len: metadata.len(),
+            modified: metadata.modified()?,
+        })
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        fs::remove_file(path)
     }
 
     fn create_staged_file(&self, dir: &Path) -> io::Result<Box<dyn inject::StagedFile>> {
@@ -117,6 +132,12 @@ struct ExistingCacheEntry {
     block_id: BlockHash,
     payload_bytes: usize,
     modified: SystemTime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredFileMetadata {
+    pub len: u64,
+    pub modified: SystemTime,
 }
 
 pub const BYTES_PER_MB: usize = 1_048_576;
@@ -428,23 +449,16 @@ impl FilesystemBlockStore {
         for candidate in FilesystemBlockIdIterator::new(self)? {
             let block_id = candidate?;
             let path = self.block_path(&block_id);
-            let metadata = fs::metadata(&path).map_err(|error| {
+            let metadata = self.metadata(&path).map_err(|error| {
                 backend_failure(format!(
                     "failed to inspect existing cached block {} at {}: {error}",
                     block_id,
                     path.display()
                 ))
             })?;
-            let payload_bytes = usize::try_from(metadata.len()).map_err(|_| {
+            let payload_bytes = usize::try_from(metadata.len).map_err(|_| {
                 backend_failure(format!(
                     "cached block {} at {} is too large to fit in platform usize accounting",
-                    block_id,
-                    path.display()
-                ))
-            })?;
-            let modified = metadata.modified().map_err(|error| {
-                backend_failure(format!(
-                    "failed to read last-modified time for existing cached block {} at {}: {error}",
                     block_id,
                     path.display()
                 ))
@@ -452,7 +466,7 @@ impl FilesystemBlockStore {
             entries.push(ExistingCacheEntry {
                 block_id,
                 payload_bytes,
-                modified,
+                modified: metadata.modified,
             });
         }
         Ok(entries)
@@ -493,7 +507,7 @@ impl FilesystemBlockStore {
 
     fn remove_cached_file(&self, block_id: &BlockHash) -> Result<(), BlockStoreError> {
         let path = self.block_path(block_id);
-        match fs::remove_file(&path) {
+        match self.remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(backend_failure(format!(
@@ -552,6 +566,20 @@ impl FilesystemBlockStore {
     }
 
     #[cfg(feature = "inject")]
+    fn metadata(&self, path: &Path) -> io::Result<StoredFileMetadata> {
+        self.ops.metadata(path)
+    }
+
+    #[cfg(not(feature = "inject"))]
+    fn metadata(&self, path: &Path) -> io::Result<StoredFileMetadata> {
+        let metadata = fs::metadata(path)?;
+        Ok(StoredFileMetadata {
+            len: metadata.len(),
+            modified: metadata.modified()?,
+        })
+    }
+
+    #[cfg(feature = "inject")]
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         self.ops.create_dir_all(path)
     }
@@ -559,6 +587,16 @@ impl FilesystemBlockStore {
     #[cfg(not(feature = "inject"))]
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         fs::create_dir_all(path)
+    }
+
+    #[cfg(feature = "inject")]
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        self.ops.remove_file(path)
+    }
+
+    #[cfg(not(feature = "inject"))]
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        fs::remove_file(path)
     }
 
     #[cfg(feature = "inject")]
