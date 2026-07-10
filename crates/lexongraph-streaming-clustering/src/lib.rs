@@ -47,16 +47,23 @@ pub enum TrainerState {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassReadiness {
+    AnalysisOnly,
+    PartitionReady,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PassReport {
     pub observed_count: usize,
     pub requested_cluster_count: u32,
-    pub realized_cluster_count: u32,
+    pub readiness: PassReadiness,
+    pub realized_cluster_count: Option<u32>,
     pub quality_metric: f64,
     pub balance_metric: f64,
     pub quality_direction: MetricDirection,
     pub balance_direction: MetricDirection,
-    pub cluster_ids: Vec<ClusterId>,
+    pub cluster_ids: Option<Vec<ClusterId>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -433,6 +440,7 @@ mod conformance_support {
         }
 
         let mut pass_reports: Vec<PassReport> = Vec::new();
+        let mut previous_partition_ready_cluster_ids: Option<Vec<ClusterId>> = None;
         harness.for_each_sample_pass_event(|event| match event {
             SamplePassEvent::Batch(batch) => {
                 trainer.ingest_batch(batch)?;
@@ -453,31 +461,63 @@ mod conformance_support {
                         report.requested_cluster_count
                     )));
                 }
-                if report.realized_cluster_count == 0 {
-                    return Err(ConformanceError::Expectation(
-                        "expected pass report to realize at least one cluster".into(),
-                    ));
-                }
-                if report.realized_cluster_count > report.requested_cluster_count {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected realized cluster count {} to be <= requested cluster count {}",
-                        report.realized_cluster_count, report.requested_cluster_count
-                    )));
-                }
-                if report.cluster_ids.len() != report.realized_cluster_count as usize {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected {} cluster ids in pass report, got {}",
-                        report.realized_cluster_count,
-                        report.cluster_ids.len()
-                    )));
-                }
-                if let Some(previous_report) = pass_reports.last()
-                    && report.cluster_ids != previous_report.cluster_ids
-                {
-                    return Err(ConformanceError::Expectation(format!(
-                        "expected cluster ids {:?} to remain stable across passes, got {:?}",
-                        previous_report.cluster_ids, report.cluster_ids
-                    )));
+                match report.readiness {
+                    PassReadiness::AnalysisOnly => {
+                        if report.realized_cluster_count.is_some() {
+                            return Err(ConformanceError::Expectation(
+                                "expected analysis-only pass reports to omit realized cluster counts"
+                                    .into(),
+                            ));
+                        }
+                        if report.cluster_ids.is_some() {
+                            return Err(ConformanceError::Expectation(
+                                "expected analysis-only pass reports to omit cluster ids".into(),
+                            ));
+                        }
+                    }
+                    PassReadiness::PartitionReady => {
+                        let realized_cluster_count = report.realized_cluster_count.ok_or_else(|| {
+                            ConformanceError::Expectation(
+                                "expected partition-ready pass reports to include realized cluster counts"
+                                    .into(),
+                            )
+                        })?;
+                        if realized_cluster_count == 0 {
+                            return Err(ConformanceError::Expectation(
+                                "expected partition-ready pass report to realize at least one cluster"
+                                    .into(),
+                            ));
+                        }
+                        if realized_cluster_count > report.requested_cluster_count {
+                            return Err(ConformanceError::Expectation(format!(
+                                "expected realized cluster count {} to be <= requested cluster count {}",
+                                realized_cluster_count, report.requested_cluster_count
+                            )));
+                        }
+                        let cluster_ids = report.cluster_ids.as_ref().ok_or_else(|| {
+                            ConformanceError::Expectation(
+                                "expected partition-ready pass reports to include cluster ids"
+                                    .into(),
+                            )
+                        })?;
+                        if cluster_ids.len() != realized_cluster_count as usize {
+                            return Err(ConformanceError::Expectation(format!(
+                                "expected {} cluster ids in pass report, got {}",
+                                realized_cluster_count,
+                                cluster_ids.len()
+                            )));
+                        }
+                        if let Some(previous_cluster_ids) =
+                            previous_partition_ready_cluster_ids.as_ref()
+                            && cluster_ids != previous_cluster_ids
+                        {
+                            return Err(ConformanceError::Expectation(format!(
+                                "expected cluster ids {:?} to remain stable across partition-ready passes, got {:?}",
+                                previous_cluster_ids, cluster_ids
+                            )));
+                        }
+                        previous_partition_ready_cluster_ids = Some(cluster_ids.clone());
+                    }
                 }
                 if trainer.state() != TrainerState::PassComplete {
                     return Err(ConformanceError::Expectation(format!(
@@ -496,6 +536,11 @@ mod conformance_support {
                 "expected complete_training to leave trainer in TrainingComplete, got {:?}",
                 trainer.state()
             )));
+        }
+        if previous_partition_ready_cluster_ids.is_none() {
+            return Err(ConformanceError::Expectation(
+                "expected training to produce at least one partition-ready pass report".into(),
+            ));
         }
         let classifier = trainer.into_classifier()?;
         let mut assignments = Vec::new();

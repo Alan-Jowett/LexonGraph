@@ -64,8 +64,12 @@ deterministic seed without fixing the downstream optimization method.
 ### DSG-STREAM-TRAIT-005 `Pass reporting`
 
 The crate defines shared pass-report types carrying requested cluster count,
-realized cluster count, `quality_metric`, `balance_metric`, and explicit
-metric-direction metadata so callers can compare passes within one run.
+`quality_metric`, `balance_metric`, explicit metric-direction metadata, and a
+small readiness enum equivalent to `AnalysisOnly | PartitionReady`.
+
+For `AnalysisOnly` passes, `realized_cluster_count` and `cluster_ids` are
+absent. For `PartitionReady` passes, both are present and become part of the
+observable contract.
 
 ### DSG-STREAM-TRAIT-006 `Shared error categories`
 
@@ -82,9 +86,10 @@ illegal transitions.
 
 ### DSG-STREAM-TRAIT-008 `Cluster ID continuity`
 
-Cluster identity continuity is a contract-level observable. Implementations may
-choose any internal matching strategy, but the externally visible cluster IDs
-and classifier IDs must remain stable across passes.
+Cluster identity continuity is a contract-level observable once a pass report is
+partition-ready. Implementations may choose any internal matching strategy, but
+the externally visible cluster IDs in partition-ready pass reports and in the
+final classifier must remain stable across later partition-ready passes.
 
 ### DSG-STREAM-TRAIT-009 `Dataset-size-independent surface`
 

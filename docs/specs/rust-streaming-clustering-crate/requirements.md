@@ -66,9 +66,15 @@ and stop/continue decisions to the caller.
 The contract shall expose deterministic per-pass fitness reporting with:
 
 - requested cluster count
-- realized cluster count
 - separate `quality_metric` and `balance_metric` values
 - direction-of-improvement metadata
+- explicit pass-report readiness status
+
+When a completed pass has not yet produced a reportable partition, the pass
+report may omit `realized_cluster_count` and `cluster_ids`.
+
+When a completed pass is marked partition-ready, the pass report shall expose
+`realized_cluster_count` and `cluster_ids` explicitly.
 
 ### REQ-STREAM-TRAIT-007
 
@@ -80,8 +86,9 @@ For exact-`K` runs, `R = K`.
 
 ### REQ-STREAM-TRAIT-008
 
-The observable contract shall preserve stable cluster identifiers across passes
-and in the final classifier.
+When pass reports expose partition-ready cluster identifiers, the observable
+contract shall preserve those stable cluster identifiers across partition-ready
+passes and in the final classifier.
 
 ### REQ-STREAM-TRAIT-009
 

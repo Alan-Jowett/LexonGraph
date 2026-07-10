@@ -3,9 +3,9 @@
 #![allow(dead_code)]
 
 use lexongraph_streaming_clustering::{
-    ClusterId, Embedding, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_config,
-    validate_embedding,
+    ClusterId, Embedding, PassReadiness, PassReport, StreamingClusterClassifier,
+    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    validate_config, validate_embedding,
 };
 
 #[derive(Clone, Copy)]
@@ -66,7 +66,7 @@ impl FixtureTrainer {
 
     fn cluster_ids_for_pass(&self, pass_index: usize) -> Vec<ClusterId> {
         match (self.mode, pass_index) {
-            (FixtureMode::UnstableClusterIds, 1) => vec![1, 0],
+            (FixtureMode::UnstableClusterIds, 2) => vec![1, 0],
             _ => vec![0, 1],
         }
     }
@@ -122,12 +122,25 @@ impl StreamingClusterTrainer for FixtureTrainer {
         let report = PassReport {
             observed_count: self.current_pass_count,
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: self.config.cluster_count,
+            readiness: if pass_index == 0 {
+                PassReadiness::AnalysisOnly
+            } else {
+                PassReadiness::PartitionReady
+            },
+            realized_cluster_count: if pass_index == 0 {
+                None
+            } else {
+                Some(self.config.cluster_count)
+            },
             quality_metric: if pass_index == 0 { 10.0 } else { 5.0 },
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
             balance_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            cluster_ids: self.cluster_ids_for_pass(pass_index),
+            cluster_ids: if pass_index == 0 {
+                None
+            } else {
+                Some(self.cluster_ids_for_pass(pass_index))
+            },
         };
         self.completed_passes += 1;
         self.current_pass_count = 0;
@@ -182,6 +195,7 @@ pub fn sample_passes() -> Vec<Vec<SampleBatch>> {
     vec![
         vec![vec![vec![1.0, 0.0]], vec![vec![-1.0, 0.0]]],
         vec![vec![vec![0.75, 0.0], vec![-0.75, 0.0]]],
+        vec![vec![vec![0.5, 0.0], vec![-0.5, 0.0]]],
     ]
 }
 
@@ -190,22 +204,35 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
         PassReport {
             observed_count: 2,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
+            readiness: PassReadiness::AnalysisOnly,
+            realized_cluster_count: None,
             quality_metric: 10.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
             balance_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: None,
         },
         PassReport {
             observed_count: 2,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
             quality_metric: 5.0,
             balance_metric: 0.0,
             quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
             balance_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: Some(vec![0, 1]),
+        },
+        PassReport {
+            observed_count: 2,
+            requested_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
+            quality_metric: 5.0,
+            balance_metric: 0.0,
+            quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
+            balance_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
+            cluster_ids: Some(vec![0, 1]),
         },
     ]
 }

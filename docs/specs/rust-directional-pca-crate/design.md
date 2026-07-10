@@ -98,6 +98,10 @@ surface and appends them to the current pass dataset order.
 The crate does not materialize block IDs, loaded blocks, or representative
 embedding records at this boundary.
 
+Implementation-owned transient state at this boundary may scale with the
+currently processed batch/chunk size and fixed configuration terms, but not
+with the full completed-pass dataset size.
+
 ### DSG-DPCA-STREAM-007 `First-pass baseline and cross-pass continuity`
 
 The first completed pass establishes the logical dataset for one training run.
@@ -108,6 +112,9 @@ Each later pass is validated against that baseline for:
 
 Deviation fails explicitly before the trainer claims conformant refinement of
 the same run.
+
+The continuity mechanism must be realizable from streaming-compatible summaries
+or fingerprints rather than crate-owned full-pass replay buffers.
 
 ### DSG-DPCA-STREAM-008 `Pass realization`
 
@@ -129,6 +136,16 @@ over the embeddings observed in that pass:
 9. compute pass metrics and expose the pass report
 
 The crate does not perform hidden extra passes.
+
+Conformant execution uses streaming or mergeable PCA accumulation and other
+streaming-compatible summaries over caller-replayed passes. A path that
+requires materializing the full pass in implementation-owned memory or spill is
+non-conformant.
+
+When exact partitioning semantics require additional caller-visible replay
+passes, earlier passes may legitimately report `AnalysisOnly` status before a
+later `PartitionReady` pass exposes stable cluster IDs and realized cluster
+count.
 
 ### DSG-DPCA-STREAM-009 `Legacy directional scoring`
 
@@ -164,6 +181,12 @@ When density-valley binning is selected, the crate instead estimates
 one-dimensional density along each participating retained PCA axis and places
 cuts at the deepest available valleys within the recursively selected segments.
 
+The partitioning realization must remain compatible with caller-visible replay
+passes and bounded implementation-owned working state. Exact quantile or
+density-valley semantics therefore may require additional caller-visible replay
+passes, but shall not require crate-owned retained-coordinate tables for the
+full dataset.
+
 ### DSG-DPCA-STREAM-012 `Exact-K boundary`
 
 The crate's observable contract requires exact `K` stable, non-empty clusters.
@@ -181,7 +204,8 @@ realized count below `K`.
 
 ### DSG-DPCA-STREAM-013 `Stable cluster identity`
 
-Externally visible cluster IDs remain stable across completed passes.
+Externally visible cluster IDs remain stable across partition-ready completed
+passes.
 
 If repeated directional-PCA fits would otherwise permute internal group order,
 the crate applies deterministic matching and tie-breaking before exposing pass
@@ -193,10 +217,15 @@ Each completed pass yields a `PassReport` whose:
 
 - `observed_count` equals the number of embeddings ingested in that pass
 - `requested_cluster_count` equals the configured target for that pass
-- `realized_cluster_count` equals the number of stable clusters actually exposed
 - `quality_metric` is deterministic and comparable across passes within one run
 - `balance_metric` is deterministic and comparable across passes within one run
 - metric directions remain fixed for the full run
+- readiness status indicates whether the pass is `AnalysisOnly` or
+  `PartitionReady`
+
+For `PartitionReady` passes:
+
+- `realized_cluster_count` equals the number of stable clusters actually exposed
 - `cluster_ids` match the stable externally visible cluster identifiers
 
 When no explicit balance constraints are configured, `balance_metric` is zero.
@@ -311,6 +340,23 @@ When a selected allocation policy imposes a realizability bound on the number of
 participating axes, the crate deterministically enforces that bound without
 changing the semantics of the selected binning or cardinality policies.
 
+### DSG-DPCA-STREAM-027 `Bounded implementation-owned working set`
+
+The concrete crate bounds implementation-owned memory and scratch/storage
+independently of the full completed-pass dataset size.
+
+Allowed growth is limited to the currently processed chunk, PCA sufficient
+statistics, streaming-compatible continuity summaries, and other fixed
+configuration-bounded state.
+
+### DSG-DPCA-STREAM-028 `Assessment rule for streaming-shaped APIs`
+
+Conformance is determined by the actual execution model, not by a streaming-
+shaped public API alone.
+
+An implementation that exposes `ingest_batch()` but still requires full-pass
+materialization or dataset spill is non-conformant under this revision.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -339,3 +385,5 @@ changing the semantics of the selected binning or cardinality policies.
 | DSG-DPCA-STREAM-024 | REQ-DPCA-STREAM-026 |
 | DSG-DPCA-STREAM-025 | REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-027 |
 | DSG-DPCA-STREAM-026 | REQ-DPCA-STREAM-013, REQ-DPCA-STREAM-028 |
+| DSG-DPCA-STREAM-027 | REQ-DPCA-STREAM-029 |
+| DSG-DPCA-STREAM-028 | REQ-DPCA-STREAM-030 |

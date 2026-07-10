@@ -48,8 +48,10 @@ explicit failure rather than silently reducing `K` or producing empty clusters.
 Inspect or execute pass reporting.
 
 **Pass condition:** each pass report exposes deterministic requested cluster
-count, realized cluster count, `quality_metric`, `balance_metric`, and
-direction-of-improvement metadata.
+count, `quality_metric`, `balance_metric`, direction-of-improvement metadata,
+and explicit readiness status. `AnalysisOnly` reports omit
+`realized_cluster_count` and `cluster_ids`; `PartitionReady` reports include
+them.
 
 **Traces to:** REQ-STREAM-TRAIT-006
 
@@ -114,11 +116,22 @@ conformance-helper rejection behavior.
 ### VAL-STREAM-TRAIT-011
 
 Run the conformance helpers against a fixture that changes externally visible
-cluster IDs across passes without preserving continuity.
+cluster IDs across partition-ready passes without preserving continuity.
 
 **Pass condition:** the suite rejects the fixture as an expectation failure.
 
 **Traces to:** REQ-STREAM-TRAIT-008, REQ-STREAM-TRAIT-014
+
+### VAL-STREAM-TRAIT-020
+
+Run the conformance helpers against a fixture whose first completed pass is
+`AnalysisOnly` and whose later pass is `PartitionReady`.
+
+**Pass condition:** the suite accepts the analysis-only pass without requiring
+cluster IDs or realized cluster count, and applies continuity checks only once
+partition-ready reports appear.
+
+**Traces to:** REQ-STREAM-TRAIT-005, REQ-STREAM-TRAIT-006, REQ-STREAM-TRAIT-008
 
 ### VAL-STREAM-TRAIT-012
 

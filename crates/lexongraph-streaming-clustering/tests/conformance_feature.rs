@@ -332,7 +332,7 @@ fn val_stream_trait_017_runtime_expectation_failures_use_suite_messages_without_
     assert!(matches!(&error, ConformanceError::Expectation(_)));
     assert_eq!(
         error.to_string(),
-        "conformance expectation failed: expected cluster ids [0, 1] to remain stable across passes, got [1, 0]"
+        "conformance expectation failed: expected cluster ids [0, 1] to remain stable across partition-ready passes, got [1, 0]"
     );
     assert!(error.source().is_none());
 }
