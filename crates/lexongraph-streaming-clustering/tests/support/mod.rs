@@ -3,9 +3,9 @@
 #![allow(dead_code)]
 
 use lexongraph_streaming_clustering::{
-    ClusterId, Embedding, PassInput, PassReport, StreamingClusterClassifier,
-    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
-    validate_config, validate_embedding,
+    ClusterId, Embedding, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
+    StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_config,
+    validate_embedding,
 };
 
 #[derive(Clone, Copy)]
@@ -178,7 +178,7 @@ impl StreamingClusterClassifier for FixtureClassifier {
     }
 }
 
-pub fn sample_passes() -> Vec<PassInput> {
+pub fn sample_passes() -> Vec<Vec<SampleBatch>> {
     vec![
         vec![vec![vec![1.0, 0.0]], vec![vec![-1.0, 0.0]]],
         vec![vec![vec![0.75, 0.0], vec![-0.75, 0.0]]],
@@ -214,7 +214,7 @@ pub fn expected_assignments() -> Vec<(Embedding, ClusterId)> {
     vec![(vec![1.0, 0.0], 0), (vec![-1.0, 0.0], 1)]
 }
 
-pub fn underfull_first_pass() -> PassInput {
+pub fn underfull_first_pass() -> Vec<SampleBatch> {
     vec![vec![vec![1.0, 0.0]]]
 }
 
@@ -247,20 +247,53 @@ impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanc
         FixtureTrainer::malformed_input_accepting()
     }
 
-    fn sample_passes(&self) -> Vec<PassInput> {
-        sample_passes()
+    fn for_each_sample_pass_event<E, F>(&self, mut on_event: F) -> Result<(), E>
+    where
+        F: FnMut(
+            lexongraph_streaming_clustering::conformance::SamplePassEvent<'_>,
+        ) -> Result<(), E>,
+    {
+        for pass in sample_passes() {
+            for batch in pass {
+                on_event(
+                    lexongraph_streaming_clustering::conformance::SamplePassEvent::Batch(
+                        batch.as_slice(),
+                    ),
+                )?;
+            }
+            on_event(lexongraph_streaming_clustering::conformance::SamplePassEvent::EndPass)?;
+        }
+        Ok(())
     }
 
-    fn expected_pass_reports(&self) -> Vec<PassReport> {
-        expected_pass_reports()
+    fn for_each_expected_pass_report<E, F>(&self, mut on_report: F) -> Result<(), E>
+    where
+        F: FnMut(&PassReport) -> Result<(), E>,
+    {
+        for report in expected_pass_reports() {
+            on_report(&report)?;
+        }
+        Ok(())
     }
 
-    fn expected_assignments(&self) -> Vec<(Embedding, ClusterId)> {
-        expected_assignments()
+    fn for_each_expected_assignment<E, F>(&self, mut on_assignment: F) -> Result<(), E>
+    where
+        F: FnMut(&[f32], ClusterId) -> Result<(), E>,
+    {
+        for (embedding, cluster_id) in expected_assignments() {
+            on_assignment(embedding.as_slice(), cluster_id)?;
+        }
+        Ok(())
     }
 
-    fn underfull_first_pass(&self) -> PassInput {
-        underfull_first_pass()
+    fn for_each_underfull_first_pass_batch<E, F>(&self, mut on_batch: F) -> Result<(), E>
+    where
+        F: FnMut(&[Embedding]) -> Result<(), E>,
+    {
+        for batch in underfull_first_pass() {
+            on_batch(batch.as_slice())?;
+        }
+        Ok(())
     }
 
     fn wrong_dimension_embedding(&self) -> Embedding {
@@ -271,3 +304,4 @@ impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanc
         nan_embedding()
     }
 }
+type SampleBatch = Vec<Embedding>;

@@ -74,12 +74,12 @@ category-level error surface.
 
 ### VAL-STREAM-TRAIT-007
 
-Inspect the public API for dataset-size coupling.
+Inspect the default and feature-gated public APIs for dataset-size coupling.
 
-**Pass condition:** the contract does not require full-dataset materialization
-or full assignment retention as part of normal trait use by callers or as an
-observable trait obligation. Concrete implementation-internal pass buffering is
-not by itself a contract violation.
+**Pass condition:** the contract does not require full-dataset materialization,
+full-dataset assignment retention, or implementation-owned indexing
+scratch/storage whose required footprint scales with total dataset size `N`.
+Caller-chosen batch contents may still scale with batch size.
 
 **Traces to:** REQ-STREAM-TRAIT-011
 
@@ -196,3 +196,17 @@ trainer/classifier API, and unsupported-host behavior remains an
 implementation-internal fallback rather than a contract change.
 
 **Traces to:** REQ-STREAM-TRAIT-023
+
+### VAL-STREAM-TRAIT-019
+
+Inspect or execute a conformant implementation while exercising multiple passes
+over a dataset larger than one batch.
+
+**Pass condition:** indexing and training do not require implementation-owned
+dataset replay buffers, per-item assignment logs, spill files, or equivalent
+temporary or persistent indexing state whose footprint scales `O(N)` with total
+dataset size. Required implementation-owned state remains bounded by requested
+cluster count, embedding dimensionality, caller-provided balance
+configuration, and caller-selected batch size.
+
+**Traces to:** REQ-STREAM-TRAIT-024

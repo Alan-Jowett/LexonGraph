@@ -100,13 +100,15 @@ state transitions, and any case where zero clusters would be realized.
 
 ### REQ-STREAM-TRAIT-011
 
-The public contract shall remain dataset-size independent by avoiding API
-shapes that require full-dataset retention or full-dataset materialization by
-callers or as an observable shared-contract obligation.
+The public contract, including feature-gated conformance-helper surfaces, shall
+remain dataset-size independent during indexing by avoiding API shapes or
+observable shared-contract obligations whose implementation-owned memory or
+scratch/storage footprint scales with total dataset size `N`.
 
-Concrete implementations may retain pass-scoped internal state when their
-documented algorithm requires it, provided that doing so does not widen the
-shared public API into a whole-dataset ownership contract.
+Caller-owned per-batch inputs may scale with caller-selected batch size.
+Shared-contract state may scale with requested cluster count, embedding
+dimensionality, caller-provided balance configuration, and documented bounded
+batch size, but not with `N`.
 
 ### REQ-STREAM-TRAIT-012
 
@@ -188,6 +190,20 @@ heterogeneous-acceleration backends, provided that:
 - the observable lifecycle, assignment semantics, error categories, and
   deterministic guarantees required by this specification remain authoritative
   at the shared boundary
+
+### REQ-STREAM-TRAIT-024
+
+A conformant implementation shall perform indexing and training with
+implementation-owned memory and scratch/storage bounded independently of total
+dataset size `N`.
+
+It shall not require dataset replay buffers, per-item assignment logs, spill
+files, or equivalent temporary or persistent indexing state whose footprint
+scales `O(N)` with the dataset.
+
+Bounded implementation-owned state may scale with requested cluster count,
+embedding dimensionality, caller-provided balance configuration, and
+caller-selected batch size, but not with `N`.
 
 ## Out of Scope
 

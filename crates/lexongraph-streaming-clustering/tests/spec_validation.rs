@@ -129,6 +129,9 @@ fn val_stream_trait_007_public_api_avoids_full_dataset_materialization() {
     assert!(source.contains("fn ingest_batch"));
     assert!(source.contains("fn assign_batch"));
     assert!(!source.contains("fn fit_dataset"));
+    assert!(!source.contains("pub type PassInput"));
+    assert!(!source.contains("pub type EmbeddingBatch"));
+    assert!(source.contains("fn for_each_sample_pass_event"));
 }
 
 #[test]
@@ -320,6 +323,24 @@ fn val_stream_trait_016_invalid_balance_constraints_are_rejected_explicitly() {
             Err(StreamingClusteringError::InvalidConfiguration { .. })
         ));
     }
+}
+
+#[test]
+fn val_stream_trait_019_indexing_state_remains_bounded_without_dataset_buffers() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let contract_source = std::fs::read_to_string(manifest_dir.join("src/lib.rs")).unwrap();
+    let fixture_source =
+        std::fs::read_to_string(manifest_dir.join("tests/support/mod.rs")).unwrap();
+
+    assert!(contract_source.contains("fn for_each_sample_pass_event"));
+    assert!(contract_source.contains("fn for_each_underfull_first_pass_batch"));
+    assert!(!contract_source.contains("fn sample_passes(&self) -> Vec<"));
+    assert!(!contract_source.contains("fn underfull_first_pass(&self) ->"));
+    assert!(fixture_source.contains("current_pass_count: usize"));
+    assert!(fixture_source.contains("completed_passes: usize"));
+    assert!(!fixture_source.contains("assignment_log"));
+    assert!(!fixture_source.contains("spill_file"));
+    assert!(!fixture_source.contains("dataset_buffer"));
 }
 
 fn run_reports_and_assignments(
