@@ -16,10 +16,23 @@ pub struct MemoryBlockStore {
     state: Arc<Mutex<State>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryBlockStoreCapacity {
+    ResidentBlocks(usize),
+    ResidentBytes(usize),
+}
+
 struct State {
-    max_resident_blocks: usize,
+    capacity: Capacity,
+    resident_bytes: usize,
     next_recency: u64,
     entries: HashMap<BlockHash, ResidentEntry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Capacity {
+    ResidentBlocks(usize),
+    ResidentBytes(usize),
 }
 
 struct ResidentEntry {
@@ -27,15 +40,24 @@ struct ResidentEntry {
     recency: u64,
 }
 
+pub const BYTES_PER_MB: usize = 1_048_576;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemoryBlockStoreBuildError {
     ZeroCapacity,
+    CapacityOverflow,
 }
 
 impl fmt::Display for MemoryBlockStoreBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroCapacity => write!(f, "memory block store capacity must be at least 1"),
+            Self::CapacityOverflow => {
+                write!(
+                    f,
+                    "memory block store capacity overflowed when converting MB to bytes"
+                )
+            }
         }
     }
 }
@@ -45,22 +67,43 @@ impl std::error::Error for MemoryBlockStoreBuildError {}
 impl fmt::Debug for MemoryBlockStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state.lock().unwrap();
-        f.debug_struct("MemoryBlockStore")
-            .field("max_resident_blocks", &state.max_resident_blocks)
+        let mut debug = f.debug_struct("MemoryBlockStore");
+        match state.capacity {
+            Capacity::ResidentBlocks(max_resident_blocks) => {
+                debug.field("max_resident_blocks", &max_resident_blocks);
+            }
+            Capacity::ResidentBytes(max_resident_bytes) => {
+                debug.field("max_resident_bytes", &max_resident_bytes);
+            }
+        }
+        debug
             .field("resident_len", &state.entries.len())
+            .field("resident_bytes", &state.resident_bytes)
             .finish()
     }
 }
 
 impl MemoryBlockStore {
     pub fn new(max_resident_blocks: usize) -> Result<Self, MemoryBlockStoreBuildError> {
-        if max_resident_blocks == 0 {
+        Self::new_with_capacity(Capacity::ResidentBlocks(max_resident_blocks))
+    }
+
+    pub fn new_cache_mb(max_resident_mb: usize) -> Result<Self, MemoryBlockStoreBuildError> {
+        let max_resident_bytes = max_resident_mb
+            .checked_mul(BYTES_PER_MB)
+            .ok_or(MemoryBlockStoreBuildError::CapacityOverflow)?;
+        Self::new_with_capacity(Capacity::ResidentBytes(max_resident_bytes))
+    }
+
+    fn new_with_capacity(capacity: Capacity) -> Result<Self, MemoryBlockStoreBuildError> {
+        if capacity.limit() == 0 {
             return Err(MemoryBlockStoreBuildError::ZeroCapacity);
         }
 
         Ok(Self {
             state: Arc::new(Mutex::new(State {
-                max_resident_blocks,
+                capacity,
+                resident_bytes: 0,
                 next_recency: 0,
                 entries: HashMap::new(),
             })),
@@ -68,18 +111,40 @@ impl MemoryBlockStore {
     }
 
     pub fn max_resident_blocks(&self) -> usize {
-        self.state.lock().unwrap().max_resident_blocks
+        match self.state.lock().unwrap().capacity {
+            Capacity::ResidentBlocks(max_resident_blocks) => max_resident_blocks,
+            Capacity::ResidentBytes(_) => 0,
+        }
+    }
+
+    pub fn capacity(&self) -> MemoryBlockStoreCapacity {
+        match self.state.lock().unwrap().capacity {
+            Capacity::ResidentBlocks(max_resident_blocks) => {
+                MemoryBlockStoreCapacity::ResidentBlocks(max_resident_blocks)
+            }
+            Capacity::ResidentBytes(max_resident_bytes) => {
+                MemoryBlockStoreCapacity::ResidentBytes(max_resident_bytes)
+            }
+        }
     }
 
     #[cfg(feature = "inject")]
     pub fn raw_insert(&self, block_id: BlockHash, bytes: Vec<u8>) {
         let mut state = self.state.lock().unwrap();
-        state.insert_or_refresh(block_id, bytes);
+        state
+            .insert_or_refresh(block_id, bytes)
+            .expect("injected raw insert must fit configured capacity");
     }
 
-    fn insert_block_bytes(&self, block_id: &BlockHash, block_bytes: &[u8]) {
+    fn insert_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
         let mut state = self.state.lock().unwrap();
-        state.insert_or_refresh(*block_id, block_bytes.to_vec());
+        state
+            .insert_or_refresh(*block_id, block_bytes.to_vec())
+            .map_err(backend_failure)
     }
 }
 
@@ -90,20 +155,45 @@ impl State {
         recency
     }
 
-    fn insert_or_refresh(&mut self, block_id: BlockHash, bytes: Vec<u8>) {
+    fn insert_or_refresh(&mut self, block_id: BlockHash, bytes: Vec<u8>) -> Result<(), String> {
+        let new_len = bytes.len();
+        if let Capacity::ResidentBytes(max_resident_bytes) = self.capacity
+            && new_len > max_resident_bytes
+        {
+            return Err(format!(
+                "block payload of {new_len} bytes exceeds cache capacity of {} bytes",
+                max_resident_bytes
+            ));
+        }
+
         let recency = self.next_recency();
+        let replacing_existing = self.entries.contains_key(&block_id);
+        let old_len = self
+            .entries
+            .get(&block_id)
+            .map(|entry| entry.bytes.len())
+            .unwrap_or(0);
+        while !self.capacity.allows_insert(
+            self.entries.len(),
+            self.resident_bytes.saturating_sub(old_len),
+            new_len,
+            replacing_existing,
+        ) {
+            self.evict_lru_excluding(Some(block_id));
+        }
         if let Some(entry) = self.entries.get_mut(&block_id) {
             entry.bytes = bytes;
             entry.recency = recency;
-            return;
+        } else {
+            self.entries
+                .insert(block_id, ResidentEntry { bytes, recency });
         }
 
-        if self.entries.len() == self.max_resident_blocks {
-            self.evict_lru();
-        }
-
-        self.entries
-            .insert(block_id, ResidentEntry { bytes, recency });
+        self.resident_bytes = self
+            .resident_bytes
+            .saturating_sub(old_len)
+            .saturating_add(new_len);
+        Ok(())
     }
 
     fn refresh(&mut self, block_id: &BlockHash) {
@@ -113,14 +203,41 @@ impl State {
         }
     }
 
-    fn evict_lru(&mut self) {
+    fn evict_lru_excluding(&mut self, excluded_block_id: Option<BlockHash>) {
         let lru_block_id = self
             .entries
             .iter()
+            .filter(|(block_id, _)| Some(**block_id) != excluded_block_id)
             .min_by_key(|(_, entry)| entry.recency)
             .map(|(block_id, _)| *block_id)
             .expect("memory block store capacity is always positive");
-        self.entries.remove(&lru_block_id);
+        let removed = self.entries.remove(&lru_block_id).unwrap();
+        self.resident_bytes = self.resident_bytes.saturating_sub(removed.bytes.len());
+    }
+}
+
+impl Capacity {
+    fn limit(self) -> usize {
+        match self {
+            Self::ResidentBlocks(limit) | Self::ResidentBytes(limit) => limit,
+        }
+    }
+
+    fn allows_insert(
+        self,
+        resident_len: usize,
+        resident_bytes: usize,
+        new_len: usize,
+        replacing_existing: bool,
+    ) -> bool {
+        match self {
+            Self::ResidentBlocks(max_resident_blocks) => {
+                replacing_existing || resident_len < max_resident_blocks
+            }
+            Self::ResidentBytes(max_resident_bytes) => {
+                resident_bytes.saturating_add(new_len) <= max_resident_bytes
+            }
+        }
     }
 }
 
@@ -131,8 +248,7 @@ impl BlockStore for MemoryBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.insert_block_bytes(block_id, block_bytes);
-        Ok(())
+        self.insert_block_bytes(block_id, block_bytes)
     }
 
     async fn get_block_bytes(
@@ -162,4 +278,8 @@ impl BlockStore for MemoryBlockStore {
             .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
     }
+}
+
+fn backend_failure(message: String) -> BlockStoreError {
+    BlockStoreError::BackendFailure(message)
 }

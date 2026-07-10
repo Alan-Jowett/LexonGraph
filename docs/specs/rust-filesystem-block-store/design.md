@@ -33,7 +33,7 @@ The crate does not own:
 - block validation rules beyond invoking the block crate
 - any consumer-facing API wider than the parent `BlockStore` contract plus
   store construction
-- deletion or compaction behavior
+- consumer-facing deletion or compaction behavior
 
 ## External Dependencies
 
@@ -66,6 +66,12 @@ implementation details remain outside the parent trait boundary.
 Successful construction stores a canonicalized directory path as the root.
 Failures to create the root, canonicalize it, stat it, or confirm that the
 resolved path is a directory map to explicit backend failures.
+
+The crate also exposes an opt-in cache-mode constructor that accepts an MB
+budget and converts it to a payload-byte budget using `1 MB = 1,048,576 bytes`.
+
+Cache-mode construction fails explicitly when the requested MB budget is zero or
+cannot be converted to the corresponding byte budget.
 
 ## On-Disk Mapping
 
@@ -197,14 +203,51 @@ Enumeration-time directory traversal failures, metadata failures, or published
 path-decoding failures also map to explicit backend failures through the parent
 error taxonomy.
 
+### DSG-FS-STORE-012 `Cache-mode accounting and construction`
+
+The opt-in cache-mode constructor scans existing published block files rooted
+under the configured store root, computes their payload-byte usage from the
+published file lengths, and derives their initial recency order from filesystem
+last-modified times with a deterministic path-based tie-breaker.
+
+If the discovered published payload set already exceeds the configured byte
+budget, the constructor evicts least-recently-used published cache files until
+the retained payload set fits the budget.
+
+### DSG-FS-STORE-013 `Cache-mode direct-write admission`
+
+Before a direct cache-mode `put` publishes a new block file, the implementation
+plans any required evictions against the current payload-byte budget.
+
+If one block's payload bytes exceed the entire byte budget, the direct cache
+write fails explicitly without publishing the new block file.
+
+Otherwise, the implementation evicts the least-recently-used cached published
+files before attempting publication of the new block.
+
+If publication subsequently fails, previously evicted cached files may already
+be gone.
+
+### DSG-FS-STORE-014 `Cache-mode recency refresh`
+
+Successful direct cache-mode `put` and `get` operations refresh the affected
+block's recency within the process-local cache accounting state.
+
+### DSG-FS-STORE-015 `Cache-mode metadata boundary`
+
+Cache-mode byte accounting and recency tracking remain implementation-private.
+
+The crate does not widen the parent `BlockStore` trait and does not surface
+implementation-private cache bookkeeping artifacts through `iter_block_ids`.
+
 ## Verification Strategy
 
-### DSG-FS-STORE-012 `Conformance reuse`
+### DSG-FS-STORE-016 `Conformance reuse`
 
 The crate reuses the parent block-store conformance helpers to verify the
 backend-neutral `put`, `get`, and block-ID enumeration contract.
 
-### DSG-FS-STORE-013 `Filesystem-specific verification`
+### DSG-FS-STORE-017 `Filesystem-specific verification`
 
 The crate adds backend-specific tests for:
 
@@ -220,6 +263,9 @@ The crate adds backend-specific tests for:
   re-inspected
 - explicit failure on conflicting pre-existing bytes
 - successful convergence for concurrent publication of the same block
+- cache-mode constructor eviction of over-budget existing cache roots
+- cache-mode byte-budget eviction under direct access
+- cache-mode rejection of direct writes larger than the total byte budget
 - enumeration of published block IDs rooted under the configured store
 - exclusion of staging files and other non-published artifacts from enumeration
 - explicit failure for directory traversal or path-decoding errors during
@@ -230,12 +276,14 @@ The crate adds backend-specific tests for:
 | Design ID | Satisfies |
 |---|---|
 | DSG-FS-STORE-001 | REQ-FS-STORE-001, REQ-FS-STORE-002 |
-| DSG-FS-STORE-002..003 | REQ-FS-STORE-002, REQ-FS-STORE-003 |
+| DSG-FS-STORE-002..003 | REQ-FS-STORE-002, REQ-FS-STORE-003, REQ-FS-STORE-017 |
 | DSG-FS-STORE-004 | REQ-FS-STORE-003, REQ-FS-STORE-004 |
 | DSG-FS-STORE-005..006 | REQ-FS-STORE-004, REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011 |
 | DSG-FS-STORE-007 | REQ-FS-STORE-006 |
-| DSG-FS-STORE-008 | REQ-FS-STORE-013, REQ-FS-STORE-014, REQ-FS-STORE-015, REQ-FS-STORE-016 |
+| DSG-FS-STORE-008 | REQ-FS-STORE-013, REQ-FS-STORE-014, REQ-FS-STORE-015, REQ-FS-STORE-016, REQ-FS-STORE-022 |
 | DSG-FS-STORE-009 | REQ-FS-STORE-005, REQ-FS-STORE-007, REQ-FS-STORE-008 |
 | DSG-FS-STORE-010 | REQ-FS-STORE-005 |
 | DSG-FS-STORE-011 | REQ-FS-STORE-001, REQ-FS-STORE-003, REQ-FS-STORE-006, REQ-FS-STORE-007, REQ-FS-STORE-010, REQ-FS-STORE-011, REQ-FS-STORE-016 |
-| DSG-FS-STORE-012..013 | REQ-FS-STORE-009, REQ-FS-STORE-012, REQ-FS-STORE-013, REQ-FS-STORE-015, REQ-FS-STORE-016 |
+| DSG-FS-STORE-012 | REQ-FS-STORE-017, REQ-FS-STORE-018, REQ-FS-STORE-019, REQ-FS-STORE-020 |
+| DSG-FS-STORE-013..015 | REQ-FS-STORE-018, REQ-FS-STORE-019, REQ-FS-STORE-021, REQ-FS-STORE-022 |
+| DSG-FS-STORE-016..017 | REQ-FS-STORE-009, REQ-FS-STORE-012, REQ-FS-STORE-013, REQ-FS-STORE-015, REQ-FS-STORE-016 |

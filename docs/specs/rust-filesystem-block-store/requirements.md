@@ -171,6 +171,53 @@ Filesystem enumeration shall surface explicit backend failure when traversal of
 the store root or decoding of a published block-file location into a block ID
 cannot be completed.
 
+### REQ-FS-STORE-017
+
+The filesystem block-store crate shall offer an opt-in cache-mode construction
+path outside the `BlockStore` trait boundary that configures a payload-byte
+budget in MB, where `1 MB = 1,048,576 bytes`.
+
+Construction shall fail explicitly when the requested cache-mode MB budget is
+zero or cannot be converted into the corresponding byte budget.
+
+### REQ-FS-STORE-018
+
+The cache-mode filesystem block-store shall account only canonical block payload
+bytes stored in published block files against the configured byte budget.
+
+The byte budget shall not include filesystem allocation slack, directory
+entries, staging files, or implementation-private bookkeeping.
+
+### REQ-FS-STORE-019
+
+When a direct cache-mode `put` would exceed the configured byte budget, the
+implementation shall evict least-recently-used cached published blocks until
+the new block fits and success can be reported.
+
+If construction discovers an existing cache root whose published block payloads
+already exceed the configured byte budget, it shall evict least-recently-used
+existing cached published blocks during construction until the cache root fits
+the budget.
+
+### REQ-FS-STORE-020
+
+For existing cached published blocks discovered during cache-mode construction,
+initial recency ordering shall derive from filesystem last-modified time, with a
+deterministic tie-breaker.
+
+### REQ-FS-STORE-021
+
+If one block's canonical payload bytes exceed the entire configured cache-mode
+byte budget, the implementation shall reject that direct cache write
+explicitly, shall not publish the block file, and shall leave the remaining
+cache contents unchanged.
+
+### REQ-FS-STORE-022
+
+Cache-mode eviction and recency accounting may remain implementation-private,
+but shall not widen the parent `BlockStore` contract or cause internal
+bookkeeping artifacts to appear through the parent trait's enumeration surface.
+
 ## Out of Scope
 
 This crate does not define or own:

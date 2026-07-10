@@ -230,3 +230,47 @@ enumeration.
 than silently omitting the affected stored state.
 
 **Traces to:** REQ-FS-STORE-016
+
+### VAL-FS-STORE-022
+
+Construct the opt-in cache-mode filesystem store with a positive MB budget and
+with zero MB.
+
+**Pass condition:** positive MB construction succeeds, zero MB construction
+fails explicitly, and cache-mode behavior uses `1 MB = 1,048,576 bytes` for the
+configured payload-byte budget.
+
+**Traces to:** REQ-FS-STORE-017
+
+### VAL-FS-STORE-023
+
+Fill the cache-mode filesystem store close to its byte budget, refresh one
+cached block with a successful `get`, then insert another block whose payload
+bytes require eviction.
+
+**Pass condition:** the least-recently-used non-refreshed cached published file
+is evicted according to payload-byte pressure rather than cached-block count.
+
+**Traces to:** REQ-FS-STORE-018, REQ-FS-STORE-019
+
+### VAL-FS-STORE-024
+
+Construct the cache-mode filesystem store against an existing cache root whose
+published payload bytes already exceed the configured byte budget.
+
+**Pass condition:** construction evicts least-recently-used existing cached
+published files, using filesystem last-modified time as the initial recency
+signal, until the retained payload set fits the budget.
+
+**Traces to:** REQ-FS-STORE-019, REQ-FS-STORE-020
+
+### VAL-FS-STORE-025
+
+Attempt to store one block whose canonical payload bytes exceed the total
+cache-mode byte budget.
+
+**Pass condition:** the direct cache write fails explicitly, no published block
+file appears at the deterministic target path, and the remaining cache contents
+stay unchanged.
+
+**Traces to:** REQ-FS-STORE-021, REQ-FS-STORE-022

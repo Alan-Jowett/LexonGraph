@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonGraph contributors
 use std::collections::HashSet;
+use std::fs::File;
 use std::future::Future;
 #[cfg(feature = "inject")]
 use std::io;
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -21,9 +23,13 @@ use lexongraph_block_store::conformance::{
     BlockStoreConformanceHarness, BlockStoreFactory, run_full_suite,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
-use lexongraph_block_store_fs::FilesystemBlockStore;
+#[cfg(feature = "inject")]
+use lexongraph_block_store_fs::StoredFileMetadata;
 #[cfg(feature = "inject")]
 use lexongraph_block_store_fs::inject::{FsOps, StagedFile};
+use lexongraph_block_store_fs::{
+    BYTES_PER_MB, FilesystemBlockStore, FilesystemBlockStoreBuildError,
+};
 #[cfg(feature = "inject")]
 use tempfile::NamedTempFile;
 use tempfile::TempDir;
@@ -276,6 +282,258 @@ fn val_fs_store_021_path_decoding_failures_are_explicit_during_enumeration() {
     expect_backend_failure_contains(error, "failed to decode an enumerated block ID candidate");
 }
 
+#[test]
+fn val_fs_store_022_cache_mode_constructor_enforces_positive_mb_capacity() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    assert_eq!(
+        FilesystemBlockStore::new_cache_mb(temp_dir.path(), 0).unwrap_err(),
+        FilesystemBlockStoreBuildError::ZeroCacheCapacity
+    );
+
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let exact_limit_id = BlockHash::from_bytes([0x41; 32]);
+    let over_limit_id = BlockHash::from_bytes([0x42; 32]);
+
+    store
+        .put_block_bytes(&exact_limit_id, &vec![0xaa; BYTES_PER_MB])
+        .unwrap();
+    let error = store
+        .put_block_bytes(&over_limit_id, &vec![0xbb; BYTES_PER_MB + 1])
+        .unwrap_err();
+
+    expect_backend_failure_contains(error, "exceeds cache capacity");
+    assert!(expected_block_path(temp_dir.path(), &exact_limit_id).exists());
+    assert!(!expected_block_path(temp_dir.path(), &over_limit_id).exists());
+}
+
+#[test]
+fn val_fs_store_023_cache_mode_eviction_uses_payload_bytes_and_lru_recency() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let first = sample_leaf_block(&"a".repeat(700_000));
+    let second = sample_leaf_block(&"b".repeat(300_000));
+    let third = sample_leaf_block(&"c".repeat(300_000));
+
+    let first_id = store.put(&first).unwrap();
+    let second_id = store.put(&second).unwrap();
+
+    assert_eq!(store.get(&first_id).unwrap().unwrap().hash, first_id);
+    let third_id = store.put(&third).unwrap();
+
+    assert_eq!(
+        collect_block_ids(store.iter_block_ids().unwrap()).unwrap(),
+        HashSet::from([first_id, third_id]),
+    );
+    assert_eq!(store.get(&second_id).unwrap(), None);
+    assert!(!expected_block_path(temp_dir.path(), &second_id).exists());
+}
+
+#[test]
+fn cache_mode_get_does_not_admit_untracked_on_disk_blocks_into_budget_accounting() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let tracked = sample_leaf_block(&"a".repeat(600_000));
+    let untracked = sample_leaf_block(&"b".repeat(500_000));
+    let third = sample_leaf_block(&"c".repeat(300_000));
+
+    let tracked_id = store.put(&tracked).unwrap();
+    let untracked_serialized = serialize_block(&untracked).unwrap();
+    let untracked_path = expected_block_path(temp_dir.path(), &untracked_serialized.hash);
+    std::fs::create_dir_all(untracked_path.parent().unwrap()).unwrap();
+    std::fs::write(&untracked_path, &untracked_serialized.bytes).unwrap();
+
+    assert_eq!(
+        store.get(&untracked_serialized.hash).unwrap().unwrap().hash,
+        untracked_serialized.hash
+    );
+    let third_id = store.put(&third).unwrap();
+
+    assert!(expected_block_path(temp_dir.path(), &tracked_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &third_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &untracked_serialized.hash).exists());
+}
+
+#[test]
+fn val_fs_store_025_cache_mode_rejects_blocks_larger_than_total_budget_without_publish() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+    let oversized = sample_leaf_block(&"x".repeat(1_100_000));
+    let oversized_hash = serialize_block(&oversized).unwrap().hash;
+    let oversized_path = expected_block_path(temp_dir.path(), &oversized_hash);
+
+    let error = store.put(&oversized).unwrap_err();
+
+    expect_backend_failure_contains(error, "exceeds cache capacity");
+    assert!(!oversized_path.exists());
+}
+
+#[test]
+fn val_fs_store_024_cache_mode_constructor_evicts_oldest_existing_blocks_until_budget_fits() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block(&"a".repeat(700_000));
+    let second = sample_leaf_block(&"b".repeat(700_000));
+
+    let first_id = priming_store.put(&first).unwrap();
+    let second_id = priming_store.put(&second).unwrap();
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &first_id),
+        SystemTime::UNIX_EPOCH,
+    );
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &second_id),
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10),
+    );
+
+    let bounded_store = FilesystemBlockStore::new_cache_mb(temp_dir.path(), 1).unwrap();
+
+    assert_eq!(
+        collect_block_ids(bounded_store.iter_block_ids().unwrap()).unwrap(),
+        HashSet::from([second_id]),
+    );
+    assert!(!expected_block_path(temp_dir.path(), &first_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn cache_mode_constructor_surfaces_injected_metadata_failures() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let block = sample_leaf_block("metadata-failure");
+
+    priming_store.put(&block).unwrap();
+
+    let error = FilesystemBlockStore::new_cache_mb_with_ops(
+        temp_dir.path(),
+        Arc::new(ScriptedFsOps::with_metadata_failure(
+            1,
+            error_spec("metadata failure"),
+        )),
+        1,
+    )
+    .unwrap_err();
+
+    match error {
+        FilesystemBlockStoreBuildError::CacheInitialization(error) => {
+            expect_backend_failure_contains(error, "failed to inspect existing cached block");
+        }
+        other => panic!("expected cache initialization failure, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn cache_mode_constructor_surfaces_injected_eviction_failures() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block(&"a".repeat(700_000));
+    let second = sample_leaf_block(&"b".repeat(700_000));
+
+    let first_id = priming_store.put(&first).unwrap();
+    let second_id = priming_store.put(&second).unwrap();
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &first_id),
+        SystemTime::UNIX_EPOCH,
+    );
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &second_id),
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10),
+    );
+
+    let error = FilesystemBlockStore::new_cache_mb_with_ops(
+        temp_dir.path(),
+        Arc::new(ScriptedFsOps::with_remove_file_failure(
+            1,
+            error_spec("remove failure"),
+        )),
+        1,
+    )
+    .unwrap_err();
+
+    match error {
+        FilesystemBlockStoreBuildError::CacheInitialization(error) => {
+            expect_backend_failure_contains(error, "failed to evict cached block");
+        }
+        other => panic!("expected cache initialization failure, got {other:?}"),
+    }
+    assert!(expected_block_path(temp_dir.path(), &first_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn cache_mode_constructor_surfaces_existing_cache_accounting_overflow() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block("overflow-a");
+    let second = sample_leaf_block("overflow-b");
+
+    priming_store.put(&first).unwrap();
+    priming_store.put(&second).unwrap();
+
+    let error = FilesystemBlockStore::new_cache_mb_with_ops(
+        temp_dir.path(),
+        Arc::new(ScriptedFsOps::with_metadata_lengths(vec![
+            usize::MAX as u64,
+            1,
+        ])),
+        1,
+    )
+    .unwrap_err();
+
+    match error {
+        FilesystemBlockStoreBuildError::CacheInitialization(error) => {
+            expect_backend_failure_contains(
+                error,
+                "existing cached blocks exceed platform usize accounting during cache initialization",
+            );
+        }
+        other => panic!("expected cache initialization failure, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "inject")]
+#[test]
+fn cache_mode_put_retains_accounting_for_successful_evictions_before_later_failure() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block(&"a".repeat(400_000));
+    let second = sample_leaf_block(&"b".repeat(400_000));
+    let too_large = sample_leaf_block(&"c".repeat(700_000));
+    let fits_after_partial_eviction = sample_leaf_block(&"d".repeat(500_000));
+
+    let first_id = priming_store.put(&first).unwrap();
+    let second_id = priming_store.put(&second).unwrap();
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &first_id),
+        SystemTime::UNIX_EPOCH,
+    );
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &second_id),
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10),
+    );
+
+    let ops = Arc::new(ScriptedFsOps::with_remove_file_failure(
+        2,
+        error_spec("remove failure"),
+    ));
+    let store =
+        FilesystemBlockStore::new_cache_mb_with_ops(temp_dir.path(), ops.clone(), 1).unwrap();
+
+    let error = store.put(&too_large).unwrap_err();
+    expect_backend_failure_contains(error, "failed to evict cached block");
+    assert!(!expected_block_path(temp_dir.path(), &first_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
+
+    let inserted_id = store.put(&fits_after_partial_eviction).unwrap();
+
+    assert_eq!(ops.state.lock().unwrap().remove_file_calls, 2);
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &inserted_id).exists());
+}
+
 #[cfg(feature = "inject")]
 #[test]
 fn val_fs_store_021_directory_traversal_failures_are_explicit_during_enumeration() {
@@ -478,6 +736,12 @@ fn collect_block_ids(
     pollster::block_on(iter.try_collect::<HashSet<_>>())
 }
 
+fn set_last_modified(path: &Path, modified: SystemTime) {
+    let file = File::options().write(true).open(path).unwrap();
+    file.set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+}
+
 #[cfg(feature = "inject")]
 fn assert_put_pre_publication_failure(ops: ScriptedFsOps, expected_message: &str) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -547,8 +811,13 @@ struct ScriptState {
     is_dir_result: Option<IsDirResult>,
     read_dir_calls: usize,
     read_dir_failure: Option<IndexedFailure>,
+    metadata_calls: usize,
+    metadata_failure: Option<IndexedFailure>,
+    metadata_len_overrides: Vec<u64>,
     read_calls: usize,
     read_failure: Option<IndexedFailure>,
+    remove_file_calls: usize,
+    remove_file_failure: Option<IndexedFailure>,
     create_staged_file_failure: Option<ErrorSpec>,
     write_failure: Option<ErrorSpec>,
     flush_failure: Option<ErrorSpec>,
@@ -593,6 +862,18 @@ impl ScriptedFsOps {
         ops
     }
 
+    fn with_metadata_failure(call: usize, error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().metadata_failure = Some(IndexedFailure { call, error });
+        ops
+    }
+
+    fn with_metadata_lengths(lengths: Vec<u64>) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().metadata_len_overrides = lengths;
+        ops
+    }
+
     fn with_create_staged_file_failure(error: ErrorSpec) -> Self {
         let ops = Self::default();
         ops.state.lock().unwrap().create_staged_file_failure = Some(error);
@@ -614,6 +895,12 @@ impl ScriptedFsOps {
     fn with_persist_failure(error: ErrorSpec) -> Self {
         let ops = Self::default();
         ops.state.lock().unwrap().persist_failure = Some(error);
+        ops
+    }
+
+    fn with_remove_file_failure(call: usize, error: ErrorSpec) -> Self {
+        let ops = Self::default();
+        ops.state.lock().unwrap().remove_file_failure = Some(IndexedFailure { call, error });
         ops
     }
 
@@ -680,6 +967,26 @@ impl FsOps for ScriptedFsOps {
             .collect()
     }
 
+    fn metadata(&self, path: &Path) -> io::Result<StoredFileMetadata> {
+        let mut state = self.state.lock().unwrap();
+        state.metadata_calls += 1;
+        let metadata_len_override = state
+            .metadata_len_overrides
+            .get(state.metadata_calls - 1)
+            .copied();
+        if let Some(failure) = state.metadata_failure.as_ref()
+            && failure.call == state.metadata_calls
+        {
+            return Err(failure.error.to_io_error());
+        }
+        drop(state);
+        let metadata = std::fs::metadata(path)?;
+        Ok(StoredFileMetadata {
+            len: metadata_len_override.unwrap_or(metadata.len()),
+            modified: metadata.modified()?,
+        })
+    }
+
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         let mut state = self.state.lock().unwrap();
         state.read_calls += 1;
@@ -690,6 +997,18 @@ impl FsOps for ScriptedFsOps {
         }
         drop(state);
         std::fs::read(path)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.remove_file_calls += 1;
+        if let Some(failure) = state.remove_file_failure.as_ref()
+            && failure.call == state.remove_file_calls
+        {
+            return Err(failure.error.to_io_error());
+        }
+        drop(state);
+        std::fs::remove_file(path)
     }
 
     fn create_staged_file(&self, dir: &Path) -> io::Result<Box<dyn StagedFile>> {

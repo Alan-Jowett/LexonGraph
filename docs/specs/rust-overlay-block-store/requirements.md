@@ -132,6 +132,16 @@ implementations into one overlay `BlockStore`.
 Downstream crates shall not need to duplicate overlay read ordering, write
 ordering, or de-duplication logic to use that heterogeneous composition.
 
+### REQ-OVERLAY-STORE-014
+
+The overlay crate may compose upper cache layers that enforce implementation-
+specific payload-byte budgets outside the parent `BlockStore` trait boundary.
+
+If a successful lower-layer `get` triggers cache refill into such a bounded
+cache layer and the cache layer rejects that refill because the block cannot be
+admitted within its configured payload-byte budget, the overlay shall still
+return the successful lower-layer `get` result unchanged.
+
 ## Out of Scope
 
 This crate does not define or own:
