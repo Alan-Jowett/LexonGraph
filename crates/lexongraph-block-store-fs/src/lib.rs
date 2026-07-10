@@ -642,8 +642,8 @@ impl BlockStore for FilesystemBlockStore {
             let evictions = cache_state.plan_evictions(*block_id, block_bytes.len())?;
             for evicted_block_id in &evictions {
                 self.remove_cached_file(evicted_block_id)?;
+                cache_state.apply_evictions(&[*evicted_block_id]);
             }
-            cache_state.apply_evictions(&evictions);
             self.publish_block_bytes(block_id, block_bytes)?;
             cache_state.upsert(*block_id, block_bytes.len());
             Ok(())

@@ -496,6 +496,46 @@ fn cache_mode_constructor_surfaces_existing_cache_accounting_overflow() {
 
 #[cfg(feature = "inject")]
 #[test]
+fn cache_mode_put_retains_accounting_for_successful_evictions_before_later_failure() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let priming_store = FilesystemBlockStore::new(temp_dir.path()).unwrap();
+    let first = sample_leaf_block(&"a".repeat(400_000));
+    let second = sample_leaf_block(&"b".repeat(400_000));
+    let too_large = sample_leaf_block(&"c".repeat(700_000));
+    let fits_after_partial_eviction = sample_leaf_block(&"d".repeat(500_000));
+
+    let first_id = priming_store.put(&first).unwrap();
+    let second_id = priming_store.put(&second).unwrap();
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &first_id),
+        SystemTime::UNIX_EPOCH,
+    );
+    set_last_modified(
+        &expected_block_path(temp_dir.path(), &second_id),
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10),
+    );
+
+    let ops = Arc::new(ScriptedFsOps::with_remove_file_failure(
+        2,
+        error_spec("remove failure"),
+    ));
+    let store =
+        FilesystemBlockStore::new_cache_mb_with_ops(temp_dir.path(), ops.clone(), 1).unwrap();
+
+    let error = store.put(&too_large).unwrap_err();
+    expect_backend_failure_contains(error, "failed to evict cached block");
+    assert!(!expected_block_path(temp_dir.path(), &first_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
+
+    let inserted_id = store.put(&fits_after_partial_eviction).unwrap();
+
+    assert_eq!(ops.state.lock().unwrap().remove_file_calls, 2);
+    assert!(expected_block_path(temp_dir.path(), &second_id).exists());
+    assert!(expected_block_path(temp_dir.path(), &inserted_id).exists());
+}
+
+#[cfg(feature = "inject")]
+#[test]
 fn val_fs_store_021_directory_traversal_failures_are_explicit_during_enumeration() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = FilesystemBlockStore::new_with_ops(
