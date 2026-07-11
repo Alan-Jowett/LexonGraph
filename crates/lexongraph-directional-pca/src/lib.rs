@@ -81,7 +81,7 @@ struct DirectionalPcaModel {
 #[derive(Debug)]
 enum ReplayPhase {
     AnalyzePca,
-    PlanCuts(PartitionAnalysisPlan),
+    PlanCuts(CutPlanningReplayPlan),
     CountCells(PartitionPlan),
     RealizePartition(ReadyPartitionPlan),
 }
@@ -92,6 +92,12 @@ struct PartitionAnalysisPlan {
     axis_bin_counts: Vec<usize>,
     binning_policy: DirectionalPcaBinningPolicy,
     total_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct CutPlanningReplayPlan {
+    plan: PartitionAnalysisPlan,
+    planners: Vec<AxisPlanner>,
 }
 
 #[derive(Clone, Debug)]
@@ -162,7 +168,7 @@ struct QuantileValueGroup {
     quotas: Vec<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum AxisPlanner {
     Quantile(QuantileAxisPlanner),
     DensityMinMax(DensityValleyMinMaxPlanner),
@@ -170,7 +176,7 @@ enum AxisPlanner {
     Ready(AxisPlan),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct QuantileAxisPlanner {
     targets: Vec<usize>,
     next_target_index: usize,
@@ -181,14 +187,14 @@ struct QuantileAxisPlanner {
     candidate_capacity: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct DensityValleyMinMaxPlanner {
     bin_count: usize,
     minimum: Option<f32>,
     maximum: Option<f32>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct DensityValleyHistogramPlanner {
     minimum: f32,
     maximum: f32,
@@ -284,23 +290,10 @@ impl DirectionalPcaStreamingTrainer {
                 tracker: PassTracker::new(),
                 accumulator: PcaAccumulator::new(self.config.dimensions),
             }),
-            ReplayPhase::PlanCuts(plan) => ActivePassState::PlanCuts(ActiveCutPlanningPass {
+            ReplayPhase::PlanCuts(replay) => ActivePassState::PlanCuts(ActiveCutPlanningPass {
                 tracker: PassTracker::new(),
-                plan: plan.clone(),
-                planners: plan
-                    .axis_bin_counts
-                    .iter()
-                    .map(|&bin_count| match plan.binning_policy {
-                        DirectionalPcaBinningPolicy::Quantile => AxisPlanner::new_quantile(
-                            bin_count,
-                            plan.total_count,
-                            self.config.cluster_count as usize,
-                        ),
-                        DirectionalPcaBinningPolicy::DensityValley => {
-                            AxisPlanner::new_density(bin_count)
-                        }
-                    })
-                    .collect(),
+                plan: replay.plan.clone(),
+                planners: replay.planners.clone(),
             }),
             ReplayPhase::CountCells(partition) => {
                 ActivePassState::CountCells(ActiveCellCountingPass {
@@ -430,13 +423,26 @@ impl DirectionalPcaStreamingTrainer {
             self.config.cluster_count,
             self.quality_metric,
         );
+        let plan = PartitionAnalysisPlan {
+            transform,
+            axis_bin_counts,
+            binning_policy: self.params.binning_policy,
+            total_count: observed_count,
+        };
+        let planners = plan
+            .axis_bin_counts
+            .iter()
+            .map(|&bin_count| match plan.binning_policy {
+                DirectionalPcaBinningPolicy::Quantile => AxisPlanner::new_quantile(
+                    bin_count,
+                    plan.total_count,
+                    self.config.cluster_count as usize,
+                ),
+                DirectionalPcaBinningPolicy::DensityValley => AxisPlanner::new_density(bin_count),
+            })
+            .collect();
         Ok((
-            ReplayPhase::PlanCuts(PartitionAnalysisPlan {
-                transform,
-                axis_bin_counts,
-                binning_policy: self.params.binning_policy,
-                total_count: observed_count,
-            }),
+            ReplayPhase::PlanCuts(CutPlanningReplayPlan { plan, planners }),
             report,
             None,
         ))
@@ -481,7 +487,14 @@ impl DirectionalPcaStreamingTrainer {
                 None,
             ))
         } else {
-            Ok((ReplayPhase::PlanCuts(pass.plan), report, None))
+            Ok((
+                ReplayPhase::PlanCuts(CutPlanningReplayPlan {
+                    plan: pass.plan,
+                    planners: advanced_planners,
+                }),
+                report,
+                None,
+            ))
         }
     }
 
@@ -680,8 +693,14 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
     }
 
     fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
-        if self.state != TrainerState::PassComplete || self.model.is_none() {
+        if self.state != TrainerState::PassComplete {
             return Err(self.invalid_transition("complete_training"));
+        }
+        if self.model.is_none() {
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: self.state,
+                operation: "complete_training".into(),
+            });
         }
         self.state = TrainerState::TrainingComplete;
         Ok(())

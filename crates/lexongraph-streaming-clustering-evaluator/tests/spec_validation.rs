@@ -2431,11 +2431,13 @@ fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
     let profile = &report.profile_reports[0];
     assert_eq!(
         profile.survivor_candidate_ids,
-        vec![
-            "pca-sort-exact-chunking".to_string(),
-            "skewed-gate-fail".to_string()
-        ]
+        vec!["skewed-gate-fail".to_string()]
     );
+    assert!(profile.candidate_reports.iter().any(|candidate| {
+        candidate.candidate_id == "pca-sort-exact-chunking"
+            && candidate.run_status == CandidateRunStatus::CandidateSharedContractFailure
+            && !candidate.survived_required_gates
+    }));
     assert!(profile.candidate_reports.iter().any(|candidate| {
         candidate.candidate_id == "skewed-gate-fail"
             && candidate.run_status == CandidateRunStatus::Succeeded
@@ -2631,7 +2633,15 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
             fixture.provenance.profile_id,
             concrete.provenance.profile_id
         );
-        assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+        if concrete.run_status == CandidateRunStatus::Succeeded {
+            assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+        } else {
+            assert!(concrete.pass_reports.is_empty());
+            assert_eq!(
+                concrete.run_status,
+                CandidateRunStatus::CandidateSharedContractFailure
+            );
+        }
         assert!(
             concrete
                 .candidate_identity

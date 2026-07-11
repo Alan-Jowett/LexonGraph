@@ -10,13 +10,13 @@ LexonGraph streaming multi-pass clustering contract.
 
 ## Scope
 
-This document specifies the crate-level requirements for a new Rust crate that:
+This document specifies the crate-level requirements for a Rust crate that:
 
 - implements `docs/protocol/dcbc.md`
 - conforms to the shared contract defined by
-  `crates/lexongraph-streaming-clustering`
+  `docs/specs/rust-streaming-clustering-crate`
 - preserves the behavioral mechanics of deterministic DCBC while exposing a
-  streaming, multi-pass trainer/classifier boundary
+  true-streaming, multi-pass trainer/classifier boundary
 
 This document does not redefine protocol math, deterministic tie-breaking,
 output semantics, or failure conditions from `docs/protocol/dcbc.md`, and it
@@ -36,7 +36,13 @@ trainer across all batches ingested before one `finish_pass()` call.
 
 `Protocol pass` means one complete DCBC traversal of the logical dataset. In
 this spec package, a protocol pass is exposed directly as one caller-visible
-streaming pass completed by `finish_pass()`.
+streaming pass completed by `finish_pass()` or as one caller-visible staged pass
+in a replay-based bounded-state realization.
+
+`True streaming` means implementation-owned state does not scale with the size
+of the full logical dataset. Transient state may scale with the currently
+ingested batch or the currently processed working set, but not with total
+dataset size.
 
 ## Requirements
 
@@ -47,7 +53,7 @@ The repository shall define a dedicated Rust crate for streaming DCBC at
 
 ### REQ-DCBC-STREAM-002
 
-The new crate shall remain subordinate to:
+The crate shall remain subordinate to:
 
 - `docs/protocol/dcbc.md` for DCBC protocol semantics
 - `docs/specs/rust-streaming-clustering-crate` for the shared streaming
@@ -80,13 +86,12 @@ protocol's lower and upper cluster-size bounds shall be accepted explicitly.
 The trainer shall expose the protocol's repeated full-dataset DCBC passes
 directly through the shared streaming interface.
 
-One completed streaming pass shall correspond to exactly one protocol pass and
-one DCBC assignment/update iteration over the pass dataset order observed before
-`finish_pass()`.
+One completed caller-visible streaming pass shall correspond either to exactly
+one protocol pass or to one caller-visible replay/progress stage in a bounded
+state realization of the next protocol pass.
 
-The crate shall not hide those protocol passes behind a separate public
-iteration-count parameter or perform hidden extra iterations beyond the number
-of completed caller-driven passes.
+The crate shall not hide protocol passes or replay behind implementation-owned
+full-dataset retention, spill, or a separate public iteration-count parameter.
 
 ### REQ-DCBC-STREAM-006
 
@@ -103,6 +108,10 @@ same pass dataset order.
 If a later pass differs in observed count or ordered embedding content from the
 first completed pass, the trainer shall fail explicitly because exact DCBC
 multi-iteration mechanics can no longer be preserved.
+
+If the implementation needs to revisit prior data, it shall do so only through
+caller-visible replay passes rather than hidden implementation-owned retention
+or spill of the full logical dataset.
 
 ### REQ-DCBC-STREAM-008
 
@@ -128,8 +137,8 @@ shared contract's requirement to produce exactly `K` non-empty clusters once
 
 ### REQ-DCBC-STREAM-010
 
-For each completed pass, the crate shall realize the DCBC mechanics required by
-`docs/protocol/dcbc.md`, including:
+For each completed protocol pass, the crate shall realize the DCBC mechanics
+required by `docs/protocol/dcbc.md`, including:
 
 - deterministic centroid initialization
 - cosine-distance assignment semantics
@@ -139,10 +148,14 @@ For each completed pass, the crate shall realize the DCBC mechanics required by
 - deterministic centroid recomputation
 - zero-norm centroid fallback behavior
 
+If a bounded-state realization requires multiple caller-visible replay stages
+before one protocol pass is complete, those stages shall expose deterministic
+progress semantics and shall not claim partition-ready output early.
+
 ### REQ-DCBC-STREAM-011
 
 The observable contract shall preserve stable cluster identifiers across
-completed passes and in the final classifier surface.
+completed partition-ready passes and in the final classifier surface.
 
 ### REQ-DCBC-STREAM-012
 
@@ -152,7 +165,10 @@ Each completed pass shall return a deterministic pass report containing:
 - `quality_metric`
 - `balance_metric`
 - quality and balance metric directions
-- stable cluster identifiers
+- readiness indicating whether the pass is analysis-only or partition-ready
+
+Partition-ready reports shall additionally expose the realized stable cluster
+identifiers. Analysis-only reports may omit partition outputs.
 
 The balance metric shall be zero when no explicit balance constraints are
 configured.
@@ -169,12 +185,12 @@ deterministic classifier that:
 
 ### REQ-DCBC-STREAM-014
 
-The crate's public API surface shall remain independent of dataset size.
+The crate shall be a true-streaming realization.
 
-The implementation may use internal spill or externalized temporary storage to
-preserve exact protocol mechanics without requiring RAM usage that scales with
-the total dataset size, but this revision does not require spill as long as the
-same conformant behavior is preserved.
+It shall not retain, materialize, or spill implementation-owned state whose
+size scales with the full logical dataset, including embeddings, normalized
+points, distance matrices, assignment vectors, membership tables, or equivalent
+replayable full-dataset state.
 
 ### REQ-DCBC-STREAM-015
 
@@ -202,6 +218,8 @@ The repository shall include executable verification artifacts covering both:
   boundary
 - this crate's conformance to the shared streaming clustering contract,
   including the opt-in conformance-helper surface
+- rejection of hidden full-dataset retention/spill as a conformant execution
+  path
 
 ### REQ-DCBC-STREAM-018
 
@@ -214,6 +232,17 @@ assignment-support computation, provided that:
 - pass reports, stable cluster IDs, classifier assignments, and shared-contract
   errors remain equivalent in observable meaning to the CPU path for the same
   inputs
+
+### REQ-DCBC-STREAM-019
+
+Transient working memory may scale with the currently ingested batch or the
+currently processed cluster-local working set, provided that such growth does
+not scale with the full logical dataset size.
+
+### REQ-DCBC-STREAM-020
+
+A streaming-shaped API backed by hidden implementation-owned full-dataset
+buffering, spill, or equivalent internal replay state is non-conformant.
 
 ## Out of Scope
 
@@ -234,5 +263,5 @@ This document composes two existing normative sources:
 - `docs/protocol/dcbc.md`
 - `docs/specs/rust-streaming-clustering-crate`
 
-It defines the requirements for a new crate that bridges them without modifying
+It defines the requirements for a crate that bridges them without modifying
 either existing specification package.

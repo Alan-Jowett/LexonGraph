@@ -62,7 +62,7 @@ use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamin
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
 use lexongraph_streaming_clustering::{
     ClusterId, PassReadiness, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError,
+    StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
 use sha2::{Digest, Sha256};
 
@@ -3698,11 +3698,19 @@ where
             let pass_report = self.trainer.finish_pass()?;
             observe_progress();
             if pass_report.readiness == PassReadiness::PartitionReady {
-                break pass_report;
+                match self.trainer.complete_training() {
+                    Ok(()) => {
+                        observe_progress();
+                        break pass_report;
+                    }
+                    Err(StreamingClusteringError::InvalidTransition {
+                        state: TrainerState::PassComplete,
+                        operation,
+                    }) if operation == "complete_training" => continue,
+                    Err(error) => return Err(error),
+                }
             }
         };
-        self.trainer.complete_training()?;
-        observe_progress();
         let classifier = self.trainer.into_classifier()?;
         let assignments = classifier.assign_batch(embeddings)?;
         observe_progress();
