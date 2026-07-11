@@ -3014,6 +3014,33 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
 
 #[test]
 fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
+    fn select_with_single_replay(
+        selector: &mut lexongraph_adaptive_planning_policy::AdaptivePlanningSelector,
+        represented_item_count: usize,
+        embeddings: &[Vec<f32>],
+    ) -> ActivePlanningAlgorithm {
+        let mut progress = selector
+            .begin_selection_boundary(
+                represented_item_count,
+                embeddings.len(),
+                embeddings.first().map_or(0, std::vec::Vec::len),
+            )
+            .unwrap();
+        loop {
+            match progress {
+                lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::Selected(
+                    algorithm,
+                ) => return algorithm,
+                lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::ReplayRequired(
+                    _,
+                ) => {
+                    selector.ingest_selection_batch(embeddings).unwrap();
+                    progress = selector.finish_selection_pass().unwrap();
+                }
+            }
+        }
+    }
+
     let mut selector = lexongraph_adaptive_planning_policy::AdaptivePlanningSelector::new(
         AdaptivePlanningSettings {
             direction: AdaptivePlanningDirection::Divisive,
@@ -3056,15 +3083,15 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
         vec![3.0, 0.0],
     ];
     assert_eq!(
-        selector.select_algorithm(square.len(), &square).unwrap(),
+        select_with_single_replay(&mut selector, square.len(), &square),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector.select_algorithm(square.len(), &square).unwrap(),
+        select_with_single_replay(&mut selector, square.len(), &square),
         ActivePlanningAlgorithm::Dcbc
     );
     assert_eq!(
-        selector.select_algorithm(line.len(), &line).unwrap(),
+        select_with_single_replay(&mut selector, line.len(), &line),
         ActivePlanningAlgorithm::Dcbc
     );
 }

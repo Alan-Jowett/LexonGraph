@@ -3255,9 +3255,11 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |partition_embeddings| {
-                let algorithm = selector
-                    .select_algorithm(partition_embeddings.len(), partition_embeddings)
-                    .map_err(map_adaptive_planning_error)?;
+                let algorithm = select_adaptive_algorithm_for_boundary(
+                    &mut selector,
+                    partition_embeddings.len(),
+                    partition_embeddings,
+                )?;
                 let phase = adaptive_phase(settings, algorithm);
                 Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
                     PartitionPlanner::new(
@@ -3278,9 +3280,11 @@ fn derive_hierarchy_for_adaptive_built_in(
             materializability_bound,
             stage_observer,
             |layer_embeddings, represented_item_count, _max_unit_item_count| {
-                let algorithm = selector
-                    .select_algorithm(represented_item_count, layer_embeddings)
-                    .map_err(map_adaptive_planning_error)?;
+                let algorithm = select_adaptive_algorithm_for_boundary(
+                    &mut selector,
+                    represented_item_count,
+                    layer_embeddings,
+                )?;
                 let phase = adaptive_phase(settings, algorithm);
                 Ok::<PartitionPlanner<BuiltInStreamingClusterTrainer>, StreamingIndexerError>(
                     PartitionPlanner::new(
@@ -3298,6 +3302,35 @@ fn derive_hierarchy_for_adaptive_built_in(
         ),
     }?;
     Ok((outcome, selector.decision_records().to_vec()))
+}
+
+fn select_adaptive_algorithm_for_boundary(
+    selector: &mut AdaptivePlanningSelector,
+    represented_item_count: usize,
+    embeddings: &[Vec<f32>],
+) -> Result<ActivePlanningAlgorithm, StreamingIndexerError> {
+    let mut progress = selector
+        .begin_selection_boundary(
+            represented_item_count,
+            embeddings.len(),
+            embeddings.first().map_or(0, std::vec::Vec::len),
+        )
+        .map_err(map_adaptive_planning_error)?;
+    loop {
+        match progress {
+            lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::Selected(algorithm) => {
+                return Ok(algorithm);
+            }
+            lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::ReplayRequired(_) => {
+                selector
+                    .ingest_selection_batch(embeddings)
+                    .map_err(map_adaptive_planning_error)?;
+                progress = selector
+                    .finish_selection_pass()
+                    .map_err(map_adaptive_planning_error)?;
+            }
+        }
+    }
 }
 
 fn adaptive_phase(

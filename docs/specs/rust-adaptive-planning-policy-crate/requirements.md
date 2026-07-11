@@ -78,6 +78,10 @@ This selector surface shall remain internal to built-in planning selection rathe
 than introducing a caller-visible interactive "choose the next algorithm after
 each layer" lifecycle.
 
+This selector surface shall itself remain true-streaming and shall not require
+full represented-dataset embedding slices, full assignment vectors, or
+equivalent dataset-sized inputs or outputs.
+
 ### REQ-ADAPTIVE-POLICY-004
 
 The adaptive policy configuration shall accept, at minimum:
@@ -110,6 +114,10 @@ planning outputs available at the adaptive boundary and shall be sufficient to
 decide whether directional PCA remains eligible without relying on randomness or
 free-form human intervention.
 
+The conformant diagnostic path shall derive those diagnostics from bounded-state
+streaming summaries, caller-visible replay stages, or bounded current-work-unit
+data rather than hidden implementation-owned full-dataset memory or spill.
+
 The recorded diagnostics shall include the mean cluster radius measured for the
 current directional-PCA realization at that boundary.
 
@@ -141,6 +149,9 @@ Its selected active-algorithm outputs and structured diagnostics shall be
 consumable by indexer-owned planning and normalization logic without requiring a
 different finalized partition hierarchy or final materialization contract.
 
+That compatibility shall not require the adaptive crate to expose or retain
+dataset-sized intermediate embedding, assignment, or materialization surfaces.
+
 ### REQ-ADAPTIVE-POLICY-012
 
 The crate shall define structured diagnostics and switch-decision records
@@ -154,6 +165,9 @@ sufficient to explain and validate:
 
 If any of those diagnostics are surfaced beyond internal crate state, they shall
 remain deterministic for identical inputs and configuration.
+
+Those surfaced diagnostics and switch-decision records shall remain bounded-state
+artifacts rather than per-item or per-embedding retained datasets.
 
 ### REQ-ADAPTIVE-POLICY-013
 
@@ -175,6 +189,25 @@ The repository shall include automated verification artifacts covering:
 - support for both `Divisive` and `Agglomerative` direction modes
 - deterministic structured diagnostics compatible with the indexer's existing
   finalized partition hierarchy abstraction
+- absence of full-dataset public API surfaces or implementation-owned full-dataset
+  memory/spill requirements in the conformant path
+
+### REQ-ADAPTIVE-POLICY-015
+
+The adaptive planning-policy crate shall be a true-streaming realization.
+
+It shall not retain, materialize, or spill implementation-owned state whose
+size scales with the full logical planning dataset.
+
+Transient working state may scale with the current batch, current subproblem, or
+current adaptive decision boundary only.
+
+### REQ-ADAPTIVE-POLICY-016
+
+The crate shall not expose public methods, callbacks, or extension points whose
+required inputs or returned outputs scale with the full represented planning
+dataset, including full embedding slices, full assignment vectors, or
+equivalent streaming-shaped `O(full dataset)` API constructs.
 
 ## Out of Scope
 

@@ -6,10 +6,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use lexongraph_directional_pca::{DirectionalPcaParams, DirectionalPcaStreamingTrainer};
+use lexongraph_directional_pca::{
+    DirectionalPcaParams, DirectionalPcaStreamingClassifier, DirectionalPcaStreamingTrainer,
+};
 use lexongraph_streaming_clustering::{
-    BalanceConstraints, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError,
+    BalanceConstraints, PassReadiness, StreamingClusterTrainer, StreamingClusteringConfig,
+    StreamingClusteringError,
 };
 
 pub const DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD: f32 = 0.25;
@@ -74,6 +76,18 @@ pub struct AdaptiveSwitchDecisionRecord {
     pub collapse_diagnostics: Option<AdaptivePlanningDiagnostics>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdaptiveReplayStage {
+    CollectingSummaries,
+    MeasuringDecision,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdaptiveSelectionProgress {
+    Selected(ActivePlanningAlgorithm),
+    ReplayRequired(AdaptiveReplayStage),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdaptivePlanningError {
     InvalidConfiguration(String),
@@ -98,11 +112,12 @@ impl fmt::Display for AdaptivePlanningError {
 
 impl std::error::Error for AdaptivePlanningError {}
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct AdaptivePlanningSelector {
     settings: AdaptivePlanningSettings,
     switched_to_dcbc: bool,
     decision_records: Vec<AdaptiveSwitchDecisionRecord>,
+    active_boundary: Option<AdaptiveDecisionBoundary>,
 }
 
 impl AdaptivePlanningSelector {
@@ -112,6 +127,7 @@ impl AdaptivePlanningSelector {
             settings,
             switched_to_dcbc: false,
             decision_records: Vec::new(),
+            active_boundary: None,
         })
     }
 
@@ -127,11 +143,17 @@ impl AdaptivePlanningSelector {
         &self.decision_records
     }
 
-    pub fn select_algorithm(
+    pub fn begin_selection_boundary(
         &mut self,
         represented_item_count: usize,
-        embeddings: &[Vec<f32>],
-    ) -> Result<ActivePlanningAlgorithm, AdaptivePlanningError> {
+        boundary_embedding_count: usize,
+        dimensions: usize,
+    ) -> Result<AdaptiveSelectionProgress, AdaptivePlanningError> {
+        if self.active_boundary.is_some() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "adaptive selection boundary is already active".into(),
+            ));
+        }
         if self.switched_to_dcbc {
             self.decision_records.push(AdaptiveSwitchDecisionRecord {
                 active_algorithm: ActivePlanningAlgorithm::Dcbc,
@@ -139,7 +161,9 @@ impl AdaptivePlanningSelector {
                 reason: AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc,
                 collapse_diagnostics: None,
             });
-            return Ok(ActivePlanningAlgorithm::Dcbc);
+            return Ok(AdaptiveSelectionProgress::Selected(
+                ActivePlanningAlgorithm::Dcbc,
+            ));
         }
 
         if self.decision_records.is_empty() {
@@ -149,30 +173,93 @@ impl AdaptivePlanningSelector {
                 reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
                 collapse_diagnostics: None,
             });
-            return Ok(ActivePlanningAlgorithm::DirectionalPca);
+            return Ok(AdaptiveSelectionProgress::Selected(
+                ActivePlanningAlgorithm::DirectionalPca,
+            ));
         }
 
-        let diagnostics = evaluate_collapse_diagnostics(
+        self.active_boundary = Some(AdaptiveDecisionBoundary::new(
             represented_item_count,
-            embeddings,
+            boundary_embedding_count,
+            dimensions,
             &self.settings.directional_pca,
-        )?;
-        let switch_boundary_occurred = diagnostics.mean_cluster_radius
-            > self.settings.switch_criteria.mean_cluster_radius_threshold;
-        let active_algorithm = if switch_boundary_occurred {
-            self.switched_to_dcbc = true;
-            ActivePlanningAlgorithm::Dcbc
-        } else {
-            ActivePlanningAlgorithm::DirectionalPca
-        };
-        self.decision_records.push(AdaptiveSwitchDecisionRecord {
-            active_algorithm,
-            switch_boundary_occurred,
-            reason: AdaptivePlanningDecisionReason::EvaluatedDirectionalPca,
-            collapse_diagnostics: Some(diagnostics),
-        });
-        Ok(active_algorithm)
+        )?);
+        Ok(AdaptiveSelectionProgress::ReplayRequired(
+            AdaptiveReplayStage::CollectingSummaries,
+        ))
     }
+
+    pub fn ingest_selection_batch(
+        &mut self,
+        embeddings: &[Vec<f32>],
+    ) -> Result<(), AdaptivePlanningError> {
+        let boundary = self.active_boundary.as_mut().ok_or_else(|| {
+            AdaptivePlanningError::DiagnosticComputation(
+                "adaptive selection boundary is not active".into(),
+            )
+        })?;
+        boundary.ingest_batch(embeddings)
+    }
+
+    pub fn finish_selection_pass(
+        &mut self,
+    ) -> Result<AdaptiveSelectionProgress, AdaptivePlanningError> {
+        let boundary = self.active_boundary.as_mut().ok_or_else(|| {
+            AdaptivePlanningError::DiagnosticComputation(
+                "adaptive selection boundary is not active".into(),
+            )
+        })?;
+        match boundary.finish_pass()? {
+            AdaptiveBoundaryState::CollectingSummaries => Ok(
+                AdaptiveSelectionProgress::ReplayRequired(AdaptiveReplayStage::CollectingSummaries),
+            ),
+            AdaptiveBoundaryState::MeasuringDecision => Ok(
+                AdaptiveSelectionProgress::ReplayRequired(AdaptiveReplayStage::MeasuringDecision),
+            ),
+            AdaptiveBoundaryState::Selected(diagnostics) => {
+                let switch_boundary_occurred = diagnostics.mean_cluster_radius
+                    > self.settings.switch_criteria.mean_cluster_radius_threshold;
+                let active_algorithm = if switch_boundary_occurred {
+                    self.switched_to_dcbc = true;
+                    ActivePlanningAlgorithm::Dcbc
+                } else {
+                    ActivePlanningAlgorithm::DirectionalPca
+                };
+                self.decision_records.push(AdaptiveSwitchDecisionRecord {
+                    active_algorithm,
+                    switch_boundary_occurred,
+                    reason: AdaptivePlanningDecisionReason::EvaluatedDirectionalPca,
+                    collapse_diagnostics: Some(diagnostics),
+                });
+                self.active_boundary = None;
+                Ok(AdaptiveSelectionProgress::Selected(active_algorithm))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AdaptiveDecisionBoundary {
+    represented_item_count: usize,
+    phase: AdaptiveReplayStage,
+    partition_ready_passes: usize,
+    trainer: Option<DirectionalPcaStreamingTrainer>,
+    classifier: Option<DirectionalPcaStreamingClassifier>,
+    measurement: Option<MeanClusterRadiusMeasurement>,
+}
+
+#[derive(Debug)]
+enum AdaptiveBoundaryState {
+    CollectingSummaries,
+    MeasuringDecision,
+    Selected(AdaptivePlanningDiagnostics),
+}
+
+#[derive(Debug)]
+struct MeanClusterRadiusMeasurement {
+    represented_item_count: usize,
+    cluster_radius_sums: BTreeMap<u32, (f64, usize)>,
+    observed_embedding_count: usize,
 }
 
 fn validate_settings(settings: &AdaptivePlanningSettings) -> Result<(), AdaptivePlanningError> {
@@ -283,70 +370,6 @@ fn validate_directional_pca_params(
     Ok(())
 }
 
-fn evaluate_collapse_diagnostics(
-    represented_item_count: usize,
-    embeddings: &[Vec<f32>],
-    settings: &AdaptiveDirectionalPcaSettings,
-) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError> {
-    if represented_item_count == 0 {
-        return Err(AdaptivePlanningError::DiagnosticComputation(
-            "represented_item_count must be greater than zero".into(),
-        ));
-    }
-    if embeddings.is_empty() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(
-            "adaptive diagnostics require at least one embedding".into(),
-        ));
-    }
-    if represented_item_count < embeddings.len() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(format!(
-            "represented_item_count {represented_item_count} cannot be smaller than the embedding count {}",
-            embeddings.len()
-        )));
-    }
-    let dimensions = embeddings[0].len();
-    if dimensions == 0 {
-        return Err(AdaptivePlanningError::DiagnosticComputation(
-            "adaptive diagnostics require non-empty embeddings".into(),
-        ));
-    }
-    let cluster_count = diagnostic_cluster_count(
-        settings.cluster_count,
-        embeddings.len(),
-        settings.params.allocation_policy,
-    )?;
-
-    let config = StreamingClusteringConfig {
-        cluster_count,
-        dimensions,
-        balance_constraints: None,
-        random_seed: settings.random_seed,
-    };
-    let mut trainer = DirectionalPcaStreamingTrainer::new(config, settings.params.clone())
-        .map_err(map_streaming_clustering_error)?;
-    trainer
-        .ingest_batch(embeddings)
-        .map_err(map_streaming_clustering_error)?;
-    trainer
-        .finish_pass()
-        .map_err(map_streaming_clustering_error)?;
-    trainer
-        .complete_training()
-        .map_err(map_streaming_clustering_error)?;
-    let classifier = trainer
-        .into_classifier()
-        .map_err(map_streaming_clustering_error)?;
-    let assignments = classifier
-        .assign_batch(embeddings)
-        .map_err(map_streaming_clustering_error)?;
-    let mean_cluster_radius = compute_mean_cluster_radius(embeddings, &assignments)?;
-
-    Ok(AdaptivePlanningDiagnostics {
-        represented_item_count,
-        mean_cluster_radius,
-    })
-}
-
 fn map_streaming_clustering_error(error: StreamingClusteringError) -> AdaptivePlanningError {
     match error {
         StreamingClusteringError::InvalidConfiguration { message } => {
@@ -395,154 +418,215 @@ fn highest_power_of_two_at_most(value: usize) -> usize {
     }
 }
 
-fn compute_mean_cluster_radius(
-    embeddings: &[Vec<f32>],
-    assignments: &[u32],
-) -> Result<f32, AdaptivePlanningError> {
-    if assignments.len() != embeddings.len() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(format!(
-            "assignment count {} did not match embedding count {}",
-            assignments.len(),
-            embeddings.len()
-        )));
-    }
-
-    let mut centroid_sums: BTreeMap<u32, (Vec<f64>, usize)> = BTreeMap::new();
-    for (embedding, &cluster_id) in embeddings.iter().zip(assignments.iter()) {
-        let entry = centroid_sums
-            .entry(cluster_id)
-            .or_insert_with(|| (vec![0.0; embedding.len()], 0));
-        if entry.0.len() != embedding.len() {
+impl AdaptiveDecisionBoundary {
+    fn new(
+        represented_item_count: usize,
+        boundary_embedding_count: usize,
+        dimensions: usize,
+        settings: &AdaptiveDirectionalPcaSettings,
+    ) -> Result<Self, AdaptivePlanningError> {
+        if represented_item_count == 0 {
             return Err(AdaptivePlanningError::DiagnosticComputation(
-                "cluster members must all share one embedding dimensionality".into(),
+                "represented_item_count must be greater than zero".into(),
             ));
         }
-        for (sum, value) in entry.0.iter_mut().zip(embedding.iter().copied()) {
-            *sum += f64::from(value);
-            if !sum.is_finite() {
+        if boundary_embedding_count == 0 {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "adaptive diagnostics require at least one boundary embedding".into(),
+            ));
+        }
+        if represented_item_count < boundary_embedding_count {
+            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                "represented_item_count {represented_item_count} cannot be smaller than the boundary embedding count {boundary_embedding_count}"
+            )));
+        }
+        if dimensions == 0 {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "adaptive diagnostics require non-empty embeddings".into(),
+            ));
+        }
+        let cluster_count = diagnostic_cluster_count(
+            settings.cluster_count,
+            boundary_embedding_count,
+            settings.params.allocation_policy,
+        )?;
+        let trainer = DirectionalPcaStreamingTrainer::new(
+            StreamingClusteringConfig {
+                cluster_count,
+                dimensions,
+                balance_constraints: None,
+                random_seed: settings.random_seed,
+            },
+            settings.params.clone(),
+        )
+        .map_err(map_streaming_clustering_error)?;
+        Ok(Self {
+            represented_item_count,
+            phase: AdaptiveReplayStage::CollectingSummaries,
+            partition_ready_passes: 0,
+            trainer: Some(trainer),
+            classifier: None,
+            measurement: None,
+        })
+    }
+
+    fn ingest_batch(&mut self, embeddings: &[Vec<f32>]) -> Result<(), AdaptivePlanningError> {
+        match self.phase {
+            AdaptiveReplayStage::CollectingSummaries => self
+                .trainer
+                .as_mut()
+                .ok_or_else(|| {
+                    AdaptivePlanningError::DiagnosticComputation(
+                        "directional-PCA training pass is not active".into(),
+                    )
+                })?
+                .ingest_batch(embeddings)
+                .map_err(map_streaming_clustering_error),
+            AdaptiveReplayStage::MeasuringDecision => self
+                .measurement
+                .as_mut()
+                .ok_or_else(|| {
+                    AdaptivePlanningError::DiagnosticComputation(
+                        "adaptive measurement pass is not active".into(),
+                    )
+                })?
+                .observe_batch(
+                    self.classifier.as_ref().ok_or_else(|| {
+                        AdaptivePlanningError::DiagnosticComputation(
+                            "directional-PCA classifier is not available for measurement".into(),
+                        )
+                    })?,
+                    embeddings,
+                ),
+        }
+    }
+
+    fn finish_pass(&mut self) -> Result<AdaptiveBoundaryState, AdaptivePlanningError> {
+        match self.phase {
+            AdaptiveReplayStage::CollectingSummaries => {
+                let trainer = self.trainer.as_mut().ok_or_else(|| {
+                    AdaptivePlanningError::DiagnosticComputation(
+                        "directional-PCA training pass is not active".into(),
+                    )
+                })?;
+                let report = trainer
+                    .finish_pass()
+                    .map_err(map_streaming_clustering_error)?;
+                match report.readiness {
+                    PassReadiness::AnalysisOnly => Ok(AdaptiveBoundaryState::CollectingSummaries),
+                    PassReadiness::PartitionReady => {
+                        self.partition_ready_passes += 1;
+                        if self.partition_ready_passes < 2 {
+                            Ok(AdaptiveBoundaryState::CollectingSummaries)
+                        } else {
+                            let mut trainer = self.trainer.take().ok_or_else(|| {
+                                AdaptivePlanningError::DiagnosticComputation(
+                                    "directional-PCA trainer disappeared before classifier creation"
+                                        .into(),
+                                )
+                            })?;
+                            trainer
+                                .complete_training()
+                                .map_err(map_streaming_clustering_error)?;
+                            let classifier = trainer
+                                .into_classifier()
+                                .map_err(map_streaming_clustering_error)?;
+                            self.classifier = Some(classifier);
+                            self.measurement = Some(MeanClusterRadiusMeasurement::new(
+                                self.represented_item_count,
+                            ));
+                            self.phase = AdaptiveReplayStage::MeasuringDecision;
+                            Ok(AdaptiveBoundaryState::MeasuringDecision)
+                        }
+                    }
+                }
+            }
+            AdaptiveReplayStage::MeasuringDecision => Ok(AdaptiveBoundaryState::Selected(
+                self.measurement
+                    .take()
+                    .ok_or_else(|| {
+                        AdaptivePlanningError::DiagnosticComputation(
+                            "adaptive measurement pass is not active".into(),
+                        )
+                    })?
+                    .finish()?,
+            )),
+        }
+    }
+}
+
+impl MeanClusterRadiusMeasurement {
+    fn new(represented_item_count: usize) -> Self {
+        Self {
+            represented_item_count,
+            cluster_radius_sums: BTreeMap::new(),
+            observed_embedding_count: 0,
+        }
+    }
+
+    fn observe_batch(
+        &mut self,
+        classifier: &DirectionalPcaStreamingClassifier,
+        embeddings: &[Vec<f32>],
+    ) -> Result<(), AdaptivePlanningError> {
+        for embedding in embeddings {
+            let (cluster_id, distance) = classifier
+                .assigned_distance(embedding)
+                .map_err(map_streaming_clustering_error)?;
+            let entry = self
+                .cluster_radius_sums
+                .entry(cluster_id)
+                .or_insert((0.0, 0));
+            entry.0 += distance;
+            if !entry.0.is_finite() {
                 return Err(AdaptivePlanningError::DiagnosticComputation(
-                    "mean cluster radius centroid accumulation became non-finite".into(),
+                    "mean cluster radius accumulation became non-finite".into(),
+                ));
+            }
+            entry.1 += 1;
+            self.observed_embedding_count += 1;
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<AdaptivePlanningDiagnostics, AdaptivePlanningError> {
+        if self.observed_embedding_count == 0 || self.cluster_radius_sums.is_empty() {
+            return Err(AdaptivePlanningError::DiagnosticComputation(
+                "mean cluster radius requires at least one observed embedding".into(),
+            ));
+        }
+
+        let mut total_cluster_radius = 0.0f64;
+        for (&cluster_id, (member_radius_sum, member_count)) in &self.cluster_radius_sums {
+            if *member_count == 0 {
+                return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                    "cluster {cluster_id} did not retain any members"
+                )));
+            }
+            let mean_cluster_radius = *member_radius_sum / *member_count as f64;
+            if !mean_cluster_radius.is_finite() {
+                return Err(AdaptivePlanningError::DiagnosticComputation(
+                    "per-cluster mean radius became non-finite".into(),
+                ));
+            }
+            total_cluster_radius += mean_cluster_radius;
+            if !total_cluster_radius.is_finite() {
+                return Err(AdaptivePlanningError::DiagnosticComputation(
+                    "mean cluster radius total became non-finite".into(),
                 ));
             }
         }
-        entry.1 += 1;
-    }
 
-    if centroid_sums.is_empty() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(
-            "mean cluster radius requires at least one realized cluster".into(),
-        ));
-    }
-
-    let mut centroids = BTreeMap::new();
-    for (&cluster_id, (sum, count)) in &centroid_sums {
-        let count = *count as f64;
-        if !count.is_finite() || count <= 0.0 {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "mean cluster radius centroid normalization became invalid".into(),
-            ));
-        }
-        centroids.insert(
-            cluster_id,
-            sum.iter()
-                .map(|value| {
-                    let normalized = *value / count;
-                    if !normalized.is_finite() {
-                        return Err(AdaptivePlanningError::DiagnosticComputation(
-                            "mean cluster radius centroid normalization became non-finite".into(),
-                        ));
-                    }
-                    Ok(normalized as f32)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-    }
-
-    let mut cluster_radius_sums = BTreeMap::<u32, (f64, usize)>::new();
-    for (embedding, &cluster_id) in embeddings.iter().zip(assignments.iter()) {
-        let centroid = centroids.get(&cluster_id).ok_or_else(|| {
-            AdaptivePlanningError::DiagnosticComputation(format!(
-                "cluster {cluster_id} did not have a computed centroid"
-            ))
-        })?;
-        let entry = cluster_radius_sums.entry(cluster_id).or_insert((0.0, 0));
-        entry.0 += euclidean_distance(embedding, centroid)?;
-        if !entry.0.is_finite() {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "mean cluster radius accumulation became non-finite".into(),
-            ));
-        }
-        entry.1 += 1;
-    }
-
-    let mut total_cluster_radius = 0.0f64;
-    for &cluster_id in centroids.keys() {
-        let (member_radius_sum, member_count) = cluster_radius_sums
-            .get(&cluster_id)
-            .copied()
-            .ok_or_else(|| {
-                AdaptivePlanningError::DiagnosticComputation(format!(
-                    "cluster {cluster_id} did not retain any members"
-                ))
-            })?;
-        if member_count == 0 {
-            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
-                "cluster {cluster_id} did not retain any members"
-            )));
-        }
-        let mean_cluster_radius = member_radius_sum / member_count as f64;
+        let mean_cluster_radius = total_cluster_radius / self.cluster_radius_sums.len() as f64;
         if !mean_cluster_radius.is_finite() {
             return Err(AdaptivePlanningError::DiagnosticComputation(
-                "per-cluster mean radius became non-finite".into(),
+                "mean cluster radius became non-finite".into(),
             ));
         }
-        total_cluster_radius += mean_cluster_radius;
-        if !total_cluster_radius.is_finite() {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "mean cluster radius total became non-finite".into(),
-            ));
-        }
-    }
 
-    let mean_cluster_radius = total_cluster_radius / centroids.len() as f64;
-    if !mean_cluster_radius.is_finite() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(
-            "mean cluster radius became non-finite".into(),
-        ));
+        Ok(AdaptivePlanningDiagnostics {
+            represented_item_count: self.represented_item_count,
+            mean_cluster_radius: mean_cluster_radius as f32,
+        })
     }
-
-    Ok(mean_cluster_radius as f32)
-}
-
-fn euclidean_distance(left: &[f32], right: &[f32]) -> Result<f64, AdaptivePlanningError> {
-    if left.len() != right.len() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(format!(
-            "cannot compare embeddings with different dimensionalities: {} and {}",
-            left.len(),
-            right.len()
-        )));
-    }
-
-    let mut squared_distance = 0.0f64;
-    for (&lhs, &rhs) in left.iter().zip(right.iter()) {
-        let delta = f64::from(lhs) - f64::from(rhs);
-        if !delta.is_finite() {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "distance computation produced a non-finite delta".into(),
-            ));
-        }
-        squared_distance += delta * delta;
-        if !squared_distance.is_finite() {
-            return Err(AdaptivePlanningError::DiagnosticComputation(
-                "distance computation produced a non-finite squared distance".into(),
-            ));
-        }
-    }
-    let distance = squared_distance.sqrt();
-    if !distance.is_finite() {
-        return Err(AdaptivePlanningError::DiagnosticComputation(
-            "distance computation produced a non-finite radius".into(),
-        ));
-    }
-    Ok(distance)
 }

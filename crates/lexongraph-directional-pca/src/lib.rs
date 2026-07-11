@@ -717,6 +717,15 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
     }
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        Ok(self.assigned_distance(embedding)?.0)
+    }
+}
+
+impl DirectionalPcaStreamingClassifier {
+    pub fn assigned_distance(
+        &self,
+        embedding: &[f32],
+    ) -> Result<(ClusterId, f64), StreamingClusteringError> {
         validate_embedding(embedding, self.config.dimensions)?;
         let mut best_cluster = 0usize;
         let mut best_distance = squared_distance(embedding, self.centroids[0].as_slice())?;
@@ -727,7 +736,7 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
                 best_cluster = cluster_index;
             }
         }
-        Ok(best_cluster as ClusterId)
+        Ok((best_cluster as ClusterId, best_distance.sqrt()))
     }
 }
 

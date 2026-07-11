@@ -63,6 +63,10 @@ per-layer conversation.
 The streaming indexer remains responsible for instantiating planning phases,
 normalizing planning output, and materializing the finalized hierarchy.
 
+The selector boundary itself remains true-streaming: it does not require a full
+represented-dataset embedding slice or equivalent dataset-sized public API
+surface in order to make or report deterministic switch decisions.
+
 ### DSG-ADAPTIVE-POLICY-003 `Explicit adaptive configuration`
 
 The adaptive configuration contains:
@@ -95,6 +99,10 @@ mean distances from represented items to their realized cluster centroids.
 
 The adaptive realization compares that mean cluster radius with the configured
 switch threshold to determine whether directional PCA remains eligible.
+
+The conformant diagnostic path derives those measurements from bounded-state
+streaming summaries, replay-visible stages, or bounded current-work-unit data
+rather than hidden implementation-owned full-dataset memory or spill.
 
 ### DSG-ADAPTIVE-POLICY-006 `Deterministic switch execution`
 
@@ -137,6 +145,9 @@ For each evaluated boundary, the crate retains a structured record identifying:
 If surfaced publicly, these diagnostics remain deterministic and suitable for
 validation without requiring parsing of free-form messages.
 
+Those surfaced records remain summary-sized artifacts; they do not retain
+per-item or per-embedding datasets.
+
 ### DSG-ADAPTIVE-POLICY-010 `Hierarchy compatibility`
 
 Regardless of whether a given planning segment is realized by directional PCA
@@ -147,6 +158,9 @@ expected by the streaming indexer.
 The adaptive crate therefore does not require a different final materialization
 contract downstream, while leaving actual normalization to the indexer-owned
 planning path.
+
+This compatibility does not require dataset-sized intermediate embedding,
+assignment, or routing surfaces at the adaptive boundary.
 
 ### DSG-ADAPTIVE-POLICY-011 `Explicit failure behavior`
 
@@ -164,6 +178,19 @@ behavior, switch-trigger behavior, deterministic switch-boundary reproduction,
 both direction modes, and compatibility of selector outputs and diagnostics
 with the indexer-owned hierarchy boundary.
 
+Repository verification artifacts also cover the absence of full-dataset public
+selector surfaces and the absence of implementation-owned full-dataset
+memory/spill requirements in the conformant adaptive path.
+
+### DSG-ADAPTIVE-POLICY-013 `Bounded adaptive decision workflow`
+
+The adaptive flow begins in directional-PCA mode and later evaluates switch
+eligibility only at bounded deterministic decision boundaries.
+
+Each such boundary uses bounded-state summaries only; once the selector switches
+to DCBC, all later boundaries in that flow remain DCBC-owned without revisiting
+directional PCA.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -179,3 +206,4 @@ with the indexer-owned hierarchy boundary.
 | DSG-ADAPTIVE-POLICY-010 | REQ-ADAPTIVE-POLICY-011 |
 | DSG-ADAPTIVE-POLICY-011 | REQ-ADAPTIVE-POLICY-013 |
 | DSG-ADAPTIVE-POLICY-012 | REQ-ADAPTIVE-POLICY-014 |
+| DSG-ADAPTIVE-POLICY-013 | REQ-ADAPTIVE-POLICY-007, REQ-ADAPTIVE-POLICY-008, REQ-ADAPTIVE-POLICY-009, REQ-ADAPTIVE-POLICY-010, REQ-ADAPTIVE-POLICY-015, REQ-ADAPTIVE-POLICY-016 |
