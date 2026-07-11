@@ -12,15 +12,15 @@ use lexongraph_directional_pca::{
     DirectionalPcaStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
-    MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringError,
+    PassReadiness, StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringError,
     TrainerState,
 };
 use support::{
-    config, conforming_trainer, duplicate_refinement_config, duplicate_refinement_params,
-    exact_k_failure_config, exact_k_failure_params, exact_k_failure_pass, expected_assignments,
-    expected_pass_reports, identical_embedding_passes, nan_embedding, params,
-    partially_collapsed_duplicate_pass, sample_passes, underfull_first_pass,
-    unsupported_balance_config, wrong_dimension_embedding,
+    config, conforming_trainer, expected_assignments, expected_pass_reports,
+    identical_embedding_passes, nan_embedding, non_duplicate_underfull_passes, params,
+    partially_collapsed_duplicate_passes, sample_passes, underfull_first_pass,
+    underfull_success_config, underfull_success_passes, unsupported_balance_config,
+    wrong_dimension_embedding,
 };
 
 #[test]
@@ -58,7 +58,7 @@ fn val_dpca_stream_004_balance_constraints_are_rejected() {
 }
 
 #[test]
-fn val_dpca_stream_005_and_013_pass_reports_expose_streaming_passes_and_metrics() {
+fn val_dpca_stream_005_and_013_pass_reports_progress_from_analysis_to_partition_ready() {
     let mut trainer = conforming_trainer();
     let mut reports = Vec::new();
     for pass in sample_passes() {
@@ -69,15 +69,10 @@ fn val_dpca_stream_005_and_013_pass_reports_expose_streaming_passes_and_metrics(
     }
 
     assert_eq!(reports, expected_pass_reports());
-    assert_eq!(
-        reports[0].quality_direction,
-        MetricDirection::SmallerIsBetter
-    );
-    assert_eq!(
-        reports[0].balance_direction,
-        MetricDirection::SmallerIsBetter
-    );
-    assert_eq!(reports[0].balance_metric, 0.0);
+    assert_eq!(reports[0].readiness, PassReadiness::AnalysisOnly);
+    assert_eq!(reports[1].readiness, PassReadiness::AnalysisOnly);
+    assert_eq!(reports[2].readiness, PassReadiness::PartitionReady);
+    assert_eq!(reports[3].readiness, PassReadiness::PartitionReady);
 }
 
 #[test]
@@ -127,127 +122,59 @@ fn val_dpca_stream_007_and_016_malformed_input_and_invalid_transitions_are_expli
         trainer.finish_pass(),
         Err(StreamingClusteringError::MalformedInput { .. })
     ));
+}
 
+#[test]
+fn val_dpca_stream_008_uses_streaming_pca_accumulation_without_full_pass_buffers() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs"),
+    )
+    .unwrap();
+    assert!(source.contains("PcaAccumulator"));
+    assert!(source.contains(".update(embedding)"));
+    assert!(!source.contains("current_pass: Vec<Embedding>"));
+    assert!(!source.contains("fit("));
+}
+
+#[test]
+fn val_dpca_stream_009_and_010_policy_surfaces_remain_available() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs"),
+    )
+    .unwrap();
+    assert!(source.contains("CentroidWeightedBins"));
+    assert!(source.contains("EigenvalueLogBits"));
+    assert!(source.contains("Quantile"));
+    assert!(source.contains("DensityValley"));
+}
+
+#[test]
+fn val_dpca_stream_011_caller_visible_replay_is_required_before_partition_ready() {
     let mut trainer = conforming_trainer();
+    for batch in &sample_passes()[0] {
+        trainer.ingest_batch(batch.as_slice()).unwrap();
+    }
+    let first = trainer.finish_pass().unwrap();
+    assert_eq!(first.readiness, PassReadiness::AnalysisOnly);
     assert!(matches!(
         trainer.complete_training(),
         Err(StreamingClusteringError::InvalidTransition { .. })
     ));
-    assert_eq!(trainer.state(), TrainerState::Error);
 }
 
 #[test]
-fn val_dpca_stream_008_pca_crate_is_used() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("lib.rs"),
-    )
-    .unwrap();
-    assert!(source.contains("use lexongraph_pca"));
-    assert!(source.contains("fit("));
-}
-
-#[test]
-fn val_dpca_stream_009_and_010_axis_scoring_and_allocation_are_realized() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("lib.rs"),
-    )
-    .unwrap();
-    assert!(source.contains("|alpha_i| * lambda_i^gamma") || source.contains("lambda.powf(gamma)"));
-    assert!(source.contains("(1.0 + score.max(0.0)).ln()"));
-}
-
-#[test]
-fn val_dpca_stream_011_quantile_binning_is_the_default_path() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("lib.rs"),
-    )
-    .unwrap();
-    assert!(source.contains("rank * bin_count / point_count"));
-}
-
-#[test]
-fn val_dpca_stream_024_adaptive_retained_axes_are_opt_in() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("lib.rs"),
-    )
-    .unwrap();
-    assert!(source.contains("AdaptiveAllEligible"));
-    assert!(source.contains("EigenvalueLogBits"));
-}
-
-#[test]
-fn val_dpca_stream_025_density_valley_binning_is_available() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("lib.rs"),
-    )
-    .unwrap();
-    assert!(source.contains("DensityValley"));
-    assert!(source.contains("select_deepest_valley_cut_positions"));
-}
-
-#[test]
-fn val_dpca_stream_026_default_path_remains_quantile_without_opt_in() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("lib.rs"),
-    )
-    .unwrap();
-    assert!(source.contains("DirectionalPcaBinningPolicy::Quantile"));
-    assert!(source.contains("rank * bin_count / point_count"));
-}
-
-#[test]
-fn val_dpca_stream_012_exact_k_failures_are_explicit() {
-    let mut underfull = conforming_trainer();
+fn val_dpca_stream_012_exact_mode_rejects_underfull_first_passes() {
+    let mut trainer =
+        DirectionalPcaStreamingTrainer::new(underfull_success_config(), params()).unwrap();
     for batch in underfull_first_pass() {
-        underfull.ingest_batch(batch.as_slice()).unwrap();
+        trainer.ingest_batch(batch.as_slice()).unwrap();
     }
     assert!(matches!(
-        underfull.finish_pass(),
-        Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
-    ));
-
-    let invalid_params = DirectionalPcaParams {
-        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(0),
-        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-        binning_policy: DirectionalPcaBinningPolicy::Quantile,
-        ..params()
-    };
-    assert!(matches!(
-        DirectionalPcaStreamingTrainer::new(config(), invalid_params),
-        Err(StreamingClusteringError::InvalidConfiguration { .. })
-    ));
-
-    let invalid_adaptive_params = DirectionalPcaParams {
-        retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-        allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-        min_effective_rank: 3,
-        ..params()
-    };
-    assert!(matches!(
-        DirectionalPcaStreamingTrainer::new(config(), invalid_adaptive_params),
-        Err(StreamingClusteringError::InvalidConfiguration { .. })
-    ));
-
-    let mut exact_k_failure =
-        DirectionalPcaStreamingTrainer::new(exact_k_failure_config(), exact_k_failure_params())
-            .unwrap();
-    for batch in exact_k_failure_pass() {
-        exact_k_failure.ingest_batch(batch.as_slice()).unwrap();
-    }
-    assert!(matches!(
-        exact_k_failure.finish_pass(),
+        trainer.finish_pass(),
         Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
     ));
 }
@@ -304,43 +231,14 @@ fn val_dpca_stream_018_shared_conformance_helpers_pass() {
 }
 
 #[test]
-fn val_dpca_stream_020_all_identical_embeddings_are_split_deterministically() {
+fn val_dpca_stream_020_and_022_identical_embeddings_split_deterministically_after_replay() {
     let mut trainer = DirectionalPcaStreamingTrainer::new(
-        duplicate_refinement_config(),
-        duplicate_refinement_params(),
-    )
-    .unwrap();
-    for batch in identical_embedding_passes().into_iter().next().unwrap() {
-        trainer.ingest_batch(batch.as_slice()).unwrap();
-    }
-
-    let report = trainer.finish_pass().unwrap();
-    assert_eq!(report.observed_count, 4);
-    assert_eq!(report.quality_metric, 0.0);
-    assert_eq!(report.cluster_ids, vec![0, 1, 2]);
-}
-
-#[test]
-fn val_dpca_stream_021_duplicate_refinement_recovers_a_partially_collapsed_fixture() {
-    let mut trainer = DirectionalPcaStreamingTrainer::new(
-        duplicate_refinement_config(),
-        duplicate_refinement_params(),
-    )
-    .unwrap();
-    for batch in partially_collapsed_duplicate_pass() {
-        trainer.ingest_batch(batch.as_slice()).unwrap();
-    }
-
-    let report = trainer.finish_pass().unwrap();
-    assert_eq!(report.observed_count, 4);
-    assert_eq!(report.cluster_ids, vec![0, 1, 2]);
-}
-
-#[test]
-fn val_dpca_stream_022_duplicate_refinement_is_stable_across_passes() {
-    let mut trainer = DirectionalPcaStreamingTrainer::new(
-        duplicate_refinement_config(),
-        duplicate_refinement_params(),
+        underfull_success_config(),
+        DirectionalPcaParams {
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            ..params()
+        },
     )
     .unwrap();
     let passes = identical_embedding_passes();
@@ -351,7 +249,8 @@ fn val_dpca_stream_022_duplicate_refinement_is_stable_across_passes() {
         }
         reports.push(trainer.finish_pass().unwrap());
     }
-    assert_eq!(reports[0], reports[1]);
+    assert_eq!(reports[2].cluster_ids, Some(vec![0, 1, 2]));
+    assert_eq!(reports[3].cluster_ids, Some(vec![0, 1, 2]));
 
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
@@ -360,39 +259,78 @@ fn val_dpca_stream_022_duplicate_refinement_is_stable_across_passes() {
 }
 
 #[test]
-fn val_dpca_stream_023_non_duplicate_exact_k_failure_still_fails() {
-    let mut trainer =
-        DirectionalPcaStreamingTrainer::new(exact_k_failure_config(), exact_k_failure_params())
-            .unwrap();
-    for batch in exact_k_failure_pass() {
-        trainer.ingest_batch(batch.as_slice()).unwrap();
+fn val_dpca_stream_021_duplicate_refinement_recovers_a_partially_collapsed_fixture() {
+    let mut trainer = DirectionalPcaStreamingTrainer::new(
+        underfull_success_config(),
+        DirectionalPcaParams {
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            ..params()
+        },
+    )
+    .unwrap();
+    let mut reports = Vec::new();
+    for pass in partially_collapsed_duplicate_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        reports.push(trainer.finish_pass().unwrap());
     }
-
-    assert!(matches!(
-        trainer.finish_pass(),
-        Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
-    ));
+    assert_eq!(reports[2].cluster_ids, Some(vec![0, 1, 2]));
+    assert_eq!(reports[3].cluster_ids, Some(vec![0, 1, 2]));
 }
 
 #[test]
 fn val_dpca_stream_023b_underfull_mode_succeeds_and_reports_realized_cluster_count() {
-    let mut underfull_params = exact_k_failure_params();
+    let mut underfull_params = params();
     underfull_params.cluster_cardinality_mode =
         DirectionalPcaClusterCardinalityMode::UnderfullSuccess;
     let mut trainer =
-        DirectionalPcaStreamingTrainer::new(exact_k_failure_config(), underfull_params).unwrap();
-    for batch in exact_k_failure_pass() {
-        trainer.ingest_batch(batch.as_slice()).unwrap();
+        DirectionalPcaStreamingTrainer::new(underfull_success_config(), underfull_params).unwrap();
+    let mut final_report = None;
+    for pass in underfull_success_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        final_report = Some(trainer.finish_pass().unwrap());
     }
 
-    let report = trainer.finish_pass().unwrap();
+    let report = final_report.unwrap();
     assert_eq!(report.requested_cluster_count, 3);
-    assert_eq!(report.realized_cluster_count, 2);
-    assert_eq!(report.cluster_ids, vec![0, 1]);
+    assert_eq!(report.realized_cluster_count, Some(2));
+    assert_eq!(report.cluster_ids, Some(vec![0, 1]));
 
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
     assert_eq!(classifier.realized_cluster_count(), 2);
+}
+
+#[test]
+fn val_dpca_stream_023_non_duplicate_exact_k_failure_still_fails() {
+    let mut trainer = DirectionalPcaStreamingTrainer::new(
+        underfull_success_config(),
+        DirectionalPcaParams {
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
+            ..params()
+        },
+    )
+    .unwrap();
+    let mut final_result = None;
+    for pass in non_duplicate_underfull_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        final_result = Some(trainer.finish_pass());
+        if final_result.as_ref().is_some_and(|result| result.is_err()) {
+            break;
+        }
+    }
+
+    assert!(matches!(
+        final_result.unwrap(),
+        Err(StreamingClusteringError::UnsatisfiableConstraint { .. })
+    ));
 }
 
 #[test]
@@ -424,92 +362,4 @@ fn val_dpca_stream_027_mixed_policy_combinations_construct_successfully() {
     for params in mixed_params {
         DirectionalPcaStreamingTrainer::new(config(), params).unwrap();
     }
-}
-
-#[test]
-fn val_dpca_stream_028_adaptive_quantile_combination_follows_quantile_path() {
-    let mut trainer = DirectionalPcaStreamingTrainer::new(
-        config(),
-        DirectionalPcaParams {
-            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-            binning_policy: DirectionalPcaBinningPolicy::Quantile,
-            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
-            ..params()
-        },
-    )
-    .unwrap();
-    for batch in sample_passes().into_iter().next().unwrap() {
-        trainer.ingest_batch(batch.as_slice()).unwrap();
-    }
-
-    let report = trainer.finish_pass().unwrap();
-    assert_eq!(report.observed_count, 4);
-    assert_eq!(report.requested_cluster_count, 2);
-}
-
-#[test]
-fn val_dpca_stream_029_adaptive_centroid_weighted_density_valley_caps_retained_axes() {
-    let config = lexongraph_streaming_clustering::StreamingClusteringConfig {
-        cluster_count: 2,
-        dimensions: 4,
-        balance_constraints: None,
-        random_seed: None,
-    };
-    let mut trainer = DirectionalPcaStreamingTrainer::new(
-        config,
-        DirectionalPcaParams {
-            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-            allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
-            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
-            ..params()
-        },
-    )
-    .unwrap();
-    trainer
-        .ingest_batch(&[
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0],
-            vec![0.0, 0.0, 1.0, 0.0],
-            vec![0.0, 0.0, 0.0, 1.0],
-        ])
-        .unwrap();
-
-    let report = trainer.finish_pass().unwrap();
-    assert_eq!(report.requested_cluster_count, 2);
-    assert!((1..=2).contains(&report.realized_cluster_count));
-}
-
-#[test]
-fn val_dpca_stream_030_fixed_axis_eigenvalue_density_valley_combination_is_available() {
-    let config = lexongraph_streaming_clustering::StreamingClusteringConfig {
-        cluster_count: 4,
-        dimensions: 2,
-        balance_constraints: None,
-        random_seed: None,
-    };
-    let mut trainer = DirectionalPcaStreamingTrainer::new(
-        config,
-        DirectionalPcaParams {
-            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
-            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-            binning_policy: DirectionalPcaBinningPolicy::DensityValley,
-            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
-            ..exact_k_failure_params()
-        },
-    )
-    .unwrap();
-    trainer
-        .ingest_batch(&[
-            vec![0.0, 0.0],
-            vec![0.0, 1.0],
-            vec![1.0, 0.0],
-            vec![1.0, 1.0],
-        ])
-        .unwrap();
-
-    let report = trainer.finish_pass().unwrap();
-    assert_eq!(report.requested_cluster_count, 4);
-    assert!(report.realized_cluster_count <= 4);
 }

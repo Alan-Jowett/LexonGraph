@@ -9,7 +9,7 @@ use lexongraph_linear_algebra_acceleration::{
     detected_execution_backend_selection, execution_backend_request,
 };
 use lexongraph_streaming_clustering::{
-    ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
+    ClusterId, Embedding, MetricDirection, PassReadiness, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
@@ -150,12 +150,13 @@ impl SphericalKmeansStreamingTrainer {
         Ok(PassReport {
             observed_count,
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: self.config.cluster_count,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(self.config.cluster_count),
             quality_metric: fit.objective_value,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: (0..self.config.cluster_count).collect(),
+            cluster_ids: Some((0..self.config.cluster_count).collect()),
         })
     }
 }

@@ -6,8 +6,9 @@ mod support;
 use std::path::Path;
 
 use lexongraph_streaming_clustering::{
-    BalanceConstraints, MetricDirection, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_config,
+    BalanceConstraints, MetricDirection, PassReadiness, StreamingClusterClassifier,
+    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    validate_config,
 };
 use support::{
     FixtureTrainer, expected_assignments, expected_pass_reports, nan_embedding, sample_passes,
@@ -42,6 +43,16 @@ fn val_stream_trait_002_caller_controls_finish_pass_and_training_completion() {
     }
     let report = trainer.finish_pass().unwrap();
     assert_eq!(report, expected_pass_reports()[0]);
+    assert_eq!(report.readiness, PassReadiness::AnalysisOnly);
+    assert_eq!(trainer.state(), TrainerState::PassComplete);
+
+    for batch in &sample_passes()[1] {
+        trainer.ingest_batch(batch).unwrap();
+        assert_eq!(trainer.state(), TrainerState::Ingesting);
+    }
+    let report = trainer.finish_pass().unwrap();
+    assert_eq!(report, expected_pass_reports()[1]);
+    assert_eq!(report.readiness, PassReadiness::PartitionReady);
     assert_eq!(trainer.state(), TrainerState::PassComplete);
 
     trainer.complete_training().unwrap();
@@ -70,10 +81,33 @@ fn val_stream_trait_004_pass_reports_expose_deterministic_metrics() {
     }
 
     let report = trainer.finish_pass().unwrap();
+    assert_eq!(report.readiness, PassReadiness::AnalysisOnly);
+    assert_eq!(report.realized_cluster_count, None);
+    assert_eq!(report.cluster_ids, None);
     assert_eq!(report.quality_metric, 10.0);
     assert_eq!(report.balance_metric, 0.0);
     assert_eq!(report.quality_direction, MetricDirection::SmallerIsBetter);
     assert_eq!(report.balance_direction, MetricDirection::SmallerIsBetter);
+}
+
+#[test]
+fn val_stream_trait_020_analysis_only_and_partition_ready_reports_use_their_documented_fields() {
+    let mut trainer = FixtureTrainer::default_deterministic();
+    for batch in &sample_passes()[0] {
+        trainer.ingest_batch(batch).unwrap();
+    }
+    let analysis_report = trainer.finish_pass().unwrap();
+    assert_eq!(analysis_report.readiness, PassReadiness::AnalysisOnly);
+    assert_eq!(analysis_report.realized_cluster_count, None);
+    assert_eq!(analysis_report.cluster_ids, None);
+
+    for batch in &sample_passes()[1] {
+        trainer.ingest_batch(batch).unwrap();
+    }
+    let partition_report = trainer.finish_pass().unwrap();
+    assert_eq!(partition_report.readiness, PassReadiness::PartitionReady);
+    assert_eq!(partition_report.realized_cluster_count, Some(2));
+    assert_eq!(partition_report.cluster_ids, Some(vec![0, 1]));
 }
 
 #[test]
@@ -129,6 +163,9 @@ fn val_stream_trait_007_public_api_avoids_full_dataset_materialization() {
     assert!(source.contains("fn ingest_batch"));
     assert!(source.contains("fn assign_batch"));
     assert!(!source.contains("fn fit_dataset"));
+    assert!(!source.contains("pub type PassInput"));
+    assert!(!source.contains("pub type EmbeddingBatch"));
+    assert!(source.contains("fn for_each_sample_pass_event"));
 }
 
 #[test]
@@ -320,6 +357,24 @@ fn val_stream_trait_016_invalid_balance_constraints_are_rejected_explicitly() {
             Err(StreamingClusteringError::InvalidConfiguration { .. })
         ));
     }
+}
+
+#[test]
+fn val_stream_trait_019_indexing_state_remains_bounded_without_dataset_buffers() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let contract_source = std::fs::read_to_string(manifest_dir.join("src/lib.rs")).unwrap();
+    let fixture_source =
+        std::fs::read_to_string(manifest_dir.join("tests/support/mod.rs")).unwrap();
+
+    assert!(contract_source.contains("fn for_each_sample_pass_event"));
+    assert!(contract_source.contains("fn for_each_underfull_first_pass_batch"));
+    assert!(!contract_source.contains("fn sample_passes(&self) -> Vec<"));
+    assert!(!contract_source.contains("fn underfull_first_pass(&self) ->"));
+    assert!(fixture_source.contains("current_pass_count: usize"));
+    assert!(fixture_source.contains("completed_passes: usize"));
+    assert!(!fixture_source.contains("assignment_log"));
+    assert!(!fixture_source.contains("spill_file"));
+    assert!(!fixture_source.contains("dataset_buffer"));
 }
 
 fn run_reports_and_assignments(

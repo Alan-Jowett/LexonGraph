@@ -64,8 +64,12 @@ deterministic seed without fixing the downstream optimization method.
 ### DSG-STREAM-TRAIT-005 `Pass reporting`
 
 The crate defines shared pass-report types carrying requested cluster count,
-realized cluster count, `quality_metric`, `balance_metric`, and explicit
-metric-direction metadata so callers can compare passes within one run.
+`quality_metric`, `balance_metric`, explicit metric-direction metadata, and a
+small readiness enum equivalent to `AnalysisOnly | PartitionReady`.
+
+For `AnalysisOnly` passes, `realized_cluster_count` and `cluster_ids` are
+absent. For `PartitionReady` passes, both are present and become part of the
+observable contract.
 
 ### DSG-STREAM-TRAIT-006 `Shared error categories`
 
@@ -82,20 +86,21 @@ illegal transitions.
 
 ### DSG-STREAM-TRAIT-008 `Cluster ID continuity`
 
-Cluster identity continuity is a contract-level observable. Implementations may
-choose any internal matching strategy, but the externally visible cluster IDs
-and classifier IDs must remain stable across passes.
+Cluster identity continuity is a contract-level observable once a pass report is
+partition-ready. Implementations may choose any internal matching strategy, but
+the externally visible cluster IDs in partition-ready pass reports and in the
+final classifier must remain stable across later partition-ready passes.
 
 ### DSG-STREAM-TRAIT-009 `Dataset-size-independent surface`
 
-The default public API avoids any surface requiring dataset replay buffers,
-full assignment materialization, or whole-dataset ownership inside the contract
-types.
+The public API, including feature-gated conformance-helper surfaces, avoids any
+surface requiring dataset replay buffers, full assignment materialization, or
+whole-dataset ownership inside shared contract types.
 
-Concrete implementations may retain pass-scoped internal state when their
-documented algorithm requires that buffering. The dataset-size-independent
-constraint applies to the shared public contract rather than prohibiting all
-implementation-internal pass buffering.
+The shared contract also forbids implementation-owned indexing state or
+scratch/storage whose required footprint scales with total dataset size `N`.
+Allowed growth is limited to requested cluster count, embedding dimensionality,
+caller-provided balance configuration, and documented bounded batch size.
 
 ### DSG-STREAM-TRAIT-010 `Feature-gated conformance helpers`
 
@@ -109,8 +114,10 @@ The conformance-helper surface provides reusable harness contracts for:
 
 - a conforming trainer fixture
 - a fixture that changes observable cluster IDs across passes
-- caller-supplied pass inputs and expected pass reports
-- caller-supplied sample embeddings and expected assignments
+- caller-supplied streamed pass events and expected pass reports without
+  requiring whole-run dataset materialization
+- caller-supplied sample embeddings and expected assignments without requiring
+  full-dataset assignment retention
 - malformed-input fixtures for classifier rejection checks
 
 ### DSG-STREAM-TRAIT-012 `Deterministic seed policy`
@@ -161,6 +168,17 @@ The shared trait crate remains backend-transparent. Concrete implementations may
  accelerator-shaped trait methods, and does not weaken the contract's
  observable lifecycle, assignment, or error semantics.
 
+### DSG-STREAM-TRAIT-019 `Bounded indexing working set`
+
+Conformant implementations bound implementation-owned indexing memory and
+scratch/storage independently of total dataset size `N`.
+
+The shared contract therefore excludes dataset-shaped replay buffers,
+assignment logs, spill files, or similar indexing surfaces at the public
+boundary, while still permitting implementation-owned state that scales with
+requested cluster count, embedding dimensionality, caller-provided balance
+configuration, and caller-selected batch size.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -182,3 +200,4 @@ The shared trait crate remains backend-transparent. Concrete implementations may
 | DSG-STREAM-TRAIT-016 | REQ-STREAM-TRAIT-021 |
 | DSG-STREAM-TRAIT-017 | REQ-STREAM-TRAIT-014, REQ-STREAM-TRAIT-022 |
 | DSG-STREAM-TRAIT-018 | REQ-STREAM-TRAIT-023 |
+| DSG-STREAM-TRAIT-019 | REQ-STREAM-TRAIT-024 |

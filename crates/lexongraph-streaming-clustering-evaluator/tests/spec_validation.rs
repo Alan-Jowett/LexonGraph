@@ -19,8 +19,9 @@ use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_zip::ZipBlockStore;
 use lexongraph_streaming_clustering::{
-    MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_embedding,
+    MetricDirection, PassReadiness, PassReport, StreamingClusterClassifier,
+    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    validate_embedding,
 };
 use lexongraph_streaming_clustering_evaluator::{
     AlignmentPolicy, BenchmarkProfile, BlockStoreCorpusReference, BlockStoreReferenceStore,
@@ -167,12 +168,13 @@ impl StreamingClusterTrainer for InvalidRangeTrainer {
         Ok(PassReport {
             observed_count: 4,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
             quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: Some(vec![0, 1]),
         })
     }
 
@@ -744,8 +746,39 @@ fn val_stream_eval_008_run_report_includes_lifecycle_outputs_and_leaf_membership
     let run_report = &report.run_reports[0];
 
     assert_eq!(run_report.pass_reports.len(), 2);
+    assert_eq!(
+        run_report.pass_reports[0].readiness,
+        lexongraph_streaming_clustering_evaluator::ObservablePassReadiness::PartitionReady
+    );
+    assert_eq!(run_report.pass_reports[0].realized_cluster_count, Some(2));
+    assert_eq!(run_report.pass_reports[0].cluster_ids, Some(vec![0, 1]));
     assert_eq!(run_report.probe_results.len(), 1);
     assert_eq!(run_report.leaf_membership.len(), 4);
+}
+
+#[test]
+fn val_stream_eval_016a_evaluator_owned_pass_reports_preserve_readiness_aware_contract() {
+    let report = run_evaluation_campaign(
+        &strict_alignment_profile(),
+        &[
+            lexongraph_streaming_clustering_evaluator::built_in_fixture_candidate(
+                "balanced-threshold",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let pass_reports = &report.run_reports[0].pass_reports;
+
+    assert_eq!(pass_reports.len(), 2);
+    for report in pass_reports {
+        assert_eq!(
+            report.readiness,
+            lexongraph_streaming_clustering_evaluator::ObservablePassReadiness::PartitionReady
+        );
+        assert_eq!(report.realized_cluster_count, Some(2));
+        assert_eq!(report.cluster_ids, Some(vec![0, 1]));
+    }
 }
 
 #[test]
@@ -2398,11 +2431,13 @@ fn val_stream_eval_039_section4_suite_reports_survivors_after_gate_failures() {
     let profile = &report.profile_reports[0];
     assert_eq!(
         profile.survivor_candidate_ids,
-        vec![
-            "pca-sort-exact-chunking".to_string(),
-            "skewed-gate-fail".to_string()
-        ]
+        vec!["skewed-gate-fail".to_string()]
     );
+    assert!(profile.candidate_reports.iter().any(|candidate| {
+        candidate.candidate_id == "pca-sort-exact-chunking"
+            && candidate.run_status == CandidateRunStatus::CandidateSharedContractFailure
+            && !candidate.survived_required_gates
+    }));
     assert!(profile.candidate_reports.iter().any(|candidate| {
         candidate.candidate_id == "skewed-gate-fail"
             && candidate.run_status == CandidateRunStatus::Succeeded
@@ -2598,7 +2633,15 @@ fn val_stream_eval_033_fixture_and_repository_candidates_share_one_campaign_mode
             fixture.provenance.profile_id,
             concrete.provenance.profile_id
         );
-        assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+        if concrete.run_status == CandidateRunStatus::Succeeded {
+            assert_eq!(fixture.pass_reports.len(), concrete.pass_reports.len());
+        } else {
+            assert!(concrete.pass_reports.is_empty());
+            assert_eq!(
+                concrete.run_status,
+                CandidateRunStatus::CandidateSharedContractFailure
+            );
+        }
         assert!(
             concrete
                 .candidate_identity

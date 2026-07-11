@@ -6,9 +6,9 @@
 mod solver;
 
 use lexongraph_streaming_clustering::{
-    ClusterId, MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError, TrainerState, validate_config,
-    validate_embedding,
+    ClusterId, MetricDirection, PassReadiness, PassReport, StreamingClusterClassifier,
+    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    validate_config, validate_embedding,
 };
 use sha2::{Digest, Sha256};
 use solver::solve_lexicographic_assignment;
@@ -148,12 +148,13 @@ impl DcbcStreamingTrainer {
         Ok(PassReport {
             observed_count: prepared.raw_points.len(),
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: self.config.cluster_count,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(self.config.cluster_count),
             quality_metric: result.objective_value,
             balance_metric: balance_metric(self.config.balance_constraints.as_ref()),
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: (0..self.config.cluster_count).collect(),
+            cluster_ids: Some((0..self.config.cluster_count).collect()),
         })
     }
 }

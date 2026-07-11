@@ -3,11 +3,11 @@
 
 //! Streaming directional-PCA clustering for LexonGraph.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use lexongraph_pca::{PcaError, PcaTransform, fit};
+use lexongraph_pca::{PcaAccumulator, PcaError, PcaTransform};
 use lexongraph_streaming_clustering::{
-    ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
+    ClusterId, Embedding, MetricDirection, PassReadiness, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 
 pub const DIRECTIONAL_PCA_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-directional-pca-v", env!("CARGO_PKG_VERSION"));
+
+const DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectionalPcaRetainedAxisPolicy {
@@ -53,14 +55,15 @@ pub struct DirectionalPcaParams {
     pub min_cumulative_variance: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DirectionalPcaStreamingTrainer {
     config: StreamingClusteringConfig,
     params: DirectionalPcaParams,
     state: TrainerState,
-    current_pass: Vec<Embedding>,
+    phase: ReplayPhase,
+    active_pass: Option<ActivePassState>,
     baseline_fingerprint: Option<PassFingerprint>,
-    completed_passes: usize,
+    quality_metric: f64,
     model: Option<DirectionalPcaModel>,
 }
 
@@ -73,7 +76,168 @@ pub struct DirectionalPcaStreamingClassifier {
 #[derive(Clone, Debug)]
 struct DirectionalPcaModel {
     centroids: Vec<Embedding>,
-    quality_metric: f64,
+}
+
+#[derive(Debug)]
+enum ReplayPhase {
+    AnalyzePca,
+    PlanCuts(CutPlanningReplayPlan),
+    CountCells(PartitionPlan),
+    RealizePartition(ReadyPartitionPlan),
+}
+
+#[derive(Clone, Debug)]
+struct PartitionAnalysisPlan {
+    transform: PcaTransform,
+    axis_bin_counts: Vec<usize>,
+    binning_policy: DirectionalPcaBinningPolicy,
+    total_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct CutPlanningReplayPlan {
+    plan: PartitionAnalysisPlan,
+    planners: Vec<AxisPlanner>,
+}
+
+#[derive(Clone, Debug)]
+struct PartitionPlan {
+    transform: PcaTransform,
+    axis_plans: Vec<AxisPlan>,
+}
+
+#[derive(Clone, Debug)]
+struct ReadyPartitionPlan {
+    partition: PartitionPlan,
+    cells: Vec<ReadyCellPlan>,
+}
+
+#[derive(Debug)]
+enum ActivePassState {
+    AnalyzePca(ActivePcaPass),
+    PlanCuts(ActiveCutPlanningPass),
+    CountCells(ActiveCellCountingPass),
+    RealizePartition(ActivePartitionRealizationPass),
+}
+
+#[derive(Debug)]
+struct ActivePcaPass {
+    tracker: PassTracker,
+    accumulator: PcaAccumulator,
+}
+
+#[derive(Debug)]
+struct ActiveCutPlanningPass {
+    tracker: PassTracker,
+    plan: PartitionAnalysisPlan,
+    planners: Vec<AxisPlanner>,
+}
+
+#[derive(Debug)]
+struct ActiveCellCountingPass {
+    tracker: PassTracker,
+    partition: PartitionPlan,
+    cursor_state: AxisCursorState,
+    cell_summaries: BTreeMap<Vec<usize>, CellDuplicateSummary>,
+}
+
+#[derive(Debug)]
+struct ActivePartitionRealizationPass {
+    tracker: PassTracker,
+    ready: ReadyPartitionPlan,
+    cursor_state: AxisCursorState,
+    cell_seen_counts: Vec<usize>,
+    cell_stats: Vec<CellStats>,
+}
+
+#[derive(Clone, Debug)]
+enum AxisPlan {
+    SingleBin,
+    Quantile(QuantileAxisPlan),
+    Thresholds(Vec<f32>),
+}
+
+#[derive(Clone, Debug)]
+struct QuantileAxisPlan {
+    groups: Vec<QuantileValueGroup>,
+}
+
+#[derive(Clone, Debug)]
+struct QuantileValueGroup {
+    value: f32,
+    quotas: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+enum AxisPlanner {
+    Quantile(QuantileAxisPlanner),
+    DensityMinMax(DensityValleyMinMaxPlanner),
+    DensityHistogram(DensityValleyHistogramPlanner),
+    Ready(AxisPlan),
+}
+
+#[derive(Clone, Debug)]
+struct QuantileAxisPlanner {
+    targets: Vec<usize>,
+    next_target_index: usize,
+    consumed_count: usize,
+    lower_bound: Option<f32>,
+    candidate_groups: Vec<ValueCount>,
+    groups: Vec<QuantileValueGroup>,
+    candidate_capacity: usize,
+}
+
+#[derive(Clone, Debug)]
+struct DensityValleyMinMaxPlanner {
+    bin_count: usize,
+    minimum: Option<f32>,
+    maximum: Option<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct DensityValleyHistogramPlanner {
+    minimum: f32,
+    maximum: f32,
+    counts: Vec<usize>,
+    bin_count: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ValueCount {
+    value: f32,
+    count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct AxisCursorState {
+    quantile_positions: Vec<Vec<usize>>,
+}
+
+#[derive(Clone, Debug)]
+struct CellStats {
+    count: usize,
+    sums: Vec<f64>,
+}
+
+#[derive(Clone, Debug)]
+struct ReadyCellPlan {
+    key: Vec<usize>,
+    count: usize,
+    extra_clusters: usize,
+    cluster_offset: usize,
+}
+
+#[derive(Clone, Debug)]
+struct CellDuplicateSummary {
+    count: usize,
+    coordinate_sums: Vec<f64>,
+    coordinate_sum_squares: Vec<f64>,
+}
+
+#[derive(Debug)]
+struct PassTracker {
+    observed_count: usize,
+    hasher: Sha256,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,15 +245,6 @@ struct PassFingerprint {
     observed_count: usize,
     digest: [u8; 32],
 }
-
-#[derive(Clone, Debug)]
-struct Cluster {
-    centroid: Embedding,
-    members: Vec<usize>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct CoordinateKey(Vec<u32>);
 
 impl DirectionalPcaStreamingTrainer {
     pub fn new(
@@ -103,9 +258,10 @@ impl DirectionalPcaStreamingTrainer {
             config,
             params,
             state: TrainerState::Idle,
-            current_pass: Vec::new(),
+            phase: ReplayPhase::AnalyzePca,
+            active_pass: None,
             baseline_fingerprint: None,
-            completed_passes: 0,
+            quality_metric: 0.0,
             model: None,
         })
     }
@@ -121,75 +277,317 @@ impl DirectionalPcaStreamingTrainer {
 
     fn fail(&mut self, error: StreamingClusteringError) -> StreamingClusteringError {
         self.state = TrainerState::Error;
-        self.current_pass.clear();
+        self.active_pass = None;
         error
+    }
+
+    fn ensure_active_pass(&mut self) {
+        if self.active_pass.is_some() {
+            return;
+        }
+        self.active_pass = Some(match &self.phase {
+            ReplayPhase::AnalyzePca => ActivePassState::AnalyzePca(ActivePcaPass {
+                tracker: PassTracker::new(),
+                accumulator: PcaAccumulator::new(self.config.dimensions),
+            }),
+            ReplayPhase::PlanCuts(replay) => ActivePassState::PlanCuts(ActiveCutPlanningPass {
+                tracker: PassTracker::new(),
+                plan: replay.plan.clone(),
+                planners: replay.planners.clone(),
+            }),
+            ReplayPhase::CountCells(partition) => {
+                ActivePassState::CountCells(ActiveCellCountingPass {
+                    tracker: PassTracker::new(),
+                    partition: partition.clone(),
+                    cursor_state: AxisCursorState::for_partition(partition),
+                    cell_summaries: BTreeMap::new(),
+                })
+            }
+            ReplayPhase::RealizePartition(ready) => {
+                ActivePassState::RealizePartition(ActivePartitionRealizationPass {
+                    tracker: PassTracker::new(),
+                    ready: ready.clone(),
+                    cursor_state: AxisCursorState::for_partition(&ready.partition),
+                    cell_seen_counts: vec![0; ready.cells.len()],
+                    cell_stats: ready
+                        .cells
+                        .iter()
+                        .flat_map(|cell| {
+                            std::iter::repeat_with(|| CellStats {
+                                count: 0,
+                                sums: vec![0.0; self.config.dimensions],
+                            })
+                            .take(1 + cell.extra_clusters)
+                        })
+                        .collect(),
+                })
+            }
+        });
     }
 
     fn finish_pass_impl(&mut self) -> Result<PassReport, StreamingClusteringError> {
         if self.state != TrainerState::Ingesting {
             return Err(self.invalid_transition("finish_pass"));
         }
-        if self.current_pass.is_empty() {
+        let active_pass = self
+            .active_pass
+            .take()
+            .ok_or_else(|| malformed_input("completed pass must contain at least one embedding"))?;
+
+        let (next_phase, report, model) = match active_pass {
+            ActivePassState::AnalyzePca(pass) => self.finish_pca_pass(pass)?,
+            ActivePassState::PlanCuts(pass) => self.finish_cut_planning_pass(pass)?,
+            ActivePassState::CountCells(pass) => self.finish_cell_counting_pass(pass)?,
+            ActivePassState::RealizePartition(pass) => {
+                self.finish_partition_realization_pass(pass)?
+            }
+        };
+
+        self.phase = next_phase;
+        if let Some(model) = model {
+            self.model = Some(model);
+        }
+        self.state = TrainerState::PassComplete;
+        Ok(report)
+    }
+
+    fn finish_pca_pass(
+        &mut self,
+        pass: ActivePcaPass,
+    ) -> Result<(ReplayPhase, PassReport, Option<DirectionalPcaModel>), StreamingClusteringError>
+    {
+        let fingerprint = pass.tracker.finish();
+        let observed_count = fingerprint.observed_count;
+        if observed_count == 0 {
             return Err(malformed_input(
                 "completed pass must contain at least one embedding",
             ));
         }
 
-        let observed_count = self.current_pass.len();
-        let current_fingerprint = fingerprint_pass(self.current_pass.as_slice());
-        if self.completed_passes == 0 {
-            let minimum_required = match self.params.cluster_cardinality_mode {
-                DirectionalPcaClusterCardinalityMode::Exact => self
-                    .params
-                    .min_input_count
-                    .max(self.config.cluster_count as usize),
-                DirectionalPcaClusterCardinalityMode::UnderfullSuccess => {
-                    self.params.min_input_count
-                }
-            };
-            if observed_count < minimum_required {
-                return Err(unsatisfiable_constraint(format!(
-                    "first pass established N = {observed_count}, smaller than the required minimum {minimum_required}"
-                )));
-            }
-            self.baseline_fingerprint = Some(current_fingerprint);
-        } else {
-            let baseline = self.baseline_fingerprint.as_ref().ok_or_else(|| {
-                unsatisfiable_constraint(
-                    "missing baseline dataset for later directional-PCA passes",
-                )
-            })?;
-            if baseline != &current_fingerprint {
-                return Err(malformed_input(
-                    "later passes must replay the same logical dataset in the same order",
-                ));
-            }
+        let minimum_required = match self.params.cluster_cardinality_mode {
+            DirectionalPcaClusterCardinalityMode::Exact => self
+                .params
+                .min_input_count
+                .max(self.config.cluster_count as usize),
+            DirectionalPcaClusterCardinalityMode::UnderfullSuccess => self.params.min_input_count,
+        };
+        if observed_count < minimum_required {
+            return Err(unsatisfiable_constraint(format!(
+                "first pass established N = {observed_count}, smaller than the required minimum {minimum_required}"
+            )));
         }
 
-        let model = fit_pass_model(&self.current_pass, &self.config, &self.params)?;
-        let quality_metric = model.quality_metric;
-        self.model = Some(model);
-        self.completed_passes += 1;
-        self.current_pass.clear();
-        self.state = TrainerState::PassComplete;
+        self.baseline_fingerprint = Some(fingerprint);
+        let transform = pass.accumulator.finalize().map_err(map_pca_error)?;
+        let effective_rank = transform.diagnostics().rank_estimate;
+        let is_degenerate = transform
+            .explained_variance()
+            .map(|values| values.iter().all(|value| value.abs() <= f32::EPSILON))
+            .unwrap_or(false);
+        if !is_degenerate && effective_rank < self.params.min_effective_rank {
+            return Err(unsatisfiable_constraint(format!(
+                "effective rank {effective_rank} is smaller than the required minimum {}",
+                self.params.min_effective_rank
+            )));
+        }
 
-        Ok(PassReport {
+        let retained_axis_count = resolve_retained_axis_count(
+            &transform,
+            &self.params,
+            self.config.cluster_count as usize,
+            effective_rank,
+        )?;
+        let cumulative_variance = transform
+            .cumulative_variance()
+            .and_then(|values| values.get(retained_axis_count.saturating_sub(1)).copied())
+            .unwrap_or(0.0);
+        if !is_degenerate && cumulative_variance < self.params.min_cumulative_variance {
+            return Err(unsatisfiable_constraint(format!(
+                "cumulative variance {cumulative_variance} is smaller than the required minimum {}",
+                self.params.min_cumulative_variance
+            )));
+        }
+
+        let transform = transform
+            .truncate(retained_axis_count)
+            .map_err(map_pca_error)?;
+        let axis_bin_counts = allocate_axis_bins(
+            transform.mean.as_slice(),
+            &transform,
+            &self.params,
+            self.config.cluster_count as usize,
+        )?;
+        self.quality_metric = quality_metric_from_transform(&transform);
+        let report = analysis_only_report(
             observed_count,
+            self.config.cluster_count,
+            self.quality_metric,
+        );
+        let plan = PartitionAnalysisPlan {
+            transform,
+            axis_bin_counts,
+            binning_policy: self.params.binning_policy,
+            total_count: observed_count,
+        };
+        let planners = plan
+            .axis_bin_counts
+            .iter()
+            .map(|&bin_count| match plan.binning_policy {
+                DirectionalPcaBinningPolicy::Quantile => AxisPlanner::new_quantile(
+                    bin_count,
+                    plan.total_count,
+                    self.config.cluster_count as usize,
+                ),
+                DirectionalPcaBinningPolicy::DensityValley => AxisPlanner::new_density(bin_count),
+            })
+            .collect();
+        Ok((
+            ReplayPhase::PlanCuts(CutPlanningReplayPlan { plan, planners }),
+            report,
+            None,
+        ))
+    }
+
+    fn finish_cut_planning_pass(
+        &mut self,
+        pass: ActiveCutPlanningPass,
+    ) -> Result<(ReplayPhase, PassReport, Option<DirectionalPcaModel>), StreamingClusteringError>
+    {
+        let fingerprint = pass.tracker.finish();
+        self.validate_replayed_pass(&fingerprint)?;
+
+        let advanced_planners = pass
+            .planners
+            .into_iter()
+            .map(AxisPlanner::finish_pass)
+            .collect::<Result<Vec<_>, _>>()?;
+        let ready = advanced_planners
+            .iter()
+            .all(|planner| matches!(planner, AxisPlanner::Ready(_)));
+        let axis_plans = advanced_planners
+            .iter()
+            .filter_map(|planner| match planner {
+                AxisPlanner::Ready(plan) => Some(plan.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let report = analysis_only_report(
+            fingerprint.observed_count,
+            self.config.cluster_count,
+            self.quality_metric,
+        );
+        if ready {
+            Ok((
+                ReplayPhase::CountCells(PartitionPlan {
+                    transform: pass.plan.transform,
+                    axis_plans,
+                }),
+                report,
+                None,
+            ))
+        } else {
+            Ok((
+                ReplayPhase::PlanCuts(CutPlanningReplayPlan {
+                    plan: pass.plan,
+                    planners: advanced_planners,
+                }),
+                report,
+                None,
+            ))
+        }
+    }
+
+    fn finish_cell_counting_pass(
+        &mut self,
+        pass: ActiveCellCountingPass,
+    ) -> Result<(ReplayPhase, PassReport, Option<DirectionalPcaModel>), StreamingClusteringError>
+    {
+        let fingerprint = pass.tracker.finish();
+        self.validate_replayed_pass(&fingerprint)?;
+
+        let populated_cell_count = pass.cell_summaries.len();
+        if populated_cell_count == 0 {
+            return Err(unsatisfiable_constraint(
+                "directional-PCA partition realized zero populated cells",
+            ));
+        }
+        if populated_cell_count > self.config.cluster_count as usize {
+            return Err(unsatisfiable_constraint(format!(
+                "directional-PCA partition realized {populated_cell_count} populated cells instead of the required {}",
+                self.config.cluster_count
+            )));
+        }
+        let ready = build_ready_partition_plan(
+            pass.partition,
+            pass.cell_summaries,
+            self.config.cluster_count as usize,
+            self.params.cluster_cardinality_mode,
+        )?;
+        let realized_cluster_count = ready
+            .cells
+            .iter()
+            .map(|cell| 1 + cell.extra_clusters)
+            .sum::<usize>() as u32;
+        let report = PassReport {
+            observed_count: fingerprint.observed_count,
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: self
-                .model
-                .as_ref()
-                .map_or(0, |model| model.centroids.len() as u32),
-            quality_metric,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(realized_cluster_count),
+            quality_metric: self.quality_metric,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: (0..self
-                .model
-                .as_ref()
-                .map_or(0, |model| model.centroids.len() as u32))
-                .collect(),
-        })
+            cluster_ids: Some((0..realized_cluster_count).collect()),
+        };
+        Ok((ReplayPhase::RealizePartition(ready), report, None))
+    }
+
+    fn finish_partition_realization_pass(
+        &mut self,
+        pass: ActivePartitionRealizationPass,
+    ) -> Result<(ReplayPhase, PassReport, Option<DirectionalPcaModel>), StreamingClusteringError>
+    {
+        let fingerprint = pass.tracker.finish();
+        self.validate_replayed_pass(&fingerprint)?;
+
+        let centroids = pass
+            .cell_stats
+            .iter()
+            .map(|stats| stats.centroid())
+            .collect::<Result<Vec<_>, _>>()?;
+        let realized_cluster_count = centroids.len() as u32;
+        let report = PassReport {
+            observed_count: fingerprint.observed_count,
+            requested_cluster_count: self.config.cluster_count,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(realized_cluster_count),
+            quality_metric: self.quality_metric,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: Some((0..realized_cluster_count).collect()),
+        };
+        Ok((
+            ReplayPhase::RealizePartition(pass.ready),
+            report,
+            Some(DirectionalPcaModel { centroids }),
+        ))
+    }
+
+    fn validate_replayed_pass(
+        &self,
+        fingerprint: &PassFingerprint,
+    ) -> Result<(), StreamingClusteringError> {
+        let baseline = self.baseline_fingerprint.as_ref().ok_or_else(|| {
+            unsatisfiable_constraint("missing baseline dataset for later directional-PCA passes")
+        })?;
+        if baseline != fingerprint {
+            return Err(malformed_input(
+                "later passes must replay the same logical dataset in the same order",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -208,6 +606,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
         match self.state {
             TrainerState::Idle | TrainerState::PassComplete => {
                 self.state = TrainerState::Ingesting;
+                self.ensure_active_pass();
             }
             TrainerState::Ingesting => {}
             TrainerState::TrainingComplete | TrainerState::Error => {
@@ -215,9 +614,76 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             }
         }
 
+        let active_pass = self
+            .active_pass
+            .as_mut()
+            .ok_or_else(|| malformed_input("missing active directional-PCA pass state"))?;
         for embedding in embeddings {
             validate_embedding(embedding, self.config.dimensions)?;
-            self.current_pass.push(embedding.clone());
+            match active_pass {
+                ActivePassState::AnalyzePca(pass) => {
+                    pass.tracker.update(embedding);
+                    pass.accumulator.update(embedding).map_err(map_pca_error)?;
+                }
+                ActivePassState::PlanCuts(pass) => {
+                    pass.tracker.update(embedding);
+                    let coordinates = pass
+                        .plan
+                        .transform
+                        .apply(embedding)
+                        .map_err(map_pca_error)?;
+                    for (planner, value) in pass.planners.iter_mut().zip(coordinates) {
+                        planner.observe(value);
+                    }
+                }
+                ActivePassState::CountCells(pass) => {
+                    pass.tracker.update(embedding);
+                    let coordinates = pass
+                        .partition
+                        .transform
+                        .apply(embedding)
+                        .map_err(map_pca_error)?;
+                    let key = pass
+                        .partition
+                        .assign_point_to_cell(coordinates.as_slice(), &mut pass.cursor_state)?;
+                    pass.cell_summaries
+                        .entry(key)
+                        .or_insert_with(|| {
+                            CellDuplicateSummary::new(pass.partition.transform.output_dim)
+                        })
+                        .observe(coordinates.as_slice());
+                }
+                ActivePassState::RealizePartition(pass) => {
+                    pass.tracker.update(embedding);
+                    let coordinates = pass
+                        .ready
+                        .partition
+                        .transform
+                        .apply(embedding)
+                        .map_err(map_pca_error)?;
+                    let key = pass
+                        .ready
+                        .partition
+                        .assign_point_to_cell(coordinates.as_slice(), &mut pass.cursor_state)?;
+                    let cell_index = pass
+                        .ready
+                        .cells
+                        .binary_search_by(|cell| cell.key.cmp(&key))
+                        .map_err(|_| {
+                            unsatisfiable_constraint("partition-ready cell plan was not stable")
+                        })?;
+                    let cell = &pass.ready.cells[cell_index];
+                    let seen = pass.cell_seen_counts[cell_index];
+                    pass.cell_seen_counts[cell_index] += 1;
+                    let base_count = cell.count - cell.extra_clusters;
+                    let cluster_index = if seen < base_count {
+                        cell.cluster_offset
+                    } else {
+                        cell.cluster_offset + 1 + (seen - base_count)
+                    };
+                    pass.cell_stats[cluster_index].observe(embedding);
+                }
+            }
         }
         Ok(())
     }
@@ -229,6 +695,12 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
     fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
         if self.state != TrainerState::PassComplete {
             return Err(self.invalid_transition("complete_training"));
+        }
+        if self.model.is_none() {
+            return Err(StreamingClusteringError::InvalidTransition {
+                state: self.state,
+                operation: "complete_training".into(),
+            });
         }
         self.state = TrainerState::TrainingComplete;
         Ok(())
@@ -264,6 +736,15 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
     }
 
     fn assign(&self, embedding: &[f32]) -> Result<ClusterId, StreamingClusteringError> {
+        Ok(self.assigned_distance(embedding)?.0)
+    }
+}
+
+impl DirectionalPcaStreamingClassifier {
+    pub fn assigned_distance(
+        &self,
+        embedding: &[f32],
+    ) -> Result<(ClusterId, f64), StreamingClusteringError> {
         validate_embedding(embedding, self.config.dimensions)?;
         let mut best_cluster = 0usize;
         let mut best_distance = squared_distance(embedding, self.centroids[0].as_slice())?;
@@ -274,78 +755,365 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
                 best_cluster = cluster_index;
             }
         }
-        Ok(best_cluster as ClusterId)
+        Ok((best_cluster as ClusterId, best_distance.sqrt()))
     }
 }
 
-fn fit_pass_model(
-    embeddings: &[Embedding],
-    config: &StreamingClusteringConfig,
-    params: &DirectionalPcaParams,
-) -> Result<DirectionalPcaModel, StreamingClusteringError> {
-    let allow_duplicate_refinement = embeddings_are_identical(embeddings);
-    let transform = fit(embeddings).map_err(map_pca_error)?;
-    let effective_rank = transform.diagnostics().rank_estimate;
-    if !allow_duplicate_refinement && effective_rank < params.min_effective_rank {
-        return Err(unsatisfiable_constraint(format!(
-            "effective rank {effective_rank} is smaller than the required minimum {}",
-            params.min_effective_rank
-        )));
+impl AxisPlanner {
+    fn new_quantile(bin_count: usize, total_count: usize, candidate_capacity: usize) -> Self {
+        if bin_count <= 1 {
+            return Self::Ready(AxisPlan::SingleBin);
+        }
+        let targets = (1..bin_count)
+            .map(|bin| div_ceil(bin * total_count, bin_count))
+            .collect();
+        Self::Quantile(QuantileAxisPlanner {
+            targets,
+            next_target_index: 0,
+            consumed_count: 0,
+            lower_bound: None,
+            candidate_groups: Vec::new(),
+            groups: Vec::new(),
+            candidate_capacity: candidate_capacity.max(1),
+        })
     }
 
-    let candidate_axis_count = resolve_retained_axis_count(
-        &transform,
-        params,
-        config.cluster_count as usize,
-        effective_rank,
-        allow_duplicate_refinement,
-    )?;
-    let cumulative_variance = transform
-        .cumulative_variance()
-        .and_then(|values| values.get(candidate_axis_count.saturating_sub(1)).copied())
-        .unwrap_or(0.0);
-    if !allow_duplicate_refinement && cumulative_variance < params.min_cumulative_variance {
-        return Err(unsatisfiable_constraint(format!(
-            "cumulative variance {cumulative_variance} is smaller than the required minimum {}",
-            params.min_cumulative_variance
-        )));
+    fn new_density(bin_count: usize) -> Self {
+        if bin_count <= 1 {
+            Self::Ready(AxisPlan::SingleBin)
+        } else {
+            Self::DensityMinMax(DensityValleyMinMaxPlanner {
+                bin_count,
+                minimum: None,
+                maximum: None,
+            })
+        }
     }
 
-    let truncated = transform
-        .truncate(candidate_axis_count)
-        .map_err(map_pca_error)?;
-    let coordinates = embeddings
-        .iter()
-        .map(|embedding| truncated.apply(embedding).map_err(map_pca_error))
-        .collect::<Result<Vec<_>, _>>()?;
-    let axis_bin_counts = allocate_axis_bins(
-        embeddings,
-        &truncated,
-        params,
-        config.cluster_count as usize,
-    )?;
-    let point_bins = assign_bins(
-        coordinates.as_slice(),
-        axis_bin_counts.as_slice(),
-        params.binning_policy,
-    );
-    let clusters = materialize_clusters(
-        embeddings,
-        coordinates.as_slice(),
-        point_bins.as_slice(),
-        config.cluster_count as usize,
-        params.cluster_cardinality_mode,
-    )?;
-    let centroids = clusters
-        .iter()
-        .map(|cluster| cluster.centroid.clone())
-        .collect::<Vec<_>>();
-    let quality_metric = compute_quality_metric(embeddings, clusters.as_slice())?;
+    fn observe(&mut self, value: f32) {
+        match self {
+            Self::Ready(_) => {}
+            Self::Quantile(planner) => planner.observe(value),
+            Self::DensityMinMax(planner) => planner.observe(value),
+            Self::DensityHistogram(planner) => planner.observe(value),
+        }
+    }
 
-    Ok(DirectionalPcaModel {
-        centroids,
+    fn finish_pass(self) -> Result<Self, StreamingClusteringError> {
+        match self {
+            Self::Ready(plan) => Ok(Self::Ready(plan)),
+            Self::Quantile(planner) => planner.finish_pass(),
+            Self::DensityMinMax(planner) => Ok(planner.finish_pass()),
+            Self::DensityHistogram(planner) => planner.finish_pass(),
+        }
+    }
+}
+
+impl From<AxisPlan> for AxisPlanner {
+    fn from(value: AxisPlan) -> Self {
+        Self::Ready(value)
+    }
+}
+
+impl From<QuantileAxisPlanner> for AxisPlanner {
+    fn from(value: QuantileAxisPlanner) -> Self {
+        Self::Quantile(value)
+    }
+}
+
+impl From<DensityValleyHistogramPlanner> for AxisPlanner {
+    fn from(value: DensityValleyHistogramPlanner) -> Self {
+        Self::DensityHistogram(value)
+    }
+}
+
+impl QuantileAxisPlanner {
+    fn observe(&mut self, value: f32) {
+        if self.next_target_index >= self.targets.len() {
+            return;
+        }
+        if let Some(lower_bound) = self.lower_bound
+            && value <= lower_bound
+        {
+            return;
+        }
+        if let Some(existing) = self
+            .candidate_groups
+            .iter_mut()
+            .find(|candidate| candidate.value == value)
+        {
+            existing.count += 1;
+            return;
+        }
+
+        if self.candidate_groups.len() < self.candidate_capacity {
+            self.candidate_groups.push(ValueCount { value, count: 1 });
+            self.candidate_groups
+                .sort_by(|left, right| left.value.total_cmp(&right.value));
+            return;
+        }
+
+        if let Some(last) = self.candidate_groups.last()
+            && value < last.value
+        {
+            self.candidate_groups.pop();
+            self.candidate_groups.push(ValueCount { value, count: 1 });
+            self.candidate_groups
+                .sort_by(|left, right| left.value.total_cmp(&right.value));
+        }
+    }
+
+    fn finish_pass(mut self) -> Result<AxisPlanner, StreamingClusteringError> {
+        if self.next_target_index >= self.targets.len() {
+            return Ok(AxisPlan::Quantile(QuantileAxisPlan {
+                groups: self.groups,
+            })
+            .into());
+        }
+        if self.candidate_groups.is_empty() {
+            return Err(unsatisfiable_constraint(
+                "quantile cut planning could not advance on the replayed pass",
+            ));
+        }
+
+        for candidate in self.candidate_groups.drain(..) {
+            let group_start = self.consumed_count;
+            self.consumed_count += candidate.count;
+            let mut quotas = Vec::new();
+            while self.next_target_index < self.targets.len()
+                && self.targets[self.next_target_index] <= self.consumed_count
+            {
+                quotas.push(self.targets[self.next_target_index] - group_start);
+                self.next_target_index += 1;
+            }
+            if !quotas.is_empty() {
+                self.groups.push(QuantileValueGroup {
+                    value: candidate.value,
+                    quotas,
+                });
+            }
+            self.lower_bound = Some(candidate.value);
+            if self.next_target_index >= self.targets.len() {
+                return Ok(AxisPlan::Quantile(QuantileAxisPlan {
+                    groups: self.groups,
+                })
+                .into());
+            }
+        }
+
+        Ok(self.into())
+    }
+}
+
+impl DensityValleyMinMaxPlanner {
+    fn observe(&mut self, value: f32) {
+        self.minimum = Some(self.minimum.map_or(value, |current| current.min(value)));
+        self.maximum = Some(self.maximum.map_or(value, |current| current.max(value)));
+    }
+
+    fn finish_pass(self) -> AxisPlanner {
+        AxisPlanner::DensityHistogram(DensityValleyHistogramPlanner {
+            minimum: self.minimum.unwrap_or(0.0),
+            maximum: self.maximum.unwrap_or(0.0),
+            counts: vec![0; self.bin_count.clamp(2, DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP)],
+            bin_count: self.bin_count,
+        })
+    }
+}
+
+impl DensityValleyHistogramPlanner {
+    fn observe(&mut self, value: f32) {
+        let index = histogram_bucket_index(
+            f64::from(self.minimum),
+            f64::from(self.maximum),
+            self.counts.len(),
+            f64::from(value),
+        );
+        self.counts[index] += 1;
+    }
+
+    fn finish_pass(self) -> Result<AxisPlanner, StreamingClusteringError> {
+        let cuts = select_histogram_valley_cut_values(
+            self.minimum,
+            self.maximum,
+            self.counts.as_slice(),
+            self.bin_count,
+        )?;
+        Ok(AxisPlan::Thresholds(cuts).into())
+    }
+}
+
+impl AxisCursorState {
+    fn for_partition(partition: &PartitionPlan) -> Self {
+        Self {
+            quantile_positions: partition
+                .axis_plans
+                .iter()
+                .map(|plan| match plan {
+                    AxisPlan::Quantile(quantile) => vec![0; quantile.groups.len()],
+                    _ => Vec::new(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl PartitionPlan {
+    fn assign_point_to_cell(
+        &self,
+        coordinates: &[f32],
+        cursor_state: &mut AxisCursorState,
+    ) -> Result<Vec<usize>, StreamingClusteringError> {
+        self.axis_plans
+            .iter()
+            .enumerate()
+            .map(|(axis, plan)| match plan {
+                AxisPlan::SingleBin => Ok(0),
+                AxisPlan::Thresholds(cuts) => {
+                    Ok(cuts.partition_point(|cut| coordinates[axis] > *cut))
+                }
+                AxisPlan::Quantile(quantile) => assign_quantile_bin(
+                    coordinates[axis],
+                    quantile,
+                    cursor_state.quantile_positions[axis].as_mut_slice(),
+                ),
+            })
+            .collect()
+    }
+}
+
+impl CellStats {
+    fn observe(&mut self, embedding: &[f32]) {
+        self.count += 1;
+        for (sum, value) in self.sums.iter_mut().zip(embedding.iter().copied()) {
+            *sum += f64::from(value);
+        }
+    }
+
+    fn centroid(&self) -> Result<Embedding, StreamingClusteringError> {
+        if self.count == 0 {
+            return Err(unsatisfiable_constraint(
+                "partition-ready cell produced an empty centroid",
+            ));
+        }
+        let count = self.count as f64;
+        Ok(self.sums.iter().map(|sum| (*sum / count) as f32).collect())
+    }
+}
+
+impl CellDuplicateSummary {
+    fn new(dimensions: usize) -> Self {
+        Self {
+            count: 0,
+            coordinate_sums: vec![0.0; dimensions],
+            coordinate_sum_squares: vec![0.0; dimensions],
+        }
+    }
+
+    fn observe(&mut self, coordinates: &[f32]) {
+        self.count += 1;
+        for (index, value) in coordinates.iter().copied().enumerate() {
+            let value = f64::from(value);
+            self.coordinate_sums[index] += value;
+            self.coordinate_sum_squares[index] += value * value;
+        }
+    }
+
+    fn can_refine_duplicates(&self) -> bool {
+        if self.count <= 1 {
+            return false;
+        }
+        const EPSILON: f64 = 1e-9;
+        self.coordinate_sums
+            .iter()
+            .zip(self.coordinate_sum_squares.iter())
+            .all(|(sum, sum_squares)| {
+                let count = self.count as f64;
+                let mean = sum / count;
+                let variance = (sum_squares / count) - (mean * mean);
+                variance.abs() <= EPSILON
+            })
+    }
+}
+
+impl PassTracker {
+    fn new() -> Self {
+        Self {
+            observed_count: 0,
+            hasher: Sha256::new(),
+        }
+    }
+
+    fn update(&mut self, embedding: &[f32]) {
+        self.observed_count += 1;
+        self.hasher.update((embedding.len() as u64).to_le_bytes());
+        for value in embedding {
+            self.hasher.update(value.to_bits().to_le_bytes());
+        }
+    }
+
+    fn finish(self) -> PassFingerprint {
+        PassFingerprint {
+            observed_count: self.observed_count,
+            digest: self.hasher.finalize().into(),
+        }
+    }
+}
+
+fn analysis_only_report(
+    observed_count: usize,
+    requested_cluster_count: u32,
+    quality_metric: f64,
+) -> PassReport {
+    PassReport {
+        observed_count,
+        requested_cluster_count,
+        readiness: PassReadiness::AnalysisOnly,
+        realized_cluster_count: None,
         quality_metric,
-    })
+        balance_metric: 0.0,
+        quality_direction: MetricDirection::SmallerIsBetter,
+        balance_direction: MetricDirection::SmallerIsBetter,
+        cluster_ids: None,
+    }
+}
+
+fn build_ready_partition_plan(
+    partition: PartitionPlan,
+    cell_summaries: BTreeMap<Vec<usize>, CellDuplicateSummary>,
+    requested_cluster_count: usize,
+    mode: DirectionalPcaClusterCardinalityMode,
+) -> Result<ReadyPartitionPlan, StreamingClusteringError> {
+    let populated_cell_count = cell_summaries.len();
+    let shortfall = requested_cluster_count.saturating_sub(populated_cell_count);
+    let mut remaining_shortfall = shortfall;
+    let mut cells = Vec::with_capacity(populated_cell_count);
+    let mut cluster_offset = 0usize;
+
+    for (key, summary) in cell_summaries {
+        let extra_clusters = if remaining_shortfall > 0 && summary.can_refine_duplicates() {
+            let extras = remaining_shortfall.min(summary.count.saturating_sub(1));
+            remaining_shortfall -= extras;
+            extras
+        } else {
+            0
+        };
+        cells.push(ReadyCellPlan {
+            key,
+            count: summary.count,
+            extra_clusters,
+            cluster_offset,
+        });
+        cluster_offset += 1 + extra_clusters;
+    }
+
+    if mode == DirectionalPcaClusterCardinalityMode::Exact && remaining_shortfall > 0 {
+        return Err(unsatisfiable_constraint(format!(
+            "directional-PCA partition realized {populated_cell_count} populated cells instead of the required {requested_cluster_count}"
+        )));
+    }
+
+    Ok(ReadyPartitionPlan { partition, cells })
 }
 
 fn validate_params(
@@ -353,23 +1121,17 @@ fn validate_params(
     params: &DirectionalPcaParams,
 ) -> Result<(), StreamingClusteringError> {
     match params.retained_axis_policy {
-        DirectionalPcaRetainedAxisPolicy::FixedCount(retained_dimension_count) => {
-            if retained_dimension_count == 0 || retained_dimension_count > config.dimensions {
+        DirectionalPcaRetainedAxisPolicy::FixedCount(retained_axis_count) => {
+            if retained_axis_count == 0 || retained_axis_count > config.dimensions {
                 return Err(invalid_configuration(format!(
                     "retained_axis_policy = FixedCount(n) requires n to be in [1, {}], got {}",
-                    config.dimensions, retained_dimension_count
+                    config.dimensions, retained_axis_count
                 )));
             }
-            if retained_dimension_count > config.cluster_count as usize {
-                return Err(invalid_configuration(format!(
-                    "retained_axis_policy = FixedCount({}) cannot exceed cluster_count {}",
-                    retained_dimension_count, config.cluster_count
-                )));
-            }
-            if params.min_effective_rank > retained_dimension_count {
+            if params.min_effective_rank > retained_axis_count {
                 return Err(invalid_configuration(format!(
                     "min_effective_rank must be in [1, FixedCount(n)={}], got {}",
-                    retained_dimension_count, params.min_effective_rank
+                    retained_axis_count, params.min_effective_rank
                 )));
             }
         }
@@ -378,14 +1140,6 @@ fn validate_params(
                 return Err(invalid_configuration(format!(
                     "min_effective_rank {} cannot exceed adaptive candidate axis count {}",
                     params.min_effective_rank, config.dimensions
-                )));
-            }
-            if params.allocation_policy == DirectionalPcaAllocationPolicy::CentroidWeightedBins
-                && params.min_effective_rank > config.cluster_count as usize
-            {
-                return Err(invalid_configuration(format!(
-                    "min_effective_rank {} cannot exceed centroid-weighted adaptive axis budget {}",
-                    params.min_effective_rank, config.cluster_count
                 )));
             }
         }
@@ -438,19 +1192,16 @@ fn resolve_retained_axis_count(
     params: &DirectionalPcaParams,
     cluster_count: usize,
     effective_rank: usize,
-    allow_duplicate_refinement: bool,
 ) -> Result<usize, StreamingClusteringError> {
     match params.retained_axis_policy {
-        DirectionalPcaRetainedAxisPolicy::FixedCount(retained_dimension_count) => {
-            Ok(retained_dimension_count)
+        DirectionalPcaRetainedAxisPolicy::FixedCount(retained_axis_count) => {
+            Ok(retained_axis_count)
         }
         DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible => {
-            let rank_bound = if allow_duplicate_refinement {
-                transform.output_dim
-            } else {
-                effective_rank.max(params.min_effective_rank)
-            };
-            let retained_axis_count = rank_bound.min(transform.output_dim).max(1);
+            let retained_axis_count = effective_rank
+                .max(params.min_effective_rank)
+                .min(transform.output_dim)
+                .max(1);
             let retained_axis_count = if params.allocation_policy
                 == DirectionalPcaAllocationPolicy::CentroidWeightedBins
             {
@@ -474,7 +1225,7 @@ fn reject_balance_constraints(
 ) -> Result<(), StreamingClusteringError> {
     if config.balance_constraints.is_some() {
         return Err(invalid_configuration(
-            "balance constraints are not supported by the scaled-down streaming directional-PCA trainer",
+            "balance constraints are not supported by the streaming directional-PCA trainer",
         ));
     }
     Ok(())
@@ -498,83 +1249,18 @@ fn map_pca_error(error: PcaError) -> StreamingClusteringError {
         | PcaError::InvalidNumericState(_)
         | PcaError::InvalidSerializedFormat(_)
         | PcaError::SchemaVersionMismatch { .. } => {
-            unsatisfiable_constraint(format!("directional PCA fit failed: {error}"))
+            unsatisfiable_constraint(format!("directional PCA analysis failed: {error}"))
         }
     }
 }
 
-fn compute_axis_scores(
-    embeddings: &[Embedding],
-    transform: &PcaTransform,
-    params: &DirectionalPcaParams,
-) -> Result<Vec<f64>, StreamingClusteringError> {
-    let explained_variance = transform
-        .explained_variance()
-        .ok_or_else(|| unsatisfiable_constraint("missing explained variance in PCA transform"))?;
-    if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits {
-        return explained_variance
-            .iter()
-            .enumerate()
-            .map(|(column, variance)| {
-                let lambda = f64::from(*variance).max(0.0);
-                let score = lambda.powf(f64::from(params.variance_exponent));
-                if !score.is_finite() {
-                    return Err(unsatisfiable_constraint(format!(
-                        "axis score became non-finite for retained dimension {column}"
-                    )));
-                }
-                Ok(score)
-            })
-            .collect();
-    }
-
-    let centroid = compute_centroid(embeddings)?;
-    let gamma = f64::from(params.variance_exponent);
-
-    (0..transform.output_dim)
-        .map(|column| {
-            let alpha = dot_with_basis_column(centroid.as_slice(), transform, column)?;
-            let lambda = f64::from(explained_variance[column]).max(0.0);
-            let variance_factor = if gamma == 0.0 {
-                1.0
-            } else {
-                lambda.powf(gamma)
-            };
-            let score = alpha.abs() * variance_factor;
-            if !score.is_finite() {
-                return Err(unsatisfiable_constraint(format!(
-                    "axis score became non-finite for retained dimension {column}"
-                )));
-            }
-            Ok(score)
-        })
-        .collect()
-}
-
-fn dot_with_basis_column(
-    vector: &[f32],
-    transform: &PcaTransform,
-    column: usize,
-) -> Result<f64, StreamingClusteringError> {
-    let mut dot = 0.0_f64;
-    for (row, value) in vector.iter().copied().enumerate() {
-        dot += f64::from(value) * f64::from(transform.basis[row + column * transform.input_dim]);
-    }
-    if !dot.is_finite() {
-        return Err(unsatisfiable_constraint(format!(
-            "directional coefficient became non-finite for retained dimension {column}"
-        )));
-    }
-    Ok(dot)
-}
-
 fn allocate_axis_bins(
-    embeddings: &[Embedding],
+    centroid: &[f32],
     transform: &PcaTransform,
     params: &DirectionalPcaParams,
     cluster_count: usize,
 ) -> Result<Vec<usize>, StreamingClusteringError> {
-    let axis_scores = compute_axis_scores(embeddings, transform, params)?;
+    let axis_scores = compute_axis_scores(centroid, transform, params)?;
     if axis_scores.is_empty() {
         return Err(invalid_configuration(
             "cannot allocate bins with zero retained dimensions",
@@ -652,6 +1338,69 @@ fn allocate_axis_bins(
     Ok(counts)
 }
 
+fn compute_axis_scores(
+    centroid: &[f32],
+    transform: &PcaTransform,
+    params: &DirectionalPcaParams,
+) -> Result<Vec<f64>, StreamingClusteringError> {
+    let explained_variance = transform
+        .explained_variance()
+        .ok_or_else(|| unsatisfiable_constraint("missing explained variance in PCA transform"))?;
+    if params.allocation_policy == DirectionalPcaAllocationPolicy::EigenvalueLogBits {
+        return explained_variance
+            .iter()
+            .enumerate()
+            .map(|(column, variance)| {
+                let lambda = f64::from(*variance).max(0.0);
+                let score = lambda.powf(f64::from(params.variance_exponent));
+                if !score.is_finite() {
+                    return Err(unsatisfiable_constraint(format!(
+                        "axis score became non-finite for retained dimension {column}"
+                    )));
+                }
+                Ok(score)
+            })
+            .collect();
+    }
+
+    let gamma = f64::from(params.variance_exponent);
+    (0..transform.output_dim)
+        .map(|column| {
+            let alpha = dot_with_basis_column(centroid, transform, column)?;
+            let lambda = f64::from(explained_variance[column]).max(0.0);
+            let variance_factor = if gamma == 0.0 {
+                1.0
+            } else {
+                lambda.powf(gamma)
+            };
+            let score = alpha.abs() * variance_factor;
+            if !score.is_finite() {
+                return Err(unsatisfiable_constraint(format!(
+                    "axis score became non-finite for retained dimension {column}"
+                )));
+            }
+            Ok(score)
+        })
+        .collect()
+}
+
+fn dot_with_basis_column(
+    vector: &[f32],
+    transform: &PcaTransform,
+    column: usize,
+) -> Result<f64, StreamingClusteringError> {
+    let mut dot = 0.0_f64;
+    for (row, value) in vector.iter().copied().enumerate() {
+        dot += f64::from(value) * f64::from(transform.basis[row + column * transform.input_dim]);
+    }
+    if !dot.is_finite() {
+        return Err(unsatisfiable_constraint(format!(
+            "directional coefficient became non-finite for retained dimension {column}"
+        )));
+    }
+    Ok(dot)
+}
+
 fn allocate_axis_bins_from_eigenvalue_bits(
     axis_scores: &[f64],
     cluster_count: usize,
@@ -699,492 +1448,164 @@ fn allocate_axis_bins_from_eigenvalue_bits(
         .collect()
 }
 
-fn assign_bins(
-    coordinates: &[Embedding],
-    axis_bin_counts: &[usize],
-    binning_policy: DirectionalPcaBinningPolicy,
-) -> Vec<Vec<usize>> {
-    match binning_policy {
-        DirectionalPcaBinningPolicy::Quantile => assign_quantile_bins(coordinates, axis_bin_counts),
-        DirectionalPcaBinningPolicy::DensityValley => {
-            assign_density_valley_bins(coordinates, axis_bin_counts)
+fn assign_quantile_bin(
+    value: f32,
+    plan: &QuantileAxisPlan,
+    positions: &mut [usize],
+) -> Result<usize, StreamingClusteringError> {
+    let mut bin = 0usize;
+    for (group_index, group) in plan.groups.iter().enumerate() {
+        if value < group.value {
+            return Ok(bin);
         }
-    }
-}
-
-fn assign_quantile_bins(coordinates: &[Embedding], axis_bin_counts: &[usize]) -> Vec<Vec<usize>> {
-    let point_count = coordinates.len();
-    let retained_dims = axis_bin_counts.len();
-    let mut point_bins = vec![vec![0_usize; retained_dims]; point_count];
-
-    for (axis, &bin_count) in axis_bin_counts.iter().enumerate() {
-        if bin_count == 1 {
+        if value > group.value {
+            bin += group.quotas.len();
             continue;
         }
 
-        let mut order = (0..point_count).collect::<Vec<_>>();
-        order.sort_by(|left, right| {
-            coordinates[*left][axis]
-                .total_cmp(&coordinates[*right][axis])
-                .then_with(|| left.cmp(right))
-        });
-
-        for (rank, point_index) in order.into_iter().enumerate() {
-            point_bins[point_index][axis] = rank * bin_count / point_count;
-        }
-    }
-
-    point_bins
-}
-
-fn assign_density_valley_bins(
-    coordinates: &[Embedding],
-    axis_bin_counts: &[usize],
-) -> Vec<Vec<usize>> {
-    let point_count = coordinates.len();
-    let retained_dims = axis_bin_counts.len();
-    let mut point_bins = vec![vec![0_usize; retained_dims]; point_count];
-
-    for (axis, &bin_count) in axis_bin_counts.iter().enumerate() {
-        if bin_count == 1 {
-            continue;
-        }
-
-        let mut order = (0..point_count).collect::<Vec<_>>();
-        order.sort_by(|left, right| {
-            coordinates[*left][axis]
-                .total_cmp(&coordinates[*right][axis])
-                .then_with(|| left.cmp(right))
-        });
-        let axis_values = order
-            .iter()
-            .map(|&point_index| coordinates[point_index][axis])
-            .collect::<Vec<_>>();
-        let cut_positions = select_deepest_valley_cut_positions(axis_values.as_slice(), bin_count);
-        let mut next_cut_index = 0usize;
-        let mut current_bin = 0usize;
-        for (rank, point_index) in order.into_iter().enumerate() {
-            while next_cut_index < cut_positions.len() && rank >= cut_positions[next_cut_index] {
-                current_bin += 1;
-                next_cut_index += 1;
+        positions[group_index] += 1;
+        let seen = positions[group_index];
+        for quota in &group.quotas {
+            if seen > *quota {
+                bin += 1;
+            } else {
+                break;
             }
-            point_bins[point_index][axis] = current_bin;
         }
+        return Ok(bin);
     }
-
-    point_bins
+    Ok(bin)
 }
 
-fn select_deepest_valley_cut_positions(axis_values: &[f32], bin_count: usize) -> Vec<usize> {
-    if axis_values.len() <= 1 || bin_count <= 1 {
-        return Vec::new();
+fn select_histogram_valley_cut_values(
+    minimum: f32,
+    maximum: f32,
+    counts: &[usize],
+    bin_count: usize,
+) -> Result<Vec<f32>, StreamingClusteringError> {
+    if minimum >= maximum || bin_count <= 1 {
+        return Ok(Vec::new());
     }
-    let mut segments = vec![(0usize, axis_values.len())];
-    let mut cut_positions = Vec::with_capacity(bin_count.saturating_sub(1));
 
-    while cut_positions.len() < bin_count.saturating_sub(1) {
-        let mut best_split: Option<(usize, usize, usize, f64, f64)> = None;
+    let smoothed = smooth_histogram(counts);
+    let mut segments = vec![(0usize, counts.len())];
+    let mut cuts = Vec::new();
+    while cuts.len() < bin_count.saturating_sub(1) {
+        let mut best: Option<(usize, usize, f64, f64)> = None;
         for (segment_index, &(start, end)) in segments.iter().enumerate() {
             if end.saturating_sub(start) <= 1 {
                 continue;
             }
-            if let Some((split_position, valley_density, valley_depth)) =
-                best_valley_in_segment(axis_values, start, end)
-            {
-                match best_split {
-                    None => {
-                        best_split = Some((
-                            segment_index,
-                            start,
-                            split_position,
-                            valley_density,
-                            valley_depth,
-                        ));
-                    }
-                    Some((_, _, best_position, best_density, best_depth)) => {
-                        if valley_depth > best_depth
-                            || (valley_depth == best_depth
-                                && (valley_density < best_density
-                                    || (valley_density == best_density
-                                        && split_position < best_position)))
+            if let Some((bucket, density, depth)) = best_bucket_valley(&smoothed, start, end) {
+                match best {
+                    None => best = Some((segment_index, bucket, density, depth)),
+                    Some((_, best_bucket, best_density, best_depth)) => {
+                        if depth > best_depth
+                            || (depth == best_depth
+                                && (density < best_density
+                                    || (density == best_density && bucket < best_bucket)))
                         {
-                            best_split = Some((
-                                segment_index,
-                                start,
-                                split_position,
-                                valley_density,
-                                valley_depth,
-                            ));
+                            best = Some((segment_index, bucket, density, depth));
                         }
                     }
                 }
             }
         }
-
-        let Some((segment_index, start, split_position, _, _)) = best_split else {
+        let Some((segment_index, bucket, _, _)) = best else {
             break;
         };
-        let (_, end) = segments.remove(segment_index);
-        segments.push((start, split_position));
-        segments.push((split_position, end));
+        let (start, end) = segments.remove(segment_index);
+        segments.push((start, bucket));
+        segments.push((bucket, end));
         segments.sort_unstable();
-        cut_positions.push(split_position);
+        cuts.push(bucket_edge_value(minimum, maximum, counts.len(), bucket));
     }
-
-    cut_positions.sort_unstable();
-    cut_positions
+    cuts.sort_by(|left, right| left.total_cmp(right));
+    if cuts.is_empty() && bin_count > 1 {
+        return Err(unsatisfiable_constraint(
+            "density-valley partitioning could not realize any deterministic cuts",
+        ));
+    }
+    Ok(cuts)
 }
 
-const DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP: usize = 256;
-
-struct SmoothedAxisHistogram {
-    min: f64,
-    max: f64,
-    smoothed_counts: Vec<f64>,
+fn smooth_histogram(counts: &[usize]) -> Vec<f64> {
+    let mut smoothed = vec![0.0; counts.len()];
+    for index in 0..counts.len() {
+        let left = if index > 0 {
+            counts[index - 1] as f64
+        } else {
+            counts[index] as f64
+        };
+        let center = counts[index] as f64;
+        let right = if index + 1 < counts.len() {
+            counts[index + 1] as f64
+        } else {
+            counts[index] as f64
+        };
+        smoothed[index] = left + (2.0 * center) + right;
+    }
+    smoothed
 }
 
-impl SmoothedAxisHistogram {
-    fn from_sorted_values(axis_values: &[f32]) -> Self {
-        let min = f64::from(axis_values[0]);
-        let max = f64::from(axis_values[axis_values.len() - 1]);
-        let bucket_count = axis_values
-            .len()
-            .clamp(2, DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP);
-        let mut raw_counts = vec![0usize; bucket_count];
-        for &value in axis_values {
-            raw_counts[histogram_bucket_index(min, max, bucket_count, f64::from(value))] += 1;
-        }
-
-        let mut smoothed_counts = vec![0.0; bucket_count];
-        for index in 0..bucket_count {
-            let left = if index > 0 {
-                raw_counts[index - 1] as f64
-            } else {
-                raw_counts[index] as f64
-            };
-            let center = raw_counts[index] as f64;
-            let right = if index + 1 < bucket_count {
-                raw_counts[index + 1] as f64
-            } else {
-                raw_counts[index] as f64
-            };
-            smoothed_counts[index] = left + (2.0 * center) + right;
-        }
-
-        Self {
-            min,
-            max,
-            smoothed_counts,
-        }
-    }
-
-    fn density_at_value(&self, value: f64) -> f64 {
-        let index = histogram_bucket_index(self.min, self.max, self.smoothed_counts.len(), value);
-        self.smoothed_counts[index]
-    }
-}
-
-fn histogram_bucket_index(min: f64, max: f64, bucket_count: usize, value: f64) -> usize {
-    if bucket_count <= 1 || max <= min {
-        return 0;
-    }
-    let normalized = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    let scaled = normalized * (bucket_count - 1) as f64;
-    scaled.round() as usize
-}
-
-fn best_valley_in_segment(
-    axis_values: &[f32],
-    start: usize,
-    end: usize,
-) -> Option<(usize, f64, f64)> {
+fn best_bucket_valley(smoothed: &[f64], start: usize, end: usize) -> Option<(usize, f64, f64)> {
     if end.saturating_sub(start) <= 1 {
         return None;
     }
-    let segment_values = &axis_values[start..end];
-    let histogram = SmoothedAxisHistogram::from_sorted_values(segment_values);
-    let segment_densities = segment_values
-        .iter()
-        .map(|&value| histogram.density_at_value(f64::from(value)))
-        .collect::<Vec<_>>();
-    let mut left_peaks = Vec::with_capacity(segment_densities.len());
-    let mut running_left_peak = f64::NEG_INFINITY;
-    for density in segment_densities.iter().copied() {
-        running_left_peak = running_left_peak.max(density);
-        left_peaks.push(running_left_peak);
+    let mut left_peaks = Vec::with_capacity(end - start);
+    let mut running_left = f64::NEG_INFINITY;
+    for density in smoothed[start..end].iter().copied() {
+        running_left = running_left.max(density);
+        left_peaks.push(running_left);
     }
-    let mut right_peaks = vec![f64::NEG_INFINITY; segment_densities.len()];
-    let mut running_right_peak = f64::NEG_INFINITY;
-    for (index, density) in segment_densities.iter().copied().enumerate().rev() {
-        running_right_peak = running_right_peak.max(density);
-        right_peaks[index] = running_right_peak;
+    let mut right_peaks = vec![f64::NEG_INFINITY; end - start];
+    let mut running_right = f64::NEG_INFINITY;
+    for (offset, density) in smoothed[start..end].iter().copied().enumerate().rev() {
+        running_right = running_right.max(density);
+        right_peaks[offset] = running_right;
     }
-    let mut best: Option<(usize, f64, f64)> = None;
 
-    for split_after in start..end.saturating_sub(1) {
-        let midpoint =
-            0.5 * (f64::from(axis_values[split_after]) + f64::from(axis_values[split_after + 1]));
-        let valley_density = histogram.density_at_value(midpoint);
-        let relative_split = split_after - start;
-        let left_peak = left_peaks[relative_split];
-        let right_peak = right_peaks[relative_split + 1];
-        let valley_depth = left_peak.min(right_peak) - valley_density;
+    let mut best = None;
+    for bucket in (start + 1)..end {
+        let relative = bucket - start;
+        let valley_density = 0.5 * (smoothed[bucket - 1] + smoothed[bucket]);
+        let valley_depth = left_peaks[relative - 1].min(right_peaks[relative]) - valley_density;
         match best {
-            None => best = Some((split_after + 1, valley_density, valley_depth)),
-            Some((best_position, best_density, best_depth)) => {
+            None => best = Some((bucket, valley_density, valley_depth)),
+            Some((best_bucket, best_density, best_depth)) => {
                 if valley_depth > best_depth
                     || (valley_depth == best_depth
                         && (valley_density < best_density
-                            || (valley_density == best_density && split_after + 1 < best_position)))
+                            || (valley_density == best_density && bucket < best_bucket)))
                 {
-                    best = Some((split_after + 1, valley_density, valley_depth));
+                    best = Some((bucket, valley_density, valley_depth));
                 }
             }
         }
     }
-
     best
 }
 
-fn materialize_clusters(
-    embeddings: &[Embedding],
-    coordinates: &[Embedding],
-    point_bins: &[Vec<usize>],
-    cluster_count: usize,
-    cardinality_mode: DirectionalPcaClusterCardinalityMode,
-) -> Result<Vec<Cluster>, StreamingClusteringError> {
-    let mut buckets: BTreeMap<Vec<usize>, Vec<usize>> = BTreeMap::new();
-    for (point_index, key) in point_bins.iter().cloned().enumerate() {
-        buckets.entry(key).or_default().push(point_index);
-    }
-
-    let member_groups = if buckets.len() == cluster_count {
-        buckets.into_values().collect::<Vec<_>>()
-    } else if buckets.len() > cluster_count {
-        return Err(unsatisfiable_constraint(format!(
-            "directional-PCA partition realized {} populated cells instead of the required {cluster_count}",
-            buckets.len()
-        )));
-    } else {
-        let refined = refine_duplicate_collapse(coordinates, &buckets, cluster_count)?;
-        if refined.len() == cluster_count
-            || cardinality_mode == DirectionalPcaClusterCardinalityMode::UnderfullSuccess
-        {
-            refined
-        } else {
-            return Err(unsatisfiable_constraint(format!(
-                "directional-PCA partition realized {} populated cells and duplicate refinement could only realize {} of the required {cluster_count}",
-                buckets.len(),
-                refined.len()
-            )));
-        }
-    };
-
-    member_groups
-        .into_iter()
-        .map(|members| {
-            let centroid = compute_centroid_from_indexes(embeddings, members.as_slice())?;
-            Ok(Cluster { centroid, members })
-        })
-        .collect()
+fn bucket_edge_value(minimum: f32, maximum: f32, bucket_count: usize, bucket: usize) -> f32 {
+    let fraction = bucket as f64 / bucket_count as f64;
+    (f64::from(minimum) + (f64::from(maximum) - f64::from(minimum)) * fraction) as f32
 }
 
-fn refine_duplicate_collapse(
-    coordinates: &[Embedding],
-    buckets: &BTreeMap<Vec<usize>, Vec<usize>>,
-    cluster_count: usize,
-) -> Result<Vec<Vec<usize>>, StreamingClusteringError> {
-    let mut remaining_extra_clusters =
-        cluster_count.checked_sub(buckets.len()).ok_or_else(|| {
-            unsatisfiable_constraint("cluster_count cannot be smaller than bucket count")
-        })?;
-    let mut planned_splits = Vec::with_capacity(buckets.len());
-
-    for members in buckets.values() {
-        let duplicate_groups = duplicate_coordinate_groups(coordinates, members);
-        let mut allocated_extras = vec![0_usize; duplicate_groups.len()];
-        for (slot, group) in allocated_extras.iter_mut().zip(duplicate_groups.iter()) {
-            if remaining_extra_clusters == 0 {
-                break;
-            }
-            let extras_for_group = remaining_extra_clusters.min(group.len().saturating_sub(1));
-            *slot = extras_for_group;
-            remaining_extra_clusters -= extras_for_group;
-        }
-        planned_splits.push((members.clone(), duplicate_groups, allocated_extras));
+fn histogram_bucket_index(minimum: f64, maximum: f64, bucket_count: usize, value: f64) -> usize {
+    if bucket_count <= 1 || maximum <= minimum {
+        return 0;
     }
-
-    let realized_cluster_capacity = buckets.len()
-        + planned_splits
-            .iter()
-            .map(|(_, _, allocated_extras)| allocated_extras.iter().sum::<usize>())
-            .sum::<usize>();
-    let mut refined = Vec::with_capacity(realized_cluster_capacity);
-    for (members, duplicate_groups, allocated_extras) in planned_splits {
-        let mut peeled_members = BTreeSet::new();
-        let mut extra_clusters = Vec::new();
-        for (group, extras_for_group) in duplicate_groups.iter().zip(allocated_extras) {
-            if extras_for_group == 0 {
-                continue;
-            }
-            for &member_index in &group[group.len() - extras_for_group..] {
-                peeled_members.insert(member_index);
-                extra_clusters.push(vec![member_index]);
-            }
-        }
-
-        let base_cluster = members
-            .into_iter()
-            .filter(|member_index| !peeled_members.contains(member_index))
-            .collect::<Vec<_>>();
-        if base_cluster.is_empty() {
-            return Err(unsatisfiable_constraint(
-                "duplicate refinement produced an empty base cluster",
-            ));
-        }
-
-        refined.push(base_cluster);
-        refined.extend(extra_clusters);
-    }
-
-    Ok(refined)
+    let normalized = ((value - minimum) / (maximum - minimum)).clamp(0.0, 1.0);
+    (normalized * (bucket_count - 1) as f64).round() as usize
 }
 
-fn duplicate_coordinate_groups(coordinates: &[Embedding], members: &[usize]) -> Vec<Vec<usize>> {
-    let mut grouped = BTreeMap::<CoordinateKey, Vec<usize>>::new();
-    for &member_index in members {
-        grouped
-            .entry(coordinate_key(coordinates[member_index].as_slice()))
-            .or_default()
-            .push(member_index);
-    }
-
-    let mut duplicate_groups = grouped
-        .into_values()
-        .filter(|group| group.len() > 1)
-        .collect::<Vec<_>>();
-    duplicate_groups.sort_by_key(|group| group[0]);
-    duplicate_groups
-}
-
-fn coordinate_key(coordinates: &[f32]) -> CoordinateKey {
-    CoordinateKey(coordinates.iter().map(|value| value.to_bits()).collect())
-}
-
-fn embeddings_are_identical(embeddings: &[Embedding]) -> bool {
-    let Some(first) = embeddings.first() else {
-        return false;
-    };
-    let first_key = coordinate_key(first.as_slice());
-    embeddings
-        .iter()
-        .skip(1)
-        .all(|embedding| coordinate_key(embedding.as_slice()) == first_key)
-}
-
-fn compute_quality_metric(
-    embeddings: &[Embedding],
-    clusters: &[Cluster],
-) -> Result<f64, StreamingClusteringError> {
-    let mut total = 0.0_f64;
-    for cluster in clusters {
-        for &member_index in &cluster.members {
-            total += squared_distance(
-                embeddings[member_index].as_slice(),
-                cluster.centroid.as_slice(),
-            )?;
-        }
-    }
-    if !total.is_finite() {
-        return Err(unsatisfiable_constraint("quality metric became non-finite"));
-    }
-    Ok(total)
-}
-
-fn fingerprint_pass(embeddings: &[Embedding]) -> PassFingerprint {
-    let mut hasher = Sha256::new();
-    for embedding in embeddings {
-        hasher.update((embedding.len() as u64).to_le_bytes());
-        for value in embedding {
-            hasher.update(value.to_bits().to_le_bytes());
-        }
-    }
-
-    PassFingerprint {
-        observed_count: embeddings.len(),
-        digest: hasher.finalize().into(),
-    }
-}
-
-fn compute_centroid(embeddings: &[Embedding]) -> Result<Embedding, StreamingClusteringError> {
-    let Some(first) = embeddings.first() else {
-        return Err(unsatisfiable_constraint(
-            "cannot compute a centroid for zero embeddings",
-        ));
-    };
-    let dims = first.len();
-    let mut sums = vec![0.0_f64; dims];
-    for embedding in embeddings {
-        for (dimension, value) in embedding.iter().copied().enumerate() {
-            sums[dimension] += f64::from(value);
-            if !sums[dimension].is_finite() {
-                return Err(unsatisfiable_constraint(format!(
-                    "centroid sum became non-finite at dimension {dimension}"
-                )));
-            }
-        }
-    }
-    let divisor = embeddings.len() as f64;
-    sums.into_iter()
-        .enumerate()
-        .map(|(dimension, value)| {
-            let centroid = (value / divisor) as f32;
-            if !centroid.is_finite() {
-                return Err(unsatisfiable_constraint(format!(
-                    "centroid became non-finite at dimension {dimension}"
-                )));
-            }
-            Ok(centroid)
-        })
-        .collect()
-}
-
-fn compute_centroid_from_indexes(
-    embeddings: &[Embedding],
-    indexes: &[usize],
-) -> Result<Embedding, StreamingClusteringError> {
-    let Some(first_index) = indexes.first() else {
-        return Err(unsatisfiable_constraint(
-            "cannot compute a centroid for zero indexed embeddings",
-        ));
-    };
-    let dims = embeddings[*first_index].len();
-    let mut sums = vec![0.0_f64; dims];
-
-    for &index in indexes {
-        for (dimension, value) in embeddings[index].iter().copied().enumerate() {
-            sums[dimension] += f64::from(value);
-            if !sums[dimension].is_finite() {
-                return Err(unsatisfiable_constraint(format!(
-                    "centroid sum became non-finite at dimension {dimension}"
-                )));
-            }
-        }
-    }
-
-    let divisor = indexes.len() as f64;
-    sums.into_iter()
-        .enumerate()
-        .map(|(dimension, value)| {
-            let centroid = (value / divisor) as f32;
-            if !centroid.is_finite() {
-                return Err(unsatisfiable_constraint(format!(
-                    "centroid became non-finite at dimension {dimension}"
-                )));
-            }
-            Ok(centroid)
-        })
-        .collect()
+fn quality_metric_from_transform(transform: &PcaTransform) -> f64 {
+    1.0 - f64::from(
+        transform
+            .cumulative_variance()
+            .and_then(|values| values.last().copied())
+            .unwrap_or(0.0),
+    )
 }
 
 fn squared_distance(left: &[f32], right: &[f32]) -> Result<f64, StreamingClusteringError> {
@@ -1206,6 +1627,10 @@ fn squared_distance(left: &[f32], right: &[f32]) -> Result<f64, StreamingCluster
         }
     }
     Ok(total)
+}
+
+fn div_ceil(numerator: usize, denominator: usize) -> usize {
+    numerator.div_ceil(denominator)
 }
 
 fn invalid_configuration(message: impl Into<String>) -> StreamingClusteringError {
@@ -1230,157 +1655,8 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn axis_scoring_uses_direction_and_variance() {
-        let embeddings = vec![
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![10.0, 1.0],
-            vec![11.0, 1.0],
-        ];
-        let transform = fit(&embeddings).unwrap().truncate(2).unwrap();
-        let scores = compute_axis_scores(
-            &embeddings,
-            &transform,
-            &DirectionalPcaParams {
-                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
-                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-                binning_policy: DirectionalPcaBinningPolicy::Quantile,
-                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
-                variance_exponent: 1.0,
-                temperature: 1.0,
-                min_input_count: 2,
-                min_effective_rank: 1,
-                min_cumulative_variance: 0.0,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(scores.len(), 2);
-        assert!(scores[0] > scores[1]);
-    }
-
-    #[test]
-    fn temperature_controlled_allocation_is_deterministic() {
-        let embeddings = vec![
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![10.0, 1.0],
-            vec![11.0, 1.0],
-        ];
-        let transform = fit(&embeddings).unwrap().truncate(2).unwrap();
-        let bins = allocate_axis_bins(
-            &embeddings,
-            &transform,
-            &DirectionalPcaParams {
-                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
-                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
-                binning_policy: DirectionalPcaBinningPolicy::Quantile,
-                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
-                variance_exponent: 1.0,
-                temperature: 1.0,
-                min_input_count: 2,
-                min_effective_rank: 1,
-                min_cumulative_variance: 0.0,
-            },
-            4,
-        )
-        .unwrap();
-        assert_eq!(bins, vec![3, 1]);
-    }
-
-    #[test]
-    fn quantile_assignment_uses_even_ranks() {
-        let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
-        let bins = assign_quantile_bins(&coordinates, &[2]);
-        assert_eq!(bins, vec![vec![0], vec![0], vec![1], vec![1]]);
-    }
-
-    #[test]
-    fn density_valley_assignment_splits_at_a_low_density_valley() {
-        let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![100.0]];
-        let bins = assign_density_valley_bins(&coordinates, &[2]);
-        assert_eq!(bins, vec![vec![0], vec![0], vec![0], vec![1]]);
-    }
-
-    #[test]
-    fn density_valley_assignment_still_realizes_requested_bins_with_duplicate_coordinates() {
-        let coordinates = vec![vec![0.0], vec![0.0], vec![0.0], vec![1.0]];
-        let bins = assign_density_valley_bins(&coordinates, &[3]);
-        let realized_bins = bins
-            .into_iter()
-            .map(|axis_bins| axis_bins[0])
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(realized_bins, std::collections::BTreeSet::from([0, 1, 2]));
-    }
-
-    #[test]
-    fn density_valley_histogram_treats_far_tail_as_a_low_density_region() {
-        let histogram = SmoothedAxisHistogram::from_sorted_values(&[0.0, 0.1, 0.2, 40.0]);
-        assert!(histogram.density_at_value(20.0) < histogram.density_at_value(0.1));
-    }
-
-    #[test]
-    fn density_valley_assignment_handles_wide_spread_without_nonfinite_work() {
-        let coordinates = vec![vec![0.0], vec![0.1], vec![0.2], vec![1.0e20_f32]];
-        let bins = assign_density_valley_bins(&coordinates, &[2]);
-        assert_eq!(bins, vec![vec![0], vec![0], vec![0], vec![1]]);
-    }
-
-    #[test]
-    fn eigenvalue_log_bit_budget_allows_zero_bit_axes() {
-        let bins = allocate_axis_bins_from_eigenvalue_bits(&[10.0, 1.0, 0.1, 0.01], 64).unwrap();
-        assert_eq!(bins.iter().product::<usize>(), 64);
-        assert!(bins.contains(&1));
-    }
-
-    #[test]
-    fn eigenvalue_log_bit_policy_rejects_non_power_of_two_cluster_count_at_construction() {
-        let error = DirectionalPcaStreamingTrainer::new(
-            StreamingClusteringConfig {
-                cluster_count: 3,
-                dimensions: 2,
-                balance_constraints: None,
-                random_seed: None,
-            },
-            DirectionalPcaParams {
-                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
-                allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-                binning_policy: DirectionalPcaBinningPolicy::DensityValley,
-                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
-                variance_exponent: 1.0,
-                temperature: 1.0,
-                min_input_count: 2,
-                min_effective_rank: 1,
-                min_cumulative_variance: 0.0,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            StreamingClusteringError::InvalidConfiguration { .. }
-        ));
-    }
-
-    #[test]
-    fn duplicate_refinement_peels_duplicate_members_deterministically() {
-        let coordinates = vec![vec![0.0], vec![0.0], vec![10.0]];
-        let buckets = BTreeMap::from([(vec![0], vec![0, 1, 2])]);
-
-        let refined = refine_duplicate_collapse(&coordinates, &buckets, 2).unwrap();
-
-        assert_eq!(refined, vec![vec![0, 2], vec![1]]);
-    }
-
-    #[test]
-    fn identical_embeddings_bypass_rank_guard_and_realize_exact_k() {
-        let config = StreamingClusteringConfig {
-            cluster_count: 3,
-            dimensions: 2,
-            balance_constraints: None,
-            random_seed: None,
-        };
-        let params = DirectionalPcaParams {
+    fn params() -> DirectionalPcaParams {
+        DirectionalPcaParams {
             retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(2),
             allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
             binning_policy: DirectionalPcaBinningPolicy::Quantile,
@@ -1389,46 +1665,50 @@ mod tests {
             temperature: 1.0,
             min_input_count: 2,
             min_effective_rank: 1,
-            min_cumulative_variance: 0.5,
-        };
-        let embeddings = vec![
-            vec![5.0, 5.0],
-            vec![5.0, 5.0],
-            vec![5.0, 5.0],
-            vec![5.0, 5.0],
-        ];
-
-        let model = fit_pass_model(&embeddings, &config, &params).unwrap();
-
-        assert_eq!(model.centroids.len(), 3);
-        assert_eq!(model.quality_metric, 0.0);
+            min_cumulative_variance: 0.0,
+        }
     }
 
     #[test]
-    fn exact_k_failure_reports_post_refinement_realized_count() {
+    fn axis_scoring_uses_direction_and_variance() {
         let embeddings = vec![
             vec![0.0, 0.0],
-            vec![0.0, 0.0],
             vec![1.0, 0.0],
-            vec![2.0, 0.0],
+            vec![10.0, 1.0],
+            vec![11.0, 1.0],
         ];
-        let coordinates = vec![vec![0.0], vec![0.0], vec![1.0], vec![2.0]];
-        let point_bins = vec![vec![0], vec![0], vec![0], vec![0]];
+        let mut accumulator = PcaAccumulator::new(2);
+        for embedding in &embeddings {
+            accumulator.update(embedding).unwrap();
+        }
+        let transform = accumulator.finalize().unwrap().truncate(2).unwrap();
+        let scores = compute_axis_scores(transform.mean.as_slice(), &transform, &params()).unwrap();
+        assert_eq!(scores.len(), 2);
+        assert!(scores[0] > scores[1]);
+    }
 
-        let error = materialize_clusters(
-            &embeddings,
-            &coordinates,
-            &point_bins,
-            4,
-            DirectionalPcaClusterCardinalityMode::Exact,
-        )
-        .unwrap_err();
+    #[test]
+    fn quantile_assignment_splits_equal_values_by_stable_rank() {
+        let plan = QuantileAxisPlan {
+            groups: vec![QuantileValueGroup {
+                value: 1.0,
+                quotas: vec![2, 3],
+            }],
+        };
+        let mut positions = vec![0usize];
+        let bins = [1.0, 1.0, 1.0, 1.0]
+            .into_iter()
+            .map(|value| assign_quantile_bin(value, &plan, positions.as_mut_slice()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(bins, vec![0, 0, 1, 2]);
+    }
 
-        assert!(matches!(
-            error,
-            StreamingClusteringError::UnsatisfiableConstraint { ref message }
-                if message.contains("realized 1 populated cells")
-                    && message.contains("could only realize 2 of the required 4")
-        ));
+    #[test]
+    fn density_valley_cuts_choose_the_deep_valley() {
+        let cuts =
+            select_histogram_valley_cut_values(-1.0, 11.0, &[4, 4, 1, 0, 1, 4, 4], 2).unwrap();
+        assert_eq!(cuts.len(), 1);
+        assert!(cuts[0] > 3.0);
+        assert!(cuts[0] < 7.0);
     }
 }

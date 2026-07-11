@@ -77,6 +77,14 @@ This revision shall not retain the obsolete public block-ID plus `BlockStore`
 execution boundary, representative-embedding derivation from loaded blocks, or
 block-store-specific result and error ownership.
 
+The public crate boundary shall also not imply or require
+implementation-owned retention, replay buffering, or spill of the completed
+dataset as part of conformant execution.
+
+Implementation-owned working state may scale with the currently processed
+batch/chunk size and fixed configuration terms, but not with the full
+completed-pass dataset size.
+
 ### REQ-DPCA-STREAM-005
 
 Trainer construction shall accept the shared `StreamingClusteringConfig` plus
@@ -132,6 +140,12 @@ logical dataset through repeated `ingest_batch()` / `finish_pass()` cycles.
 The crate shall not hide additional caller-invisible passes or replace the
 shared pass lifecycle with an independent iteration API.
 
+When a later caller-visible pass must revisit the logical dataset, the replay
+shall come from the caller re-streaming that dataset rather than from
+implementation-owned full-pass retention, pass snapshots, or spill files.
+
+Per-batch transient working state remains conformant.
+
 ### REQ-DPCA-STREAM-010
 
 After the first completed pass establishes the logical dataset for one training
@@ -147,6 +161,13 @@ conformant refinement of the same run.
 For each completed pass, the crate shall realize directional-PCA partitioning
 by using the repository PCA crate rather than redefining PCA decomposition
 behavior independently.
+
+Conformant execution shall use the PCA crate through streaming or mergeable
+sufficient-statistics behavior and shall not rely on a full-pass convenience
+fitting path over a materialized embedding collection.
+
+Transient implementation-owned working memory proportional to the current chunk
+is conformant; materialization of the full completed pass is not.
 
 ### REQ-DPCA-STREAM-012
 
@@ -192,9 +213,9 @@ rather than by quantiles or by a largest-gap proxy.
 
 ### REQ-DPCA-STREAM-015
 
-By default, the crate shall fail explicitly when one completed pass cannot
-realize exact-K partitioning under the documented directional-PCA mechanics,
-including at minimum:
+By default, the crate shall fail explicitly when the completed-pass sequence
+required by the documented directional-PCA mechanics cannot realize exact-K
+partitioning, including at minimum:
 
 - first-pass `Observed N < K`
 - invalid or infeasible directional parameters
@@ -206,7 +227,7 @@ The crate shall not silently adapt the partitioning behavior merely to force an
 exact-K outcome.
 
 The only conformant exception is duplicate-collapse recovery: if the realized
-directional-PCA partition under-realizes `K` solely because duplicate or
+partition-ready directional-PCA partition under-realizes `K` solely because duplicate or
 otherwise indistinguishable members collapse into too few populated cells, the
 crate shall apply the documented deterministic duplicate-refinement rule rather
 than fail.
@@ -222,11 +243,16 @@ Each completed pass shall return a deterministic `PassReport` containing:
 
 - `observed_count`
 - `requested_cluster_count`
-- `realized_cluster_count`
 - `quality_metric`
 - `balance_metric`
 - quality and balance metric directions
-- stable cluster identifiers
+- explicit readiness status
+
+For `AnalysisOnly` passes, `realized_cluster_count` and stable cluster
+identifiers may be absent.
+
+For `PartitionReady` passes, `realized_cluster_count` and stable cluster
+identifiers shall be present.
 
 The balance metric shall be zero when no explicit balance constraints are
 configured.
@@ -237,7 +263,7 @@ duplicate-refinement fallback.
 ### REQ-DPCA-STREAM-017
 
 The observable contract shall preserve stable cluster identifiers across
-completed passes and in the final classifier surface.
+partition-ready completed passes and in the final classifier surface.
 
 ### REQ-DPCA-STREAM-018
 
@@ -330,6 +356,33 @@ Each selected policy shall retain its documented semantics when combined with a
 different retained-axis, allocation, or binning policy, subject to the explicit
 invariants of that selected policy such as power-of-two `K` for eigenvalue
 log-bit allocation.
+
+### REQ-DPCA-STREAM-029
+
+A conformant implementation shall realize indexing and training with
+implementation-owned memory and scratch/storage bounded independently of the
+full completed-pass dataset size `N`.
+
+Allowed implementation-owned growth may depend on:
+
+- the currently processed batch/chunk size
+- embedding dimensionality
+- requested cluster count and retained-axis configuration
+- other fixed documented configuration parameters
+
+The crate shall not require retaining the completed dataset, retained-coordinate
+tables for all members, replay logs, or spill files whose footprint scales with
+the full dataset size `N`.
+
+### REQ-DPCA-STREAM-030
+
+When evaluating a concrete implementation against this revision, any design
+that requires implementation-owned storage scaling with the full completed-pass
+dataset size `N` is non-conformant even if the public API is batch-streaming
+shaped.
+
+Transient storage scaling with the currently processed chunk remains
+conformant.
 
 ### REQ-DPCA-STREAM-021
 

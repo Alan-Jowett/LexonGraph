@@ -67,7 +67,9 @@ Exercise one pass with multiple batches whose concatenated order is known.
 
 **Pass condition:** `finish_pass()` realizes exactly one caller-visible
 directional-PCA pass over the concatenated pass dataset order and does not
-perform hidden extra passes.
+perform hidden extra passes or require implementation-owned full-dataset
+retention/spill to do so. The pass may report `AnalysisOnly` status when exact
+partitioning requires later replay passes.
 
 **Traces to:** REQ-DPCA-STREAM-008, REQ-DPCA-STREAM-009
 
@@ -77,7 +79,8 @@ Complete a second pass whose observed count or ordered embedding content differs
 from the first completed pass.
 
 **Pass condition:** continuation fails explicitly before claiming conformant
-refinement of the same training run.
+refinement of the same training run, and the continuity check does not depend
+on crate-owned full-pass replay buffers.
 
 **Traces to:** REQ-DPCA-STREAM-010
 
@@ -96,7 +99,9 @@ malformed-input surface.
 Inspect the execution path over a representative conformant fixture.
 
 **Pass condition:** the directional-PCA pass is realized by the repository PCA
-crate surface rather than an undocumented independent PCA implementation.
+crate surface through streaming or mergeable sufficient-statistics behavior
+rather than an undocumented independent PCA implementation or a full-pass
+`fit(...)` convenience path.
 
 **Traces to:** REQ-DPCA-STREAM-011
 
@@ -151,9 +156,11 @@ rather than silently forcing an exact-K outcome.
 Inspect pass reports across at least two passes.
 
 **Pass condition:** each report exposes deterministic `observed_count`,
-`requested_cluster_count`, `realized_cluster_count`, `quality_metric`,
-`balance_metric`, fixed metric directions, and stable cluster IDs. When no
-explicit balance constraints are configured, `balance_metric` is zero.
+`requested_cluster_count`, `quality_metric`, `balance_metric`, fixed metric
+directions, and readiness status. `AnalysisOnly` reports may omit
+`realized_cluster_count` and stable cluster IDs; `PartitionReady` reports
+include them. When no explicit balance constraints are configured,
+`balance_metric` is zero.
 
 **Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017
 
@@ -162,8 +169,8 @@ explicit balance constraints are configured, `balance_metric` is zero.
 Exercise multiple completed passes on a fixture whose internal group ordering
 would otherwise change.
 
-**Pass condition:** pass reports and classifier assignments preserve stable
-externally visible cluster IDs across passes.
+**Pass condition:** partition-ready pass reports and classifier assignments
+preserve stable externally visible cluster IDs across partition-ready passes.
 
 **Traces to:** REQ-DPCA-STREAM-017
 
@@ -249,9 +256,9 @@ non-empty clusters.
 Repeat duplicate-collapse fixtures across at least two passes with identical
 ordered input.
 
-**Pass condition:** pass reports and classifier assignments preserve stable
-cluster IDs and deterministic assignments across passes that exercise duplicate
-refinement.
+**Pass condition:** partition-ready pass reports and classifier assignments
+preserve stable cluster IDs and deterministic assignments across
+partition-ready passes that exercise duplicate refinement.
 
 **Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018
 
@@ -336,3 +343,24 @@ eigenvalue log-bit invariants, and the crate preserves the selected fixed-axis
 boundary rather than silently switching to the adaptive retained-axis policy.
 
 **Traces to:** REQ-DPCA-STREAM-013, REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-028
+
+### VAL-DPCA-STREAM-031
+
+Inspect or execute a conformant implementation while exercising passes whose
+full logical dataset is larger than one chunk.
+
+**Pass condition:** implementation-owned memory and scratch/storage remain
+bounded by current chunk size, PCA/statistical summaries, and fixed
+configuration terms rather than by full completed-pass dataset size `N`.
+
+**Traces to:** REQ-DPCA-STREAM-029
+
+### VAL-DPCA-STREAM-032
+
+Assess an implementation whose public API is batch-streaming shaped but whose
+normal execution retains or spills the full pass.
+
+**Pass condition:** the implementation is classified as non-conformant under
+this revision.
+
+**Traces to:** REQ-DPCA-STREAM-030

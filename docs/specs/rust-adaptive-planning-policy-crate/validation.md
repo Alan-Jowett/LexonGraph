@@ -35,8 +35,9 @@ Inspect the crate's public surface and its specification references.
 **Pass condition:** the crate exposes adaptive planning-policy settings together
 with a selector surface for the streaming indexer's built-in planning path,
 remains subordinate to the streaming indexer, directional-PCA, and streaming
-DCBC specification packages, and does not redefine the shared streaming
-clustering contract.
+DCBC specification packages, does not redefine the shared streaming clustering
+contract, and does not expose a full represented-dataset embedding-slice public
+selector surface.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-002, REQ-ADAPTIVE-POLICY-003
 
@@ -76,7 +77,8 @@ decision boundary.
 
 **Pass condition:** the recorded diagnostics are structured, deterministic, and
 sufficient to decide whether directional PCA remained eligible at that
-boundary, including the measured mean cluster radius.
+boundary, including the measured mean cluster radius, without requiring a
+hidden full-dataset memory or spill path.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-007, REQ-ADAPTIVE-POLICY-012
 
@@ -142,3 +144,15 @@ including coverage for a current threshold assumption of `0.25`, and both
 repeated runs select the same switch boundary.
 
 **Traces to:** REQ-ADAPTIVE-POLICY-014
+
+### VAL-ADAPTIVE-POLICY-013
+
+Inspect the adaptive selector surface and its implementation-owned retained
+state.
+
+**Pass condition:** the conformant path does not require full represented-dataset
+embedding slices, full assignment vectors, or equivalent dataset-sized public
+API constructs, and does not retain or spill implementation-owned state
+proportional to the full logical planning dataset.
+
+**Traces to:** REQ-ADAPTIVE-POLICY-015, REQ-ADAPTIVE-POLICY-016

@@ -7,11 +7,11 @@ mod support;
 use std::error::Error;
 
 use lexongraph_streaming_clustering::conformance::{
-    StreamingClusteringConformanceHarness, run_streaming_clustering_suite,
+    SamplePassEvent, StreamingClusteringConformanceHarness, run_streaming_clustering_suite,
 };
 use lexongraph_streaming_clustering::{
-    ClusterId, Embedding, PassInput, PassReport, StreamingClusterClassifier,
-    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    ClusterId, Embedding, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
+    StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     conformance::ConformanceError,
 };
 use support::{
@@ -115,20 +115,47 @@ impl StreamingClusteringConformanceHarness for FaultHarness {
         )
     }
 
-    fn sample_passes(&self) -> Vec<PassInput> {
-        sample_passes()
+    fn for_each_sample_pass_event<E, F>(&self, mut on_event: F) -> Result<(), E>
+    where
+        F: FnMut(SamplePassEvent<'_>) -> Result<(), E>,
+    {
+        for pass in sample_passes() {
+            for batch in pass {
+                on_event(SamplePassEvent::Batch(batch.as_slice()))?;
+            }
+            on_event(SamplePassEvent::EndPass)?;
+        }
+        Ok(())
     }
 
-    fn expected_pass_reports(&self) -> Vec<PassReport> {
-        expected_pass_reports()
+    fn for_each_expected_pass_report<E, F>(&self, mut on_report: F) -> Result<(), E>
+    where
+        F: FnMut(&PassReport) -> Result<(), E>,
+    {
+        for report in expected_pass_reports() {
+            on_report(&report)?;
+        }
+        Ok(())
     }
 
-    fn expected_assignments(&self) -> Vec<(Embedding, ClusterId)> {
-        expected_assignments()
+    fn for_each_expected_assignment<E, F>(&self, mut on_assignment: F) -> Result<(), E>
+    where
+        F: FnMut(&[f32], ClusterId) -> Result<(), E>,
+    {
+        for (embedding, cluster_id) in expected_assignments() {
+            on_assignment(embedding.as_slice(), cluster_id)?;
+        }
+        Ok(())
     }
 
-    fn underfull_first_pass(&self) -> PassInput {
-        underfull_first_pass()
+    fn for_each_underfull_first_pass_batch<E, F>(&self, mut on_batch: F) -> Result<(), E>
+    where
+        F: FnMut(&[Embedding]) -> Result<(), E>,
+    {
+        for batch in underfull_first_pass() {
+            on_batch(batch.as_slice())?;
+        }
+        Ok(())
     }
 
     fn wrong_dimension_embedding(&self) -> Embedding {
@@ -305,7 +332,7 @@ fn val_stream_trait_017_runtime_expectation_failures_use_suite_messages_without_
     assert!(matches!(&error, ConformanceError::Expectation(_)));
     assert_eq!(
         error.to_string(),
-        "conformance expectation failed: expected cluster ids [0, 1] to remain stable across passes, got [1, 0]"
+        "conformance expectation failed: expected cluster ids [0, 1] to remain stable across partition-ready passes, got [1, 0]"
     );
     assert!(error.source().is_none());
 }

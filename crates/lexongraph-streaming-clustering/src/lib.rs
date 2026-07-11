@@ -15,8 +15,6 @@ use std::fmt;
 
 pub type ClusterId = u32;
 pub type Embedding = Vec<f32>;
-pub type EmbeddingBatch = Vec<Embedding>;
-pub type PassInput = Vec<EmbeddingBatch>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StreamingClusteringConfig {
@@ -49,16 +47,23 @@ pub enum TrainerState {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassReadiness {
+    AnalysisOnly,
+    PartitionReady,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PassReport {
     pub observed_count: usize,
     pub requested_cluster_count: u32,
-    pub realized_cluster_count: u32,
+    pub readiness: PassReadiness,
+    pub realized_cluster_count: Option<u32>,
     pub quality_metric: f64,
     pub balance_metric: f64,
     pub quality_direction: MetricDirection,
     pub balance_direction: MetricDirection,
-    pub cluster_ids: Vec<ClusterId>,
+    pub cluster_ids: Option<Vec<ClusterId>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,27 +262,36 @@ mod conformance_support {
         fn conforming_trainer(&self) -> Self::Trainer;
         fn unstable_cluster_ids_trainer(&self) -> Self::Trainer;
         fn malformed_input_accepting_trainer(&self) -> Self::Trainer;
-        fn sample_passes(&self) -> Vec<PassInput>;
-        fn expected_pass_reports(&self) -> Vec<PassReport>;
-        fn expected_assignments(&self) -> Vec<(Embedding, ClusterId)>;
-        fn underfull_first_pass(&self) -> PassInput;
+        fn for_each_sample_pass_event<E, F>(&self, on_event: F) -> Result<(), E>
+        where
+            F: FnMut(SamplePassEvent<'_>) -> Result<(), E>;
+        fn for_each_expected_pass_report<E, F>(&self, on_report: F) -> Result<(), E>
+        where
+            F: FnMut(&PassReport) -> Result<(), E>;
+        fn for_each_expected_assignment<E, F>(&self, on_assignment: F) -> Result<(), E>
+        where
+            F: FnMut(&[f32], ClusterId) -> Result<(), E>;
+        fn for_each_underfull_first_pass_batch<E, F>(&self, on_batch: F) -> Result<(), E>
+        where
+            F: FnMut(&[Embedding]) -> Result<(), E>;
         fn wrong_dimension_embedding(&self) -> Embedding;
         fn nan_embedding(&self) -> Embedding;
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub enum SamplePassEvent<'a> {
+        Batch(&'a [Embedding]),
+        EndPass,
     }
 
     pub fn run_streaming_clustering_suite<H>(harness: &H) -> ConformanceResult
     where
         H: StreamingClusteringConformanceHarness,
     {
-        let sample_passes = harness.sample_passes();
-        let expected_pass_reports = harness.expected_pass_reports();
-        let expected_assignments = harness.expected_assignments();
+        let expected_pass_reports = collect_expected_pass_reports(harness)?;
+        let expected_assignments = collect_expected_assignments(harness)?;
 
-        let conforming_trace = collect_training_trace(
-            harness.conforming_trainer(),
-            &sample_passes,
-            &expected_assignments,
-        )?;
+        let conforming_trace = collect_training_trace(harness, harness.conforming_trainer())?;
         if conforming_trace.pass_reports != expected_pass_reports {
             return Err(ConformanceError::Expectation(format!(
                 "expected pass reports {:?}, got {:?}",
@@ -295,22 +309,15 @@ mod conformance_support {
             )));
         }
 
-        let repeated_trace = collect_training_trace(
-            harness.conforming_trainer(),
-            &sample_passes,
-            &expected_assignments,
-        )?;
+        let repeated_trace = collect_training_trace(harness, harness.conforming_trainer())?;
         if repeated_trace != conforming_trace {
             return Err(ConformanceError::Expectation(
                 "expected repeated conforming runs to be deterministic".into(),
             ));
         }
 
-        let unstable_trace = collect_training_trace(
-            harness.unstable_cluster_ids_trainer(),
-            &sample_passes,
-            &expected_assignments,
-        );
+        let unstable_trace =
+            collect_training_trace(harness, harness.unstable_cluster_ids_trainer());
         match unstable_trace {
             Err(ConformanceError::Expectation(_)) => {}
             Err(error) => return Err(error),
@@ -339,9 +346,8 @@ mod conformance_support {
         }
 
         let mut underfull_trainer = harness.conforming_trainer();
-        for batch in harness.underfull_first_pass() {
-            underfull_trainer.ingest_batch(&batch)?;
-        }
+        harness
+            .for_each_underfull_first_pass_batch(|batch| underfull_trainer.ingest_batch(batch))?;
         match underfull_trainer.finish_pass() {
             Err(StreamingClusteringError::UnsatisfiableConstraint { .. }) => {}
             Err(error) => return Err(ConformanceError::Implementation(error)),
@@ -358,7 +364,7 @@ mod conformance_support {
             ));
         }
 
-        let classifier = build_classifier(harness.conforming_trainer(), &sample_passes)?;
+        let classifier = build_classifier(harness, harness.conforming_trainer())?;
         assert_classifier_rejects_malformed_input(
             &classifier,
             harness.wrong_dimension_embedding().as_slice(),
@@ -366,7 +372,7 @@ mod conformance_support {
         )?;
 
         let malformed_input_classifier =
-            build_classifier(harness.malformed_input_accepting_trainer(), &sample_passes)?;
+            build_classifier(harness, harness.malformed_input_accepting_trainer())?;
         match assert_classifier_rejects_malformed_input(
             &malformed_input_classifier,
             harness.wrong_dimension_embedding().as_slice(),
@@ -391,12 +397,38 @@ mod conformance_support {
         assignments: Vec<ClusterId>,
     }
 
-    fn collect_training_trace<T>(
+    fn collect_expected_pass_reports<H>(harness: &H) -> Result<Vec<PassReport>, ConformanceError>
+    where
+        H: StreamingClusteringConformanceHarness,
+    {
+        let mut reports = Vec::new();
+        harness.for_each_expected_pass_report(|report| {
+            reports.push(report.clone());
+            Ok::<_, ConformanceError>(())
+        })?;
+        Ok(reports)
+    }
+
+    fn collect_expected_assignments<H>(
+        harness: &H,
+    ) -> Result<Vec<(Embedding, ClusterId)>, ConformanceError>
+    where
+        H: StreamingClusteringConformanceHarness,
+    {
+        let mut assignments = Vec::new();
+        harness.for_each_expected_assignment(|embedding, cluster_id| {
+            assignments.push((embedding.to_vec(), cluster_id));
+            Ok::<_, ConformanceError>(())
+        })?;
+        Ok(assignments)
+    }
+
+    fn collect_training_trace<H, T>(
+        harness: &H,
         mut trainer: T,
-        passes: &[PassInput],
-        assignment_inputs: &[(Embedding, ClusterId)],
     ) -> Result<TrainingTrace, ConformanceError>
     where
+        H: StreamingClusteringConformanceHarness,
         T: StreamingClusterTrainer,
     {
         validate_config(trainer.config()).map_err(ConformanceError::Implementation)?;
@@ -407,9 +439,10 @@ mod conformance_support {
             )));
         }
 
-        let mut pass_reports: Vec<PassReport> = Vec::with_capacity(passes.len());
-        for pass in passes {
-            for batch in pass {
+        let mut pass_reports: Vec<PassReport> = Vec::new();
+        let mut previous_partition_ready_cluster_ids: Option<Vec<ClusterId>> = None;
+        harness.for_each_sample_pass_event(|event| match event {
+            SamplePassEvent::Batch(batch) => {
                 trainer.ingest_batch(batch)?;
                 if trainer.state() != TrainerState::Ingesting {
                     return Err(ConformanceError::Expectation(format!(
@@ -417,49 +450,85 @@ mod conformance_support {
                         trainer.state()
                     )));
                 }
+                Ok(())
             }
-            let report = trainer.finish_pass()?;
-            if report.requested_cluster_count != trainer.config().cluster_count {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected requested cluster count {} in pass report, got {}",
-                    trainer.config().cluster_count,
-                    report.requested_cluster_count
-                )));
+            SamplePassEvent::EndPass => {
+                let report = trainer.finish_pass()?;
+                if report.requested_cluster_count != trainer.config().cluster_count {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected requested cluster count {} in pass report, got {}",
+                        trainer.config().cluster_count,
+                        report.requested_cluster_count
+                    )));
+                }
+                match report.readiness {
+                    PassReadiness::AnalysisOnly => {
+                        if report.realized_cluster_count.is_some() {
+                            return Err(ConformanceError::Expectation(
+                                "expected analysis-only pass reports to omit realized cluster counts"
+                                    .into(),
+                            ));
+                        }
+                        if report.cluster_ids.is_some() {
+                            return Err(ConformanceError::Expectation(
+                                "expected analysis-only pass reports to omit cluster ids".into(),
+                            ));
+                        }
+                    }
+                    PassReadiness::PartitionReady => {
+                        let realized_cluster_count = report.realized_cluster_count.ok_or_else(|| {
+                            ConformanceError::Expectation(
+                                "expected partition-ready pass reports to include realized cluster counts"
+                                    .into(),
+                            )
+                        })?;
+                        if realized_cluster_count == 0 {
+                            return Err(ConformanceError::Expectation(
+                                "expected partition-ready pass report to realize at least one cluster"
+                                    .into(),
+                            ));
+                        }
+                        if realized_cluster_count > report.requested_cluster_count {
+                            return Err(ConformanceError::Expectation(format!(
+                                "expected realized cluster count {} to be <= requested cluster count {}",
+                                realized_cluster_count, report.requested_cluster_count
+                            )));
+                        }
+                        let cluster_ids = report.cluster_ids.as_ref().ok_or_else(|| {
+                            ConformanceError::Expectation(
+                                "expected partition-ready pass reports to include cluster ids"
+                                    .into(),
+                            )
+                        })?;
+                        if cluster_ids.len() != realized_cluster_count as usize {
+                            return Err(ConformanceError::Expectation(format!(
+                                "expected {} cluster ids in pass report, got {}",
+                                realized_cluster_count,
+                                cluster_ids.len()
+                            )));
+                        }
+                        if let Some(previous_cluster_ids) =
+                            previous_partition_ready_cluster_ids.as_ref()
+                            && cluster_ids != previous_cluster_ids
+                        {
+                            return Err(ConformanceError::Expectation(format!(
+                                "expected cluster ids {:?} to remain stable across partition-ready passes, got {:?}",
+                                previous_cluster_ids, cluster_ids
+                            )));
+                        }
+                        previous_partition_ready_cluster_ids = Some(cluster_ids.clone());
+                    }
+                }
+                if trainer.state() != TrainerState::PassComplete {
+                    return Err(ConformanceError::Expectation(format!(
+                        "expected finish_pass to leave trainer in PassComplete, got {:?}",
+                        trainer.state()
+                    )));
+                }
+                pass_reports.push(report);
+                Ok(())
             }
-            if report.realized_cluster_count == 0 {
-                return Err(ConformanceError::Expectation(
-                    "expected pass report to realize at least one cluster".into(),
-                ));
-            }
-            if report.realized_cluster_count > report.requested_cluster_count {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected realized cluster count {} to be <= requested cluster count {}",
-                    report.realized_cluster_count, report.requested_cluster_count
-                )));
-            }
-            if report.cluster_ids.len() != report.realized_cluster_count as usize {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected {} cluster ids in pass report, got {}",
-                    report.realized_cluster_count,
-                    report.cluster_ids.len()
-                )));
-            }
-            if let Some(previous_report) = pass_reports.last()
-                && report.cluster_ids != previous_report.cluster_ids
-            {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected cluster ids {:?} to remain stable across passes, got {:?}",
-                    previous_report.cluster_ids, report.cluster_ids
-                )));
-            }
-            if trainer.state() != TrainerState::PassComplete {
-                return Err(ConformanceError::Expectation(format!(
-                    "expected finish_pass to leave trainer in PassComplete, got {:?}",
-                    trainer.state()
-                )));
-            }
-            pass_reports.push(report);
-        }
+        })?;
 
         trainer.complete_training()?;
         if trainer.state() != TrainerState::TrainingComplete {
@@ -468,11 +537,17 @@ mod conformance_support {
                 trainer.state()
             )));
         }
+        if previous_partition_ready_cluster_ids.is_none() {
+            return Err(ConformanceError::Expectation(
+                "expected training to produce at least one partition-ready pass report".into(),
+            ));
+        }
         let classifier = trainer.into_classifier()?;
-        let assignments = assignment_inputs
-            .iter()
-            .map(|(embedding, _)| classifier.assign(embedding.as_slice()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut assignments = Vec::new();
+        harness.for_each_expected_assignment(|embedding, _| {
+            assignments.push(classifier.assign(embedding)?);
+            Ok::<_, StreamingClusteringError>(())
+        })?;
         let realized_cluster_count = classifier.realized_cluster_count();
         if realized_cluster_count == 0 {
             return Err(ConformanceError::Expectation(
@@ -501,20 +576,19 @@ mod conformance_support {
         })
     }
 
-    fn build_classifier<T>(
+    fn build_classifier<H, T>(
+        harness: &H,
         mut trainer: T,
-        passes: &[PassInput],
     ) -> Result<T::Classifier, ConformanceError>
     where
+        H: StreamingClusteringConformanceHarness,
         T: StreamingClusterTrainer,
     {
         validate_config(trainer.config()).map_err(ConformanceError::Implementation)?;
-        for pass in passes {
-            for batch in pass {
-                trainer.ingest_batch(batch)?;
-            }
-            trainer.finish_pass()?;
-        }
+        harness.for_each_sample_pass_event(|event| match event {
+            SamplePassEvent::Batch(batch) => trainer.ingest_batch(batch),
+            SamplePassEvent::EndPass => trainer.finish_pass().map(|_| ()),
+        })?;
         trainer.complete_training()?;
         trainer
             .into_classifier()
@@ -564,7 +638,7 @@ pub mod conformance {
     //! ```
 
     pub use super::conformance_support::{
-        ConformanceError, ConformanceResult, StreamingClusteringConformanceHarness,
-        run_streaming_clustering_suite,
+        ConformanceError, ConformanceResult, SamplePassEvent,
+        StreamingClusteringConformanceHarness, run_streaming_clustering_suite,
     };
 }

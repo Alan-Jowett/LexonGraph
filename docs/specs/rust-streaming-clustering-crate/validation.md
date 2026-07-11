@@ -48,8 +48,10 @@ explicit failure rather than silently reducing `K` or producing empty clusters.
 Inspect or execute pass reporting.
 
 **Pass condition:** each pass report exposes deterministic requested cluster
-count, realized cluster count, `quality_metric`, `balance_metric`, and
-direction-of-improvement metadata.
+count, `quality_metric`, `balance_metric`, direction-of-improvement metadata,
+and explicit readiness status. `AnalysisOnly` reports omit
+`realized_cluster_count` and `cluster_ids`; `PartitionReady` reports include
+them.
 
 **Traces to:** REQ-STREAM-TRAIT-006
 
@@ -74,12 +76,12 @@ category-level error surface.
 
 ### VAL-STREAM-TRAIT-007
 
-Inspect the public API for dataset-size coupling.
+Inspect the default and feature-gated public APIs for dataset-size coupling.
 
-**Pass condition:** the contract does not require full-dataset materialization
-or full assignment retention as part of normal trait use by callers or as an
-observable trait obligation. Concrete implementation-internal pass buffering is
-not by itself a contract violation.
+**Pass condition:** the contract does not require full-dataset materialization,
+full-dataset assignment retention, or implementation-owned indexing
+scratch/storage whose required footprint scales with total dataset size `N`.
+Caller-chosen batch contents may still scale with batch size.
 
 **Traces to:** REQ-STREAM-TRAIT-011
 
@@ -114,11 +116,22 @@ conformance-helper rejection behavior.
 ### VAL-STREAM-TRAIT-011
 
 Run the conformance helpers against a fixture that changes externally visible
-cluster IDs across passes without preserving continuity.
+cluster IDs across partition-ready passes without preserving continuity.
 
 **Pass condition:** the suite rejects the fixture as an expectation failure.
 
 **Traces to:** REQ-STREAM-TRAIT-008, REQ-STREAM-TRAIT-014
+
+### VAL-STREAM-TRAIT-020
+
+Run the conformance helpers against a fixture whose first completed pass is
+`AnalysisOnly` and whose later pass is `PartitionReady`.
+
+**Pass condition:** the suite accepts the analysis-only pass without requiring
+cluster IDs or realized cluster count, and applies continuity checks only once
+partition-ready reports appear.
+
+**Traces to:** REQ-STREAM-TRAIT-005, REQ-STREAM-TRAIT-006, REQ-STREAM-TRAIT-008
 
 ### VAL-STREAM-TRAIT-012
 
@@ -196,3 +209,17 @@ trainer/classifier API, and unsupported-host behavior remains an
 implementation-internal fallback rather than a contract change.
 
 **Traces to:** REQ-STREAM-TRAIT-023
+
+### VAL-STREAM-TRAIT-019
+
+Inspect or execute a conformant implementation while exercising multiple passes
+over a dataset larger than one batch.
+
+**Pass condition:** indexing and training do not require implementation-owned
+dataset replay buffers, per-item assignment logs, spill files, or equivalent
+temporary or persistent indexing state whose footprint scales `O(N)` with total
+dataset size. Required implementation-owned state remains bounded by requested
+cluster count, embedding dimensionality, caller-provided balance
+configuration, and caller-selected batch size.
+
+**Traces to:** REQ-STREAM-TRAIT-024

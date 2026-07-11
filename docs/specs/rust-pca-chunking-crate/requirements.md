@@ -4,7 +4,7 @@
 
 ## Status
 
-Draft specification for a Rust crate that realizes PCA projection +
+Draft specification for a Rust crate that realizes streaming PCA projection +
 deterministic sort + exact chunking for LexonGraph through the shared streaming
 clustering contract.
 
@@ -34,6 +34,11 @@ exactly `K` contiguous non-empty chunks, where `K` is the shared
 `Chunk boundary model` means the retained projection transform plus the
 deterministic decision rule used by the final classifier to map valid
 embeddings into one of the trained chunk IDs.
+
+`True streaming` means the implementation-owned working set is bounded
+independently of total dataset cardinality. Memory may scale with the size of
+the currently ingested batch or the currently processed chunk/key group, but
+not with the size of the full logical dataset.
 
 ## Requirements
 
@@ -71,15 +76,17 @@ documented projection-key weighting behavior.
 
 ### REQ-PCA-CHUNK-005
 
-For each completed pass, the crate shall realize the candidate's core algorithm
-by:
+For each completed training run, the crate shall realize the candidate's core
+algorithm by:
 
-1. fitting PCA through the repository PCA crate
+1. accumulating PCA statistics through the repository PCA crate without
+   retaining the full logical dataset
 2. deriving the documented retained projection
 3. computing one deterministic scalar projection key per embedding from that
-   retained projection
-4. deterministically sorting embeddings by projection key
-5. partitioning the sorted order into exactly `K` contiguous non-empty chunks
+   retained projection on replayed passes
+4. deterministically ordering embeddings by the documented classifier-visible
+   sort key
+5. partitioning the ordered replay into exactly `K` contiguous non-empty chunks
 
 ### REQ-PCA-CHUNK-006
 
@@ -96,8 +103,9 @@ non-empty chunks.
 
 The projection-key sort order shall be deterministic.
 
-Projected-value ties shall be resolved through a documented total-order rule
-whose final tie-break preserves pass dataset order.
+Projected-value ties shall be resolved through a documented classifier-visible
+total-order rule. Any pass-order tie-break used to define a full training-pass
+order shall not be relied on by the final classifier boundary model.
 
 If exact chunking would otherwise split fully identical classifier sort keys
 across a chunk boundary, the crate shall fail explicitly rather than claim a
@@ -115,6 +123,10 @@ The first completed pass of one training run shall establish the logical
 dataset. Each later completed pass shall represent the same logical dataset in
 the same pass dataset order or fail explicitly.
 
+The implementation may require additional caller-visible replay passes before a
+partition-ready model exists, but it shall not hide those passes behind
+implementation-owned retention or spill of the full logical dataset.
+
 ### REQ-PCA-CHUNK-011
 
 Each completed pass shall return a deterministic `PassReport` containing:
@@ -123,7 +135,10 @@ Each completed pass shall return a deterministic `PassReport` containing:
 - `quality_metric`
 - `balance_metric`
 - quality and balance metric directions
-- stable cluster identifiers
+- readiness reflecting whether the pass is analysis-only or partition-ready
+
+Partition-ready reports shall additionally expose realized cluster count and
+stable cluster identifiers. Analysis-only reports may omit partition outputs.
 
 The balance metric shall be zero when no explicit balance constraints are
 configured.
@@ -142,7 +157,7 @@ deterministic classifier that:
 ### REQ-PCA-CHUNK-013
 
 The observable contract shall preserve stable cluster identifiers across
-repeated identical passes and in the final classifier surface.
+repeated identical partition-ready passes and in the final classifier surface.
 
 ### REQ-PCA-CHUNK-014
 
@@ -162,10 +177,25 @@ reject them explicitly through the shared invalid-configuration category.
 
 The repository shall include executable verification artifacts covering both:
 
-- this crate's realization of PCA projection + deterministic sort + exact
-  chunking
+- this crate's realization of streaming PCA projection + deterministic sort +
+  exact chunking
 - this crate's conformance to the shared streaming clustering contract,
   including the opt-in conformance-helper surface
+
+### REQ-PCA-CHUNK-017
+
+The implementation shall be a true streaming realization.
+
+It shall not retain, materialize, or spill an `O(full logical dataset)` working
+set owned by the implementation, whether as embeddings, projected coordinates,
+sort tables, or equivalent replayable full-dataset state.
+
+### REQ-PCA-CHUNK-018
+
+Transient working memory may scale with the currently ingested batch, the
+currently processed chunk, or the currently processed classifier-visible sort
+key group, provided that growth is not proportional to the full logical dataset
+size.
 
 ## Out of Scope
 

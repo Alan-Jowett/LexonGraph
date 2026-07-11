@@ -2981,12 +2981,13 @@ mod tests {
             pass_reports: vec![ObservablePassReport {
                 observed_count: 4,
                 requested_cluster_count: 2,
-                realized_cluster_count: 2,
+                readiness: crate::ObservablePassReadiness::PartitionReady,
+                realized_cluster_count: Some(2),
                 quality_metric: 0.0,
                 balance_metric: 0.0,
                 quality_direction: crate::ObservableMetricDirection::SmallerIsBetter,
                 balance_direction: crate::ObservableMetricDirection::SmallerIsBetter,
-                cluster_ids: vec![0, 1],
+                cluster_ids: Some(vec![0, 1]),
             }],
             probe_results: vec![ProbeAssignmentResult {
                 workload_id: "probes".into(),

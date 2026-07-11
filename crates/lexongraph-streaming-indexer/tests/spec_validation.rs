@@ -434,6 +434,7 @@ enum RecursivePlannerBehavior {
     FinishPassFailure,
     ShortAssignmentBatch,
     UnderfullSuccess,
+    EndlessAnalysisOnly,
 }
 
 #[derive(Clone, Copy)]
@@ -463,6 +464,12 @@ impl SlowRecursiveClusteringFactory {
     fn underfull_success() -> Self {
         Self {
             behavior: RecursivePlannerBehavior::UnderfullSuccess,
+        }
+    }
+
+    fn endless_analysis_only() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::EndlessAnalysisOnly,
         }
     }
 }
@@ -587,6 +594,20 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
                 message: "synthetic recursive planning failure".into(),
             });
         }
+        if self.behavior == RecursivePlannerBehavior::EndlessAnalysisOnly {
+            self.state = TrainerState::PassComplete;
+            return Ok(lexongraph_streaming_clustering::PassReport {
+                observed_count: self.embeddings.len(),
+                requested_cluster_count: self.config.cluster_count,
+                readiness: lexongraph_streaming_clustering::PassReadiness::AnalysisOnly,
+                realized_cluster_count: None,
+                quality_metric: 1.0,
+                balance_metric: 0.0,
+                quality_direction: MetricDirection::LargerIsBetter,
+                balance_direction: MetricDirection::SmallerIsBetter,
+                cluster_ids: None,
+            });
+        }
         let mut sorted = self
             .embeddings
             .iter()
@@ -599,16 +620,19 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
         Ok(lexongraph_streaming_clustering::PassReport {
             observed_count: self.embeddings.len(),
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
-                2
-            } else {
-                self.config.cluster_count
-            },
+            readiness: lexongraph_streaming_clustering::PassReadiness::PartitionReady,
+            realized_cluster_count: Some(
+                if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
+                    2
+                } else {
+                    self.config.cluster_count
+                },
+            ),
             quality_metric: 1.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::LargerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: Some(vec![0, 1]),
         })
     }
 
@@ -671,6 +695,61 @@ impl HierarchicalPlanningPolicy for InvalidHierarchyPlanningPolicy {
                         parent_id: Some("p0".into()),
                         child_ids: vec![],
                         item_indices: vec![1.min(max), 2.min(max)],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                ],
+            },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: [PlanningStage::Custom].into_iter().collect(),
+        })
+    }
+}
+
+#[derive(Clone, Default)]
+struct EmptyTerminalHierarchyPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for EmptyTerminalHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mid = embeddings.len() / 2;
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![
+                    FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: vec!["p0.0".into(), "p0.1".into()],
+                        item_indices: (0..embeddings.len()).collect(),
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: (0..mid).collect(),
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.1".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![],
                         terminal: true,
                         planning_stage: PlanningStage::Custom,
                     },
@@ -989,6 +1068,65 @@ impl HierarchicalPlanningPolicy for NestedHierarchyPlanningPolicy {
                         parent_id: Some("p0".into()),
                         child_ids: vec![],
                         item_indices: vec![3],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                ],
+            },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
+            planning_quality_metric: 1.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: [PlanningStage::Custom].into_iter().collect(),
+        })
+    }
+}
+
+#[derive(Clone, Default)]
+struct InterleavedTerminalHierarchyPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for InterleavedTerminalHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        if embeddings.len() != 4 {
+            return Err(FixtureError(
+                "interleaved hierarchy fixture requires four embeddings".into(),
+            ));
+        }
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![
+                    FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: vec!["p0.0".into(), "p0.1".into()],
+                        item_indices: vec![0, 1, 2, 3],
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![0, 2],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.1".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![1, 3],
                         terminal: true,
                         planning_stage: PlanningStage::Custom,
                     },
@@ -1602,6 +1740,30 @@ async fn val_stream_indexer_045_shared_summary_policy_surface_is_reusable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_045a_same_order_finalization_supports_interleaved_terminal_partitions()
+{
+    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        InterleavedTerminalHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(!result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_047_exact_centroid_summary_policy_materializes_deterministically() {
     let items = [item("a"), item("j"), item("p"), item("~")];
 
@@ -1745,6 +1907,27 @@ async fn regression_hierarchy_failure_preserves_open_pass_for_retry() {
     let retry = run.finish_pass().unwrap();
     assert_eq!(retry.observed_item_count, 4);
     assert_eq!(retry.completed_pass_count, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_empty_terminal_partitions_are_rejected_explicitly() {
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        EmptyTerminalHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    let error = run.finish_pass().unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("must contain at least one item"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2928,6 +3111,33 @@ async fn val_stream_indexer_043_adaptive_switch_boundary_is_deterministic() {
 
 #[test]
 fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
+    fn select_with_single_replay(
+        selector: &mut lexongraph_adaptive_planning_policy::AdaptivePlanningSelector,
+        represented_item_count: usize,
+        embeddings: &[Vec<f32>],
+    ) -> ActivePlanningAlgorithm {
+        let mut progress = selector
+            .begin_selection_boundary(
+                represented_item_count,
+                embeddings.len(),
+                embeddings.first().map_or(0, std::vec::Vec::len),
+            )
+            .unwrap();
+        loop {
+            match progress {
+                lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::Selected(
+                    algorithm,
+                ) => return algorithm,
+                lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::ReplayRequired(
+                    _,
+                ) => {
+                    selector.ingest_selection_batch(embeddings).unwrap();
+                    progress = selector.finish_selection_pass().unwrap();
+                }
+            }
+        }
+    }
+
     let mut selector = lexongraph_adaptive_planning_policy::AdaptivePlanningSelector::new(
         AdaptivePlanningSettings {
             direction: AdaptivePlanningDirection::Divisive,
@@ -2970,15 +3180,15 @@ fn val_stream_indexer_044_adaptive_selector_keeps_one_way_switch_records() {
         vec![3.0, 0.0],
     ];
     assert_eq!(
-        selector.select_algorithm(square.len(), &square).unwrap(),
+        select_with_single_replay(&mut selector, square.len(), &square),
         ActivePlanningAlgorithm::DirectionalPca
     );
     assert_eq!(
-        selector.select_algorithm(square.len(), &square).unwrap(),
+        select_with_single_replay(&mut selector, square.len(), &square),
         ActivePlanningAlgorithm::Dcbc
     );
     assert_eq!(
-        selector.select_algorithm(line.len(), &line).unwrap(),
+        select_with_single_replay(&mut selector, line.len(), &line),
         ActivePlanningAlgorithm::Dcbc
     );
 }
@@ -5152,6 +5362,27 @@ async fn regression_recursive_failed_units_advance_completion_counters() {
         assert_eq!(failed_unit.discovered_unit_count, Some(1));
         assert_eq!(failed_unit.current_recursion_depth, Some(0));
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_recursive_analysis_only_planners_fail_instead_of_looping_forever() {
+    let items = switch_trigger_items();
+    let mut run = StreamingIndexingRun::with_streaming_clustering_factory(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        SlowRecursiveClusteringFactory::endless_analysis_only(),
+        embedding_spec(),
+        128,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    let error = run.finish_pass().unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("maximum replay pass count"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

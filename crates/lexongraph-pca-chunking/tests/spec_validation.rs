@@ -7,9 +7,10 @@ use std::path::Path;
 use lexongraph_pca_chunking::{
     PCA_CHUNKING_SOFTWARE_IDENTITY, PcaChunkingParams, PcaChunkingStreamingTrainer,
 };
+use lexongraph_streaming_clustering::conformance::SamplePassEvent;
 use lexongraph_streaming_clustering::{
-    MetricDirection, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
-    StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    MetricDirection, PassReadiness, PassReport, StreamingClusterClassifier,
+    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
 
 fn config() -> StreamingClusteringConfig {
@@ -28,17 +29,21 @@ fn params() -> PcaChunkingParams {
     }
 }
 
-fn sample_passes() -> Vec<Vec<Vec<Vec<f32>>>> {
+type SamplePass = Vec<Vec<Vec<f32>>>;
+
+fn repeat_pass(pass: SamplePass, count: usize) -> Vec<SamplePass> {
+    std::iter::repeat_n(pass, count).collect()
+}
+
+fn base_pass() -> SamplePass {
     vec![
-        vec![
-            vec![vec![0.0, 0.0], vec![0.25, 0.0]],
-            vec![vec![10.0, 0.0], vec![10.25, 0.0]],
-        ],
-        vec![
-            vec![vec![0.0, 0.0], vec![0.25, 0.0]],
-            vec![vec![10.0, 0.0], vec![10.25, 0.0]],
-        ],
+        vec![vec![0.0, 0.0], vec![0.25, 0.0]],
+        vec![vec![10.0, 0.0], vec![10.25, 0.0]],
     ]
+}
+
+fn sample_passes() -> Vec<SamplePass> {
+    repeat_pass(base_pass(), 4)
 }
 
 fn expected_pass_reports() -> Vec<PassReport> {
@@ -46,22 +51,46 @@ fn expected_pass_reports() -> Vec<PassReport> {
         PassReport {
             observed_count: 4,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
-            quality_metric: 0.0625,
+            readiness: PassReadiness::AnalysisOnly,
+            realized_cluster_count: None,
+            quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: None,
         },
         PassReport {
             observed_count: 4,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
-            quality_metric: 0.0625,
+            readiness: PassReadiness::AnalysisOnly,
+            realized_cluster_count: None,
+            quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: None,
+        },
+        PassReport {
+            observed_count: 4,
+            requested_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: Some(vec![0, 1]),
+        },
+        PassReport {
+            observed_count: 4,
+            requested_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
+            quality_metric: 0.0,
+            balance_metric: 0.0,
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: Some(vec![0, 1]),
         },
     ]
 }
@@ -81,6 +110,28 @@ fn wrong_dimension_embedding() -> Vec<f32> {
 
 fn nan_embedding() -> Vec<f32> {
     vec![f32::NAN, 0.0]
+}
+
+fn remainder_passes() -> Vec<SamplePass> {
+    repeat_pass(
+        vec![vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![2.0, 0.0],
+            vec![10.0, 0.0],
+            vec![11.0, 0.0],
+        ]],
+        4,
+    )
+}
+
+fn duplicate_batch() -> Vec<Vec<f32>> {
+    vec![
+        vec![1.0, 1.0],
+        vec![1.0, 1.05],
+        vec![1.05, 1.0],
+        vec![1.05, 1.05],
+    ]
 }
 
 #[derive(Clone, Copy)]
@@ -113,8 +164,11 @@ impl StreamingClusterTrainer for HarnessTrainer {
 
     fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
         let mut report = self.inner.finish_pass()?;
-        if matches!(self.mode, HarnessMode::UnstableClusterIds) && self.completed_passes % 2 == 1 {
-            report.cluster_ids.reverse();
+        if matches!(self.mode, HarnessMode::UnstableClusterIds)
+            && self.completed_passes >= 3
+            && let Some(cluster_ids) = report.cluster_ids.as_mut()
+        {
+            cluster_ids.reverse();
         }
         self.completed_passes += 1;
         Ok(report)
@@ -154,6 +208,86 @@ impl StreamingClusterClassifier for HarnessClassifier {
             }
             _ => self.inner.assign(embedding),
         }
+    }
+}
+
+struct Harness;
+
+impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanceHarness
+    for Harness
+{
+    type Trainer = HarnessTrainer;
+
+    fn conforming_trainer(&self) -> Self::Trainer {
+        HarnessTrainer {
+            inner: PcaChunkingStreamingTrainer::new(config(), params()).unwrap(),
+            mode: HarnessMode::Conforming,
+            completed_passes: 0,
+        }
+    }
+
+    fn unstable_cluster_ids_trainer(&self) -> Self::Trainer {
+        HarnessTrainer {
+            inner: PcaChunkingStreamingTrainer::new(config(), params()).unwrap(),
+            mode: HarnessMode::UnstableClusterIds,
+            completed_passes: 0,
+        }
+    }
+
+    fn malformed_input_accepting_trainer(&self) -> Self::Trainer {
+        HarnessTrainer {
+            inner: PcaChunkingStreamingTrainer::new(config(), params()).unwrap(),
+            mode: HarnessMode::MalformedInputAccepting,
+            completed_passes: 0,
+        }
+    }
+
+    fn for_each_sample_pass_event<E, F>(&self, mut on_event: F) -> Result<(), E>
+    where
+        F: FnMut(SamplePassEvent<'_>) -> Result<(), E>,
+    {
+        for pass in sample_passes() {
+            for batch in pass {
+                on_event(SamplePassEvent::Batch(batch.as_slice()))?;
+            }
+            on_event(SamplePassEvent::EndPass)?;
+        }
+        Ok(())
+    }
+
+    fn for_each_expected_pass_report<E, F>(&self, mut on_report: F) -> Result<(), E>
+    where
+        F: FnMut(&PassReport) -> Result<(), E>,
+    {
+        for report in expected_pass_reports() {
+            on_report(&report)?;
+        }
+        Ok(())
+    }
+
+    fn for_each_expected_assignment<E, F>(&self, mut on_assignment: F) -> Result<(), E>
+    where
+        F: FnMut(&[f32], u32) -> Result<(), E>,
+    {
+        for (embedding, cluster_id) in expected_assignments() {
+            on_assignment(embedding.as_slice(), cluster_id)?;
+        }
+        Ok(())
+    }
+
+    fn for_each_underfull_first_pass_batch<E, F>(&self, mut on_batch: F) -> Result<(), E>
+    where
+        F: FnMut(&[Vec<f32>]) -> Result<(), E>,
+    {
+        on_batch(&[vec![0.0, 0.0]])
+    }
+
+    fn wrong_dimension_embedding(&self) -> Vec<f32> {
+        wrong_dimension_embedding()
+    }
+
+    fn nan_embedding(&self) -> Vec<f32> {
+        nan_embedding()
     }
 }
 
@@ -218,26 +352,29 @@ fn val_pca_chunk_005_cross_pass_continuity_is_enforced() {
 }
 
 #[test]
-fn val_pca_chunk_006_execution_path_uses_pca_and_contiguous_sort_chunking() {
+fn val_pca_chunk_006_execution_path_uses_streaming_pca_and_boundary_replay() {
     let source = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("lib.rs"),
     )
     .unwrap();
-    assert!(source.contains("use lexongraph_pca"));
-    assert!(source.contains("fit("));
-    assert!(source.contains("compare_sort_key_parts"));
-    assert!(source.contains("partition_point"));
+    assert!(source.contains("PcaAccumulator"));
+    assert!(source.contains("boundary_targets"));
+    assert!(source.contains("PassReadiness::AnalysisOnly"));
+    assert!(!source.contains("current_pass: Vec<Embedding>"));
+    assert!(!source.contains("fit("));
 }
 
 #[test]
 fn val_pca_chunk_007_equal_chunk_sizes_are_realized() {
     let mut trainer = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
-    for batch in sample_passes().into_iter().next().unwrap() {
-        trainer.ingest_batch(batch.as_slice()).unwrap();
+    for pass in sample_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        trainer.finish_pass().unwrap();
     }
-    trainer.finish_pass().unwrap();
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
     let assignments = expected_assignments()
@@ -249,23 +386,13 @@ fn val_pca_chunk_007_equal_chunk_sizes_are_realized() {
 
 #[test]
 fn val_pca_chunk_008_remainder_is_assigned_to_earliest_chunks() {
-    let config = StreamingClusteringConfig {
-        cluster_count: 2,
-        dimensions: 2,
-        balance_constraints: None,
-        random_seed: Some(7),
-    };
-    let mut trainer = PcaChunkingStreamingTrainer::new(config, params()).unwrap();
-    trainer
-        .ingest_batch(&[
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![2.0, 0.0],
-            vec![10.0, 0.0],
-            vec![11.0, 0.0],
-        ])
-        .unwrap();
-    trainer.finish_pass().unwrap();
+    let mut trainer = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
+    for pass in remainder_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        trainer.finish_pass().unwrap();
+    }
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
     let assignments = [0.0, 1.0, 2.0, 10.0, 11.0]
@@ -279,22 +406,27 @@ fn val_pca_chunk_008_remainder_is_assigned_to_earliest_chunks() {
 fn val_pca_chunk_009_duplicate_heavy_inputs_remain_deterministic() {
     let mut run_a = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
     let mut run_b = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
-    let duplicate_batch = vec![
-        vec![1.0, 1.0],
-        vec![1.0, 1.05],
-        vec![1.05, 1.0],
-        vec![1.05, 1.05],
-    ];
-    run_a.ingest_batch(duplicate_batch.as_slice()).unwrap();
-    run_b.ingest_batch(duplicate_batch.as_slice()).unwrap();
-    let report_a = run_a.finish_pass().unwrap();
-    let report_b = run_b.finish_pass().unwrap();
-    assert_eq!(report_a, report_b);
+    for _ in 0..2 {
+        run_a.ingest_batch(duplicate_batch().as_slice()).unwrap();
+        run_b.ingest_batch(duplicate_batch().as_slice()).unwrap();
+        let report_a = run_a.finish_pass().unwrap();
+        let report_b = run_b.finish_pass().unwrap();
+        assert_eq!(report_a, report_b);
+    }
 }
 
 #[test]
 fn regression_exact_identical_embeddings_that_cross_a_boundary_fail_explicitly() {
     let mut trainer = PcaChunkingStreamingTrainer::new(config(), params()).unwrap();
+    trainer
+        .ingest_batch(&[
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+        ])
+        .unwrap();
+    trainer.finish_pass().unwrap();
     trainer
         .ingest_batch(&[
             vec![1.0, 1.0],
@@ -369,62 +501,6 @@ fn val_pca_chunk_012_invalid_configuration_and_transitions_are_explicit() {
         Err(StreamingClusteringError::InvalidTransition { .. })
     ));
     assert_eq!(trainer.state(), TrainerState::Error);
-}
-
-struct Harness;
-
-impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanceHarness
-    for Harness
-{
-    type Trainer = HarnessTrainer;
-
-    fn conforming_trainer(&self) -> Self::Trainer {
-        HarnessTrainer {
-            inner: PcaChunkingStreamingTrainer::new(config(), params()).unwrap(),
-            mode: HarnessMode::Conforming,
-            completed_passes: 0,
-        }
-    }
-
-    fn unstable_cluster_ids_trainer(&self) -> Self::Trainer {
-        HarnessTrainer {
-            inner: PcaChunkingStreamingTrainer::new(config(), params()).unwrap(),
-            mode: HarnessMode::UnstableClusterIds,
-            completed_passes: 0,
-        }
-    }
-
-    fn malformed_input_accepting_trainer(&self) -> Self::Trainer {
-        HarnessTrainer {
-            inner: PcaChunkingStreamingTrainer::new(config(), params()).unwrap(),
-            mode: HarnessMode::MalformedInputAccepting,
-            completed_passes: 0,
-        }
-    }
-
-    fn sample_passes(&self) -> Vec<lexongraph_streaming_clustering::PassInput> {
-        sample_passes()
-    }
-
-    fn expected_pass_reports(&self) -> Vec<PassReport> {
-        expected_pass_reports()
-    }
-
-    fn expected_assignments(&self) -> Vec<(Vec<f32>, u32)> {
-        expected_assignments()
-    }
-
-    fn underfull_first_pass(&self) -> lexongraph_streaming_clustering::PassInput {
-        vec![vec![vec![0.0, 0.0]]]
-    }
-
-    fn wrong_dimension_embedding(&self) -> Vec<f32> {
-        wrong_dimension_embedding()
-    }
-
-    fn nan_embedding(&self) -> Vec<f32> {
-        nan_embedding()
-    }
 }
 
 #[test]

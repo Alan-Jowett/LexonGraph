@@ -9,8 +9,8 @@ DCBC through the shared LexonGraph streaming clustering contract.
 
 ## Validation Scope
 
-These validation entries define the conformance surface for the new streaming
-DCBC crate. They cover both:
+These validation entries define the conformance surface for the streaming DCBC
+crate. They cover both:
 
 - realization of DCBC protocol mechanics at the crate's observable boundary
 - conformance to the shared streaming trainer/classifier contract
@@ -19,7 +19,7 @@ DCBC crate. They cover both:
 
 ### VAL-DCBC-STREAM-001
 
-Inspect the repository artifacts for the new crate.
+Inspect the repository artifacts for the crate.
 
 **Pass condition:** the repository includes a crate at
 `crates/lexongraph-dcbc-streaming` and this spec package.
@@ -50,14 +50,15 @@ seed behavior.
 
 ### VAL-DCBC-STREAM-004
 
-Exercise one pass with multiple batches whose concatenated order is known.
+Exercise repeated completed passes with a fixture whose concatenated order is
+known.
 
-**Pass condition:** `finish_pass()` realizes exactly one caller-visible DCBC
-iteration over the concatenated pass dataset order and does not perform hidden
-extra iterations. After `m` completed caller-driven passes, exactly `m`
-protocol-visible DCBC passes have executed.
+**Pass condition:** the observable sequence of pass reports preserves the
+documented caller-visible mapping between replay/progress stages and completed
+DCBC protocol passes. The implementation does not claim partition-ready output
+before enough caller-visible passes have occurred.
 
-**Traces to:** REQ-DCBC-STREAM-005, REQ-DCBC-STREAM-006
+**Traces to:** REQ-DCBC-STREAM-005, REQ-DCBC-STREAM-010, REQ-DCBC-STREAM-012
 
 ### VAL-DCBC-STREAM-005
 
@@ -90,7 +91,8 @@ resulting cluster sizes satisfy those bounds.
 
 ### VAL-DCBC-STREAM-008
 
-Inspect the first completed pass on a fixture with unique farthest candidates.
+Inspect the first completed protocol pass on a fixture with unique farthest
+candidates.
 
 **Pass condition:** initialization chooses the first embedding in pass dataset
 order as the first centroid and later centroids follow the protocol's
@@ -102,7 +104,7 @@ deterministic farthest-point rule.
 
 Run assignment on a fixture with multiple optimal solutions.
 
-**Pass condition:** the pass result preserves the protocol-required
+**Pass condition:** the realized protocol pass preserves the protocol-required
 lexicographically minimal optimal assignment.
 
 **Traces to:** REQ-DCBC-STREAM-010
@@ -120,8 +122,8 @@ for normalized distance computations while preserving the raw stored centroid.
 
 ### VAL-DCBC-STREAM-011
 
-Exercise multiple completed passes on a fixture whose internal cluster ordering
-would otherwise change.
+Exercise multiple completed partition-ready passes on a fixture whose internal
+cluster ordering would otherwise change.
 
 **Pass condition:** pass reports and classifier assignments preserve stable
 externally visible cluster IDs across passes.
@@ -133,9 +135,9 @@ externally visible cluster IDs across passes.
 Inspect pass reports across at least two passes.
 
 **Pass condition:** each report exposes deterministic `observed_count`,
-`quality_metric`, `balance_metric`, fixed metric directions, and stable
-cluster IDs; `balance_metric` is zero when no explicit balance constraints are
-configured.
+`quality_metric`, `balance_metric`, fixed metric directions, and readiness
+semantics consistent with analysis-only versus partition-ready states;
+`balance_metric` is zero when no explicit balance constraints are configured.
 
 **Traces to:** REQ-DCBC-STREAM-012
 
@@ -153,14 +155,15 @@ training dataset.
 
 ### VAL-DCBC-STREAM-014
 
-Inspect the crate's public surface while exercising a dataset larger than
-memory-budgeted in-memory retention for the test fixture.
+Inspect the crate's implementation path and exercise a fixture larger than any
+single transient batch-sized working set.
 
-**Pass condition:** the public API remains dataset-size independent and any
-implementation-internal spill or temporary storage is hidden behind the crate
-boundary.
+**Pass condition:** no conformant path retains, materializes, or spills
+implementation-owned full-dataset embeddings, normalized-point tables, distance
+matrices, assignment vectors, memberships, or equivalent replayable
+full-dataset state.
 
-**Traces to:** REQ-DCBC-STREAM-014
+**Traces to:** REQ-DCBC-STREAM-014, REQ-DCBC-STREAM-019, REQ-DCBC-STREAM-020
 
 ### VAL-DCBC-STREAM-015
 
@@ -185,20 +188,21 @@ no claim that the encoding is canonical across implementations.
 
 ### VAL-DCBC-STREAM-017
 
-Run the shared streaming clustering conformance helpers against the new crate.
+Run the shared streaming clustering conformance helpers against the crate.
 
-**Pass condition:** the new crate passes the shared lifecycle, metric,
-malformed-input, determinism, and cluster-ID continuity checks.
+**Pass condition:** the crate passes the shared lifecycle, metric,
+malformed-input, determinism, and partition-ready cluster-ID continuity checks.
 
 **Traces to:** REQ-DCBC-STREAM-017
 
 ### VAL-DCBC-STREAM-018
 
-Run DCBC-focused executable tests for the new crate's observable boundary.
+Run DCBC-focused executable tests for the crate's observable boundary.
 
 **Pass condition:** executable tests exist for protocol-significant ordering,
 initialization, assignment determinism, centroid-update semantics, first-pass
-feasibility rejection, and pass-to-iteration realization.
+feasibility rejection, replay/progress staging if applicable, and pass-to-pass
+protocol realization.
 
 **Traces to:** REQ-DCBC-STREAM-017
 

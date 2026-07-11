@@ -90,9 +90,10 @@ assignment and centroid-update steps in normalized embedding space.
 Exercise a conformant fixture across repeated identical runs.
 
 **Pass condition:** pass reports expose deterministic `observed_count`,
-`quality_metric`, `balance_metric`, fixed metric directions, and stable cluster
-IDs. When no explicit balance constraints are configured, `balance_metric` is
-zero.
+explicit partition-ready readiness, populated `realized_cluster_count`,
+populated stable `cluster_ids`, deterministic `quality_metric`,
+`balance_metric`, and fixed metric directions. When no explicit balance
+constraints are configured, `balance_metric` is zero.
 
 **Traces to:** REQ-SPHKM-009, REQ-SPHKM-012
 
@@ -123,7 +124,9 @@ streaming error categories.
 Run the shared streaming clustering conformance helpers against the crate.
 
 **Pass condition:** the crate passes the shared lifecycle, malformed-input,
-determinism, and cluster-ID continuity checks.
+determinism, cluster-ID continuity, readiness-aware report-shape, and
+underfull-first-pass checks using the current streamed-event and callback-style
+helper surface rather than removed whole-run helper APIs.
 
 **Traces to:** REQ-SPHKM-014
 

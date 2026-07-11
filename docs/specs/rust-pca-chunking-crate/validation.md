@@ -4,9 +4,9 @@
 
 ## Status
 
-Draft validation specification for a Rust crate that realizes PCA projection +
-deterministic sort + exact chunking through the shared LexonGraph streaming
-clustering contract.
+Draft validation specification for a Rust crate that realizes streaming PCA
+projection + deterministic sort + exact chunking through the shared LexonGraph
+streaming clustering contract.
 
 ## Validation Scope
 
@@ -48,13 +48,14 @@ parameters.
 
 ### VAL-PCA-CHUNK-004
 
-Exercise one completed pass with multiple input batches whose concatenated order
-is known.
+Exercise repeated completed passes with a fixture whose concatenated order is
+known.
 
-**Pass condition:** `finish_pass()` realizes exactly one caller-visible pass
-over the concatenated pass dataset order.
+**Pass condition:** `finish_pass()` exposes caller-visible analysis-only passes
+before returning a partition-ready report when the exact replayable boundaries
+have been discovered.
 
-**Traces to:** REQ-PCA-CHUNK-005, REQ-PCA-CHUNK-010
+**Traces to:** REQ-PCA-CHUNK-010, REQ-PCA-CHUNK-011
 
 ### VAL-PCA-CHUNK-005
 
@@ -70,11 +71,11 @@ refinement of the same logical dataset.
 
 Inspect the execution path over a representative conformant fixture.
 
-**Pass condition:** the pass realization uses the repository PCA crate and then
-applies deterministic scalar projection, stable sort, and contiguous exact
-chunking.
+**Pass condition:** the implementation uses the repository PCA accumulator path,
+derives classifier-visible sort keys on replayed passes, and does not require a
+retained full-pass dataset or full-pass `fit(...)` call.
 
-**Traces to:** REQ-PCA-CHUNK-005
+**Traces to:** REQ-PCA-CHUNK-005, REQ-PCA-CHUNK-017, REQ-PCA-CHUNK-018
 
 ### VAL-PCA-CHUNK-007
 
@@ -97,8 +98,9 @@ remainder-allocation rule while still yielding exactly `K` non-empty chunks.
 
 Use duplicate-heavy or tied-projection fixtures across repeated runs.
 
-**Pass condition:** projection-key ties are resolved deterministically and
-repeated identical executions remain observable-identical.
+**Pass condition:** classifier-visible ties are resolved deterministically and
+repeated identical executions remain observable-identical whenever exact
+replayable chunking is realizable.
 
 **Traces to:** REQ-PCA-CHUNK-008, REQ-PCA-CHUNK-009, REQ-PCA-CHUNK-013
 
@@ -117,9 +119,9 @@ boundary model that cannot replay the trained membership.
 Inspect pass reports across repeated identical runs.
 
 **Pass condition:** reports expose deterministic `observed_count`,
-`quality_metric`, `balance_metric`, fixed metric directions, and stable cluster
-IDs. When no explicit balance constraints are configured, `balance_metric` is
-zero.
+`quality_metric`, `balance_metric`, fixed metric directions, and readiness
+consistent with analysis-only versus partition-ready phases. When no explicit
+balance constraints are configured, `balance_metric` is zero.
 
 **Traces to:** REQ-PCA-CHUNK-011, REQ-PCA-CHUNK-013
 
@@ -150,6 +152,6 @@ streaming error categories.
 Run the shared streaming clustering conformance helpers against the crate.
 
 **Pass condition:** the crate passes the shared lifecycle, malformed-input,
-determinism, and cluster-ID continuity checks.
+determinism, and partition-ready cluster-ID continuity checks.
 
 **Traces to:** REQ-PCA-CHUNK-016
