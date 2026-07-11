@@ -21,12 +21,15 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::fs::{self, File};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_recursion::async_recursion;
 use ciborium::{Value, ser::into_writer};
@@ -58,7 +61,7 @@ use lexongraph_pca::fit;
 use lexongraph_spherical_kmeans::{SphericalKmeansParams, SphericalKmeansStreamingTrainer};
 pub use lexongraph_streaming_clustering::{BalanceConstraints, MetricDirection};
 use lexongraph_streaming_clustering::{
-    ClusterId, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
+    ClusterId, PassReadiness, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
     StreamingClusteringConfig, StreamingClusteringError,
 };
 use sha2::{Digest, Sha256};
@@ -338,6 +341,7 @@ pub enum StreamingIndexerError {
         min_serialized_bytes: usize,
         size_target: usize,
     },
+    LocalSpill(String),
     TerminalPartitionMaterialization(String),
     BlockConstruction(BlockError),
     Storage(BlockStoreError),
@@ -379,6 +383,7 @@ impl fmt::Display for StreamingIndexerError {
                 "smallest intermediate node needs {min_serialized_bytes} bytes, \
                  exceeding block size target {size_target}"
             ),
+            Self::LocalSpill(m) => write!(f, "local spill failed: {m}"),
             Self::TerminalPartitionMaterialization(m) => {
                 write!(f, "terminal partition could not be materialized: {m}")
             }
@@ -1444,7 +1449,7 @@ impl StreamingClusteringFactory for DcbcStreamingClusteringFactory {
 
 enum BuiltInStreamingClusterTrainer {
     Dcbc(DcbcStreamingTrainer),
-    DirectionalPca(DirectionalPcaStreamingTrainer),
+    DirectionalPca(Box<DirectionalPcaStreamingTrainer>),
     SphericalKmeans(SphericalKmeansStreamingTrainer),
 }
 
@@ -1775,12 +1780,23 @@ enum RunPhase {
     Finalized,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct BaselineItem {
     content_ref_hash: BlockHash,
     metadata_hash: BlockHash,
     content_hash: BlockHash,
     embedding_hash: BlockHash,
+}
+
+struct PartitionRoutingPlan {
+    item_partition_ids: Vec<String>,
+    terminal_partition_item_counts: HashMap<String, usize>,
+}
+
+struct PartitionSpillDirectory {
+    dir: PathBuf,
+    paths: HashMap<String, PathBuf>,
+    writers: HashMap<String, BufWriter<File>>,
 }
 
 #[derive(Clone)]
@@ -2406,6 +2422,14 @@ where
         let materializability_bound =
             materializability_bound(&self.embedding_spec, self.block_size_target)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
+        let routing_plan = build_partition_routing_plan(hierarchy, baseline.len())
+            .map_err(StreamingIndexerError::HierarchyValidation)?;
+        let partitions = hierarchy
+            .partitions
+            .iter()
+            .cloned()
+            .map(|partition| (partition.id.clone(), partition))
+            .collect::<HashMap<_, _>>();
 
         let replay_started = Instant::now();
         let replay_total = baseline.len();
@@ -2443,8 +2467,14 @@ where
 
         let replay_result = async {
             let mut replay_count = 0usize;
-            let mut leaf_children: Vec<IndexedChild> = Vec::with_capacity(baseline.len());
             let mut persisted_ids: Vec<BlockHash> = Vec::new();
+            let mut terminal_partition_ids = routing_plan
+                .terminal_partition_item_counts
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            terminal_partition_ids.sort();
+            let mut spill = PartitionSpillDirectory::new(terminal_partition_ids)?;
 
             for batch in replay_batches {
                 let items = batch.as_ref();
@@ -2495,9 +2525,10 @@ where
                     )));
                 }
 
-                for (offset, ((item, content), embedding)) in items
+                for (offset, (((item, content), metadata), embedding)) in items
                     .iter()
-                    .zip(contents.iter())
+                    .zip(contents)
+                    .zip(metadatas)
                     .zip(embeddings.iter())
                     .enumerate()
                 {
@@ -2510,7 +2541,7 @@ where
                         content_ref_hash,
                         metadata_hash: hash_metadata(&item.metadata)
                             .map_err(StreamingIndexerError::InvalidMetadata)?,
-                        content_hash: hash_content(content),
+                        content_hash: hash_content(&content),
                         embedding_hash: hash_bytes(embedding),
                     };
                     if expected != &replay_item {
@@ -2519,11 +2550,6 @@ where
                             replay_count + offset
                         )));
                     }
-                }
-
-                for ((content, metadata), embedding) in
-                    contents.into_iter().zip(metadatas).zip(embeddings.iter())
-                {
                     validate_embedding_bytes(embedding, &self.embedding_spec, "item")
                         .map_err(StreamingIndexerError::EmbeddingFailure)?;
 
@@ -2548,12 +2574,15 @@ where
                         .map_err(StreamingIndexerError::Storage)?;
                     verify_persisted_block_id(block_id, serialized.hash)?;
                     persisted_ids.push(block_id);
-                    leaf_children.push(IndexedChild {
-                        embedding: embedding.clone(),
-                        child: block_id,
-                        level: 0,
-                        descendant_count: 1,
-                    });
+                    spill.append_leaf_child(
+                        &routing_plan.item_partition_ids[replay_count + offset],
+                        &IndexedChild {
+                            embedding: embedding.clone(),
+                            child: block_id,
+                            level: 0,
+                            descendant_count: 1,
+                        },
+                    )?;
                     replay_progress.fetch_add(1, AtomicOrdering::Relaxed);
                 }
                 replay_count += items.len();
@@ -2569,12 +2598,12 @@ where
                 )));
             }
 
-            Ok((leaf_children, persisted_ids))
+            Ok((spill.finish()?, persisted_ids))
         }
         .await;
 
         heartbeat.stop();
-        let (leaf_children, mut persisted_ids) = match replay_result {
+        let (spill, mut persisted_ids) = match replay_result {
             Ok(replay_materialization) => {
                 emit_status(
                     &self.observer,
@@ -2605,22 +2634,44 @@ where
             }
         };
 
-        if leaf_children.len() == 1 {
-            let root_id = leaf_children[0].child;
-            dedup_sort_ids(&mut persisted_ids);
-            return Ok(StreamingIndexingResult {
-                root_id,
-                block_ids: persisted_ids,
-            });
+        let mut materialized_terminal_children = HashMap::<String, IndexedChild>::new();
+        for (partition_id, expected_count) in &routing_plan.terminal_partition_item_counts {
+            let leaf_children = spill.read_partition_children(partition_id.as_str())?;
+            if leaf_children.len() != *expected_count {
+                return Err(StreamingIndexerError::ReplayMismatch(format!(
+                    "terminal partition {partition_id:?} spill contained {} items but expected {expected_count}",
+                    leaf_children.len()
+                )));
+            }
+            if leaf_children.is_empty() {
+                return Err(StreamingIndexerError::ReplayMismatch(format!(
+                    "terminal partition {partition_id:?} spill is empty"
+                )));
+            }
+            let partition_child = if leaf_children.len() == 1 {
+                leaf_children.into_iter().next().unwrap()
+            } else {
+                self.assemble_child_set(
+                    leaf_children,
+                    partition_id == &hierarchy.root_partition_id,
+                    materializability_bound,
+                    store,
+                    &mut persisted_ids,
+                )
+                .await?
+            };
+            materialized_terminal_children.insert(partition_id.clone(), partition_child);
         }
 
         let root_child = self
-            .materialize_hierarchy_bottom_up(
-                hierarchy,
-                &leaf_children,
+            .materialize_partition_from_terminal_children(
+                hierarchy.root_partition_id.as_str(),
+                &partitions,
+                &materialized_terminal_children,
                 materializability_bound,
                 store,
                 &mut persisted_ids,
+                true,
             )
             .await?;
         dedup_sort_ids(&mut persisted_ids);
@@ -2630,80 +2681,50 @@ where
         })
     }
 
-    async fn materialize_hierarchy_bottom_up(
-        &self,
-        hierarchy: &FinalizedPartitionHierarchy,
-        leaf_children: &[IndexedChild],
-        materializability_bound: usize,
-        store: &dyn BlockStore,
-        persisted_ids: &mut Vec<BlockHash>,
-    ) -> Result<IndexedChild, StreamingIndexerError> {
-        let partitions = hierarchy
-            .partitions
-            .iter()
-            .cloned()
-            .map(|partition| (partition.id.clone(), partition))
-            .collect::<HashMap<_, _>>();
-        self.materialize_partition(
-            &hierarchy.root_partition_id,
-            &partitions,
-            leaf_children,
-            true,
-            materializability_bound,
-            store,
-            persisted_ids,
-        )
-        .await
-    }
-
     #[allow(clippy::too_many_arguments)]
     #[async_recursion(?Send)]
-    async fn materialize_partition(
+    async fn materialize_partition_from_terminal_children(
         &self,
         partition_id: &str,
         partitions: &HashMap<String, FinalizedPartition>,
-        leaf_children: &[IndexedChild],
-        is_global_root_partition: bool,
+        materialized_terminal_children: &HashMap<String, IndexedChild>,
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
+        is_global_root_partition: bool,
     ) -> Result<IndexedChild, StreamingIndexerError> {
         let partition = partitions.get(partition_id).ok_or_else(|| {
             StreamingIndexerError::HierarchyValidation(format!(
-                "partition {partition_id:?} is missing during final assembly"
+                "partition {partition_id:?} is missing during partition-ordered assembly"
             ))
         })?;
 
-        let children = if partition.terminal {
-            partition
-                .item_indices
-                .iter()
-                .map(|&index| {
-                    leaf_children.get(index).cloned().ok_or_else(|| {
-                        StreamingIndexerError::HierarchyValidation(format!(
-                            "terminal partition {partition_id:?} references missing item index {index}"
-                        ))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let mut materialized = Vec::with_capacity(partition.child_ids.len());
-            for child_id in &partition.child_ids {
-                materialized.push(
-                    self.materialize_partition(
-                        child_id,
-                        partitions,
-                        leaf_children,
-                        false,
-                        materializability_bound,
-                        store,
-                        persisted_ids,
-                    )
-                    .await?,
-                );
-            }
-            materialized
-        };
+        if partition.terminal {
+            return materialized_terminal_children
+                .get(partition_id)
+                .cloned()
+                .ok_or_else(|| {
+                    StreamingIndexerError::ReplayMismatch(format!(
+                        "terminal partition {partition_id:?} was not materialized"
+                    ))
+                });
+        }
+
+        let mut children = Vec::with_capacity(partition.child_ids.len());
+        for child_id in &partition.child_ids {
+            children.push(
+                self.materialize_partition_from_terminal_children(
+                    child_id,
+                    partitions,
+                    materialized_terminal_children,
+                    materializability_bound,
+                    store,
+                    persisted_ids,
+                    false,
+                )
+                .await?,
+            );
+        }
 
         self.assemble_child_set(
             children,
@@ -3193,6 +3214,7 @@ fn create_built_in_trainer(
                 },
                 settings.params.clone(),
             )
+            .map(Box::new)
             .map(BuiltInStreamingClusterTrainer::DirectionalPca)
             .map_err(map_clustering_error)
         }
@@ -3561,7 +3583,7 @@ fn derive_hierarchy_from_published_spherical_kmeans_profile(
             partitions,
         },
         requested_cluster_count: Some(requested_cluster_count),
-        realized_cluster_count: Some(pass_report.realized_cluster_count),
+        realized_cluster_count: pass_report.realized_cluster_count,
         planning_quality_metric: accumulator.average_quality(),
         planning_balance_metric: accumulator.average_balance(),
         planning_quality_direction: accumulator.quality_direction,
@@ -3637,10 +3659,15 @@ where
     where
         OP: FnMut(),
     {
-        self.trainer.ingest_batch(embeddings)?;
-        observe_progress();
-        let pass_report = self.trainer.finish_pass()?;
-        observe_progress();
+        let pass_report = loop {
+            self.trainer.ingest_batch(embeddings)?;
+            observe_progress();
+            let pass_report = self.trainer.finish_pass()?;
+            observe_progress();
+            if pass_report.readiness == PassReadiness::PartitionReady {
+                break pass_report;
+            }
+        };
         self.trainer.complete_training()?;
         observe_progress();
         let classifier = self.trainer.into_classifier()?;
@@ -4191,7 +4218,7 @@ impl PlanningMetricAccumulator {
             self.quality_direction = report.quality_direction;
             self.balance_direction = report.balance_direction;
             self.requested_cluster_count = Some(report.requested_cluster_count);
-            self.realized_cluster_count = Some(report.realized_cluster_count);
+            self.realized_cluster_count = report.realized_cluster_count;
         }
         self.quality_sum += report.quality_metric;
         self.balance_sum += report.balance_metric;
@@ -6496,6 +6523,210 @@ fn validate_partition_hierarchy(
         return Err("partition hierarchy contains unreachable partitions".into());
     }
     Ok(())
+}
+
+fn build_partition_routing_plan(
+    hierarchy: &FinalizedPartitionHierarchy,
+    item_count: usize,
+) -> Result<PartitionRoutingPlan, String> {
+    validate_partition_hierarchy(hierarchy, item_count)?;
+
+    let mut item_partition_ids = vec![String::new(); item_count];
+    let mut terminal_partition_item_counts = HashMap::new();
+    for partition in &hierarchy.partitions {
+        if !partition.terminal {
+            continue;
+        }
+        terminal_partition_item_counts.insert(partition.id.clone(), partition.item_indices.len());
+        for &item_index in &partition.item_indices {
+            if !item_partition_ids[item_index].is_empty() {
+                return Err(format!(
+                    "item index {item_index} is assigned to more than one terminal partition"
+                ));
+            }
+            item_partition_ids[item_index] = partition.id.clone();
+        }
+    }
+    if item_partition_ids.iter().any(String::is_empty) {
+        return Err("every logical item must resolve to a terminal partition".into());
+    }
+
+    Ok(PartitionRoutingPlan {
+        item_partition_ids,
+        terminal_partition_item_counts,
+    })
+}
+
+impl PartitionSpillDirectory {
+    fn new(partition_ids: Vec<String>) -> Result<Self, StreamingIndexerError> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "lexongraph-streaming-indexer-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not create temporary spill directory {}: {error}",
+                dir.display()
+            ))
+        })?;
+
+        let mut paths = HashMap::new();
+        for (index, partition_id) in partition_ids.into_iter().enumerate() {
+            paths.insert(
+                partition_id,
+                dir.join(format!("partition-{index:08}.spill")),
+            );
+        }
+
+        Ok(Self {
+            dir,
+            paths,
+            writers: HashMap::new(),
+        })
+    }
+
+    fn append_leaf_child(
+        &mut self,
+        partition_id: &str,
+        child: &IndexedChild,
+    ) -> Result<(), StreamingIndexerError> {
+        if !self.writers.contains_key(partition_id) {
+            let path = self.paths.get(partition_id).ok_or_else(|| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "partition {partition_id:?} is missing a spill path"
+                ))
+            })?;
+            let file = File::create(path).map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not create partition spill {}: {error}",
+                    path.display()
+                ))
+            })?;
+            self.writers
+                .insert(partition_id.to_string(), BufWriter::new(file));
+        }
+
+        let writer = self.writers.get_mut(partition_id).ok_or_else(|| {
+            StreamingIndexerError::LocalSpill(format!(
+                "partition {partition_id:?} spill writer is unavailable"
+            ))
+        })?;
+        write_spilled_indexed_child(writer, child)
+    }
+
+    fn finish(mut self) -> Result<Self, StreamingIndexerError> {
+        for writer in self.writers.values_mut() {
+            writer
+                .flush()
+                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+        }
+        self.writers.clear();
+        Ok(self)
+    }
+
+    fn read_partition_children(
+        &self,
+        partition_id: &str,
+    ) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
+        let path = self.paths.get(partition_id).ok_or_else(|| {
+            StreamingIndexerError::LocalSpill(format!(
+                "partition {partition_id:?} is missing a spill path"
+            ))
+        })?;
+        let file = File::open(path).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not open partition spill {}: {error}",
+                path.display()
+            ))
+        })?;
+        let mut reader = BufReader::new(file);
+        let mut children = Vec::new();
+        while let Some(child) = read_spilled_indexed_child(&mut reader)? {
+            children.push(child);
+        }
+        Ok(children)
+    }
+}
+
+impl Drop for PartitionSpillDirectory {
+    fn drop(&mut self) {
+        if !self.dir.as_os_str().is_empty() {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+}
+
+fn write_spilled_indexed_child(
+    writer: &mut BufWriter<File>,
+    child: &IndexedChild,
+) -> Result<(), StreamingIndexerError> {
+    let embedding_len = u32::try_from(child.embedding.len()).map_err(|_| {
+        StreamingIndexerError::LocalSpill(
+            "embedding length does not fit the spill file format".into(),
+        )
+    })?;
+    let descendant_count = u64::try_from(child.descendant_count).map_err(|_| {
+        StreamingIndexerError::LocalSpill(
+            "descendant count does not fit the spill file format".into(),
+        )
+    })?;
+    writer
+        .write_all(&embedding_len.to_le_bytes())
+        .and_then(|_| writer.write_all(&child.embedding))
+        .and_then(|_| writer.write_all(child.child.as_bytes()))
+        .and_then(|_| writer.write_all(&child.level.to_le_bytes()))
+        .and_then(|_| writer.write_all(&descendant_count.to_le_bytes()))
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))
+}
+
+fn read_spilled_indexed_child(
+    reader: &mut BufReader<File>,
+) -> Result<Option<IndexedChild>, StreamingIndexerError> {
+    let mut embedding_len_bytes = [0u8; 4];
+    match reader.read_exact(&mut embedding_len_bytes) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(StreamingIndexerError::LocalSpill(error.to_string())),
+    }
+    let embedding_len = usize::try_from(u32::from_le_bytes(embedding_len_bytes)).map_err(|_| {
+        StreamingIndexerError::LocalSpill("spilled embedding length does not fit usize".into())
+    })?;
+    let mut embedding = vec![0u8; embedding_len];
+    reader
+        .read_exact(&mut embedding)
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+
+    let mut child_bytes = [0u8; BlockHash::LEN];
+    reader
+        .read_exact(&mut child_bytes)
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+
+    let mut level_bytes = [0u8; 8];
+    reader
+        .read_exact(&mut level_bytes)
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+
+    let mut descendant_count_bytes = [0u8; 8];
+    reader
+        .read_exact(&mut descendant_count_bytes)
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+
+    Ok(Some(IndexedChild {
+        embedding,
+        child: BlockHash::from_bytes(child_bytes),
+        level: u64::from_le_bytes(level_bytes),
+        descendant_count: usize::try_from(u64::from_le_bytes(descendant_count_bytes)).map_err(
+            |_| {
+                StreamingIndexerError::LocalSpill(
+                    "spilled descendant count does not fit usize".into(),
+                )
+            },
+        )?,
+    }))
 }
 
 struct HierarchyStats {

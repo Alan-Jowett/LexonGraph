@@ -47,7 +47,7 @@ operation.
 `Final materialization replay` means one additional caller-driven replay of the
 same logical item set after planning completion, used to construct the finished
 persisted block tree without requiring the crate to retain the full dataset as a
-public-API obligation.
+public-API or implementation-owned obligation.
 
 `Item replay order` means the ordered sequence of indexing items observed across
 all batches in one completed planning pass.
@@ -55,6 +55,11 @@ all batches in one completed planning pass.
 `Partition hierarchy` means the deterministic coarse-to-fine planning tree over
 the replayed logical item set that is finalized before bottom-up block
 assembly.
+
+`True streaming` means neither the public API nor implementation-owned retained
+state scales with the size of the full logical dataset. Transient working memory
+may scale with the currently ingested batch or currently processed work unit,
+but not with the full logical dataset.
 
 `Terminal partition` means one partition in that hierarchy chosen as a direct
 input to bottom-up parent construction over materialized leaves.
@@ -105,8 +110,11 @@ includes:
 - ingesting one or more batches of indexing items for the current planning pass
 - completing the current planning pass and obtaining a deterministic pass report
 - caller-directed planning continuation or completion
-- final materialization through a final materialization replay that assembles the
-  finished block tree bottom-up from the finalized partition hierarchy
+- final materialization through a final replay of the logical item set in
+  established replay order, where the crate may classify items into
+  implementation-owned temporary per-terminal-partition spill files before
+  assembling the finished block tree bottom-up from the finalized partition
+  hierarchy
 
 ### REQ-STREAM-INDEXER-005
 
@@ -198,13 +206,21 @@ The crate shall continue to provide explicit API paths that accept
 caller-supplied canonical-embedding, hierarchical planning, and streaming
 clustering policy implementations.
 
+Those override seams shall remain true-streaming. This revision shall not treat
+full-dataset embedding slices, full partition-membership tables, or equivalent
+dataset-sized override inputs or outputs as conformant public API shapes.
+
 ### REQ-STREAM-INDEXER-016
 
 The first completed streaming indexing pass shall establish the logical item set
 and item replay order for the run.
 
 Each later completed pass and the final materialization replay shall represent
-the same logical item set in the same item replay order or fail explicitly.
+that same logical item set in the same item replay order or fail explicitly.
+
+If the crate needs to revisit prior data, that revisit shall occur only through
+caller-visible replay or caller-visible staged progression rather than hidden
+implementation-owned retention or spill of the full logical dataset.
 
 ### REQ-STREAM-INDEXER-017
 
@@ -212,6 +228,14 @@ The public contract shall remain dataset-size independent by requiring caller
 replay for repeated passes and final materialization rather than requiring the
 crate's default API surface to retain or rematerialize the full logical dataset
 on the caller's behalf.
+
+A replay-shaped public API is not sufficient by itself: conformant public input,
+output, and extension-point shapes shall also avoid constructs whose memory
+footprint scales `O(full logical dataset size)`.
+
+This restriction does not forbid implementation-owned temporary local spill
+used only after planning completion to stage per-terminal-partition
+materialization inputs.
 
 ### REQ-STREAM-INDEXER-018
 
@@ -238,6 +262,10 @@ When the built-in planning path is selected:
 Both modes shall normalize into the same deterministic finalized partition
 hierarchy abstraction before final materialization.
 
+Any planning orchestration around the shared streaming clustering contract shall
+remain true-streaming and shall not depend on retained full-dataset embedding
+tables, replay-verification tables, or partition-membership tables.
+
 ### REQ-STREAM-INDEXER-020
 
 After planning completion and during the final materialization replay, the crate
@@ -248,6 +276,16 @@ Any clustering used while deriving or refining that hierarchy in either
 `Divisive` or `Agglomerative` mode shall continue to flow through the shared
 streaming clustering contract rather than an older batch-only clustering
 boundary.
+
+The final materialization replay may use implementation-owned temporary local
+append-only spill scoped to terminal partitions, provided that:
+
+- the spill is populated only after planning completion
+- the spill is written in replay order during the final materialization replay
+- the spill is read back by the crate to materialize terminal partitions and
+  then assemble parents bottom-up
+- the crate remains authoritative for leaf construction, block persistence,
+  parent assembly, final result packaging, and spill cleanup
 
 ### REQ-STREAM-INDEXER-021
 
@@ -262,6 +300,42 @@ pass report that includes:
   shared streaming clustering surface wherever clustering participates in that
   work
 - enough structured state for the caller to decide whether to continue or stop
+
+If exact planning cannot yet expose a final partition-ready hierarchy under the
+bounded-state rules of this revision, the report shall expose deterministic
+readiness or progress semantics rather than claiming final partition readiness
+early.
+
+### REQ-STREAM-INDEXER-021A
+
+The crate shall be a true-streaming realization.
+
+It shall not retain or materialize planning-time implementation-owned state
+whose size scales with the full logical dataset, including replayed embedding
+tables, partition membership tables, or equivalent replayable full-dataset
+state.
+
+### REQ-STREAM-INDEXER-021B
+
+The crate shall not expose public planning, finalization, or hierarchy surfaces
+whose required inputs or returned state scale with the full logical dataset,
+including full embedding slices, full partition-membership vectors, or
+equivalent dataset-sized API constructs.
+
+### REQ-STREAM-INDEXER-021C
+
+Transient working memory may scale with the currently ingested batch or the
+currently processed work unit, provided that such growth does not scale with the
+full logical dataset size.
+
+### REQ-STREAM-INDEXER-021D
+
+A caller-visible replay lifecycle backed by hidden implementation-owned
+full-dataset planning-time buffering or spill is non-conformant.
+
+Implementation-owned temporary local spill used only after planning completion
+to stage terminal-partition materialization inputs is conformant in this
+revision.
 
 ### REQ-STREAM-INDEXER-022
 

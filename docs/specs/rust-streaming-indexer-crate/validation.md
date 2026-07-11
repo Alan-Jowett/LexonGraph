@@ -105,7 +105,9 @@ caller-supplied canonical-embedding, hierarchical-planning, or clustering
 implementations.
 
 **Pass condition:** the crate accepts those replacements without changing the
-rest of the streaming runtime contract.
+rest of the streaming runtime contract, and the override seam does not require
+full-dataset embedding slices, full partition-membership vectors, or equivalent
+dataset-sized public API constructs.
 
 **Traces to:** REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015
 
@@ -115,7 +117,10 @@ Complete one successful planning pass with multiple caller-chosen batches.
 
 **Pass condition:** the pass report is deterministic and includes the observed
 item count plus deterministic planning progress or quality information for the
-caller-visible hierarchy-building work of the selected planning direction.
+caller-visible hierarchy-building work of the selected planning direction. If
+the bounded-state realization is not yet partition-ready, the report exposes
+deterministic readiness/progress semantics rather than claiming final
+partition-ready output early.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-021
 
@@ -152,18 +157,40 @@ index result.
 After planning completion, supply a final materialization replay identical to
 the established logical item set and replay order.
 
-**Pass condition:** final materialization succeeds without requiring the crate's
-public API to have retained the full logical dataset between passes, while
-using the finalized partition hierarchy to drive bottom-up assembly regardless
-of whether that hierarchy was derived divisively or agglomeratively.
+**Pass condition:** the crate classifies replayed items into temporary
+per-terminal-partition append-only spill, and that spill-backed classification
+result is deterministic for a fixed planning state and replay order.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-016,
 REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035
 
 ### VAL-STREAM-INDEXER-014
 
+After planning completion, allow the implementation to read back each
+partition spill and materialize the final result.
+
+**Pass condition:** final materialization succeeds without requiring the
+caller-visible API to retain or expose the full logical dataset between passes,
+while using the finalized partition hierarchy to drive bottom-up assembly
+regardless of whether that hierarchy was derived divisively or agglomeratively.
+
+**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-024
+
+### VAL-STREAM-INDEXER-014A
+
 After planning completion, supply a final materialization replay whose item
-count or replay order differs from the established baseline.
+count, item order, metadata, or content reference sequence differs from the
+established baseline.
+
+**Pass condition:** classification/spill staging fails explicitly before
+claiming successful final materialization.
+
+**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-024
+
+### VAL-STREAM-INDEXER-014B
+
+After planning completion, corrupt, truncate, omit, or otherwise invalidate the
+temporary partition spill consumed by terminal materialization.
 
 **Pass condition:** final materialization fails explicitly.
 
@@ -236,8 +263,9 @@ clustering contract rather than an older batch-only clustering boundary.
 
 ### VAL-STREAM-INDEXER-021
 
-Run the same logical item set, indexing context, pass boundaries, and final
-materialization replay twice with deterministic dependency behavior.
+Run the same logical item set, indexing context, pass boundaries, and
+spill-backed final materialization replay twice with deterministic dependency
+behavior.
 
 **Pass condition:** both runs produce the same pass reports, the same finalized
 partition hierarchy, the same root block ID, and the same persisted block set.
@@ -297,9 +325,33 @@ Inspect the caller-visible API surface for dataset-size coupling.
 **Pass condition:** repeated planning passes and final materialization require
 caller replay of the logical item set rather than a default public API
 obligation for the crate to retain or rematerialize the entire dataset on the
-caller's behalf, even if internal partition-plan state is retained.
+caller's behalf, and the public planning/finalization/hierarchy seams do not
+require or return full-dataset embedding slices, partition-membership vectors,
+or equivalent dataset-sized constructs.
 
-**Traces to:** REQ-STREAM-INDEXER-017
+**Traces to:** REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021B
+
+### VAL-STREAM-INDEXER-025A
+
+Inspect the implementation-owned retained state used for replay verification,
+planning, and final materialization.
+
+**Pass condition:** no conformant path retains, materializes, or spills
+full-dataset baseline tables, replayed embedding tables, partition membership
+tables, or equivalent implementation-owned full logical dataset state.
+
+**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021A,
+REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D
+
+### VAL-STREAM-INDEXER-025B
+
+Inspect one bounded-state realization path that requires revisiting prior data.
+
+**Pass condition:** the revisit remains caller-visible as replay or staged
+progress rather than being simulated through hidden implementation-owned
+full-dataset retention or spill.
+
+**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021D
 
 ### VAL-STREAM-INDEXER-026
 

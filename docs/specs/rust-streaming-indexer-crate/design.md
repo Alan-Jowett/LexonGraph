@@ -66,8 +66,11 @@ streaming indexing run with the following observable lifecycle:
 2. ingest one or more batches of indexing items for the current planning pass
 3. complete the pass and obtain an `IndexingPassReport`
 4. either begin the next pass or mark planning complete
-5. consume one final materialization replay to produce the finished index result
-   by assembling parent layers bottom-up from the finalized partition hierarchy
+5. consume one final materialization replay in the established replay order
+6. during that replay, classify items into implementation-owned temporary
+   terminal-partition spill files
+7. read back each partition spill and assemble the finished index result
+   bottom-up from the finalized partition hierarchy
 
 ### DSG-STREAM-INDEXER-004 `IndexItem`
 
@@ -95,6 +98,10 @@ The crate consumes:
   agglomeratively
 - a terminal-partition normalization or termination policy, or equivalent
   planning rule, used by bottom-up assembly
+
+Caller-supplied policy seams remain conformant only when their public input and
+output shapes are themselves true-streaming rather than dataset-sized material
+views.
 
 ### DSG-STREAM-INDEXER-006 `Built-in planning selection`
 
@@ -128,6 +135,9 @@ item replay order. The run stores only the deterministic baseline information
 needed to verify later replay equivalence rather than a public obligation to
 retain the full dataset for callers.
 
+That retained baseline information is itself bounded-state; it shall not grow as
+an implementation-owned full logical dataset table.
+
 ### DSG-STREAM-INDEXER-008 `Replay continuity enforcement`
 
 Each later completed pass and the final materialization replay are validated
@@ -146,8 +156,16 @@ The public API requires the caller to replay the logical item set for repeated
 passes and final materialization rather than requiring the crate to keep the
 entire corpus resident or rematerializable through hidden caller-facing state.
 
-Implementation-internal transient storage is permitted, but it is not part of
-the caller contract.
+Implementation-internal transient storage is permitted when it is bounded by
+the current batch or current work unit during planning.
+
+After planning completion, the implementation may additionally use temporary
+local append-only spill scoped to terminal partitions while classifying the
+final materialization replay.
+
+Public planning, hierarchy, and finalization surfaces shall not require or
+return full-dataset embedding slices, partition-membership vectors, or
+equivalent dataset-sized materializations.
 
 ### DSG-STREAM-INDEXER-010 `Caller-visible pass realization`
 
@@ -156,8 +174,8 @@ replay order:
 
 1. content resolution for each item
 2. ordered embedding generation for each resolved item
-3. deterministic derivation of planning-time item embeddings and any pass-local
-   planning artifacts
+3. deterministic derivation of planning-time item embeddings and any bounded
+   pass-local planning artifacts
 4. deterministic refinement or validation of the hierarchical partition plan
    using the selected planning direction, where built-in `Divisive` mode
    partitions replayed original-item embeddings from coarser units to finer ones
@@ -167,7 +185,9 @@ replay order:
    adaptive built-in realization may begin with directional-PCA-backed planning
    work and then switch one-way to DCBC-backed planning work while preserving
    that selected direction
-5. pass completion on each clustering realization used in that planning work
+5. pass completion on each clustering realization used in that planning work, or
+   deterministic caller-visible staging when a full protocol result is not yet
+   partition-ready under bounded-state constraints
 6. construction of the public `IndexingPassReport`
 
 The completed pass does not yet claim a finished persisted block tree or a
@@ -186,6 +206,10 @@ materialized parent layer.
   participates in that work
 - structured state sufficient for caller stop/continue decisions
 
+If planning has not yet produced a final partition-ready hierarchy under the
+true-streaming bounded-state constraints, the report exposes deterministic
+analysis/progress state rather than claiming final readiness early.
+
 The report remains deterministic for a fixed indexing context and replay order.
 
 ### DSG-STREAM-INDEXER-012 `Planning completion gate`
@@ -195,6 +219,9 @@ after at least one successful completed pass and after the retained partition
 hierarchy covers the established logical item set. Final materialization before
 that transition fails explicitly.
 
+The retained planning state used for this gate is bounded-state summary data,
+not full-dataset embedding or membership materialization.
+
 ### DSG-STREAM-INDEXER-013 `Final materialization replay`
 
 After planning completion, the run consumes one final materialization replay of
@@ -203,10 +230,11 @@ the same logical item set in the same replay order.
 During that replay, the crate:
 
 1. resolves content and generates embeddings again in deterministic order
-2. constructs exactly one leaf block per item
-3. persists the produced leaf blocks
-4. binds each produced leaf deterministically to one terminal partition in the
-   finalized partition hierarchy
+2. classifies each item against the completed planning state
+3. appends each classified item's terminal-partition materialization input to a
+   temporary local per-partition spill file
+4. after the replay completes, replays each partition spill back into
+   terminal-partition materialization
 5. materializes parent layers bottom-up from the terminal partitions until
    exactly one root remains
 
@@ -219,6 +247,9 @@ partition hierarchy was derived through built-in `Divisive` or
 Once leaves have been materialized and bound to terminal partitions, the crate
 builds higher parent layers by following ancestor relations in the finalized
 partition hierarchy rather than by further caller replay of the original items.
+
+The temporary spill is an implementation detail; block construction and
+higher-layer assembly remain crate-owned.
 
 Any clustering used to derive or refine that hierarchy before planning
 completion in either built-in direction still flows through the shared
@@ -359,6 +390,9 @@ later replay validation and bottom-up assembly.
 
 Both built-in directions normalize into the same finalized partition-hierarchy
 representation before final materialization.
+
+The finalized partition-hierarchy surface itself remains bounded-state and shall
+not require full-dataset item-membership vectors as a public API obligation.
 
 ### DSG-STREAM-INDEXER-024 `Partition identity and ancestry`
 
@@ -1133,11 +1167,11 @@ using the caller-supplied overridden values where applicable.
 | DSG-STREAM-INDEXER-001 | REQ-STREAM-INDEXER-002 |
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
-| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
+| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043, REQ-STREAM-INDEXER-044 |
-| DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017 |
-| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
-| DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
+| DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D |
+| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
+| DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
 | DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064 |
 | DSG-STREAM-INDEXER-018 | REQ-STREAM-INDEXER-024 |
@@ -1145,7 +1179,7 @@ using the caller-supplied overridden values where applicable.
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
 | DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
-| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-034 |
+| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-034 |
 | DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |

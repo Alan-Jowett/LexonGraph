@@ -599,16 +599,19 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
         Ok(lexongraph_streaming_clustering::PassReport {
             observed_count: self.embeddings.len(),
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
-                2
-            } else {
-                self.config.cluster_count
-            },
+            readiness: lexongraph_streaming_clustering::PassReadiness::PartitionReady,
+            realized_cluster_count: Some(
+                if self.behavior == RecursivePlannerBehavior::UnderfullSuccess {
+                    2
+                } else {
+                    self.config.cluster_count
+                },
+            ),
             quality_metric: 1.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::LargerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            cluster_ids: Some(vec![0, 1]),
         })
     }
 
@@ -989,6 +992,65 @@ impl HierarchicalPlanningPolicy for NestedHierarchyPlanningPolicy {
                         parent_id: Some("p0".into()),
                         child_ids: vec![],
                         item_indices: vec![3],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                ],
+            },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
+            planning_quality_metric: 1.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: [PlanningStage::Custom].into_iter().collect(),
+        })
+    }
+}
+
+#[derive(Clone, Default)]
+struct InterleavedTerminalHierarchyPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for InterleavedTerminalHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        if embeddings.len() != 4 {
+            return Err(FixtureError(
+                "interleaved hierarchy fixture requires four embeddings".into(),
+            ));
+        }
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![
+                    FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: vec!["p0.0".into(), "p0.1".into()],
+                        item_indices: vec![0, 1, 2, 3],
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![0, 2],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.1".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![1, 3],
                         terminal: true,
                         planning_stage: PlanningStage::Custom,
                     },
@@ -1598,6 +1660,30 @@ async fn val_stream_indexer_045_shared_summary_policy_surface_is_reusable() {
         .await
         .unwrap();
 
+    assert!(!result.block_ids.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_045a_same_order_finalization_supports_interleaved_terminal_partitions()
+{
+    let items = [item("alpha"), item("bravo"), item("charlie"), item("delta")];
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        InterleavedTerminalHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
+    run.mark_planning_complete().unwrap();
+
+    let store = MemoryBlockStore::default();
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
     assert!(!result.block_ids.is_empty());
 }
 
