@@ -218,6 +218,11 @@ shared lifecycle by:
 - producing a classifier and running the declared classifier-side probe
   workloads from the workload's declared corpus source
 
+Any evaluator-owned fixture, test double, or reusable candidate adapter that
+emits `PassReport` values shall preserve the current shared pass-report
+contract, including explicit readiness status and readiness-consistent
+optionality for `realized_cluster_count` and `cluster_ids`.
+
 ### REQ-STREAM-EVAL-010
 
 For each candidate run, after producing the final classifier, the evaluator
@@ -238,6 +243,10 @@ The evaluator shall support repeated identical executions of the same candidate
 under the same benchmark profile and shall compare observable results for
 determinism, including pass reports and classifier-side assignments over the
 declared probe workloads.
+
+Deterministic pass-report comparison shall include readiness status and the
+presence or absence of partition fields together with any populated partition
+metadata.
 
 ### REQ-STREAM-EVAL-012
 

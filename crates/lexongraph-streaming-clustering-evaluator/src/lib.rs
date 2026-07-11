@@ -46,7 +46,7 @@ use lexongraph_spherical_kmeans::{
     SphericalKmeansStreamingTrainer,
 };
 use lexongraph_streaming_clustering::{
-    ClusterId, Embedding, MetricDirection, PassReport, StreamingClusterClassifier,
+    ClusterId, Embedding, MetricDirection, PassReadiness, PassReport, StreamingClusterClassifier,
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
@@ -172,16 +172,32 @@ impl From<MetricDirection> for ObservableMetricDirection {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObservablePassReadiness {
+    AnalysisOnly,
+    PartitionReady,
+}
+
+impl From<PassReadiness> for ObservablePassReadiness {
+    fn from(value: PassReadiness) -> Self {
+        match value {
+            PassReadiness::AnalysisOnly => Self::AnalysisOnly,
+            PassReadiness::PartitionReady => Self::PartitionReady,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObservablePassReport {
     pub observed_count: usize,
     pub requested_cluster_count: u32,
-    pub realized_cluster_count: u32,
+    pub readiness: ObservablePassReadiness,
+    pub realized_cluster_count: Option<u32>,
     pub quality_metric: f64,
     pub balance_metric: f64,
     pub quality_direction: ObservableMetricDirection,
     pub balance_direction: ObservableMetricDirection,
-    pub cluster_ids: Vec<ClusterId>,
+    pub cluster_ids: Option<Vec<ClusterId>>,
 }
 
 impl From<PassReport> for ObservablePassReport {
@@ -189,6 +205,7 @@ impl From<PassReport> for ObservablePassReport {
         Self {
             observed_count: value.observed_count,
             requested_cluster_count: value.requested_cluster_count,
+            readiness: value.readiness.into(),
             realized_cluster_count: value.realized_cluster_count,
             quality_metric: value.quality_metric,
             balance_metric: value.balance_metric,
@@ -4597,12 +4614,13 @@ impl StreamingClusterTrainer for Section4FamilyStrategyTrainer {
         let report = PassReport {
             observed_count: self.pass_observed_count,
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: self.config.cluster_count,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(self.config.cluster_count),
             quality_metric: 0.0,
             balance_metric: 0.0,
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: (0..self.config.cluster_count).collect(),
+            cluster_ids: Some((0..self.config.cluster_count).collect()),
         };
         self.pass_observed_count = 0;
         self.state = TrainerState::PassComplete;
@@ -5313,7 +5331,8 @@ impl StreamingClusterTrainer for FixtureTrainer {
         let report = PassReport {
             observed_count: self.pass_observed_count,
             requested_cluster_count: self.config.cluster_count,
-            realized_cluster_count: self.config.cluster_count,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(self.config.cluster_count),
             quality_metric: if matches!(self.mode, FixtureMode::SkewedGateFail) {
                 1.0
             } else {
@@ -5326,7 +5345,7 @@ impl StreamingClusterTrainer for FixtureTrainer {
             },
             quality_direction: MetricDirection::SmallerIsBetter,
             balance_direction: MetricDirection::SmallerIsBetter,
-            cluster_ids: (0..self.config.cluster_count).collect(),
+            cluster_ids: Some((0..self.config.cluster_count).collect()),
         };
         self.pass_observed_count = 0;
         self.pass_index += 1;

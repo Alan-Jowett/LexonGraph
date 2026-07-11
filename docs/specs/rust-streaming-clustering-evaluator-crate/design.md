@@ -163,6 +163,11 @@ Inline fixtures and block-store-backed corpus references therefore share one
 execution shape after workload resolution rather than splitting the evaluator
 into unrelated small-corpus and large-corpus code paths.
 
+When the evaluator records or fabricates pass reports through evaluator-owned
+fixtures, adapters, or observable transport types, it preserves the shared
+readiness-aware pass-report shape rather than collapsing readiness or assuming
+partition fields are always present.
+
 ### DSG-STREAM-EVAL-008A `Unified corpus-source model`
 
 The evaluator defines one corpus-source abstraction that can back:
@@ -237,6 +242,9 @@ and compare the observable boundary:
 - pass report sequences
 - classifier-side assignments or other classifier probe results
 - deterministic provenance fields expected to remain identical
+
+Pass-report comparison includes readiness status and the presence or absence of
+partition-ready fields in addition to the metric payload.
 
 Determinism evaluation is scoped to this observable boundary rather than to
 unobservable internal state.

@@ -84,7 +84,8 @@ Run the same candidate twice under the same benchmark profile.
 
 **Pass condition:** the evaluator compares pass-report sequences and
 classifier-side probe outputs across repeated executions and reports whether the
-observable results are deterministic.
+observable results are deterministic, including readiness status and the
+presence or absence of partition fields in pass reports.
 
 **Traces to:** REQ-STREAM-EVAL-008, REQ-STREAM-EVAL-011
 
@@ -217,6 +218,17 @@ candidate/configuration execution does not expose success-shaped completed
 artifacts beyond the point of failure.
 
 **Traces to:** REQ-STREAM-EVAL-015, REQ-STREAM-EVAL-022
+
+### VAL-STREAM-EVAL-016A
+
+Inspect one evaluator-owned observable pass-report transport and one
+evaluator-owned fixture or test double that emits `PassReport` values.
+
+**Pass condition:** both preserve the current shared readiness-aware pass-report
+contract, including explicit readiness status and readiness-consistent optional
+partition fields, rather than assuming partition metadata is always populated.
+
+**Traces to:** REQ-STREAM-EVAL-009, REQ-STREAM-EVAL-011
 
 ### VAL-STREAM-EVAL-017
 
