@@ -434,6 +434,7 @@ enum RecursivePlannerBehavior {
     FinishPassFailure,
     ShortAssignmentBatch,
     UnderfullSuccess,
+    EndlessAnalysisOnly,
 }
 
 #[derive(Clone, Copy)]
@@ -463,6 +464,12 @@ impl SlowRecursiveClusteringFactory {
     fn underfull_success() -> Self {
         Self {
             behavior: RecursivePlannerBehavior::UnderfullSuccess,
+        }
+    }
+
+    fn endless_analysis_only() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::EndlessAnalysisOnly,
         }
     }
 }
@@ -585,6 +592,20 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::MalformedInput {
                 message: "synthetic recursive planning failure".into(),
+            });
+        }
+        if self.behavior == RecursivePlannerBehavior::EndlessAnalysisOnly {
+            self.state = TrainerState::PassComplete;
+            return Ok(lexongraph_streaming_clustering::PassReport {
+                observed_count: self.embeddings.len(),
+                requested_cluster_count: self.config.cluster_count,
+                readiness: lexongraph_streaming_clustering::PassReadiness::AnalysisOnly,
+                realized_cluster_count: None,
+                quality_metric: 1.0,
+                balance_metric: 0.0,
+                quality_direction: MetricDirection::LargerIsBetter,
+                balance_direction: MetricDirection::SmallerIsBetter,
+                cluster_ids: None,
             });
         }
         let mut sorted = self
@@ -5265,6 +5286,27 @@ async fn regression_recursive_failed_units_advance_completion_counters() {
         assert_eq!(failed_unit.discovered_unit_count, Some(1));
         assert_eq!(failed_unit.current_recursion_depth, Some(0));
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_recursive_analysis_only_planners_fail_instead_of_looping_forever() {
+    let items = switch_trigger_items();
+    let mut run = StreamingIndexingRun::with_streaming_clustering_factory(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        SlowRecursiveClusteringFactory::endless_analysis_only(),
+        embedding_spec(),
+        128,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    let error = run.finish_pass().unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("maximum replay pass count"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

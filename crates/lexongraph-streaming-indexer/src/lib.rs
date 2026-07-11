@@ -1789,14 +1789,15 @@ struct BaselineItem {
 }
 
 struct PartitionRoutingPlan {
-    item_partition_ids: Vec<String>,
-    terminal_partition_item_counts: HashMap<String, usize>,
+    terminal_partition_ids: Vec<String>,
+    terminal_partition_item_counts: Vec<usize>,
+    item_partition_ordinals: Vec<u32>,
 }
 
 struct PartitionSpillDirectory {
     dir: PathBuf,
-    paths: HashMap<String, PathBuf>,
-    writers: HashMap<String, BufWriter<File>>,
+    paths: Vec<PathBuf>,
+    writers: Vec<Option<BufWriter<File>>>,
 }
 
 #[derive(Clone)]
@@ -2468,13 +2469,7 @@ where
         let replay_result = async {
             let mut replay_count = 0usize;
             let mut persisted_ids: Vec<BlockHash> = Vec::new();
-            let mut terminal_partition_ids = routing_plan
-                .terminal_partition_item_counts
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
-            terminal_partition_ids.sort();
-            let mut spill = PartitionSpillDirectory::new(terminal_partition_ids)?;
+            let mut spill = PartitionSpillDirectory::new(routing_plan.terminal_partition_ids.len())?;
 
             for batch in replay_batches {
                 let items = batch.as_ref();
@@ -2575,7 +2570,7 @@ where
                     verify_persisted_block_id(block_id, serialized.hash)?;
                     persisted_ids.push(block_id);
                     spill.append_leaf_child(
-                        &routing_plan.item_partition_ids[replay_count + offset],
+                        routing_plan.item_partition_ordinals[replay_count + offset],
                         &IndexedChild {
                             embedding: embedding.clone(),
                             child: block_id,
@@ -2635,9 +2630,12 @@ where
         };
 
         let mut materialized_terminal_children = HashMap::<String, IndexedChild>::new();
-        for (partition_id, expected_count) in &routing_plan.terminal_partition_item_counts {
-            let leaf_children = spill.read_partition_children(partition_id.as_str())?;
-            if leaf_children.len() != *expected_count {
+        for (partition_ordinal, partition_id) in
+            routing_plan.terminal_partition_ids.iter().enumerate()
+        {
+            let expected_count = routing_plan.terminal_partition_item_counts[partition_ordinal];
+            let leaf_children = spill.read_partition_children(partition_ordinal)?;
+            if leaf_children.len() != expected_count {
                 return Err(StreamingIndexerError::ReplayMismatch(format!(
                     "terminal partition {partition_id:?} spill contained {} items but expected {expected_count}",
                     leaf_children.len()
@@ -3692,7 +3690,17 @@ where
     where
         OP: FnMut(),
     {
+        let replay_pass_limit = embeddings.len().saturating_add(4).max(1);
+        let mut replay_passes = 0usize;
         let pass_report = loop {
+            replay_passes += 1;
+            if replay_passes > replay_pass_limit {
+                return Err(StreamingClusteringError::MalformedInput {
+                    message: format!(
+                        "planner exceeded the maximum replay pass count of {replay_pass_limit}"
+                    ),
+                });
+            }
             self.trainer.ingest_batch(embeddings)?;
             observe_progress();
             let pass_report = self.trainer.finish_pass()?;
@@ -6572,34 +6580,43 @@ fn build_partition_routing_plan(
 ) -> Result<PartitionRoutingPlan, String> {
     validate_partition_hierarchy(hierarchy, item_count)?;
 
-    let mut item_partition_ids = vec![String::new(); item_count];
-    let mut terminal_partition_item_counts = HashMap::new();
-    for partition in &hierarchy.partitions {
-        if !partition.terminal {
-            continue;
-        }
-        terminal_partition_item_counts.insert(partition.id.clone(), partition.item_indices.len());
+    let mut terminal_partitions = hierarchy
+        .partitions
+        .iter()
+        .filter(|partition| partition.terminal)
+        .collect::<Vec<_>>();
+    terminal_partitions.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut item_partition_ordinals = vec![u32::MAX; item_count];
+    let mut terminal_partition_ids = Vec::with_capacity(terminal_partitions.len());
+    let mut terminal_partition_item_counts = Vec::with_capacity(terminal_partitions.len());
+    for (partition_ordinal, partition) in terminal_partitions.into_iter().enumerate() {
+        let partition_ordinal = u32::try_from(partition_ordinal)
+            .map_err(|_| "terminal partition ordinal does not fit into u32".to_string())?;
+        terminal_partition_ids.push(partition.id.clone());
+        terminal_partition_item_counts.push(partition.item_indices.len());
         for &item_index in &partition.item_indices {
-            if !item_partition_ids[item_index].is_empty() {
+            if item_partition_ordinals[item_index] != u32::MAX {
                 return Err(format!(
                     "item index {item_index} is assigned to more than one terminal partition"
                 ));
             }
-            item_partition_ids[item_index] = partition.id.clone();
+            item_partition_ordinals[item_index] = partition_ordinal;
         }
     }
-    if item_partition_ids.iter().any(String::is_empty) {
+    if item_partition_ordinals.contains(&u32::MAX) {
         return Err("every logical item must resolve to a terminal partition".into());
     }
 
     Ok(PartitionRoutingPlan {
-        item_partition_ids,
+        terminal_partition_ids,
         terminal_partition_item_counts,
+        item_partition_ordinals,
     })
 }
 
 impl PartitionSpillDirectory {
-    fn new(partition_ids: Vec<String>) -> Result<Self, StreamingIndexerError> {
+    fn new(partition_count: usize) -> Result<Self, StreamingIndexerError> {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?
@@ -6615,30 +6632,35 @@ impl PartitionSpillDirectory {
             ))
         })?;
 
-        let mut paths = HashMap::new();
-        for (index, partition_id) in partition_ids.into_iter().enumerate() {
-            paths.insert(
-                partition_id,
-                dir.join(format!("partition-{index:08}.spill")),
-            );
+        let mut paths = Vec::with_capacity(partition_count);
+        for index in 0..partition_count {
+            paths.push(dir.join(format!("partition-{index:08}.spill")));
         }
 
         Ok(Self {
             dir,
             paths,
-            writers: HashMap::new(),
+            writers: (0..partition_count).map(|_| None).collect(),
         })
     }
 
     fn append_leaf_child(
         &mut self,
-        partition_id: &str,
+        partition_ordinal: u32,
         child: &IndexedChild,
     ) -> Result<(), StreamingIndexerError> {
-        if !self.writers.contains_key(partition_id) {
-            let path = self.paths.get(partition_id).ok_or_else(|| {
+        let partition_ordinal = usize::try_from(partition_ordinal).map_err(|_| {
+            StreamingIndexerError::LocalSpill("partition ordinal does not fit into usize".into())
+        })?;
+        let writer_slot = self.writers.get_mut(partition_ordinal).ok_or_else(|| {
+            StreamingIndexerError::LocalSpill(format!(
+                "partition ordinal {partition_ordinal} is out of range for spill routing"
+            ))
+        })?;
+        if writer_slot.is_none() {
+            let path = self.paths.get(partition_ordinal).ok_or_else(|| {
                 StreamingIndexerError::LocalSpill(format!(
-                    "partition {partition_id:?} is missing a spill path"
+                    "partition ordinal {partition_ordinal} is missing a spill path"
                 ))
             })?;
             let file = File::create(path).map_err(|error| {
@@ -6647,35 +6669,36 @@ impl PartitionSpillDirectory {
                     path.display()
                 ))
             })?;
-            self.writers
-                .insert(partition_id.to_string(), BufWriter::new(file));
+            *writer_slot = Some(BufWriter::new(file));
         }
 
-        let writer = self.writers.get_mut(partition_id).ok_or_else(|| {
+        let writer = writer_slot.as_mut().ok_or_else(|| {
             StreamingIndexerError::LocalSpill(format!(
-                "partition {partition_id:?} spill writer is unavailable"
+                "partition ordinal {partition_ordinal} spill writer is unavailable"
             ))
         })?;
         write_spilled_indexed_child(writer, child)
     }
 
     fn finish(mut self) -> Result<Self, StreamingIndexerError> {
-        for writer in self.writers.values_mut() {
-            writer
-                .flush()
-                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+        for writer in &mut self.writers {
+            if let Some(writer) = writer.as_mut() {
+                writer
+                    .flush()
+                    .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+            }
         }
-        self.writers.clear();
+        self.writers.iter_mut().for_each(|writer| *writer = None);
         Ok(self)
     }
 
     fn read_partition_children(
         &self,
-        partition_id: &str,
+        partition_ordinal: usize,
     ) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
-        let path = self.paths.get(partition_id).ok_or_else(|| {
+        let path = self.paths.get(partition_ordinal).ok_or_else(|| {
             StreamingIndexerError::LocalSpill(format!(
-                "partition {partition_id:?} is missing a spill path"
+                "partition ordinal {partition_ordinal} is missing a spill path"
             ))
         })?;
         let file = File::open(path).map_err(|error| {
@@ -6695,6 +6718,7 @@ impl PartitionSpillDirectory {
 
 impl Drop for PartitionSpillDirectory {
     fn drop(&mut self) {
+        self.writers.clear();
         if !self.dir.as_os_str().is_empty() {
             let _ = fs::remove_dir_all(&self.dir);
         }
