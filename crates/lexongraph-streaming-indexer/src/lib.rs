@@ -21,15 +21,15 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use async_recursion::async_recursion;
 use ciborium::{Value, ser::into_writer};
@@ -65,6 +65,7 @@ use lexongraph_streaming_clustering::{
     StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
 // ─────────────────────────────────────────────────────────────
 // Public input / output types
@@ -1791,11 +1792,12 @@ struct BaselineItem {
 struct PartitionRoutingPlan {
     terminal_partition_ids: Vec<String>,
     terminal_partition_item_counts: Vec<usize>,
-    item_partition_ordinals: Vec<u32>,
+    _route_dir: TempDir,
+    route_path: PathBuf,
 }
 
 struct PartitionSpillDirectory {
-    dir: PathBuf,
+    dir: Option<TempDir>,
     paths: Vec<PathBuf>,
     writers: Vec<Option<BufWriter<File>>>,
 }
@@ -2423,8 +2425,7 @@ where
         let materializability_bound =
             materializability_bound(&self.embedding_spec, self.block_size_target)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
-        let routing_plan = build_partition_routing_plan(hierarchy, baseline.len())
-            .map_err(StreamingIndexerError::HierarchyValidation)?;
+        let routing_plan = build_partition_routing_plan(hierarchy, baseline.len())?;
         let partitions = hierarchy
             .partitions
             .iter()
@@ -2469,6 +2470,7 @@ where
         let replay_result = async {
             let mut replay_count = 0usize;
             let mut persisted_ids: Vec<BlockHash> = Vec::new();
+            let mut routing_reader = routing_plan.open_reader()?;
             let mut spill = PartitionSpillDirectory::new(routing_plan.terminal_partition_ids.len())?;
 
             for batch in replay_batches {
@@ -2569,8 +2571,14 @@ where
                         .map_err(StreamingIndexerError::Storage)?;
                     verify_persisted_block_id(block_id, serialized.hash)?;
                     persisted_ids.push(block_id);
+                    let partition_ordinal =
+                        routing_reader.read_partition_ordinal()?.ok_or_else(|| {
+                            StreamingIndexerError::ReplayMismatch(
+                                "finalization replay routing ended before the baseline".into(),
+                            )
+                        })?;
                     spill.append_leaf_child(
-                        routing_plan.item_partition_ordinals[replay_count + offset],
+                        partition_ordinal,
                         &IndexedChild {
                             embedding: embedding.clone(),
                             child: block_id,
@@ -2591,6 +2599,11 @@ where
                     "finalization replay had {replay_count} items but baseline has {}",
                     baseline.len()
                 )));
+            }
+            if routing_reader.read_partition_ordinal()?.is_some() {
+                return Err(StreamingIndexerError::ReplayMismatch(
+                    "finalization replay routing contained more items than the baseline".into(),
+                ));
             }
 
             Ok((spill.finish()?, persisted_ids))
@@ -3307,6 +3320,7 @@ fn select_adaptive_algorithm_for_boundary(
     represented_item_count: usize,
     embeddings: &[Vec<f32>],
 ) -> Result<ActivePlanningAlgorithm, StreamingIndexerError> {
+    let replay_pass_limit = embeddings.len().saturating_add(4).max(1);
     let mut progress = selector
         .begin_selection_boundary(
             represented_item_count,
@@ -3314,12 +3328,19 @@ fn select_adaptive_algorithm_for_boundary(
             embeddings.first().map_or(0, std::vec::Vec::len),
         )
         .map_err(map_adaptive_planning_error)?;
+    let mut replay_passes = 0usize;
     loop {
         match progress {
             lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::Selected(algorithm) => {
                 return Ok(algorithm);
             }
             lexongraph_adaptive_planning_policy::AdaptiveSelectionProgress::ReplayRequired(_) => {
+                replay_passes += 1;
+                if replay_passes > replay_pass_limit {
+                    return Err(StreamingIndexerError::ClusteringFailure(format!(
+                        "adaptive selection exceeded the maximum replay pass count of {replay_pass_limit}"
+                    )));
+                }
                 selector
                     .ingest_selection_batch(embeddings)
                     .map_err(map_adaptive_planning_error)?;
@@ -6510,6 +6531,12 @@ fn validate_partition_hierarchy(
                 partition.id
             ));
         }
+        if partition.terminal && partition.item_indices.is_empty() {
+            return Err(format!(
+                "terminal partition {:?} must contain at least one item",
+                partition.id
+            ));
+        }
         if !partition.terminal && partition.child_ids.is_empty() {
             return Err(format!(
                 "non-terminal partition {:?} must declare children",
@@ -6577,8 +6604,9 @@ fn validate_partition_hierarchy(
 fn build_partition_routing_plan(
     hierarchy: &FinalizedPartitionHierarchy,
     item_count: usize,
-) -> Result<PartitionRoutingPlan, String> {
-    validate_partition_hierarchy(hierarchy, item_count)?;
+) -> Result<PartitionRoutingPlan, StreamingIndexerError> {
+    validate_partition_hierarchy(hierarchy, item_count)
+        .map_err(StreamingIndexerError::HierarchyValidation)?;
 
     let mut terminal_partitions = hierarchy
         .partitions
@@ -6587,58 +6615,153 @@ fn build_partition_routing_plan(
         .collect::<Vec<_>>();
     terminal_partitions.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut item_partition_ordinals = vec![u32::MAX; item_count];
     let mut terminal_partition_ids = Vec::with_capacity(terminal_partitions.len());
     let mut terminal_partition_item_counts = Vec::with_capacity(terminal_partitions.len());
+    let route_dir = tempfile::tempdir().map_err(|error| {
+        StreamingIndexerError::LocalSpill(format!(
+            "could not create temporary routing directory: {error}"
+        ))
+    })?;
+    let route_path = route_dir.path().join("partition-routing.bin");
+    {
+        let route_file = File::create(&route_path).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not create partition routing file {}: {error}",
+                route_path.display()
+            ))
+        })?;
+        let mut writer = BufWriter::new(route_file);
+        for _ in 0..item_count {
+            writer
+                .write_all(&u32::MAX.to_le_bytes())
+                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+        }
+        writer
+            .flush()
+            .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+    }
+    let mut route_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&route_path)
+        .map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not reopen partition routing file {}: {error}",
+                route_path.display()
+            ))
+        })?;
+    let mut assigned_item_count = 0usize;
     for (partition_ordinal, partition) in terminal_partitions.into_iter().enumerate() {
-        let partition_ordinal = u32::try_from(partition_ordinal)
-            .map_err(|_| "terminal partition ordinal does not fit into u32".to_string())?;
+        if partition.item_indices.is_empty() {
+            return Err(StreamingIndexerError::HierarchyValidation(format!(
+                "terminal partition {:?} must contain at least one item",
+                partition.id
+            )));
+        }
+        let partition_ordinal = u32::try_from(partition_ordinal).map_err(|_| {
+            StreamingIndexerError::HierarchyValidation(
+                "terminal partition ordinal does not fit into u32".into(),
+            )
+        })?;
         terminal_partition_ids.push(partition.id.clone());
         terminal_partition_item_counts.push(partition.item_indices.len());
         for &item_index in &partition.item_indices {
-            if item_partition_ordinals[item_index] != u32::MAX {
-                return Err(format!(
+            let offset = u64::try_from(item_index)
+                .map_err(|_| {
+                    StreamingIndexerError::HierarchyValidation(
+                        "item index does not fit into u64".into(),
+                    )
+                })?
+                .checked_mul(4)
+                .ok_or_else(|| {
+                    StreamingIndexerError::HierarchyValidation(
+                        "partition routing offset overflowed".into(),
+                    )
+                })?;
+            route_file
+                .seek(SeekFrom::Start(offset))
+                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+            let mut existing = [0u8; 4];
+            route_file
+                .read_exact(&mut existing)
+                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+            if u32::from_le_bytes(existing) != u32::MAX {
+                return Err(StreamingIndexerError::HierarchyValidation(format!(
                     "item index {item_index} is assigned to more than one terminal partition"
-                ));
+                )));
             }
-            item_partition_ordinals[item_index] = partition_ordinal;
+            route_file
+                .seek(SeekFrom::Start(offset))
+                .and_then(|_| route_file.write_all(&partition_ordinal.to_le_bytes()))
+                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+            assigned_item_count += 1;
         }
     }
-    if item_partition_ordinals.contains(&u32::MAX) {
-        return Err("every logical item must resolve to a terminal partition".into());
+    if assigned_item_count != item_count {
+        return Err(StreamingIndexerError::HierarchyValidation(
+            "every logical item must resolve to a terminal partition".into(),
+        ));
     }
 
     Ok(PartitionRoutingPlan {
         terminal_partition_ids,
         terminal_partition_item_counts,
-        item_partition_ordinals,
+        _route_dir: route_dir,
+        route_path,
     })
+}
+
+impl PartitionRoutingPlan {
+    fn open_reader(&self) -> Result<PartitionRoutingReader, StreamingIndexerError> {
+        let route_file = File::open(&self.route_path).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not open partition routing file {}: {error}",
+                self.route_path.display()
+            ))
+        })?;
+        Ok(PartitionRoutingReader {
+            reader: BufReader::new(route_file),
+        })
+    }
+}
+
+struct PartitionRoutingReader {
+    reader: BufReader<File>,
+}
+
+impl PartitionRoutingReader {
+    fn read_partition_ordinal(&mut self) -> Result<Option<u32>, StreamingIndexerError> {
+        let mut ordinal = [0u8; 4];
+        match self.reader.read_exact(&mut ordinal) {
+            Ok(()) => Ok(Some(u32::from_le_bytes(ordinal))),
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+            Err(error) => Err(StreamingIndexerError::LocalSpill(error.to_string())),
+        }
+    }
 }
 
 impl PartitionSpillDirectory {
     fn new(partition_count: usize) -> Result<Self, StreamingIndexerError> {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "lexongraph-streaming-indexer-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir(&dir).map_err(|error| {
+        let dir = tempfile::tempdir().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
-                "could not create temporary spill directory {}: {error}",
-                dir.display()
+                "could not create temporary spill directory: {error}"
             ))
         })?;
 
         let mut paths = Vec::with_capacity(partition_count);
         for index in 0..partition_count {
-            paths.push(dir.join(format!("partition-{index:08}.spill")));
+            let path = dir.path().join(format!("partition-{index:08}.spill"));
+            File::create(&path).map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not create partition spill {}: {error}",
+                    path.display()
+                ))
+            })?;
+            paths.push(path);
         }
 
         Ok(Self {
-            dir,
+            dir: Some(dir),
             paths,
             writers: (0..partition_count).map(|_| None).collect(),
         })
@@ -6719,8 +6842,8 @@ impl PartitionSpillDirectory {
 impl Drop for PartitionSpillDirectory {
     fn drop(&mut self) {
         self.writers.clear();
-        if !self.dir.as_os_str().is_empty() {
-            let _ = fs::remove_dir_all(&self.dir);
+        if let Some(dir) = self.dir.take() {
+            let _ = dir.close();
         }
     }
 }

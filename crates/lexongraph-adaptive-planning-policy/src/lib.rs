@@ -241,6 +241,7 @@ impl AdaptivePlanningSelector {
 #[derive(Debug)]
 struct AdaptiveDecisionBoundary {
     represented_item_count: usize,
+    boundary_embedding_count: usize,
     phase: AdaptiveReplayStage,
     partition_ready_passes: usize,
     trainer: Option<DirectionalPcaStreamingTrainer>,
@@ -258,6 +259,7 @@ enum AdaptiveBoundaryState {
 #[derive(Debug)]
 struct MeanClusterRadiusMeasurement {
     represented_item_count: usize,
+    boundary_embedding_count: usize,
     cluster_radius_sums: BTreeMap<u32, (f64, usize)>,
     observed_embedding_count: usize,
 }
@@ -462,6 +464,7 @@ impl AdaptiveDecisionBoundary {
         .map_err(map_streaming_clustering_error)?;
         Ok(Self {
             represented_item_count,
+            boundary_embedding_count,
             phase: AdaptiveReplayStage::CollectingSummaries,
             partition_ready_passes: 0,
             trainer: Some(trainer),
@@ -534,6 +537,7 @@ impl AdaptiveDecisionBoundary {
                             self.classifier = Some(classifier);
                             self.measurement = Some(MeanClusterRadiusMeasurement::new(
                                 self.represented_item_count,
+                                self.boundary_embedding_count,
                             ));
                             self.phase = AdaptiveReplayStage::MeasuringDecision;
                             Ok(AdaptiveBoundaryState::MeasuringDecision)
@@ -556,9 +560,10 @@ impl AdaptiveDecisionBoundary {
 }
 
 impl MeanClusterRadiusMeasurement {
-    fn new(represented_item_count: usize) -> Self {
+    fn new(represented_item_count: usize, boundary_embedding_count: usize) -> Self {
         Self {
             represented_item_count,
+            boundary_embedding_count,
             cluster_radius_sums: BTreeMap::new(),
             observed_embedding_count: 0,
         }
@@ -594,6 +599,12 @@ impl MeanClusterRadiusMeasurement {
             return Err(AdaptivePlanningError::DiagnosticComputation(
                 "mean cluster radius requires at least one observed embedding".into(),
             ));
+        }
+        if self.observed_embedding_count != self.boundary_embedding_count {
+            return Err(AdaptivePlanningError::DiagnosticComputation(format!(
+                "mean cluster radius expected {} observed embeddings but received {}",
+                self.boundary_embedding_count, self.observed_embedding_count
+            )));
         }
 
         let mut total_cluster_radius = 0.0f64;

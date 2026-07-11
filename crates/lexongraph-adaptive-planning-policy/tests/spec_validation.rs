@@ -353,6 +353,48 @@ fn val_adaptive_policy_012_repeats_the_same_switch_boundary() {
 }
 
 #[test]
+fn regression_adaptive_policy_rejects_partial_measurement_replays() {
+    let fixture = diffuse_cluster_embeddings();
+    let mut selector = AdaptivePlanningSelector::new(settings(
+        AdaptivePlanningDirection::Divisive,
+        DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD,
+    ))
+    .unwrap();
+
+    assert!(matches!(
+        select_algorithm(&mut selector, fixture.len(), &fixture),
+        ActivePlanningAlgorithm::DirectionalPca
+    ));
+
+    let mut progress = selector
+        .begin_selection_boundary(fixture.len(), fixture.len(), fixture[0].len())
+        .unwrap();
+    loop {
+        match progress {
+            AdaptiveSelectionProgress::Selected(_) => {
+                panic!("partial replay should not produce a selection")
+            }
+            AdaptiveSelectionProgress::ReplayRequired(AdaptiveReplayStage::CollectingSummaries) => {
+                selector.ingest_selection_batch(&fixture).unwrap();
+                progress = selector.finish_selection_pass().unwrap();
+            }
+            AdaptiveSelectionProgress::ReplayRequired(AdaptiveReplayStage::MeasuringDecision) => {
+                selector
+                    .ingest_selection_batch(&fixture[..fixture.len() - 1])
+                    .unwrap();
+                let error = selector.finish_selection_pass().unwrap_err();
+                let message = error.to_string();
+                assert!(
+                    message.contains("expected 4 observed embeddings but received 3"),
+                    "unexpected error: {message}"
+                );
+                break;
+            }
+        }
+    }
+}
+
+#[test]
 fn regression_adaptive_policy_requires_threshold_exceedance_instead_of_switching_at_equality() {
     let fixture = compact_cluster_embeddings();
     let mut selector = AdaptivePlanningSelector::new(settings(

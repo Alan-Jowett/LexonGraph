@@ -712,6 +712,61 @@ impl HierarchicalPlanningPolicy for InvalidHierarchyPlanningPolicy {
 }
 
 #[derive(Clone, Default)]
+struct EmptyTerminalHierarchyPlanningPolicy;
+
+impl HierarchicalPlanningPolicy for EmptyTerminalHierarchyPlanningPolicy {
+    type Error = FixtureError;
+
+    fn finish_planning_pass(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        _: &EmbeddingSpec,
+        _: usize,
+        _: usize,
+    ) -> Result<PlanningPassOutcome, Self::Error> {
+        let mid = embeddings.len() / 2;
+        Ok(PlanningPassOutcome {
+            hierarchy: FinalizedPartitionHierarchy {
+                root_partition_id: "p0".into(),
+                partitions: vec![
+                    FinalizedPartition {
+                        id: "p0".into(),
+                        parent_id: None,
+                        child_ids: vec!["p0.0".into(), "p0.1".into()],
+                        item_indices: (0..embeddings.len()).collect(),
+                        terminal: false,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.0".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: (0..mid).collect(),
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                    FinalizedPartition {
+                        id: "p0.1".into(),
+                        parent_id: Some("p0".into()),
+                        child_ids: vec![],
+                        item_indices: vec![],
+                        terminal: true,
+                        planning_stage: PlanningStage::Custom,
+                    },
+                ],
+            },
+            requested_cluster_count: None,
+            realized_cluster_count: None,
+            planning_quality_metric: 0.0,
+            planning_balance_metric: 0.0,
+            planning_quality_direction: MetricDirection::LargerIsBetter,
+            planning_balance_direction: MetricDirection::SmallerIsBetter,
+            stages_used: [PlanningStage::Custom].into_iter().collect(),
+        })
+    }
+}
+
+#[derive(Clone, Default)]
 struct FixedHierarchyPlanningPolicy;
 
 impl HierarchicalPlanningPolicy for FixedHierarchyPlanningPolicy {
@@ -1852,6 +1907,27 @@ async fn regression_hierarchy_failure_preserves_open_pass_for_retry() {
     let retry = run.finish_pass().unwrap();
     assert_eq!(retry.observed_item_count, 4);
     assert_eq!(retry.completed_pass_count, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_empty_terminal_partitions_are_rejected_explicitly() {
+    let mut run = StreamingIndexingRun::new(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        EmptyTerminalHierarchyPlanningPolicy,
+        embedding_spec(),
+        256,
+    );
+    run.ingest_batch(&[item("alpha"), item("bravo"), item("charlie"), item("delta")])
+        .await
+        .unwrap();
+    let error = run.finish_pass().unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("must contain at least one item"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
