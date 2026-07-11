@@ -111,10 +111,18 @@ the same pass dataset order or fail explicitly.
 Each completed pass shall return a deterministic `PassReport` containing:
 
 - `observed_count`
+- explicit readiness status
 - `quality_metric`
 - `balance_metric`
 - quality and balance metric directions
 - stable cluster identifiers
+
+Each emitted report shall conform to the shared readiness-aware contract for
+`realized_cluster_count` and `cluster_ids`.
+
+For this crate's successful exact-`K` completed-pass realization, the report
+shall be partition-ready and shall expose `realized_cluster_count` and stable
+`cluster_ids` explicitly.
 
 The balance metric shall be zero when no explicit balance constraints are
 configured.
@@ -164,6 +172,15 @@ The repository shall include executable verification artifacts covering both:
 - this crate's observable spherical-k-means behavior
 - this crate's conformance to the shared streaming clustering contract,
   including the opt-in conformance-helper surface
+
+Those conformance artifacts shall track the current shared helper shape,
+including streamed pass-event fixtures, callback-style expected pass-report and
+assignment fixtures, readiness-aware expected reports, and underfull-first-pass
+fixtures that do not require whole-run dataset materialization.
+
+This revision shall align the crate's contract-facing reports and verification
+artifacts to the shared streaming contract without changing the crate's intended
+spherical-k-means clustering semantics.
 
 ### REQ-SPHKM-015
 

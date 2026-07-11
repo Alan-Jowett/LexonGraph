@@ -96,6 +96,11 @@ If repeated deterministic fits would otherwise permute internal centroid order,
 the crate applies deterministic matching and tie-breaking before exposing pass
 reports or classifier assignments.
 
+Because this crate's successful exact-`K` passes are partition-ready, each
+successful pass report exposes explicit readiness plus populated
+`realized_cluster_count` and stable `cluster_ids` in the shared optional-field
+shape.
+
 ### DSG-SPHKM-007 `Classifier realization`
 
 After `complete_training()`, `into_classifier()` consumes the trainer and yields
@@ -126,6 +131,11 @@ The observable boundary maps failures into the shared error categories:
 The repository includes automated tests that exercise both the crate's
 algorithm-specific observable behavior and the shared streaming clustering
 conformance helpers.
+
+Those verification artifacts realize the current shared helper boundary through
+streamed sample pass events, callback-style expected reports and assignments,
+readiness-aware expected pass reports, and underfull-first-pass fixtures that
+avoid removed whole-run helper surfaces.
 
 ### DSG-SPHKM-011 `Optional shared acceleration backend`
 

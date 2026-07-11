@@ -7,9 +7,11 @@ use lexongraph_spherical_kmeans::{
     SphericalInitializationPolicy, SphericalKmeansParams, SphericalKmeansStreamingClassifier,
     SphericalKmeansStreamingTrainer,
 };
+use lexongraph_streaming_clustering::conformance::SamplePassEvent;
 use lexongraph_streaming_clustering::{
-    BalanceConstraints, ClusterId, Embedding, PassInput, PassReport, StreamingClusterClassifier,
-    StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
+    BalanceConstraints, ClusterId, Embedding, MetricDirection, PassReadiness, PassReport,
+    StreamingClusterClassifier, StreamingClusterTrainer, StreamingClusteringConfig,
+    StreamingClusteringError, TrainerState,
 };
 
 pub fn config() -> StreamingClusteringConfig {
@@ -48,7 +50,7 @@ pub fn invalid_params() -> SphericalKmeansParams {
     }
 }
 
-pub fn sample_passes() -> Vec<PassInput> {
+pub fn sample_passes() -> Vec<Vec<Vec<Embedding>>> {
     vec![
         vec![vec![vec![1.0, 0.0]], vec![vec![-1.0, 0.0]]],
         vec![vec![vec![1.0, 0.0]], vec![vec![-1.0, 0.0]]],
@@ -60,22 +62,24 @@ pub fn expected_pass_reports() -> Vec<PassReport> {
         PassReport {
             observed_count: 2,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
             quality_metric: 0.0,
             balance_metric: 0.0,
-            quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            balance_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: Some(vec![0, 1]),
         },
         PassReport {
             observed_count: 2,
             requested_cluster_count: 2,
-            realized_cluster_count: 2,
+            readiness: PassReadiness::PartitionReady,
+            realized_cluster_count: Some(2),
             quality_metric: 0.0,
             balance_metric: 0.0,
-            quality_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            balance_direction: lexongraph_streaming_clustering::MetricDirection::SmallerIsBetter,
-            cluster_ids: vec![0, 1],
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
+            cluster_ids: Some(vec![0, 1]),
         },
     ]
 }
@@ -84,7 +88,7 @@ pub fn expected_assignments() -> Vec<(Embedding, ClusterId)> {
     vec![(vec![1.0, 0.0], 0), (vec![-1.0, 0.0], 1)]
 }
 
-pub fn underfull_first_pass() -> PassInput {
+pub fn underfull_first_pass() -> Vec<Vec<Embedding>> {
     vec![vec![vec![1.0, 0.0]]]
 }
 
@@ -158,8 +162,11 @@ impl StreamingClusterTrainer for HarnessTrainer {
 
     fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
         let mut report = self.inner.finish_pass()?;
-        if matches!(self.mode, HarnessMode::UnstableClusterIds) && self.completed_passes == 1 {
-            report.cluster_ids.reverse();
+        if matches!(self.mode, HarnessMode::UnstableClusterIds)
+            && self.completed_passes == 1
+            && let Some(cluster_ids) = report.cluster_ids.as_mut()
+        {
+            cluster_ids.reverse();
         }
         self.completed_passes += 1;
         Ok(report)
@@ -213,20 +220,48 @@ impl lexongraph_streaming_clustering::conformance::StreamingClusteringConformanc
         HarnessTrainer::malformed_input_accepting()
     }
 
-    fn sample_passes(&self) -> Vec<PassInput> {
-        sample_passes()
+    fn for_each_sample_pass_event<E, F>(&self, mut on_event: F) -> Result<(), E>
+    where
+        F: FnMut(SamplePassEvent<'_>) -> Result<(), E>,
+    {
+        let passes = sample_passes();
+        for pass in &passes {
+            for batch in pass {
+                on_event(SamplePassEvent::Batch(batch))?;
+            }
+            on_event(SamplePassEvent::EndPass)?;
+        }
+        Ok(())
     }
 
-    fn expected_pass_reports(&self) -> Vec<PassReport> {
-        expected_pass_reports()
+    fn for_each_expected_pass_report<E, F>(&self, mut on_report: F) -> Result<(), E>
+    where
+        F: FnMut(&PassReport) -> Result<(), E>,
+    {
+        for report in &expected_pass_reports() {
+            on_report(report)?;
+        }
+        Ok(())
     }
 
-    fn expected_assignments(&self) -> Vec<(Embedding, ClusterId)> {
-        expected_assignments()
+    fn for_each_expected_assignment<E, F>(&self, mut on_assignment: F) -> Result<(), E>
+    where
+        F: FnMut(&[f32], ClusterId) -> Result<(), E>,
+    {
+        for (embedding, cluster_id) in &expected_assignments() {
+            on_assignment(embedding, *cluster_id)?;
+        }
+        Ok(())
     }
 
-    fn underfull_first_pass(&self) -> PassInput {
-        underfull_first_pass()
+    fn for_each_underfull_first_pass_batch<E, F>(&self, mut on_batch: F) -> Result<(), E>
+    where
+        F: FnMut(&[Embedding]) -> Result<(), E>,
+    {
+        for batch in &underfull_first_pass() {
+            on_batch(batch)?;
+        }
+        Ok(())
     }
 
     fn wrong_dimension_embedding(&self) -> Embedding {
