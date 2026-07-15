@@ -4,12 +4,14 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::io::Write as _;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use futures::future::join_all;
 use futures::stream::{self, FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockError, BlockHash};
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
@@ -33,6 +35,10 @@ const RETRY_MAX_ATTEMPTS: usize = 6;
 const AZURE_TABLE_API_VERSION: &str = "2019-02-02";
 const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
+const MAX_TRANSACTION_OPERATIONS: usize = 100;
+const MAX_TRANSACTION_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+const BATCH_BOUNDARY: &str = "batch_lexongraph";
+const CHANGESET_BOUNDARY: &str = "changeset_lexongraph";
 
 static ROOT_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
 static CONTINUATION_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
@@ -114,6 +120,101 @@ impl AzureTableBlockStoreV2 {
                 }
             }
         }
+    }
+
+    async fn insert_rows_transaction_with_retries(
+        &self,
+        block_id: &BlockHash,
+        rows: &[TableBlockEntity],
+    ) -> Result<TransactionInsertOutcome, BlockStoreError> {
+        let partition_key = rows
+            .first()
+            .map(|row| row.partition_key.as_str())
+            .unwrap_or_default();
+        let first_row_context = rows
+            .first()
+            .map(|row| {
+                describe_row_context(
+                    row.row_index
+                        .and_then(|value| usize::try_from(value).ok())
+                        .unwrap_or_default(),
+                    &row.partition_key,
+                    &row.row_key,
+                )
+            })
+            .unwrap_or_else(|| "continuation rows".to_string());
+        let mut attempts = 0usize;
+        let mut delay = RETRY_INITIAL_DELAY;
+        loop {
+            attempts += 1;
+            match self.backend.insert_entities_transaction_once(rows).await {
+                Ok(()) => return Ok(TransactionInsertOutcome::Committed),
+                Err(TableBackendAttemptError::AlreadyExists(_)) => {
+                    return Ok(TransactionInsertOutcome::AlreadyExists);
+                }
+                Err(TableBackendAttemptError::Transport(_)) if attempts < RETRY_MAX_ATTEMPTS => {
+                    sleep(delay).await;
+                    delay = next_retry_delay(delay);
+                    continue;
+                }
+                Err(TableBackendAttemptError::Transport(message)) => {
+                    return Err(backend_failure(format!(
+                        "failed to publish block {} continuation-row transaction starting at {} in PartitionKey={} to Azure table {}: retry policy expired after {} attempts: {}",
+                        block_id,
+                        first_row_context,
+                        partition_key,
+                        self.table_display,
+                        attempts,
+                        message
+                    )));
+                }
+                Err(TableBackendAttemptError::Response(message)) => {
+                    return Err(backend_failure(format!(
+                        "failed to publish block {} continuation-row transaction starting at {} in PartitionKey={} to Azure table {}: {}",
+                        block_id, first_row_context, partition_key, self.table_display, message
+                    )));
+                }
+            }
+        }
+    }
+
+    async fn insert_rows_concurrently(
+        &self,
+        block_id: &BlockHash,
+        rows: &[TableBlockEntity],
+    ) -> Result<(), BlockStoreError> {
+        let results = join_all(
+            rows.iter()
+                .map(|row| self.insert_row_with_retries(block_id, row)),
+        )
+        .await;
+        for result in results {
+            result?;
+        }
+        Ok(())
+    }
+
+    async fn publish_continuation_rows(
+        &self,
+        block_id: &BlockHash,
+        rows: &[TableBlockEntity],
+    ) -> Result<(), BlockStoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        if self
+            .backend
+            .continuation_rows_fit_in_one_transaction(rows)?
+        {
+            match self
+                .insert_rows_transaction_with_retries(block_id, rows)
+                .await?
+            {
+                TransactionInsertOutcome::Committed => return Ok(()),
+                TransactionInsertOutcome::AlreadyExists => {}
+            }
+        }
+        self.insert_rows_concurrently(block_id, rows).await
     }
 
     async fn get_row_with_retries(
@@ -215,9 +316,7 @@ impl BlockStore for AzureTableBlockStoreV2 {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         let rows = TableBlockEntity::rows_from_block_bytes(block_id, block_bytes)?;
-        for row in rows.iter().skip(1) {
-            self.insert_row_with_retries(block_id, row).await?;
-        }
+        self.publish_continuation_rows(block_id, &rows[1..]).await?;
         if let Some(root_row) = rows.first() {
             self.insert_row_with_retries(block_id, root_row).await?;
         }
@@ -342,9 +441,19 @@ impl QueryContext {
 
 #[async_trait]
 trait TableBackend: Send + Sync {
+    fn continuation_rows_fit_in_one_transaction(
+        &self,
+        rows: &[TableBlockEntity],
+    ) -> Result<bool, BlockStoreError>;
+
     async fn insert_entity_once(
         &self,
         entity: &TableBlockEntity,
+    ) -> Result<(), TableBackendAttemptError>;
+
+    async fn insert_entities_transaction_once(
+        &self,
+        rows: &[TableBlockEntity],
     ) -> Result<(), TableBackendAttemptError>;
 
     async fn get_entity_once(
@@ -366,6 +475,22 @@ enum TableBackendAttemptError {
     Transport(String),
 }
 
+impl TableBackendAttemptError {
+    fn message(&self) -> &str {
+        match self {
+            Self::AlreadyExists(message) | Self::Response(message) | Self::Transport(message) => {
+                message
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransactionInsertOutcome {
+    Committed,
+    AlreadyExists,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct QueryContinuation {
     partition_key: Option<String>,
@@ -382,6 +507,11 @@ struct EntityPage {
 struct ReqwestTableBackend {
     client: Client,
     endpoint: TableEndpoint,
+}
+
+struct BatchInsertRequest {
+    content_type: String,
+    body: Vec<u8>,
 }
 
 impl ReqwestTableBackend {
@@ -427,6 +557,10 @@ impl ReqwestTableBackend {
 
     fn entity_insert_url(&self) -> Url {
         self.endpoint.table_url.clone()
+    }
+
+    fn batch_url(&self) -> Url {
+        self.endpoint.batch_url.clone()
     }
 
     fn entity_lookup_url(&self, partition_key: &str, row_key: &str) -> Url {
@@ -540,10 +674,83 @@ impl ReqwestTableBackend {
         )];
         self.query_page(continuation, &extra).await
     }
+
+    fn build_insert_transaction_request(
+        table_name: &str,
+        rows: &[TableBlockEntity],
+    ) -> Result<Option<BatchInsertRequest>, TableBackendAttemptError> {
+        if rows.is_empty() || rows.len() > MAX_TRANSACTION_OPERATIONS {
+            return Ok(None);
+        }
+        let Some(first_partition_key) = rows.first().map(|row| row.partition_key.as_str()) else {
+            return Ok(None);
+        };
+        if rows
+            .iter()
+            .any(|row| row.partition_key.as_str() != first_partition_key)
+        {
+            return Ok(None);
+        }
+
+        let mut body = Vec::new();
+        write!(&mut body, "--{BATCH_BOUNDARY}\r\nContent-Type: multipart/mixed; boundary={CHANGESET_BOUNDARY}\r\n\r\n")
+            .unwrap();
+        for row in rows {
+            let entity_body = serde_json::to_vec(row).map_err(|error| {
+                TableBackendAttemptError::Response(format!(
+                    "failed to encode Azure Table entity body: {}",
+                    error
+                ))
+            })?;
+            write!(
+                &mut body,
+                "--{CHANGESET_BOUNDARY}\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nPOST {table_name} HTTP/1.1\r\nAccept: {ODATA_NO_METADATA}\r\nContent-Type: application/json\r\nPrefer: {PREFER_RETURN_NO_CONTENT}\r\n\r\n"
+            )
+            .unwrap();
+            body.extend_from_slice(&entity_body);
+            body.extend_from_slice(b"\r\n");
+        }
+        write!(
+            &mut body,
+            "--{CHANGESET_BOUNDARY}--\r\n--{BATCH_BOUNDARY}--\r\n"
+        )
+        .unwrap();
+        if body.len() > MAX_TRANSACTION_PAYLOAD_BYTES {
+            return Ok(None);
+        }
+        Ok(Some(BatchInsertRequest {
+            content_type: format!("multipart/mixed; boundary={BATCH_BOUNDARY}"),
+            body,
+        }))
+    }
+
+    fn parse_batch_statuses(body: &str) -> Vec<StatusCode> {
+        body.lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let mut parts = line.split_whitespace();
+                let protocol = parts.next()?;
+                if !matches!(protocol, "HTTP/1.1" | "HTTP/1.0") {
+                    return None;
+                }
+                let status = parts.next()?.parse::<u16>().ok()?;
+                StatusCode::from_u16(status).ok()
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
 impl TableBackend for ReqwestTableBackend {
+    fn continuation_rows_fit_in_one_transaction(
+        &self,
+        rows: &[TableBlockEntity],
+    ) -> Result<bool, BlockStoreError> {
+        Self::build_insert_transaction_request(&self.endpoint.table_name, rows)
+            .map(|request| request.is_some())
+            .map_err(|error| backend_failure(error.message().to_string()))
+    }
+
     async fn insert_entity_once(
         &self,
         entity: &TableBlockEntity,
@@ -567,6 +774,48 @@ impl TableBackend for ReqwestTableBackend {
             StatusCode::NO_CONTENT | StatusCode::CREATED => Ok(()),
             _ => Err(Self::response_error(status, &body)),
         }
+    }
+
+    async fn insert_entities_transaction_once(
+        &self,
+        rows: &[TableBlockEntity],
+    ) -> Result<(), TableBackendAttemptError> {
+        let request = Self::build_insert_transaction_request(&self.endpoint.table_name, rows)?
+            .ok_or_else(|| {
+                TableBackendAttemptError::Response(
+                    "continuation rows do not fit within one Azure Table transaction".into(),
+                )
+            })?;
+        let response = self
+            .request(Method::POST, self.batch_url())
+            .header(CONTENT_TYPE, &request.content_type)
+            .header("DataServiceVersion", "3.0")
+            .header("MaxDataServiceVersion", "3.0")
+            .body(request.body)
+            .send()
+            .await
+            .map_err(Self::classify_send_error)?;
+        let (status, _headers, body) = Self::read_body_text(response).await?;
+        if status != StatusCode::ACCEPTED {
+            return Err(Self::response_error(status, &body));
+        }
+        let statuses = Self::parse_batch_statuses(&body);
+        if statuses.is_empty() || statuses.iter().all(StatusCode::is_success) {
+            return Ok(());
+        }
+        if statuses.contains(&StatusCode::CONFLICT) {
+            return Err(TableBackendAttemptError::AlreadyExists(
+                describe_http_response(StatusCode::CONFLICT, &body),
+            ));
+        }
+        let failing_status = statuses
+            .into_iter()
+            .find(|status| !status.is_success())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        Err(TableBackendAttemptError::Response(describe_http_response(
+            failing_status,
+            &body,
+        )))
     }
 
     async fn get_entity_once(
@@ -622,6 +871,8 @@ struct QueryResponse<T> {
 struct TableEndpoint {
     table_url: Url,
     table_query_url: Url,
+    batch_url: Url,
+    table_name: String,
     display: String,
 }
 
@@ -672,6 +923,11 @@ impl TableEndpoint {
                 url.path()
             )));
         }
+        let batch_url = {
+            let mut batch = url.clone();
+            batch.set_path("/$batch");
+            batch
+        };
         url.set_path(&format!("/{}", table_name));
         let display = redact_url(&url);
         let table_url = url.clone();
@@ -680,6 +936,8 @@ impl TableEndpoint {
         Ok(Self {
             table_url,
             table_query_url,
+            batch_url,
+            table_name,
             display,
         })
     }
@@ -1562,9 +1820,19 @@ mod tests {
         state: &'a Mutex<MockState>,
     }
 
+    struct InFlightInsertGuard<'a> {
+        state: &'a Mutex<MockState>,
+    }
+
     impl Drop for InFlightGetGuard<'_> {
         fn drop(&mut self) {
             self.state.lock().unwrap().get_requests_in_flight -= 1;
+        }
+    }
+
+    impl Drop for InFlightInsertGuard<'_> {
+        fn drop(&mut self) {
+            self.state.lock().unwrap().insert_requests_in_flight -= 1;
         }
     }
 
@@ -1575,9 +1843,16 @@ mod tests {
         deny_get: bool,
         deny_query: bool,
         insert_transport_failures: usize,
+        transaction_transport_failures: usize,
         get_transport_failures: usize,
         query_transport_failures: usize,
         continuation_transport_failures: HashMap<Option<QueryContinuation>, usize>,
+        insert_requests: Vec<(String, String)>,
+        transaction_requests: Vec<Vec<(String, String)>>,
+        publish_log: Vec<String>,
+        yield_insert_requests: bool,
+        insert_requests_in_flight: usize,
+        max_insert_requests_in_flight: usize,
         get_requests: Vec<(String, String)>,
         yield_get_requests: bool,
         get_requests_in_flight: usize,
@@ -1596,6 +1871,10 @@ mod tests {
 
         fn set_insert_transport_failures(&self, count: usize) {
             self.state.lock().unwrap().insert_transport_failures = count;
+        }
+
+        fn set_transaction_transport_failures(&self, count: usize) {
+            self.state.lock().unwrap().transaction_transport_failures = count;
         }
 
         fn set_get_transport_failures(&self, count: usize) {
@@ -1630,6 +1909,26 @@ mod tests {
             self.state.lock().unwrap().query_requests.clone()
         }
 
+        fn insert_requests(&self) -> Vec<(String, String)> {
+            self.state.lock().unwrap().insert_requests.clone()
+        }
+
+        fn transaction_requests(&self) -> Vec<Vec<(String, String)>> {
+            self.state.lock().unwrap().transaction_requests.clone()
+        }
+
+        fn publish_log(&self) -> Vec<String> {
+            self.state.lock().unwrap().publish_log.clone()
+        }
+
+        fn set_yield_insert_requests(&self, enabled: bool) {
+            self.state.lock().unwrap().yield_insert_requests = enabled;
+        }
+
+        fn max_insert_requests_in_flight(&self) -> usize {
+            self.state.lock().unwrap().max_insert_requests_in_flight
+        }
+
         fn get_requests(&self) -> Vec<(String, String)> {
             self.state.lock().unwrap().get_requests.clone()
         }
@@ -1645,25 +1944,91 @@ mod tests {
 
     #[async_trait]
     impl TableBackend for MockTableBackend {
+        fn continuation_rows_fit_in_one_transaction(
+            &self,
+            rows: &[TableBlockEntity],
+        ) -> Result<bool, BlockStoreError> {
+            ReqwestTableBackend::build_insert_transaction_request("blocks", rows)
+                .map(|request| request.is_some())
+                .map_err(|error| backend_failure(error.message().to_string()))
+        }
+
         async fn insert_entity_once(
             &self,
             entity: &TableBlockEntity,
         ) -> Result<(), TableBackendAttemptError> {
+            let key = (entity.partition_key.clone(), entity.row_key.clone());
+            let (result, should_yield) = {
+                let mut state = self.state.lock().unwrap();
+                state.insert_requests.push(key.clone());
+                state.publish_log.push(format!("insert:{}", key.1));
+                state.insert_requests_in_flight += 1;
+                state.max_insert_requests_in_flight = std::cmp::max(
+                    state.max_insert_requests_in_flight,
+                    state.insert_requests_in_flight,
+                );
+                let result = if state.insert_transport_failures > 0 {
+                    state.insert_transport_failures -= 1;
+                    Err(TableBackendAttemptError::Transport(
+                        "mock insert transport failure".into(),
+                    ))
+                } else if state.deny_insert {
+                    Err(TableBackendAttemptError::Response("HTTP 403".into()))
+                } else {
+                    match state.entities.entry(key) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(entity.clone());
+                            Ok(())
+                        }
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            Err(TableBackendAttemptError::AlreadyExists("HTTP 409".into()))
+                        }
+                    }
+                };
+                (result, state.yield_insert_requests)
+            };
+            let _in_flight_guard = InFlightInsertGuard { state: &self.state };
+            if should_yield {
+                tokio::task::yield_now().await;
+            }
+            result
+        }
+
+        async fn insert_entities_transaction_once(
+            &self,
+            rows: &[TableBlockEntity],
+        ) -> Result<(), TableBackendAttemptError> {
+            let keys = rows
+                .iter()
+                .map(|row| (row.partition_key.clone(), row.row_key.clone()))
+                .collect::<Vec<_>>();
             let mut state = self.state.lock().unwrap();
-            if state.insert_transport_failures > 0 {
-                state.insert_transport_failures -= 1;
+            state.transaction_requests.push(keys.clone());
+            state.publish_log.push(format!(
+                "transaction:{}",
+                keys.iter()
+                    .map(|(_, row_key)| row_key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            if state.transaction_transport_failures > 0 {
+                state.transaction_transport_failures -= 1;
                 return Err(TableBackendAttemptError::Transport(
-                    "mock insert transport failure".into(),
+                    "mock transaction transport failure".into(),
                 ));
             }
             if state.deny_insert {
                 return Err(TableBackendAttemptError::Response("HTTP 403".into()));
             }
-            let key = (entity.partition_key.clone(), entity.row_key.clone());
-            if state.entities.contains_key(&key) {
+            if keys.iter().any(|key| state.entities.contains_key(key)) {
                 return Err(TableBackendAttemptError::AlreadyExists("HTTP 409".into()));
             }
-            state.entities.insert(key, entity.clone());
+            for row in rows {
+                state.entities.insert(
+                    (row.partition_key.clone(), row.row_key.clone()),
+                    row.clone(),
+                );
+            }
             Ok(())
         }
 
@@ -1786,6 +2151,24 @@ mod tests {
             .build()
             .unwrap()
             .block_on(future)
+    }
+
+    fn bytes_requiring_non_transactional_continuation_path() -> Vec<u8> {
+        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
+        for continuation_rows in 2..=MAX_TRANSACTION_OPERATIONS + 1 {
+            let bytes =
+                vec![0xdd; root_row_limit + continuation_row_limit * continuation_rows + 123];
+            let block_id = BlockHash::from_bytes([0xf0; 32]);
+            let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &bytes).unwrap();
+            if ReqwestTableBackend::build_insert_transaction_request("blocks", &rows[1..])
+                .unwrap()
+                .is_none()
+            {
+                return bytes;
+            }
+        }
+        panic!("expected to find a multi-row block that exceeds one transaction");
     }
 
     #[test]
@@ -2067,6 +2450,110 @@ mod tests {
         assert_eq!(loaded, bytes);
         assert_eq!(backend.get_requests()[0].1, row_key_for(&block_id, 0));
         assert!(backend.max_get_requests_in_flight() > 1);
+    }
+
+    #[test]
+    fn multi_row_put_uses_one_transaction_when_continuation_rows_fit() {
+        let backend = Arc::new(MockTableBackend::default());
+        let store = test_store(backend.clone());
+        let block_id = BlockHash::from_bytes([0x47; 32]);
+        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
+        let bytes = vec![0xcc; root_row_limit + continuation_row_limit + 123];
+        let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &bytes).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            backend
+                .continuation_rows_fit_in_one_transaction(&rows[1..])
+                .unwrap()
+        );
+
+        block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
+
+        assert_eq!(backend.transaction_requests().len(), 1);
+        assert_eq!(
+            backend.transaction_requests()[0],
+            rows[1..]
+                .iter()
+                .map(|row| (row.partition_key.clone(), row.row_key.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            backend.insert_requests(),
+            vec![(rows[0].partition_key.clone(), rows[0].row_key.clone())]
+        );
+        let publish_log = backend.publish_log();
+        assert!(publish_log[0].starts_with("transaction:"));
+        assert_eq!(
+            publish_log.last().unwrap(),
+            &format!("insert:{}", rows[0].row_key)
+        );
+    }
+
+    #[test]
+    fn multi_row_put_falls_back_to_concurrent_continuation_inserts_when_transaction_would_overflow()
+    {
+        let backend = Arc::new(MockTableBackend::default());
+        let store = test_store(backend.clone());
+        let block_id = BlockHash::from_bytes([0x48; 32]);
+        let bytes = bytes_requiring_non_transactional_continuation_path();
+        let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &bytes).unwrap();
+        assert!(rows.len() >= 3);
+        assert!(
+            !backend
+                .continuation_rows_fit_in_one_transaction(&rows[1..])
+                .unwrap()
+        );
+        backend.set_yield_insert_requests(true);
+
+        block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
+
+        assert!(backend.transaction_requests().is_empty());
+        assert!(backend.max_insert_requests_in_flight() > 1);
+        let publish_log = backend.publish_log();
+        assert_eq!(
+            publish_log.last().unwrap(),
+            &format!("insert:{}", rows[0].row_key)
+        );
+        assert_eq!(backend.insert_requests().last().unwrap().1, rows[0].row_key);
+    }
+
+    #[test]
+    fn transport_failures_retry_for_transactional_and_concurrent_continuation_writes() {
+        let transactional_backend = Arc::new(MockTableBackend::default());
+        transactional_backend.set_transaction_transport_failures(1);
+        let transactional_store = test_store(transactional_backend.clone());
+        let transactional_block_id = BlockHash::from_bytes([0x49; 32]);
+        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
+        let transactional_bytes = vec![0xee; root_row_limit + continuation_row_limit + 123];
+        block_on(
+            transactional_store.put_block_bytes(&transactional_block_id, &transactional_bytes),
+        )
+        .unwrap();
+        assert_eq!(transactional_backend.transaction_requests().len(), 2);
+
+        let concurrent_backend = Arc::new(MockTableBackend::default());
+        concurrent_backend.set_insert_transport_failures(1);
+        concurrent_backend.set_yield_insert_requests(true);
+        let concurrent_store = test_store(concurrent_backend.clone());
+        let concurrent_block_id = BlockHash::from_bytes([0x4a; 32]);
+        let concurrent_bytes = bytes_requiring_non_transactional_continuation_path();
+        let concurrent_rows =
+            TableBlockEntity::rows_from_block_bytes(&concurrent_block_id, &concurrent_bytes)
+                .unwrap();
+        assert!(
+            !concurrent_backend
+                .continuation_rows_fit_in_one_transaction(&concurrent_rows[1..])
+                .unwrap()
+        );
+
+        block_on(concurrent_store.put_block_bytes(&concurrent_block_id, &concurrent_bytes))
+            .unwrap();
+
+        assert!(concurrent_backend.transaction_requests().is_empty());
+        assert!(concurrent_backend.max_insert_requests_in_flight() > 1);
+        assert!(concurrent_backend.insert_requests().len() > concurrent_rows.len());
     }
 
     #[test]
