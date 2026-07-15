@@ -169,10 +169,9 @@ report continuation rows, unrelated entities, or other table artifacts.
 
 ### VAL-AZURE-TABLE-STORE-V2-015
 
-Cause entity listing, payload inspection, or decoding of a malformed recognized
-block-root candidate such as a shard-prefix-mismatched key pair, malformed
-required root metadata, or malformed continuation-row layout to fail during
-enumeration.
+Cause entity listing, required root-row metadata inspection, or decoding of a
+malformed recognized block-root candidate such as a shard-prefix-mismatched key
+pair or malformed required root metadata to fail during enumeration.
 
 **Pass condition:** enumeration fails explicitly as a backend failure rather
 than silently omitting the affected stored state.
@@ -335,3 +334,18 @@ transient transport failure, and still preserves the normal `Ok(None)`,
 success, and explicit-failure outcomes for the returned responses.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-020
+
+### VAL-AZURE-TABLE-STORE-V2-028
+
+Exercise identifier enumeration against a mock, probe, or inspectable backend
+surface containing recognized block roots, continuation rows, and unrelated
+entities, including a recognized multi-row block whose continuation rows are
+not fetched during the scan path.
+
+**Pass condition:** the normal enumeration path yields the recognized block IDs
+using the root-row metadata returned by the query response, does not issue
+per-block point reads for continuation rows or other row-set completeness
+checks before yielding those IDs, and still excludes continuation rows and
+unrelated entities from the reported block-ID stream.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-012, REQ-AZURE-TABLE-STORE-V2-013
