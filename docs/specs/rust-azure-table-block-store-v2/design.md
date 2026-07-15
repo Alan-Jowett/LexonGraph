@@ -205,14 +205,17 @@ The enumeration realization:
    boundary
 2. recognizes block roots by the deterministic `PartitionKey`/`RowKey` layout
 3. ignores continuation rows and unrelated entities
-4. validates the minimal v2 metadata needed to confirm the recognized stored
-   state is inspectable
+4. validates the minimal root-row v2 metadata returned by the query response
+   and needed to confirm that the recognized stored state is enumerable
 5. decodes each recognized root key back into its block ID
 6. yields only decoded block IDs to callers
 
-Malformed recognized candidates, including shard-prefix mismatches, malformed
-root metadata, or malformed continuation-row layout referenced by a recognized
-root, are surfaced as explicit backend failures.
+The normal enumeration path does not fetch continuation rows or otherwise
+re-read a recognized block row set solely to verify completeness before
+yielding its block ID.
+
+Malformed recognized candidates, including shard-prefix mismatches or malformed
+required root metadata, are surfaced as explicit backend failures.
 
 If the Azure client reports a transport failure while issuing the table query,
 before any backend response has been received, the implementation retries that
@@ -278,6 +281,8 @@ Table-focused tests for:
 - point-read verification that `get` uses direct entity-addressed lookups for
   known root-row and continuation-row addresses rather than filtered table
   queries
+- enumeration verification that recognized root rows are yielded using query
+  metadata alone without per-block continuation-row reads in the normal path
 - response-parsing compatibility cases where otherwise valid Azure outcomes omit
   non-decisive common storage headers
 - enumeration filtering and malformed-candidate failures
@@ -302,6 +307,8 @@ replaceable internal client interface so mock-backed test doubles can:
 - simulate publish, read, and query authorization outcomes
 - distinguish direct entity-addressed reads from table queries so tests can
   verify the point-read access path
+- observe enumeration-time query requests and confirm the normal enumeration
+  path does not perform per-block point reads for recognized roots
 - inject malformed or integrity-mismatched recognized block row sets in the v2
   chunked row-set format
 - simulate transient transport failures, including paginated query retries

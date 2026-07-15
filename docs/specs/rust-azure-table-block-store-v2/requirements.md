@@ -196,15 +196,27 @@ IDs.
 
 It shall not report continuation rows as independent stored blocks.
 
+Enumeration shall decide whether to yield a block ID using the recognized
+root-row key shape and the required root-row metadata already present in the
+table-query response for that root row.
+
+The normal enumeration path shall not fetch continuation rows or perform other
+per-block point reads solely to verify row-set completeness before yielding a
+recognized block ID.
+
 ### REQ-AZURE-TABLE-STORE-V2-013
 
 Azure Table enumeration shall surface explicit backend failure when entity
-listing, payload inspection, or decoding of a recognized block-root candidate
-into a valid block ID cannot be completed.
+listing, required root-row metadata inspection, or decoding of a recognized
+block-root candidate into a valid block ID cannot be completed.
 
 This explicit failure rule includes malformed candidate keys, shard-prefix
-mismatches, malformed continuation-row layout, and malformed v2 chunked row-set
-metadata encountered during enumeration.
+mismatches, and malformed required root metadata encountered during
+enumeration.
+
+This revision does not require enumeration to fetch or validate continuation
+rows before yielding a recognized block ID. Full row-set validation remains the
+responsibility of `get` when a caller materializes block content.
 
 ### REQ-AZURE-TABLE-STORE-V2-014
 

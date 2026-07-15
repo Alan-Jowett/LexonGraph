@@ -157,42 +157,6 @@ impl AzureTableBlockStoreV2 {
         }
     }
 
-    async fn verify_enumerated_block(
-        &self,
-        metadata: &TableBlockEntityMetadata,
-        block_id: &BlockHash,
-    ) -> Result<(), BlockStoreError> {
-        metadata
-            .validate_enumeration_payload()
-            .map_err(backend_failure)?;
-        let row_count = metadata.root_row_count().map_err(backend_failure)?;
-        for row_index in 0..row_count {
-            let Some(row) = self.get_row_with_retries(block_id, row_index).await? else {
-                return Err(backend_failure(format!(
-                    "failed to inspect Azure Table block {} during enumeration: missing row {}",
-                    block_id, row_index
-                )));
-            };
-            row.validate_row_identity(block_id, row_index)?;
-            let chunk_count = row
-                .validate_row_metadata(row_index, row_count, metadata.byte_len()?)
-                .map_err(|error| {
-                    backend_failure(format!(
-                        "failed to inspect Azure Table block {} during enumeration: {}",
-                        block_id, error
-                    ))
-                })?;
-            row.validate_chunk_property_presence(chunk_count)
-                .map_err(|error| {
-                    backend_failure(format!(
-                        "failed to inspect Azure Table block {} during enumeration: {}",
-                        block_id, error
-                    ))
-                })?;
-        }
-        Ok(())
-    }
-
     async fn fetch_page_with_retries(
         &self,
         continuation: Option<QueryContinuation>,
@@ -295,13 +259,7 @@ impl BlockStore for AzureTableBlockStoreV2 {
                 loop {
                     if let Some(entity) = state.pending.pop_front() {
                         match entity.enumerated_block_id() {
-                            Ok(Some(block_id)) => {
-                                state
-                                    .store
-                                    .verify_enumerated_block(&entity, &block_id)
-                                    .await?;
-                                return Ok(Some((block_id, state)));
-                            }
+                            Ok(Some(block_id)) => return Ok(Some((block_id, state))),
                             Ok(None) => continue,
                             Err(message) => return Err(backend_failure(message)),
                         }
@@ -877,29 +835,6 @@ impl TableBlockEntityMetadata {
             ));
         }
         Ok(())
-    }
-
-    fn root_row_count(&self) -> Result<usize, String> {
-        usize::try_from(self.row_count.ok_or_else(|| {
-            format!(
-                "failed to inspect Azure Table row {} / {}: missing RowCount",
-                self.partition_key, self.row_key
-            )
-        })?)
-        .map_err(|_| {
-            format!(
-                "failed to inspect Azure Table row {} / {}: RowCount must be positive",
-                self.partition_key, self.row_key
-            )
-        })
-    }
-
-    fn byte_len(&self) -> Result<usize, BlockStoreError> {
-        usize::try_from(
-            self.byte_len
-                .ok_or_else(|| decode_failure("Azure Table block row is missing ByteLen"))?,
-        )
-        .map_err(|_| decode_failure("Azure Table ByteLen must be non-negative and fit in usize"))
     }
 }
 
@@ -2120,6 +2055,7 @@ mod tests {
         );
         let ids = block_on(store.list_block_ids()).unwrap();
         assert_eq!(ids, vec![BlockHash::from_bytes([0x55; 32])]);
+        assert!(backend.get_requests().is_empty());
 
         let malformed_backend = Arc::new(MockTableBackend::default());
         let malformed_store = test_store(malformed_backend.clone());
@@ -2250,8 +2186,9 @@ mod tests {
                 continuation: None,
             },
         );
-        let missing_row_error = block_on(missing_row_store.list_block_ids()).unwrap_err();
-        assert!(format!("{missing_row_error}").contains("missing row 1"));
+        let ids = block_on(missing_row_store.list_block_ids()).unwrap();
+        assert_eq!(ids, vec![BlockHash::from_bytes([0x91; 32])]);
+        assert!(missing_row_backend.get_requests().is_empty());
     }
 
     #[test]
