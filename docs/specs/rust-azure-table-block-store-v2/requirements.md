@@ -124,6 +124,12 @@ and row-set metadata, it shall retrieve that row by direct entity-addressed
 lookup rather than by issuing a filtered table query for the same point-read
 state.
 
+When the mapped root row is present and its validated root metadata indicates
+that additional continuation rows are required, `get` shall derive the full set
+of required deterministic continuation-row keys from that root metadata and may
+issue those direct continuation-row reads concurrently rather than serializing
+them after their addresses are already known.
+
 When the mapped block root is present, `get` shall reconstruct the stored
 canonical bytes from the v2 chunked row-set format and validate those bytes
 against the requested block ID before reporting success.
@@ -307,6 +313,11 @@ same read or query request using a bounded retry policy.
 For `get`, that retried request shall remain the same deterministic
 entity-addressed read for the mapped root row or required continuation row and
 shall not fall back to a filtered table query for the same known row address.
+
+If `get` issues more than one required continuation-row read concurrently, each
+such deterministic direct read shall retain its own bounded retry behavior for
+that row address rather than forcing the operation back through a serialized
+continuation-row fallback path.
 
 If a later retry reaches a backend response, `get` and identifier enumeration
 shall continue applying their normal absence, decode, filtering, and explicit-

@@ -171,7 +171,8 @@ attempt, `put` reports an explicit backend failure and does not claim success.
 3. returns `Ok(None)` when the root row is absent
 4. uses the root-row metadata to derive the deterministic continuation-row keys
    required for the logical block
-5. retrieves those continuation rows directly when required
+5. issues the required continuation-row direct reads concurrently once those
+   deterministic row keys are known
 6. reconstructs canonical bytes from the v2 chunked row-set format when the
    root row is present
 7. validates the reconstructed bytes through the block crate before returning
@@ -186,6 +187,9 @@ addressed read request, before any backend response has been received, the
 implementation retries that same deterministic direct-read request with a
 bounded retry policy rather than switching to a filtered query path for the
 same known row address.
+
+When multiple required continuation-row reads are in flight concurrently, this
+retry behavior applies independently to each direct row-addressed request.
 
 If a later retry reaches a backend response, `get` resumes the normal absence,
 success, decode-failure, and explicit-failure handling for that response.
@@ -281,6 +285,8 @@ Table-focused tests for:
 - point-read verification that `get` uses direct entity-addressed lookups for
   known root-row and continuation-row addresses rather than filtered table
   queries
+- multi-row `get` verification that required continuation rows are issued as
+  concurrent direct reads once root metadata makes their addresses known
 - enumeration verification that recognized root rows are yielded using query
   metadata alone without per-block continuation-row reads in the normal path
 - response-parsing compatibility cases where otherwise valid Azure outcomes omit
@@ -307,6 +313,8 @@ replaceable internal client interface so mock-backed test doubles can:
 - simulate publish, read, and query authorization outcomes
 - distinguish direct entity-addressed reads from table queries so tests can
   verify the point-read access path
+- observe multi-row `get` request issuance closely enough to verify that
+  required continuation-row reads can be dispatched concurrently
 - observe enumeration-time query requests and confirm the normal enumeration
   path does not perform per-block point reads for recognized roots
 - inject malformed or integrity-mismatched recognized block row sets in the v2
