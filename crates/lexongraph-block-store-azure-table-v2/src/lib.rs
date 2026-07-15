@@ -1558,6 +1558,16 @@ mod tests {
         state: Mutex<MockState>,
     }
 
+    struct InFlightGetGuard<'a> {
+        state: &'a Mutex<MockState>,
+    }
+
+    impl Drop for InFlightGetGuard<'_> {
+        fn drop(&mut self) {
+            self.state.lock().unwrap().get_requests_in_flight -= 1;
+        }
+    }
+
     #[derive(Default)]
     struct MockState {
         entities: BTreeMap<(String, String), TableBlockEntity>,
@@ -1683,10 +1693,10 @@ mod tests {
                 };
                 (result, state.yield_get_requests)
             };
+            let _in_flight_guard = InFlightGetGuard { state: &self.state };
             if should_yield {
                 tokio::task::yield_now().await;
             }
-            self.state.lock().unwrap().get_requests_in_flight -= 1;
             result
         }
 
