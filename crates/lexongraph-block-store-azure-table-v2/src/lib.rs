@@ -4,8 +4,9 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -35,11 +36,10 @@ const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
 const MAX_TRANSACTION_OPERATIONS: usize = 100;
 const MAX_TRANSACTION_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
-const BATCH_BOUNDARY: &str = "batch_lexongraph";
-const CHANGESET_BOUNDARY: &str = "changeset_lexongraph";
 
 static ROOT_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
 static CONTINUATION_ROW_CAPACITY_BY_CHUNK_COUNT: OnceLock<Vec<usize>> = OnceLock::new();
+static MULTIPART_BOUNDARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub struct AzureTableBlockStoreV2 {
@@ -116,6 +116,12 @@ impl AzureTableBlockStoreV2 {
                         block_id, row_context, self.table_display, message
                     )));
                 }
+                Err(TableBackendAttemptError::TransactionTooLarge) => {
+                    return Err(backend_failure(format!(
+                        "unexpected transaction-size result while publishing block {} {} to Azure table {}",
+                        block_id, row_context, self.table_display
+                    )));
+                }
             }
         }
     }
@@ -149,6 +155,9 @@ impl AzureTableBlockStoreV2 {
                 Ok(()) => return Ok(TransactionInsertOutcome::Committed),
                 Err(TableBackendAttemptError::AlreadyExists(_)) => {
                     return Ok(TransactionInsertOutcome::AlreadyExists);
+                }
+                Err(TableBackendAttemptError::TransactionTooLarge) => {
+                    return Ok(TransactionInsertOutcome::TooLarge);
                 }
                 Err(TableBackendAttemptError::Transport(_)) if attempts < RETRY_MAX_ATTEMPTS => {
                     sleep(delay).await;
@@ -199,17 +208,12 @@ impl AzureTableBlockStoreV2 {
         if rows.is_empty() {
             return Ok(());
         }
-        if self
-            .backend
-            .continuation_rows_fit_in_one_transaction(rows)?
+        match self
+            .insert_rows_transaction_with_retries(block_id, rows)
+            .await?
         {
-            match self
-                .insert_rows_transaction_with_retries(block_id, rows)
-                .await?
-            {
-                TransactionInsertOutcome::Committed => return Ok(()),
-                TransactionInsertOutcome::AlreadyExists => {}
-            }
+            TransactionInsertOutcome::Committed => return Ok(()),
+            TransactionInsertOutcome::AlreadyExists | TransactionInsertOutcome::TooLarge => {}
         }
         self.insert_rows_concurrently(block_id, rows).await
     }
@@ -243,6 +247,12 @@ impl AzureTableBlockStoreV2 {
                     return Err(backend_failure(format!(
                         "failed to read block {} {} from Azure table {}: {}",
                         block_id, row_context, self.table_display, message
+                    )));
+                }
+                Err(TableBackendAttemptError::TransactionTooLarge) => {
+                    return Err(backend_failure(format!(
+                        "unexpected transaction-size result while reading block {} {} from Azure table {}",
+                        block_id, row_context, self.table_display
                     )));
                 }
                 Err(TableBackendAttemptError::AlreadyExists(message)) => {
@@ -290,6 +300,13 @@ impl AzureTableBlockStoreV2 {
                         self.table_display,
                         context.description(),
                         message
+                    )));
+                }
+                Err(TableBackendAttemptError::TransactionTooLarge) => {
+                    return Err(backend_failure(format!(
+                        "unexpected transaction-size result while querying Azure table {} {}",
+                        self.table_display,
+                        context.description()
                     )));
                 }
                 Err(TableBackendAttemptError::AlreadyExists(message)) => {
@@ -438,11 +455,6 @@ impl QueryContext {
 
 #[async_trait]
 trait TableBackend: Send + Sync {
-    fn continuation_rows_fit_in_one_transaction(
-        &self,
-        rows: &[TableBlockEntity],
-    ) -> Result<bool, BlockStoreError>;
-
     async fn insert_entity_once(
         &self,
         entity: &TableBlockEntity,
@@ -469,23 +481,15 @@ trait TableBackend: Send + Sync {
 enum TableBackendAttemptError {
     AlreadyExists(String),
     Response(String),
+    TransactionTooLarge,
     Transport(String),
-}
-
-impl TableBackendAttemptError {
-    fn message(&self) -> &str {
-        match self {
-            Self::AlreadyExists(message) | Self::Response(message) | Self::Transport(message) => {
-                message
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TransactionInsertOutcome {
     Committed,
     AlreadyExists,
+    TooLarge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -512,6 +516,15 @@ struct BatchInsertRequest {
 }
 
 impl ReqwestTableBackend {
+    fn next_multipart_boundary(prefix: &str) -> String {
+        let nonce = MULTIPART_BOUNDARY_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("{prefix}_{timestamp:032x}_{nonce:016x}")
+    }
+
     fn new(endpoint: &TableEndpoint) -> Result<Self, BlockStoreError> {
         let client = Client::builder().build().map_err(|error| {
             backend_failure(format!(
@@ -689,10 +702,12 @@ impl ReqwestTableBackend {
             return Ok(None);
         }
 
+        let batch_boundary = Self::next_multipart_boundary("batch_lexongraph");
+        let changeset_boundary = Self::next_multipart_boundary("changeset_lexongraph");
         let batch_preamble = format!(
-            "--{BATCH_BOUNDARY}\r\nContent-Type: multipart/mixed; boundary={CHANGESET_BOUNDARY}\r\n\r\n"
+            "--{batch_boundary}\r\nContent-Type: multipart/mixed; boundary={changeset_boundary}\r\n\r\n"
         );
-        let batch_epilogue = format!("--{CHANGESET_BOUNDARY}--\r\n--{BATCH_BOUNDARY}--\r\n");
+        let batch_epilogue = format!("--{changeset_boundary}--\r\n--{batch_boundary}--\r\n");
         let mut body = Vec::new();
         let mut total_bytes = batch_preamble.len() + batch_epilogue.len();
         body.extend_from_slice(batch_preamble.as_bytes());
@@ -704,7 +719,7 @@ impl ReqwestTableBackend {
                 ))
             })?;
             let row_preamble = format!(
-                "--{CHANGESET_BOUNDARY}\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nPOST {table_name} HTTP/1.1\r\nAccept: {ODATA_NO_METADATA}\r\nContent-Type: application/json\r\nPrefer: {PREFER_RETURN_NO_CONTENT}\r\n\r\n"
+                "--{changeset_boundary}\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nPOST {table_name} HTTP/1.1\r\nAccept: {ODATA_NO_METADATA}\r\nContent-Type: application/json\r\nPrefer: {PREFER_RETURN_NO_CONTENT}\r\n\r\n"
             );
             total_bytes += row_preamble.len() + entity_body.len() + 2;
             if total_bytes > MAX_TRANSACTION_PAYLOAD_BYTES {
@@ -716,7 +731,7 @@ impl ReqwestTableBackend {
         }
         body.extend_from_slice(batch_epilogue.as_bytes());
         Ok(Some(BatchInsertRequest {
-            content_type: format!("multipart/mixed; boundary={BATCH_BOUNDARY}"),
+            content_type: format!("multipart/mixed; boundary={batch_boundary}"),
             body,
         }))
     }
@@ -739,15 +754,6 @@ impl ReqwestTableBackend {
 
 #[async_trait]
 impl TableBackend for ReqwestTableBackend {
-    fn continuation_rows_fit_in_one_transaction(
-        &self,
-        rows: &[TableBlockEntity],
-    ) -> Result<bool, BlockStoreError> {
-        Self::build_insert_transaction_request(&self.endpoint.table_name, rows)
-            .map(|request| request.is_some())
-            .map_err(|error| backend_failure(error.message().to_string()))
-    }
-
     async fn insert_entity_once(
         &self,
         entity: &TableBlockEntity,
@@ -778,11 +784,7 @@ impl TableBackend for ReqwestTableBackend {
         rows: &[TableBlockEntity],
     ) -> Result<(), TableBackendAttemptError> {
         let request = Self::build_insert_transaction_request(&self.endpoint.table_name, rows)?
-            .ok_or_else(|| {
-                TableBackendAttemptError::Response(
-                    "continuation rows do not fit within one Azure Table transaction".into(),
-                )
-            })?;
+            .ok_or(TableBackendAttemptError::TransactionTooLarge)?;
         let response = self
             .request(Method::POST, self.batch_url())
             .header(CONTENT_TYPE, &request.content_type)
@@ -1947,15 +1949,6 @@ mod tests {
 
     #[async_trait]
     impl TableBackend for MockTableBackend {
-        fn continuation_rows_fit_in_one_transaction(
-            &self,
-            rows: &[TableBlockEntity],
-        ) -> Result<bool, BlockStoreError> {
-            ReqwestTableBackend::build_insert_transaction_request("blocks", rows)
-                .map(|request| request.is_some())
-                .map_err(|error| backend_failure(error.message().to_string()))
-        }
-
         async fn insert_entity_once(
             &self,
             entity: &TableBlockEntity,
@@ -2001,6 +1994,9 @@ mod tests {
             &self,
             rows: &[TableBlockEntity],
         ) -> Result<(), TableBackendAttemptError> {
+            if ReqwestTableBackend::build_insert_transaction_request("blocks", rows)?.is_none() {
+                return Err(TableBackendAttemptError::TransactionTooLarge);
+            }
             let keys = rows
                 .iter()
                 .map(|row| (row.partition_key.clone(), row.row_key.clone()))
@@ -2466,9 +2462,9 @@ mod tests {
         let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &bytes).unwrap();
         assert_eq!(rows.len(), 3);
         assert!(
-            backend
-                .continuation_rows_fit_in_one_transaction(&rows[1..])
+            ReqwestTableBackend::build_insert_transaction_request("blocks", &rows[1..])
                 .unwrap()
+                .is_some()
         );
 
         block_on(store.put_block_bytes(&block_id, &bytes)).unwrap();
@@ -2503,9 +2499,9 @@ mod tests {
         let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &bytes).unwrap();
         assert!(rows.len() >= 3);
         assert!(
-            !backend
-                .continuation_rows_fit_in_one_transaction(&rows[1..])
+            ReqwestTableBackend::build_insert_transaction_request("blocks", &rows[1..])
                 .unwrap()
+                .is_none()
         );
         backend.set_yield_insert_requests(true);
 
@@ -2546,9 +2542,9 @@ mod tests {
             TableBlockEntity::rows_from_block_bytes(&concurrent_block_id, &concurrent_bytes)
                 .unwrap();
         assert!(
-            !concurrent_backend
-                .continuation_rows_fit_in_one_transaction(&concurrent_rows[1..])
+            ReqwestTableBackend::build_insert_transaction_request("blocks", &concurrent_rows[1..])
                 .unwrap()
+                .is_none()
         );
 
         block_on(concurrent_store.put_block_bytes(&concurrent_block_id, &concurrent_bytes))
