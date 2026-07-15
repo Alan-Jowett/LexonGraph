@@ -10,8 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use futures::future::join_all;
-use futures::stream;
+use futures::stream::{self, FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockError, BlockHash};
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -235,21 +234,31 @@ impl BlockStore for AzureTableBlockStoreV2 {
         let root_metadata = root_row.decode_root_metadata(block_id)?;
         let mut rows = Vec::new();
         rows.push(root_row);
-        let continuation_rows =
-            join_all((1..root_metadata.row_count).map(|row_index| async move {
+        let mut in_flight = FuturesUnordered::new();
+        for row_index in 1..root_metadata.row_count {
+            in_flight.push(async move {
                 (
                     row_index,
                     self.get_row_with_retries(block_id, row_index).await,
                 )
-            }))
-            .await;
-        for (_row_index, row) in continuation_rows {
-            let Some(row) = row? else {
-                return Err(decode_failure(
-                    "Azure Table block row set is missing a required continuation row",
-                ));
-            };
-            rows.push(row);
+            });
+        }
+        let mut resolved_rows = vec![None; root_metadata.row_count];
+        let mut next_row_index = 1usize;
+        while let Some((row_index, row)) = in_flight.next().await {
+            resolved_rows[row_index] = Some(row);
+            while next_row_index < root_metadata.row_count {
+                let Some(row) = resolved_rows[next_row_index].take() else {
+                    break;
+                };
+                let Some(row) = row? else {
+                    return Err(decode_failure(
+                        "Azure Table block row set is missing a required continuation row",
+                    ));
+                };
+                rows.push(row);
+                next_row_index += 1;
+            }
         }
         TableBlockEntity::decode_block_bytes(block_id, &rows).map(Some)
     }
