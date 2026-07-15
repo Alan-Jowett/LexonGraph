@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use futures::stream;
+use futures::stream::{self, FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockError, BlockHash};
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -234,13 +234,31 @@ impl BlockStore for AzureTableBlockStoreV2 {
         let root_metadata = root_row.decode_root_metadata(block_id)?;
         let mut rows = Vec::new();
         rows.push(root_row);
+        let mut in_flight = FuturesUnordered::new();
         for row_index in 1..root_metadata.row_count {
-            let Some(row) = self.get_row_with_retries(block_id, row_index).await? else {
-                return Err(decode_failure(
-                    "Azure Table block row set is missing a required continuation row",
-                ));
-            };
-            rows.push(row);
+            in_flight.push(async move {
+                (
+                    row_index,
+                    self.get_row_with_retries(block_id, row_index).await,
+                )
+            });
+        }
+        let mut resolved_rows = vec![None; root_metadata.row_count];
+        let mut next_row_index = 1usize;
+        while let Some((row_index, row)) = in_flight.next().await {
+            resolved_rows[row_index] = Some(row);
+            while next_row_index < root_metadata.row_count {
+                let Some(row) = resolved_rows[next_row_index].take() else {
+                    break;
+                };
+                let Some(row) = row? else {
+                    return Err(decode_failure(
+                        "Azure Table block row set is missing a required continuation row",
+                    ));
+                };
+                rows.push(row);
+                next_row_index += 1;
+            }
         }
         TableBlockEntity::decode_block_bytes(block_id, &rows).map(Some)
     }
@@ -1540,6 +1558,16 @@ mod tests {
         state: Mutex<MockState>,
     }
 
+    struct InFlightGetGuard<'a> {
+        state: &'a Mutex<MockState>,
+    }
+
+    impl Drop for InFlightGetGuard<'_> {
+        fn drop(&mut self) {
+            self.state.lock().unwrap().get_requests_in_flight -= 1;
+        }
+    }
+
     #[derive(Default)]
     struct MockState {
         entities: BTreeMap<(String, String), TableBlockEntity>,
@@ -1551,6 +1579,9 @@ mod tests {
         query_transport_failures: usize,
         continuation_transport_failures: HashMap<Option<QueryContinuation>, usize>,
         get_requests: Vec<(String, String)>,
+        yield_get_requests: bool,
+        get_requests_in_flight: usize,
+        max_get_requests_in_flight: usize,
         query_pages: HashMap<Option<QueryContinuation>, EntityPage>,
         query_requests: Vec<Option<QueryContinuation>>,
     }
@@ -1602,6 +1633,14 @@ mod tests {
         fn get_requests(&self) -> Vec<(String, String)> {
             self.state.lock().unwrap().get_requests.clone()
         }
+
+        fn set_yield_get_requests(&self, enabled: bool) {
+            self.state.lock().unwrap().yield_get_requests = enabled;
+        }
+
+        fn max_get_requests_in_flight(&self) -> usize {
+            self.state.lock().unwrap().max_get_requests_in_flight
+        }
     }
 
     #[async_trait]
@@ -1633,23 +1672,32 @@ mod tests {
             partition_key: &str,
             row_key: &str,
         ) -> Result<Option<TableBlockEntity>, TableBackendAttemptError> {
-            let mut state = self.state.lock().unwrap();
-            state
-                .get_requests
-                .push((partition_key.to_string(), row_key.to_string()));
-            if state.get_transport_failures > 0 {
-                state.get_transport_failures -= 1;
-                return Err(TableBackendAttemptError::Transport(
-                    "mock get transport failure".into(),
-                ));
+            let key = (partition_key.to_string(), row_key.to_string());
+            let (result, should_yield) = {
+                let mut state = self.state.lock().unwrap();
+                state.get_requests.push(key.clone());
+                state.get_requests_in_flight += 1;
+                state.max_get_requests_in_flight = std::cmp::max(
+                    state.max_get_requests_in_flight,
+                    state.get_requests_in_flight,
+                );
+                let result = if state.get_transport_failures > 0 {
+                    state.get_transport_failures -= 1;
+                    Err(TableBackendAttemptError::Transport(
+                        "mock get transport failure".into(),
+                    ))
+                } else if state.deny_get {
+                    Err(TableBackendAttemptError::Response("HTTP 403".into()))
+                } else {
+                    Ok(state.entities.get(&key).cloned())
+                };
+                (result, state.yield_get_requests)
+            };
+            let _in_flight_guard = InFlightGetGuard { state: &self.state };
+            if should_yield {
+                tokio::task::yield_now().await;
             }
-            if state.deny_get {
-                return Err(TableBackendAttemptError::Response("HTTP 403".into()));
-            }
-            Ok(state
-                .entities
-                .get(&(partition_key.to_string(), row_key.to_string()))
-                .cloned())
+            result
         }
 
         async fn query_entities_page_once(
@@ -1998,6 +2046,27 @@ mod tests {
         assert_eq!(loaded.len(), single_row_limit + 1);
         assert_eq!(present_backend.get_requests(), expected_after_retry);
         assert!(present_backend.query_requests().is_empty());
+    }
+
+    #[test]
+    fn multi_row_get_dispatches_continuation_reads_concurrently() {
+        let backend = Arc::new(MockTableBackend::default());
+        let store = test_store(backend.clone());
+        let block_id = BlockHash::from_bytes([0x46; 32]);
+        let root_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let continuation_row_limit = max_supported_row_payload_bytes(1, MAX_CHUNK_PROPERTY_COUNT);
+        let bytes = vec![0xbb; root_row_limit + continuation_row_limit + 123];
+        let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &bytes).unwrap();
+        assert!(rows.len() >= 3);
+        for row in rows {
+            backend.insert_entity(row);
+        }
+        backend.set_yield_get_requests(true);
+
+        let loaded = block_on(store.get_block_bytes(&block_id)).unwrap().unwrap();
+        assert_eq!(loaded, bytes);
+        assert_eq!(backend.get_requests()[0].1, row_key_for(&block_id, 0));
+        assert!(backend.max_get_requests_in_flight() > 1);
     }
 
     #[test]
