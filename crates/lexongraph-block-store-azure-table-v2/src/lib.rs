@@ -4,14 +4,12 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use std::io::Write as _;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use futures::future::join_all;
 use futures::stream::{self, FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockError, BlockHash};
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
@@ -183,12 +181,11 @@ impl AzureTableBlockStoreV2 {
         block_id: &BlockHash,
         rows: &[TableBlockEntity],
     ) -> Result<(), BlockStoreError> {
-        let results = join_all(
-            rows.iter()
-                .map(|row| self.insert_row_with_retries(block_id, row)),
-        )
-        .await;
-        for result in results {
+        let mut in_flight = FuturesUnordered::new();
+        for row in rows {
+            in_flight.push(self.insert_row_with_retries(block_id, row));
+        }
+        while let Some(result) = in_flight.next().await {
             result?;
         }
         Ok(())
@@ -692,9 +689,13 @@ impl ReqwestTableBackend {
             return Ok(None);
         }
 
+        let batch_preamble = format!(
+            "--{BATCH_BOUNDARY}\r\nContent-Type: multipart/mixed; boundary={CHANGESET_BOUNDARY}\r\n\r\n"
+        );
+        let batch_epilogue = format!("--{CHANGESET_BOUNDARY}--\r\n--{BATCH_BOUNDARY}--\r\n");
         let mut body = Vec::new();
-        write!(&mut body, "--{BATCH_BOUNDARY}\r\nContent-Type: multipart/mixed; boundary={CHANGESET_BOUNDARY}\r\n\r\n")
-            .unwrap();
+        let mut total_bytes = batch_preamble.len() + batch_epilogue.len();
+        body.extend_from_slice(batch_preamble.as_bytes());
         for row in rows {
             let entity_body = serde_json::to_vec(row).map_err(|error| {
                 TableBackendAttemptError::Response(format!(
@@ -702,22 +703,18 @@ impl ReqwestTableBackend {
                     error
                 ))
             })?;
-            write!(
-                &mut body,
+            let row_preamble = format!(
                 "--{CHANGESET_BOUNDARY}\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nPOST {table_name} HTTP/1.1\r\nAccept: {ODATA_NO_METADATA}\r\nContent-Type: application/json\r\nPrefer: {PREFER_RETURN_NO_CONTENT}\r\n\r\n"
-            )
-            .unwrap();
+            );
+            total_bytes += row_preamble.len() + entity_body.len() + 2;
+            if total_bytes > MAX_TRANSACTION_PAYLOAD_BYTES {
+                return Ok(None);
+            }
+            body.extend_from_slice(row_preamble.as_bytes());
             body.extend_from_slice(&entity_body);
             body.extend_from_slice(b"\r\n");
         }
-        write!(
-            &mut body,
-            "--{CHANGESET_BOUNDARY}--\r\n--{BATCH_BOUNDARY}--\r\n"
-        )
-        .unwrap();
-        if body.len() > MAX_TRANSACTION_PAYLOAD_BYTES {
-            return Ok(None);
-        }
+        body.extend_from_slice(batch_epilogue.as_bytes());
         Ok(Some(BatchInsertRequest {
             content_type: format!("multipart/mixed; boundary={BATCH_BOUNDARY}"),
             body,
