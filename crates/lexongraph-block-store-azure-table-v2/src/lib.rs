@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use futures::future::try_join_all;
+use futures::future::join_all;
 use futures::stream;
 use lexongraph_block::{BlockError, BlockHash};
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
@@ -236,15 +236,15 @@ impl BlockStore for AzureTableBlockStoreV2 {
         let mut rows = Vec::new();
         rows.push(root_row);
         let continuation_rows =
-            try_join_all((1..root_metadata.row_count).map(|row_index| async move {
-                Ok::<_, BlockStoreError>((
+            join_all((1..root_metadata.row_count).map(|row_index| async move {
+                (
                     row_index,
-                    self.get_row_with_retries(block_id, row_index).await?,
-                ))
+                    self.get_row_with_retries(block_id, row_index).await,
+                )
             }))
-            .await?;
+            .await;
         for (_row_index, row) in continuation_rows {
-            let Some(row) = row else {
+            let Some(row) = row? else {
                 return Err(decode_failure(
                     "Azure Table block row set is missing a required continuation row",
                 ));
