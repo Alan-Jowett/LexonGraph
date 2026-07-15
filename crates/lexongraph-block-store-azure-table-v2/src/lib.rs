@@ -607,8 +607,10 @@ impl TableBackend for ReqwestTableBackend {
         match status {
             StatusCode::OK => serde_json::from_str(&body).map(Some).map_err(|error| {
                 TableBackendAttemptError::Response(format!(
-                    "HTTP {}: failed to decode Azure Table entity response: {}",
+                    "HTTP {}: failed to decode Azure Table entity response for PartitionKey={} RowKey={}: {}",
                     status.as_u16(),
+                    partition_key,
+                    row_key,
                     error
                 ))
             }),
