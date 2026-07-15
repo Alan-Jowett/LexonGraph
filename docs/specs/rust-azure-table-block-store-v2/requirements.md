@@ -126,7 +126,7 @@ state.
 
 When the mapped root row is present and its validated root metadata indicates
 that additional continuation rows are required, `get` shall derive the full set
-of required deterministic continuation-row keys from that root metadata and may
+of required deterministic continuation-row keys from that root metadata and shall
 issue those direct continuation-row reads concurrently rather than serializing
 them after their addresses are already known.
 
