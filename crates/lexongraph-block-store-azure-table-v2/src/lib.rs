@@ -800,12 +800,10 @@ impl TableBackend for ReqwestTableBackend {
             return Err(Self::response_error(status, &body));
         }
         let statuses = Self::parse_batch_statuses(&body);
-        if statuses.len() != rows.len() {
+        if statuses.is_empty() {
             return Err(TableBackendAttemptError::Response(format!(
-                "HTTP {}: failed to decode Azure Table batch response: expected {} operation statuses but found {}",
+                "HTTP {}: failed to decode Azure Table batch response: found no operation statuses",
                 status.as_u16(),
-                rows.len(),
-                statuses.len()
             )));
         }
         if statuses.iter().all(StatusCode::is_success) {
