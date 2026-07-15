@@ -166,7 +166,8 @@ attempt, `put` reports an explicit backend failure and does not claim success.
 `get`:
 
 1. derives the deterministic root-row key from the requested block ID
-2. attempts to retrieve that root row directly
+2. attempts to retrieve that root row directly through an entity-addressed
+   lookup rather than a filtered table query
 3. returns `Ok(None)` when the root row is absent
 4. uses the root-row metadata to derive the deterministic continuation-row keys
    required for the logical block
@@ -180,9 +181,11 @@ Malformed row-set payloads and malformed reconstructed bytes map to
 malformed-content failures, block-ID mismatches map to integrity-mismatch
 failures, and inaccessible reads map to backend failures.
 
-If the Azure client reports a transport failure while issuing the entity-read
-request, before any backend response has been received, the implementation
-retries that same deterministic read request with a bounded retry policy.
+If the Azure client reports a transport failure while issuing an entity-
+addressed read request, before any backend response has been received, the
+implementation retries that same deterministic direct-read request with a
+bounded retry policy rather than switching to a filtered query path for the
+same known row address.
 
 If a later retry reaches a backend response, `get` resumes the normal absence,
 success, decode-failure, and explicit-failure handling for that response.
@@ -272,6 +275,9 @@ Table-focused tests for:
   continuation row is inaccessible or the backend denies the read
 - explicit backend failure for enumeration when SAS permissions deny table query
 - transient publish, read, and query retries
+- point-read verification that `get` uses direct entity-addressed lookups for
+  known root-row and continuation-row addresses rather than filtered table
+  queries
 - response-parsing compatibility cases where otherwise valid Azure outcomes omit
   non-decisive common storage headers
 - enumeration filtering and malformed-candidate failures
@@ -294,6 +300,8 @@ replaceable internal client interface so mock-backed test doubles can:
 
 - observe constructor behavior without changing the public API
 - simulate publish, read, and query authorization outcomes
+- distinguish direct entity-addressed reads from table queries so tests can
+  verify the point-read access path
 - inject malformed or integrity-mismatched recognized block row sets in the v2
   chunked row-set format
 - simulate transient transport failures, including paginated query retries

@@ -319,3 +319,19 @@ limits rather than because of a fixed artificial per-block row cap.
 recognized published block, and does not silently fall back to another backend.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-016
+
+### VAL-AZURE-TABLE-STORE-V2-027
+
+Exercise `get` against a mock, probe, or inspectable backend surface for both
+an absent root row and a present multi-row stored block whose root-row and
+continuation-row addresses are already known from the requested block ID and
+stored metadata, including a case with a transient transport failure before any
+backend response.
+
+**Pass condition:** the point-read path issues direct entity-addressed reads
+for the root row and any required continuation rows, does not issue a filtered
+table query for those known row addresses, retries the same direct read after a
+transient transport failure, and still preserves the normal `Ok(None)`,
+success, and explicit-failure outcomes for the returned responses.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-020

@@ -118,6 +118,12 @@ row-key layout.
 `get` shall return `Ok(None)` when the mapped block root is absent, including
 when orphan continuation rows exist without that root row.
 
+When `get` reads a mapped block root or any required continuation row whose
+deterministic `PartitionKey` and `RowKey` are already known from the block ID
+and row-set metadata, it shall retrieve that row by direct entity-addressed
+lookup rather than by issuing a filtered table query for the same point-read
+state.
+
 When the mapped block root is present, `get` shall reconstruct the stored
 canonical bytes from the v2 chunked row-set format and validate those bytes
 against the requested block ID before reporting success.
@@ -285,6 +291,10 @@ success for that block ID.
 If Azure entity-read or table-query transport fails before `get` or identifier
 enumeration receives a backend response, the implementation shall retry that
 same read or query request using a bounded retry policy.
+
+For `get`, that retried request shall remain the same deterministic
+entity-addressed read for the mapped root row or required continuation row and
+shall not fall back to a filtered table query for the same known row address.
 
 If a later retry reaches a backend response, `get` and identifier enumeration
 shall continue applying their normal absence, decode, filtering, and explicit-

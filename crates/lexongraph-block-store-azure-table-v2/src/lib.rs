@@ -449,12 +449,21 @@ impl ReqwestTableBackend {
         }
     }
 
-    fn block_lookup_filter(partition_key: &str, row_key: &str) -> String {
-        format!("PartitionKey eq '{partition_key}' and RowKey eq '{row_key}'")
-    }
-
     fn entity_insert_url(&self) -> Url {
         self.endpoint.table_url.clone()
+    }
+
+    fn entity_lookup_url(&self, partition_key: &str, row_key: &str) -> Url {
+        let mut url = self.endpoint.table_url.clone();
+        let partition_key = escape_odata_string_literal(partition_key);
+        let row_key = escape_odata_string_literal(row_key);
+        url.set_path(&format!(
+            "{}(PartitionKey='{}',RowKey='{}')",
+            self.endpoint.table_url.path(),
+            partition_key,
+            row_key
+        ));
+        url
     }
 
     fn query_url(&self, continuation: Option<QueryContinuation>, extra: &[(&str, String)]) -> Url {
@@ -555,18 +564,6 @@ impl ReqwestTableBackend {
         )];
         self.query_page(continuation, &extra).await
     }
-
-    async fn query_entity_once(
-        &self,
-        partition_key: &str,
-        row_key: &str,
-    ) -> Result<QueryResponse<TableBlockEntity>, TableBackendAttemptError> {
-        let extra = [
-            ("$filter", Self::block_lookup_filter(partition_key, row_key)),
-            ("$top", "2".to_string()),
-        ];
-        self.query_page(None, &extra).await
-    }
 }
 
 #[async_trait]
@@ -601,14 +598,24 @@ impl TableBackend for ReqwestTableBackend {
         partition_key: &str,
         row_key: &str,
     ) -> Result<Option<TableBlockEntity>, TableBackendAttemptError> {
-        let page = self.query_entity_once(partition_key, row_key).await?;
-        match page.entities.len() {
-            0 => Ok(None),
-            1 => Ok(page.entities.into_iter().next()),
-            count => Err(TableBackendAttemptError::Response(format!(
-                "lookup for PartitionKey={} RowKey={} returned {} entities",
-                partition_key, row_key, count
-            ))),
+        let response = self
+            .request(Method::GET, self.entity_lookup_url(partition_key, row_key))
+            .send()
+            .await
+            .map_err(Self::classify_send_error)?;
+        let (status, _headers, body) = Self::read_body_text(response).await?;
+        match status {
+            StatusCode::OK => serde_json::from_str(&body).map(Some).map_err(|error| {
+                TableBackendAttemptError::Response(format!(
+                    "HTTP {}: failed to decode Azure Table entity response for PartitionKey={} RowKey={}: {}",
+                    status.as_u16(),
+                    partition_key,
+                    row_key,
+                    error
+                ))
+            }),
+            StatusCode::NOT_FOUND => Ok(None),
+            _ => Err(Self::response_error(status, &body)),
         }
     }
 
@@ -1562,6 +1569,10 @@ fn next_retry_delay(current: Duration) -> Duration {
     std::cmp::min(current.saturating_mul(2), RETRY_MAX_DELAY)
 }
 
+fn escape_odata_string_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
 }
@@ -1604,6 +1615,7 @@ mod tests {
         get_transport_failures: usize,
         query_transport_failures: usize,
         continuation_transport_failures: HashMap<Option<QueryContinuation>, usize>,
+        get_requests: Vec<(String, String)>,
         query_pages: HashMap<Option<QueryContinuation>, EntityPage>,
         query_requests: Vec<Option<QueryContinuation>>,
     }
@@ -1651,6 +1663,10 @@ mod tests {
         fn query_requests(&self) -> Vec<Option<QueryContinuation>> {
             self.state.lock().unwrap().query_requests.clone()
         }
+
+        fn get_requests(&self) -> Vec<(String, String)> {
+            self.state.lock().unwrap().get_requests.clone()
+        }
     }
 
     #[async_trait]
@@ -1683,6 +1699,9 @@ mod tests {
             row_key: &str,
         ) -> Result<Option<TableBlockEntity>, TableBackendAttemptError> {
             let mut state = self.state.lock().unwrap();
+            state
+                .get_requests
+                .push((partition_key.to_string(), row_key.to_string()));
             if state.get_transport_failures > 0 {
                 state.get_transport_failures -= 1;
                 return Err(TableBackendAttemptError::Transport(
@@ -1994,6 +2013,56 @@ mod tests {
             backend.query_requests(),
             vec![None, Some(c1.clone()), Some(c1)]
         );
+    }
+
+    #[test]
+    fn get_uses_direct_entity_reads_instead_of_filtered_queries() {
+        let missing_backend = Arc::new(MockTableBackend::default());
+        let missing_store = test_store(missing_backend.clone());
+        let missing_block_id = BlockHash::from_bytes([0x44; 32]);
+        assert_eq!(
+            block_on(missing_store.get_block_bytes(&missing_block_id)).unwrap(),
+            None
+        );
+        assert_eq!(
+            missing_backend.get_requests(),
+            vec![(
+                partition_key_for(&missing_block_id),
+                row_key_for(&missing_block_id, 0)
+            )]
+        );
+        assert!(missing_backend.query_requests().is_empty());
+
+        let present_backend = Arc::new(MockTableBackend::default());
+        let present_store = test_store(present_backend.clone());
+        let block_id = BlockHash::from_bytes([0x45; 32]);
+        let single_row_limit = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
+        let rows =
+            TableBlockEntity::rows_from_block_bytes(&block_id, &vec![0xaa; single_row_limit + 1])
+                .unwrap();
+        let expected_after_retry = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(row_index, row)| {
+                let key = (row.partition_key.clone(), row.row_key.clone());
+                if row_index == 0 {
+                    vec![key.clone(), key]
+                } else {
+                    vec![key]
+                }
+            })
+            .collect::<Vec<_>>();
+        for row in rows {
+            present_backend.insert_entity(row);
+        }
+        present_backend.set_get_transport_failures(1);
+
+        let loaded = block_on(present_store.get_block_bytes(&block_id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.len(), single_row_limit + 1);
+        assert_eq!(present_backend.get_requests(), expected_after_retry);
+        assert!(present_backend.query_requests().is_empty());
     }
 
     #[test]
@@ -2362,6 +2431,19 @@ mod tests {
         assert_eq!(
             describe_http_response(StatusCode::NO_CONTENT, ""),
             "HTTP 204 No Content"
+        );
+    }
+
+    #[test]
+    fn entity_lookup_url_uses_direct_entity_addressing() {
+        let endpoint =
+            TableEndpoint::parse("https://acct.table.core.windows.net/blocks?sv=test&sig=fake")
+                .unwrap();
+        let backend = ReqwestTableBackend::new(&endpoint).unwrap();
+        let url = backend.entity_lookup_url("part'ition", "row'key");
+        assert_eq!(
+            url.as_str(),
+            "https://acct.table.core.windows.net/blocks(PartitionKey='part''ition',RowKey='row''key')?sv=test&sig=fake"
         );
     }
 
