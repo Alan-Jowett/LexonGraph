@@ -335,21 +335,6 @@ success, and explicit-failure outcomes for the returned responses.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-020
 
-### VAL-AZURE-TABLE-STORE-V2-029
-
-Exercise `get` against a mock, probe, or inspectable backend surface for a
-recognized multi-row block whose root row is readable and whose continuation
-row addresses become fully known from the decoded root metadata.
-
-**Pass condition:** after the root row is read successfully, the required
-continuation-row direct reads are dispatched concurrently rather than one at a
-time, the reconstructed block bytes still reflect deterministic row order, and
-the operation preserves the same success, malformed-content, and explicit-
-failure outcomes when one or more required continuation rows are missing or
-unreadable.
-
-**Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-020
-
 ### VAL-AZURE-TABLE-STORE-V2-028
 
 Exercise identifier enumeration against a mock, probe, or inspectable backend
@@ -364,3 +349,18 @@ checks before yielding those IDs, and still excludes continuation rows and
 unrelated entities from the reported block-ID stream.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-012, REQ-AZURE-TABLE-STORE-V2-013
+
+### VAL-AZURE-TABLE-STORE-V2-029
+
+Exercise `get` against a mock, probe, or inspectable backend surface for a
+recognized multi-row block whose root row is readable and whose continuation
+row addresses become fully known from the decoded root metadata.
+
+**Pass condition:** after the root row is read successfully, the required
+continuation-row direct reads are dispatched concurrently rather than one at a
+time, the reconstructed block bytes still reflect deterministic row order, and
+the operation preserves the same success, malformed-content, and explicit-
+failure outcomes when one or more required continuation rows are missing or
+unreadable.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-020
