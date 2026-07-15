@@ -800,7 +800,15 @@ impl TableBackend for ReqwestTableBackend {
             return Err(Self::response_error(status, &body));
         }
         let statuses = Self::parse_batch_statuses(&body);
-        if statuses.is_empty() || statuses.iter().all(StatusCode::is_success) {
+        if statuses.len() != rows.len() {
+            return Err(TableBackendAttemptError::Response(format!(
+                "HTTP {}: failed to decode Azure Table batch response: expected {} operation statuses but found {}",
+                status.as_u16(),
+                rows.len(),
+                statuses.len()
+            )));
+        }
+        if statuses.iter().all(StatusCode::is_success) {
             return Ok(());
         }
         if statuses.contains(&StatusCode::CONFLICT) {
@@ -2921,6 +2929,16 @@ mod tests {
             ReqwestTableBackend::response_error(StatusCode::CONFLICT, ""),
             TableBackendAttemptError::AlreadyExists(_)
         ));
+        assert_eq!(
+            ReqwestTableBackend::parse_batch_statuses(
+                "--changeset\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n--changeset--\r\n"
+            ),
+            vec![StatusCode::NO_CONTENT]
+        );
+        assert!(
+            ReqwestTableBackend::parse_batch_statuses("--changeset\r\nno status here\r\n")
+                .is_empty()
+        );
         assert_eq!(
             describe_http_response(StatusCode::NO_CONTENT, ""),
             "HTTP 204 No Content"
