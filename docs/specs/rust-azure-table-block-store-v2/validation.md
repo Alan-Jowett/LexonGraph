@@ -219,11 +219,15 @@ beforehand.
 
 Cause a transient transport failure during `put` before Azure returns any
 backend response, including both a case that later succeeds on retry and a case
-that continues failing until the bounded retry policy is exhausted.
+that continues failing until the bounded retry policy is exhausted. Cover both
+a continuation-row transaction request and a concurrent continuation-row insert
+request when multi-row publication requires those paths.
 
-**Pass condition:** `put` retries the deterministic row insert after the
-transient transport failure, succeeds when a later retry reaches a successful
-backend response, and otherwise fails explicitly as a backend failure.
+**Pass condition:** `put` retries the same deterministic row insert or
+continuation-row transaction request after the transient transport failure,
+succeeds when a later retry reaches a successful backend response, preserves
+independent retry behavior for concurrent continuation-row inserts, and
+otherwise fails explicitly as a backend failure.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-019
 
@@ -364,3 +368,19 @@ failure outcomes when one or more required continuation rows are missing or
 unreadable.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-006, REQ-AZURE-TABLE-STORE-V2-020
+
+### VAL-AZURE-TABLE-STORE-V2-030
+
+Exercise `put` against a mock, probe, or inspectable backend surface for two
+recognized multi-row blocks: one whose continuation rows fit within one Azure
+Table transaction and one whose continuation rows require the non-transaction
+fallback path.
+
+**Pass condition:** when the continuation rows fit within one Azure Table
+transaction, the continuation-row publication path uses one transaction before
+attempting the root row; when they do not fit, the required continuation-row
+inserts are issued concurrently rather than one at a time; and in both cases
+the root row is still attempted only after the continuation-row publication
+path succeeds so the root row remains the publication commit point.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-007, REQ-AZURE-TABLE-STORE-V2-019

@@ -139,8 +139,10 @@ non-decisive common storage headers are absent.
 3. encodes the canonical bytes into the v2 chunked row-set format
 4. rejects the write explicitly before publication if the encoded row set would
    exceed Azure Table limits for this revision
-5. attempts to insert continuation rows first, then inserts the root row last
-   using create-without-overwrite semantics for each row
+5. publishes continuation rows first and the root row last using create-
+   without-overwrite semantics, using one continuation-row transaction when all
+   continuation rows fit within a single Azure Table transaction and otherwise
+   issuing the required continuation-row inserts concurrently
 6. returns the block ID on successful publication
 7. treats already-existing root-row outcomes as successful convergence
 8. maps other denied or failed publish outcomes to explicit backend failures
@@ -152,8 +154,12 @@ those rows are not treated as a published block until the root row exists.
 This revision does not fall back to blob storage or any other backend.
 
 If the Azure client reports a transport failure while issuing a deterministic
-row insert, before any backend response has been received, the implementation
-retries that same deterministic row insert with a bounded retry policy.
+row insert or a continuation-row transaction request, before any backend
+response has been received, the implementation retries that same deterministic
+request with a bounded retry policy.
+
+When multiple required continuation-row inserts are in flight concurrently,
+this retry behavior applies independently to each row-addressed insert request.
 
 If a later retry reaches a backend response, `put` resumes the normal success,
 already-existing, and explicit-failure handling for that response.
@@ -282,6 +288,9 @@ Table-focused tests for:
   continuation row is inaccessible or the backend denies the read
 - explicit backend failure for enumeration when SAS permissions deny table query
 - transient publish, read, and query retries
+- multi-row `put` verification that continuation rows use one transaction when
+  they fit within one Azure Table transaction and otherwise issue concurrent
+  inserts before root-row publication
 - point-read verification that `get` uses direct entity-addressed lookups for
   known root-row and continuation-row addresses rather than filtered table
   queries
@@ -311,6 +320,8 @@ replaceable internal client interface so mock-backed test doubles can:
 
 - observe constructor behavior without changing the public API
 - simulate publish, read, and query authorization outcomes
+- distinguish a continuation-row transaction from individual row inserts closely
+  enough to verify the transaction-versus-concurrent publication split
 - distinguish direct entity-addressed reads from table queries so tests can
   verify the point-read access path
 - observe multi-row `get` request issuance closely enough to verify that

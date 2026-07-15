@@ -154,6 +154,15 @@ against the requested block ID before reporting success.
 block bytes to the deterministic row set, and it shall not overwrite any
 previously published row in that row set for that block ID.
 
+When a block requires continuation rows and all of those continuation rows fit
+within one Azure Table transaction, `put` shall publish those continuation rows
+in one transaction before attempting the root row.
+
+When a block requires continuation rows that do not fit within one Azure Table
+transaction, `put` shall issue the required continuation-row inserts
+concurrently rather than serializing them once their deterministic row
+addresses are already known.
+
 If publication observes that the deterministic root row already exists, whether
 before or after a concurrent publication race, `put` shall return success.
 
@@ -293,8 +302,14 @@ the shared `BlockStore` contract by exercising:
 ### REQ-AZURE-TABLE-STORE-V2-019
 
 If Azure publish transport fails before `put` receives a backend response for a
-deterministic row insert, the implementation shall retry that same deterministic
-row insert using a bounded retry policy.
+deterministic root-row insert, a deterministic continuation-row insert, or a
+continuation-row transaction request, the implementation shall retry that same
+deterministic request using a bounded retry policy.
+
+If `put` issues more than one required continuation-row insert concurrently,
+each such deterministic insert shall retain its own bounded retry behavior for
+that row address rather than forcing the operation back through a serialized
+continuation-row fallback path.
 
 If a later retry reaches a backend response, `put` shall continue applying the
 same success, idempotence, already-published, and explicit-failure rules that
