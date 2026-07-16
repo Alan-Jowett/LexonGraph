@@ -15,5 +15,5 @@ lexongraph-block-store = { path = "../lexongraph-block-store" }
 
 [dev-dependencies]
 lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }
-pollster = "0.4.0"
+pollster = "1.0.1"
 tokio = { version = "1", features = ["rt", "time", "net"] }

@@ -16,4 +16,4 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }
-pollster = "0.4.0"
+pollster = "1.0.1"

@@ -13,5 +13,5 @@ lexongraph-block-store = { version = "0.1.0", path = "../lexongraph-block-store"
 zip = "8"
 
 [dev-dependencies]
-pollster = "0.4.0"
+pollster = "1.0.1"
 tempfile = "3"
