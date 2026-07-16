@@ -6,90 +6,84 @@
 [![Coverage Status](https://coveralls.io/repos/github/Alan-Jowett/LexonGraph/badge.svg?branch=main)](https://coveralls.io/github/Alan-Jowett/LexonGraph?branch=main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-LexonGraph is a semantic indexing and retrieval system built around immutable,
-content-addressed blocks. The repository now includes the canonical protocol
-documents, traceable specification packages, an implemented Rust workspace for
-the core repository surface, and CI that enforces the workspace quality gates.
+LexonGraph is a Rust workspace for block-addressed semantic indexing, search,
+and evaluation. This repository combines the protocol documents, traceable spec
+packages, implementation crates, evaluation tooling, and repository automation
+used to evolve the project.
 
-## Repository status
+The README is a guide to the repository surface. The authoritative behavior for
+governed areas lives in `docs/protocol/` and `docs/specs/`.
 
-LexonGraph is still evolving, but the repository is no longer just an
-architecture sketch. It currently contains:
+## Repository at a glance
 
-- **Active governed and implemented surface**
-  - canonical protocol documents for blocks, search, indexing, and DCBC
-  - requirements/design/validation spec packages for the current Rust workspace
-    and repository automation
-  - implemented Rust crates for blocks, storage contracts, filesystem storage,
-    deterministic clustering, indexing, search, and embedding-provider
-    integration
-- **Active repository maintenance surface**
-  - GitHub Actions CI for formatting, linting, tests, and coverage reporting
-  - Dependabot configuration for Cargo and GitHub Actions dependency updates
-  - repository maintenance skills under `.github/skills/`
-- **Supporting, reference, and future-facing material**
-  - architecture notes, audits, and RCA documents under `docs/arch/`,
-    `docs/audits/`, and `docs/rca/`
-  - `docs/protocol/ebcp.md` as reference or future protocol work rather than
-    part of the active governed implementation surface
+The current repository contains:
 
-The README is a summary. The protocol documents in `docs/protocol/` and the
-traceable packages in `docs/specs/` are the authoritative sources for protocol
-and specification behavior.
+- **Protocol documents** for block encoding, search, indexing, clustering, and
+  protocol evolution under `docs/protocol/`
+- **Traceable specification packages** under `docs/specs/`, each using
+  `requirements.md`, `design.md`, and `validation.md`
+- **A 24-crate Rust workspace** spanning block formats, block stores,
+  embedding-provider contracts, clustering/planning algorithms, indexing, and
+  evaluator tooling
+- **Supporting docs** under `docs/arch/`, `docs/audits/`, `docs/rca/`,
+  `docs/research/`, and `docs/sop/`
+- **Repository automation** including CI, coverage, Dependabot, local hooks, and
+  repository-specific skills under `.github/skills/`
 
 ## Architecture at a glance
 
-- **Immutable blocks** are encoded as canonical CBOR maps and addressed by
+- **Blocks** are immutable and content-addressed by
   `sha256(canonical_cbor_bytes(block))`.
-- **Branch blocks** point to child blocks, forming a Merkle-linked structure.
-- **Leaf blocks** carry embeddings, metadata, and inline content payloads.
-- **Embedding providers** are split between a provider-agnostic trait crate and
-  concrete provider implementations.
-- **Search** uses deterministic frontier expansion over ranked candidates.
-- **Indexing** builds deterministic block sets from application-supplied items
-  and uses DCBC-backed packing by default.
-- **DCBC** provides deterministic capacity-constrained balanced clustering for
-  clustering and packing workflows.
+- **Version 1 blocks** are the current canonical block protocol.
+- **Version 2 blocks** are being designed as a draft envelope that can coexist
+  with version 1.
+- **Branch blocks** link child blocks into a Merkle-linked hierarchy.
+- **Leaf blocks** carry embeddings, metadata, and content payloads.
+- **Embedding providers** are split between a provider-agnostic contract crate
+  and concrete provider implementations.
+- **Search** performs deterministic traversal over ranked candidates.
+- **Indexing** builds deterministic block hierarchies from replayed item streams.
+- **Clustering and planning** include DCBC, directional PCA, spherical k-means,
+  PCA chunking, adaptive policy selection, and evaluator-owned benchmarking.
 
 ## Document map
 
-| Area | Status | Document or path | Purpose |
+| Area | Status | Path | Purpose |
 | --- | --- | --- | --- |
 | Vision | Supporting | `docs/vision.md` | High-level architecture summary and design direction |
-| Block protocol | Active governed | `docs/protocol/blocks.md` | Canonical block encoding, invariants, and block identity |
-| Search protocol | Active governed | `docs/protocol/search.md` | Deterministic traversal, ranking, and termination semantics |
-| Indexing protocol | Active governed | `docs/protocol/indexing.md` | Deterministic index-construction inputs, invariants, and outputs |
-| DCBC protocol | Active governed | `docs/protocol/dcbc.md` | Deterministic capacity-constrained balanced clustering rules |
-| EBCP | Reference / future-facing | `docs/protocol/ebcp.md` | Embedding block compression protocol work that is not part of the active governed implementation surface in this pass |
+| Block protocol v1 | Canonical | `docs/protocol/blocks.md` | Current block layout, invariants, and hashing rules |
+| Block protocol v2 | Draft | `docs/protocol/blocks-v2.md` | Proposed version-2 block envelope and reserved types |
+| Search protocol | Canonical | `docs/protocol/search.md` | Deterministic traversal, ranking, and termination semantics |
+| Indexing protocol | Canonical | `docs/protocol/indexing.md` | Deterministic index-construction lifecycle and outputs |
+| DCBC protocol | Canonical | `docs/protocol/dcbc.md` | Deterministic capacity-constrained balanced clustering rules |
+| EBCP | Reference / future-facing | `docs/protocol/ebcp.md` | Embedding block compression protocol work referenced by the block model |
+| Specification packages | Active governed | `docs/specs/` | Traceable requirements, design, and validation packages |
 | Architecture notes | Supporting | `docs/arch/` | Design explorations and deeper technical background |
+| Research notes | Supporting | `docs/research/` | Benchmark and clustering research artifacts |
+| SOPs | Supporting | `docs/sop/` | Reproducible operational procedures |
 | Audits | Supporting | `docs/audits/` | Cross-artifact drift and traceability audit records |
-| Root cause analyses | Supporting | `docs/rca/` | Focused follow-up analyses for specific drift or implementation issues |
+| Root cause analyses | Supporting | `docs/rca/` | Focused follow-up analyses for specific issues |
 
 ## Specification packages
 
-The repository uses spec packages under `docs/specs/`. Each package follows the
-same structure:
+Spec packages in `docs/specs/` use a `requirements.md` / `design.md` /
+`validation.md` structure. The current packages are:
 
-- `requirements.md` for the required behavior and boundaries
-- `design.md` for the derived design
-- `validation.md` for the verification surface
-
-Current packages cover:
-
-- `repository-dependabot`
-- `rust-block-crate`
-- `rust-block-inspect-cli`
-- `rust-block-storage-trait`
-- `rust-dcbc-streaming-crate`
-- `rust-directional-pca-crate`
-- `rust-embeddings-openai-crate`
-- `rust-embeddings-trait`
-- `rust-filesystem-block-store`
-- `rust-pca-crate`
-- `rust-search-crate`
-- `rust-streaming-clustering-crate`
-- `rust-streaming-indexer-crate`
-- `rust-workspace-ci`
+- **Repository automation:** `repository-dependabot`, `rust-workspace-ci`
+- **Block model and stores:** `rust-block-crate`, `rust-block-storage-trait`,
+  `rust-filesystem-block-store`, `rust-memory-block-store`,
+  `rust-overlay-block-store`, `rust-zip-block-store`,
+  `rust-azure-blob-block-store`, `rust-azure-blob-block-store-sdk`,
+  `rust-azure-table-block-store`, `rust-azure-table-block-store-v2`
+- **Search, indexing, and embeddings:** `rust-search-crate`,
+  `rust-streaming-indexer-crate`, `rust-adaptive-planning-policy-crate`,
+  `rust-embeddings-trait`, `rust-embeddings-openai-crate`
+- **Clustering, math, and evaluation:** `rust-streaming-clustering-crate`,
+  `rust-streaming-clustering-evaluator-crate`, `rust-dcbc-streaming-crate`,
+  `rust-directional-pca-crate`, `rust-spherical-kmeans-crate`,
+  `rust-pca-crate`, `rust-pca-chunking-crate`,
+  `rust-linear-algebra-acceleration-crate`
+- **CLI:** `rust-block-inspect-cli`
 
 ## Rust workspace
 
@@ -97,45 +91,42 @@ The top-level Cargo workspace currently contains:
 
 | Crate | Role |
 | --- | --- |
+| `lexongraph-adaptive-planning-policy` | Deterministic adaptive selection between directional-PCA and DCBC planning paths |
 | `lexongraph-block` | Typed block model, validation, canonical CBOR serialization, and block-hash derivation |
-| `lexongraph-block-inspect` | CLI for inspecting canonical block encodings and decoded block structure |
-| `lexongraph-block-store` | Backend-agnostic `BlockStore` trait plus conformance harnesses |
-| `lexongraph-block-store-azure` | Azure Blob Storage implementation of the block-store contract over container SAS URLs |
-| `lexongraph-block-store-fs` | Local filesystem implementation of the block-store contract |
-| `lexongraph-dcbc-streaming` | Deterministic streaming DCBC clustering implementation |
-| `lexongraph-directional-pca` | Deterministic directional PCA utilities for streaming clustering workflows |
-| `lexongraph-embeddings-trait` | Shared async embedding-provider contract plus opt-in conformance helpers |
+| `lexongraph-block-inspect` | CLI for inspecting stored blocks and rooted block trees in a filesystem block store |
+| `lexongraph-block-store` | Backend-agnostic `BlockStore` trait plus conformance helpers |
+| `lexongraph-block-store-azure` | Azure Blob Storage `BlockStore` implementation over container SAS URLs |
+| `lexongraph-block-store-azure-sdk` | Azure Blob Storage `BlockStore` implementation built on the Azure SDK |
+| `lexongraph-block-store-azure-table` | Azure Table Storage `BlockStore` implementation |
+| `lexongraph-block-store-azure-table-v2` | Version-2 Azure Table Storage `BlockStore` implementation |
+| `lexongraph-block-store-fs` | Local filesystem `BlockStore` implementation |
+| `lexongraph-block-store-memory` | Volatile in-memory `BlockStore` implementation |
+| `lexongraph-block-store-overlay` | Layered overlay `BlockStore` with cache, writable, and read-only tiers |
+| `lexongraph-block-store-zip` | Read-only `BlockStore` backed by a zip archive with filesystem-style sharding |
+| `lexongraph-dcbc-streaming` | Streaming deterministic capacity-constrained balanced clustering implementation |
+| `lexongraph-directional-pca` | Streaming directional-PCA clustering implementation |
 | `lexongraph-embeddings-openai` | OpenAI-compatible and Azure OpenAI embedding-provider implementation |
-| `lexongraph-pca` | Deterministic, streaming-first PCA accumulation, affine transform algebra, and stable transform artifact encoding |
+| `lexongraph-embeddings-trait` | Shared async embedding-provider contract plus opt-in conformance helpers |
+| `lexongraph-linear-algebra-acceleration` | Execution-backend selection and dense-distance acceleration utilities |
+| `lexongraph-pca` | Deterministic, streaming-first PCA transforms |
+| `lexongraph-pca-chunking` | Streaming PCA projection, deterministic sorting, and exact chunking |
 | `lexongraph-search` | Protocol-conforming search orchestration with trait-based policy hooks |
+| `lexongraph-spherical-kmeans` | Streaming spherical k-means clustering implementation |
 | `lexongraph-streaming-clustering` | Shared streaming clustering contract plus conformance helpers |
+| `lexongraph-streaming-clustering-evaluator` | Benchmark harness and CLI for sectioned streaming-clustering evaluations |
 | `lexongraph-streaming-indexer` | Protocol-conforming streaming indexing orchestration with replay-based ingestion |
 
-The workspace includes multiple `BlockStore` backends. The primary persistence
-backends implemented in this repository are the local filesystem block store
-and an Azure Blob Storage block store over container SAS URLs, alongside
-memory, overlay, and zip variants for in-memory, composed, and read-only
-archive scenarios.
+## Published indexing profiles
 
-## Published streaming-indexer profiles
-
-The streaming indexer exposes versioned published profiles so callers can select
-an explicit repository-owned indexing bundle without wiring the low-level
-planning knobs manually.
-
-| Profile | Planning bundle | What it does |
-| --- | --- | --- |
-| `0.1.0` | Spherical k-means + greedy-pack hierarchy + exact-centroid summaries | Forms terminal groups with repository-owned spherical k-means settings, then greedily packs those groups into a finalized partition hierarchy using Euclidean centroid distance before the existing bottom-up block materialization flow persists the tree. |
-| `0.2.0` | Divisive directional-PCA + exact-centroid summaries | Uses the existing built-in directional-PCA planning path with `Divisive` hierarchy construction and pinned `cluster_count = 2` to derive the finalized partition hierarchy, then reuses the same bottom-up block materialization flow to persist the tree. |
-| `0.3.0` | Divisive directional-PCA + exact-centroid summaries | Uses the same built-in directional-PCA planning path, hierarchy construction, and summary policy as `0.2.0`, but pins `cluster_count = 64`, enables adaptive all-eligible axis participation, allocates split bits from eigenvalue-only log weights with zero-bit eligibility for weak axes, and places cuts with density-valley partitioning before reusing the same bottom-up block materialization flow to persist the tree. |
-
-All published profile versions remain explicitly selectable. The low-level streaming
-indexer APIs are still available for callers that want direct control over
-planning realization, direction, and settings.
+`lexongraph-streaming-indexer` includes repository-owned published planning
+profiles so callers can opt into pinned indexing bundles instead of wiring the
+low-level planning knobs manually. The supported versions are defined in
+`crates/lexongraph-streaming-indexer/src/lib.rs` and currently span
+`0.1.0` through `0.7.0`.
 
 ## Contributor entrypoint
 
-For Rust changes, use the same workspace commands enforced by CI:
+For Rust changes, start with the same workspace checks enforced by CI:
 
 ```bash
 cargo fmt --check --all
@@ -143,69 +134,50 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The CI workflow lives in `.github/workflows/ci.yml` and currently runs on:
+The main CI workflow in `.github/workflows/ci.yml` currently runs:
 
-- pushes to `main`
-- pull requests targeting `main` (filtered via `paths:` to repository-quality-relevant files including Rust workspace files, docs, hooks, `.gitignore`, `.gitattributes`, and workflow configuration)
+- SPDX header checks
+- workspace formatting, clippy, and tests
+- conditional live Azure block-store tests when Azure-relevant paths change
+- workspace coverage via `cargo llvm-cov`, uploaded to Coveralls
 
-The repository also defines `.github/dependabot.yml` for weekly Cargo and
-GitHub Actions dependency update proposals.
-
-To enable the repository-managed local checks, configure Git to use the
-versioned hook directory:
+To enable the repository-managed local hooks, configure Git to use the versioned
+hook directory:
 
 ```bash
 git config core.hooksPath hooks
 ```
 
-The `pre-commit` hook enforces SPDX headers on staged governed files, and CI
-re-checks the full tracked repository surface.
+The checked-in hooks currently include:
 
-Repository maintenance skills live under `.github/skills/` and support
-specification and maintenance workflows for this repository.
+- `hooks/check-spdx-headers`
+- `hooks/pre-commit`
+
+Repository maintenance skills live under `.github/skills/`.
 
 ## Repository layout
 
 ```text
 .
-|- crates/
-|  |- lexongraph-block
-|  |- lexongraph-block-inspect
-|  |- lexongraph-block-store
-|  |- lexongraph-block-store-azure
-|  |- lexongraph-block-store-fs
-|  |- lexongraph-dcbc-streaming
-|  |- lexongraph-directional-pca
-|  |- lexongraph-embeddings-openai
-|  |- lexongraph-embeddings-trait
-|  |- lexongraph-pca
-|  |- lexongraph-search
-|  |- lexongraph-streaming-clustering
-|  `- lexongraph-streaming-indexer
+|- crates/          # Rust workspace crates
 |- docs/
 |  |- arch/
 |  |- audits/
 |  |- protocol/
 |  |- rca/
+|  |- research/
+|  |- sop/
 |  |- specs/
 |  `- vision.md
 |- .github/
 |  |- dependabot.yml
 |  |- skills/
-|  `- workflows/ci.yml
+|  `- workflows/
 |- hooks/
 |- Cargo.toml
+|- Cargo.lock
 `- README.md
 ```
-
-## Current focus
-
-The repository is centered on keeping the protocol surface, crate-level specs,
-and implemented Rust workspace aligned:
-
-- protocol-first definitions in `docs/protocol/`
-- traceable crate-level requirements in `docs/specs/`
-- verification-backed Rust implementations in `crates/`
 
 ## License
 
