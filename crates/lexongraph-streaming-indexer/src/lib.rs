@@ -86,6 +86,7 @@ impl Default for StreamingV2PassMetricAccumulator {
             quality_sum: 0.0,
             balance_sum: 0.0,
             cluster_runs: 0,
+            requested_cluster_count: None,
             realized_cluster_count: None,
             quality_direction: MetricDirection::LargerIsBetter,
             balance_direction: MetricDirection::LargerIsBetter,
@@ -3089,6 +3090,7 @@ struct StreamingV2PassMetricAccumulator {
     quality_sum: f64,
     balance_sum: f64,
     cluster_runs: usize,
+    requested_cluster_count: Option<u32>,
     realized_cluster_count: Option<u32>,
     quality_direction: MetricDirection,
     balance_direction: MetricDirection,
@@ -3313,7 +3315,6 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let materializability_bound =
             materializability_bound(&self.embedding_spec, self.block_size_target)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
-        let requested_cluster_count = Some(self.profile_settings()?.cluster_count);
         let mut metrics = StreamingV2PassMetricAccumulator::default();
 
         if self.partitions.is_empty() {
@@ -3496,7 +3497,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         Ok(IndexingPassReport {
             observed_item_count: fingerprint.observed_count,
             completed_pass_count: self.completed_passes,
-            requested_planning_cluster_count: requested_cluster_count,
+            requested_planning_cluster_count: metrics.requested_cluster_count,
             realized_planning_cluster_count: metrics.realized_cluster_count,
             planning_quality_metric: metrics.average_quality(),
             planning_balance_metric: metrics.average_balance(),
@@ -4161,7 +4162,15 @@ impl StreamingV2PassMetricAccumulator {
         if self.cluster_runs == 0 {
             self.quality_direction = report.quality_direction;
             self.balance_direction = report.balance_direction;
+            self.requested_cluster_count = Some(report.requested_cluster_count);
             self.realized_cluster_count = report.realized_cluster_count;
+        } else {
+            if self.requested_cluster_count != Some(report.requested_cluster_count) {
+                self.requested_cluster_count = None;
+            }
+            if self.realized_cluster_count != report.realized_cluster_count {
+                self.realized_cluster_count = None;
+            }
         }
         self.quality_sum += report.quality_metric;
         self.balance_sum += report.balance_metric;

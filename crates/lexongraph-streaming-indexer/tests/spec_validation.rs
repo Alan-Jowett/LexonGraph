@@ -5543,6 +5543,8 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
     run.ingest_batch(items.as_slice()).await.unwrap();
     let first = run.finish_pass().unwrap();
     assert_eq!(first.completed_pass_count, 1);
+    assert_eq!(first.requested_planning_cluster_count, None);
+    assert_eq!(first.realized_planning_cluster_count, None);
     let first_topology = run.current_partition_topology().unwrap();
     assert_eq!(first_topology.partitions.len(), 1);
     assert!(run.finalized_partition_topology().is_none());
