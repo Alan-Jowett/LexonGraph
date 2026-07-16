@@ -3528,6 +3528,16 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             ));
         }
         if self.pending_partition_ids().is_empty() {
+            if self.partitions.values().any(|partition| {
+                !partition.terminal
+                    && partition.pending_trainer.is_none()
+                    && partition.routing.is_some()
+                    && partition.child_ids.is_empty()
+            }) {
+                return Err(StreamingIndexerError::InvalidLifecycleTransition(
+                    "planning completion requires every routed v2 partition to install child partitions".into(),
+                ));
+            }
             validate_streaming_v2_topology(&self.current_topology())
                 .map_err(StreamingIndexerError::HierarchyValidation)?;
             self.phase = RunPhase::PlanningComplete;

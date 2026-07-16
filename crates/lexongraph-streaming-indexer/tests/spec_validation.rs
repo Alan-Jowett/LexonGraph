@@ -5566,6 +5566,11 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
         run.ingest_batch(items.as_slice()).await.unwrap();
         let report = run.finish_pass().unwrap();
         assert_eq!(report.completed_pass_count, expected_pass);
+        let error = run.mark_planning_complete().unwrap_err();
+        assert!(matches!(
+            error,
+            StreamingIndexerError::InvalidLifecycleTransition(_)
+        ));
         if let Some(topology) = run.current_partition_topology()
             && topology.partitions.len() > 1
         {
@@ -5576,10 +5581,8 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
                     .iter()
                     .any(|partition| !partition.child_ids.is_empty())
             );
-            assert!(run.mark_planning_complete().is_err());
             break;
         }
-        assert!(run.mark_planning_complete().is_err());
     }
     assert!(saw_split_topology);
 }
