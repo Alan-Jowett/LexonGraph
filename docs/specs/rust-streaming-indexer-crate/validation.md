@@ -440,8 +440,9 @@ REQ-STREAM-INDEXER-041
 Run identical planning passes twice over the same logical item set and compare
 the resulting partition hierarchies.
 
-**Pass condition:** partition identities, ancestry, and terminal memberships are
-deterministic across both runs.
+**Pass condition:** the reported partition identities or equivalent stable
+boundary labels, ancestry, and terminal memberships are deterministic across
+both runs, even if the implementation uses opaque internal partition IDs.
 
 **Traces to:** REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-037
 
@@ -811,8 +812,9 @@ all of the following:
 - a declared planning-unit kind for the recursive phase
 - repeated `InProgress` updates for the same current planning unit with
   monotonically increasing `current_unit_elapsed`
-- at least one later update whose `current_partition_path` or equivalent unit
-  descriptor changes because work moved to a different partition, or whose
+- at least one later update whose deterministic current planning-unit
+  identifier (`current_partition_path` or equivalent stable boundary label)
+  changes because work moved to a different partition, or whose
   `completed_unit_count` advances because one planning unit completed
 - no requirement for downstream callers to infer that state transition from
   free-form log text
@@ -828,14 +830,29 @@ Capture the `HierarchyPlanning { stage }` observer updates and inspect the
 recursive planning detail fields.
 
 **Pass condition:** the observer stream exposes, or explicitly marks as
-unavailable, the recursive planning fields required by the design for current
-unit identity and discovered work. When those fields are available,
+unavailable, the recursive planning fields required by the design for
+deterministic current-unit identity and discovered work, without assuming the
+implementation retains ancestry strings as its primary internal key. When
+those fields are available,
 `discovered_unit_count`, `completed_unit_count`, and the aggregate partition or
 planner counters are monotonic non-decreasing, and a downstream caller can
 distinguish "still working the same partition" from "advanced to another
 partition" without guessing from elapsed time alone.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064
+
+### VAL-STREAM-INDEXER-108
+
+Inspect the v2 retained planning implementation artifacts.
+
+**Pass condition:** retained partition metadata, parent/child references,
+replay-order offsets, and classifier-assignment tracking are keyed by compact
+internal partition identifiers or contiguous partition-indexed storage rather
+than string-keyed maps on the hot retained path. Any externally reported
+partition labels are produced only at topology, observer, or diagnostic
+boundaries.
+
+**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-120
 
 ### VAL-STREAM-INDEXER-061
 

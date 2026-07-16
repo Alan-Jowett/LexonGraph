@@ -1818,6 +1818,11 @@ struct BaselineItem {
     embedding_hash: BlockHash,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct PartitionId(usize);
+
+const ROOT_PARTITION_ID: PartitionId = PartitionId(0);
+
 struct PartitionRoutingPlan {
     terminal_partition_ids: Vec<String>,
     terminal_partition_item_counts: Vec<usize>,
@@ -1844,8 +1849,8 @@ struct StreamingV2ReplayFingerprintTracker {
 
 struct StreamingV2PassState {
     fingerprint: StreamingV2ReplayFingerprintTracker,
-    replay_order_offsets: HashMap<String, usize>,
-    classifier_assignment_counts: HashMap<String, Vec<usize>>,
+    replay_order_offsets: Vec<usize>,
+    classifier_assignment_counts: Vec<Option<Vec<usize>>>,
 }
 
 #[derive(Clone)]
@@ -1854,9 +1859,8 @@ struct StreamingV2ReplayOrderPlan {
 }
 
 struct StreamingV2PartitionNode {
-    id: String,
-    parent_id: Option<String>,
-    child_ids: Vec<String>,
+    parent_id: Option<PartitionId>,
+    child_ids: Vec<PartitionId>,
     item_count: usize,
     terminal: bool,
     pending_trainer: Option<DirectionalPcaStreamingTrainer>,
@@ -3082,7 +3086,8 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
     completed_passes: usize,
     baseline_fingerprint: Option<StreamingV2ReplayFingerprint>,
     current_pass: Option<StreamingV2PassState>,
-    partitions: BTreeMap<String, StreamingV2PartitionNode>,
+    partitions: Vec<StreamingV2PartitionNode>,
+    next_partition_id: usize,
     _item_ref: PhantomData<R>,
 }
 
@@ -3097,9 +3102,9 @@ struct StreamingV2PassMetricAccumulator {
 }
 
 struct StreamingV2CompletedPartition {
-    partition_id: String,
+    partition_id: PartitionId,
     routing: StreamingV2RoutingStrategy,
-    child_ids: Vec<String>,
+    child_ids: Vec<PartitionId>,
     children: Vec<StreamingV2PartitionNode>,
 }
 
@@ -3147,7 +3152,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             completed_passes: 0,
             baseline_fingerprint: None,
             current_pass: None,
-            partitions: BTreeMap::new(),
+            partitions: Vec::new(),
+            next_partition_id: 0,
             _item_ref: PhantomData,
         })
     }
@@ -3225,7 +3231,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
 
         let (contents, embeddings) = self.resolve_batch(batch).await?;
-        let mut grouped = HashMap::<String, Vec<Vec<f32>>>::new();
+        let mut grouped = HashMap::<PartitionId, Vec<Vec<f32>>>::new();
 
         for ((item, content), embedding) in batch.iter().zip(contents.iter()).zip(embeddings.iter())
         {
@@ -3243,11 +3249,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     let pass = self
                         .current_pass
                         .get_or_insert_with(StreamingV2PassState::new);
+                    pass.ensure_partition_capacity(self.partitions.len());
                     Self::route_planning_target_in_partitions(
                         &self.partitions,
                         decoded.as_slice(),
-                        &mut pass.replay_order_offsets,
-                        &mut pass.classifier_assignment_counts,
+                        pass.replay_order_offsets.as_mut_slice(),
+                        pass.classifier_assignment_counts.as_mut_slice(),
                     )?
                 };
                 if let Some(partition_id) = partition_id {
@@ -3266,14 +3273,15 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
 
         for (partition_id, partition_embeddings) in grouped {
-            let node = self.partitions.get_mut(&partition_id).ok_or_else(|| {
+            let label = self.partition_label(partition_id);
+            let node = self.partition_mut(partition_id).map_err(|_| {
                 StreamingIndexerError::HierarchyValidation(format!(
-                    "planning partition {partition_id:?} is missing"
+                    "planning partition {label:?} is missing"
                 ))
             })?;
             let trainer = node.pending_trainer.as_mut().ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
-                    "planning partition {partition_id:?} is not awaiting replay input"
+                    "planning partition {label:?} is not awaiting replay input"
                 ))
             })?;
             trainer
@@ -3295,7 +3303,17 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 "at least one item must be ingested before completing a pass".into(),
             ));
         };
-        let fingerprint = current_pass.fingerprint.finish();
+        let StreamingV2PassState {
+            fingerprint,
+            replay_order_offsets: _,
+            classifier_assignment_counts,
+        } = current_pass;
+        let expandable_ids = classifier_assignment_counts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, counts)| counts.as_ref().map(|_| PartitionId(index)))
+            .collect::<Vec<_>>();
+        let fingerprint = fingerprint.finish();
         if fingerprint.observed_count == 0 {
             return Err(StreamingIndexerError::EmptyPass(
                 "at least one item must be ingested before completing a pass".into(),
@@ -3318,67 +3336,79 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let mut metrics = StreamingV2PassMetricAccumulator::default();
 
         if self.partitions.is_empty() {
-            self.partitions.insert(
-                "p0".into(),
-                self.create_partition_node(
-                    "p0".into(),
-                    None,
-                    fingerprint.observed_count,
-                    materializability_bound,
-                )?,
-            );
+            let root_id = self.allocate_partition_id();
+            debug_assert_eq!(root_id, ROOT_PARTITION_ID);
+            self.partitions.push(self.create_partition_node(
+                None,
+                fingerprint.observed_count,
+                materializability_bound,
+            )?);
         } else {
             let pending_ids = self.pending_partition_ids();
             let mut completed = Vec::new();
             for partition_id in pending_ids {
-                let node = self.partitions.get_mut(&partition_id).ok_or_else(|| {
-                    StreamingIndexerError::HierarchyValidation(format!(
-                        "pending partition {partition_id:?} is missing"
-                    ))
-                })?;
-                let trainer = node.pending_trainer.as_mut().ok_or_else(|| {
-                    StreamingIndexerError::HierarchyValidation(format!(
-                        "pending partition {partition_id:?} has no trainer"
-                    ))
-                })?;
-                let report = trainer.finish_pass().map_err(map_clustering_error)?;
-                metrics.observe(&report);
-                if report.observed_count != node.item_count {
-                    return Err(StreamingIndexerError::HierarchyValidation(format!(
-                        "pending partition {partition_id:?} observed {} items but expected {}",
-                        report.observed_count, node.item_count
-                    )));
-                }
-                match trainer.complete_training() {
-                    Ok(()) => {
-                        let trainer = node.pending_trainer.take().unwrap();
-                        let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
-                        let realized_cluster_count =
-                            usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
-                                StreamingIndexerError::HierarchyValidation(
-                                    "classifier realized cluster count does not fit into usize"
-                                        .into(),
-                                )
-                            })?;
-                        let (routing, child_ids, children) = if realized_cluster_count <= 1
-                            && node.item_count > materializability_bound
+                let label = self.partition_label(partition_id);
+                let completed_training = {
+                    let node = self.partition_mut(partition_id).map_err(|_| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "pending partition {label:?} is missing"
+                        ))
+                    })?;
+                    let trainer = node.pending_trainer.as_mut().ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "pending partition {label:?} has no trainer"
+                        ))
+                    })?;
+                    let report = trainer.finish_pass().map_err(map_clustering_error)?;
+                    metrics.observe(&report);
+                    if report.observed_count != node.item_count {
+                        return Err(StreamingIndexerError::HierarchyValidation(format!(
+                            "pending partition {label:?} observed {} items but expected {}",
+                            report.observed_count, node.item_count
+                        )));
+                    }
+                    match trainer.complete_training() {
+                        Ok(()) => true,
+                        Err(StreamingClusteringError::InvalidTransition { state, operation })
+                            if state == TrainerState::PassComplete
+                                && operation == "complete_training" =>
                         {
-                            let child_counts =
-                                balanced_groups(node.item_count, materializability_bound)
-                                    .map_err(StreamingIndexerError::HierarchyValidation)?
-                                    .into_iter()
-                                    .map(|group| group.len())
-                                    .collect::<Vec<_>>();
+                            false
+                        }
+                        Err(error) => return Err(map_clustering_error(error)),
+                    }
+                };
+                if completed_training {
+                    let trainer = self
+                        .partition_mut(partition_id)?
+                        .pending_trainer
+                        .take()
+                        .unwrap();
+                    let item_count = self.partition(partition_id)?.item_count;
+                    let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
+                    let realized_cluster_count =
+                        usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
+                            StreamingIndexerError::HierarchyValidation(
+                                "classifier realized cluster count does not fit into usize".into(),
+                            )
+                        })?;
+                    let (routing, child_ids, children) =
+                        if realized_cluster_count <= 1 && item_count > materializability_bound {
+                            let child_counts = balanced_groups(item_count, materializability_bound)
+                                .map_err(StreamingIndexerError::HierarchyValidation)?
+                                .into_iter()
+                                .map(|group| group.len())
+                                .collect::<Vec<_>>();
                             if child_counts.is_empty() {
                                 return Err(StreamingIndexerError::HierarchyValidation(format!(
-                                    "partition {partition_id:?} produced no child routing plan"
+                                    "partition {label:?} produced no child routing plan"
                                 )));
                             }
                             let routing = StreamingV2RoutingStrategy::ReplayOrder(
                                 StreamingV2ReplayOrderPlan::new(child_counts.clone()),
                             );
                             let (child_ids, children) = self.create_child_nodes(
-                                partition_id.clone(),
+                                partition_id,
                                 child_counts,
                                 materializability_bound,
                             )?;
@@ -3390,46 +3420,36 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                 Vec::new(),
                             )
                         };
-                        completed.push(StreamingV2CompletedPartition {
-                            partition_id,
-                            routing,
-                            child_ids,
-                            children,
-                        });
-                    }
-                    Err(StreamingClusteringError::InvalidTransition { state, operation })
-                        if state == TrainerState::PassComplete
-                            && operation == "complete_training" => {}
-                    Err(error) => return Err(map_clustering_error(error)),
+                    completed.push(StreamingV2CompletedPartition {
+                        partition_id,
+                        routing,
+                        child_ids,
+                        children,
+                    });
                 }
             }
 
             for partition in completed {
-                if let Some(node) = self.partitions.get_mut(&partition.partition_id) {
+                {
+                    let node = self.partition_mut(partition.partition_id)?;
                     node.pending_trainer = None;
                     node.routing = Some(partition.routing);
                     node.child_ids = partition.child_ids.clone();
                     node.terminal = false;
                 }
-                for child in partition.children {
-                    self.partitions.insert(child.id.clone(), child);
-                }
+                self.partitions.extend(partition.children);
             }
 
-            let expandable_ids = current_pass
-                .classifier_assignment_counts
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
             for partition_id in expandable_ids {
-                let node = self.partitions.get(&partition_id).ok_or_else(|| {
+                let label = self.partition_label(partition_id);
+                let node = self.partition(partition_id).map_err(|_| {
                     StreamingIndexerError::HierarchyValidation(format!(
-                        "expandable partition {partition_id:?} is missing"
+                        "expandable partition {label:?} is missing"
                     ))
                 })?;
                 let routing = node.routing.as_ref().ok_or_else(|| {
                     StreamingIndexerError::HierarchyValidation(format!(
-                        "expandable partition {partition_id:?} is missing routing"
+                        "expandable partition {label:?} is missing routing"
                     ))
                 })?;
                 let expected_child_count = match routing {
@@ -3442,52 +3462,49 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     }
                     StreamingV2RoutingStrategy::ReplayOrder(_) => {
                         return Err(StreamingIndexerError::HierarchyValidation(format!(
-                            "expandable partition {partition_id:?} unexpectedly uses replay-order routing"
+                            "expandable partition {label:?} unexpectedly uses replay-order routing"
                         )));
                     }
                 };
-                let child_counts = current_pass
-                    .classifier_assignment_counts
-                    .get(&partition_id)
+                let child_counts = classifier_assignment_counts
+                    .get(partition_id.0)
+                    .and_then(|counts| counts.as_ref())
                     .ok_or_else(|| {
                         StreamingIndexerError::HierarchyValidation(format!(
-                            "partition {partition_id:?} did not observe a full classifier replay before child sizing"
+                            "partition {label:?} did not observe a full classifier replay before child sizing"
                         ))
                     })?
                     .clone();
                 if child_counts.len() != expected_child_count {
                     return Err(StreamingIndexerError::HierarchyValidation(format!(
-                        "partition {partition_id:?} observed {} classifier child buckets but expected {}",
+                        "partition {label:?} observed {} classifier child buckets but expected {}",
                         child_counts.len(),
                         expected_child_count
                     )));
                 }
                 if child_counts.contains(&0) {
                     return Err(StreamingIndexerError::HierarchyValidation(format!(
-                        "partition {partition_id:?} classifier replay left at least one child empty"
+                        "partition {label:?} classifier replay left at least one child empty"
                     )));
                 }
                 let observed_child_total = child_counts.iter().sum::<usize>();
                 if observed_child_total != node.item_count {
                     return Err(StreamingIndexerError::HierarchyValidation(format!(
-                        "partition {partition_id:?} classifier replay observed {} items but expected {}",
+                        "partition {label:?} classifier replay observed {} items but expected {}",
                         observed_child_total, node.item_count
                     )));
                 }
-                let (child_ids, children) = self.create_child_nodes(
-                    partition_id.clone(),
-                    child_counts,
-                    materializability_bound,
-                )?;
-                let node = self.partitions.get_mut(&partition_id).ok_or_else(|| {
-                    StreamingIndexerError::HierarchyValidation(format!(
-                        "expandable partition {partition_id:?} disappeared before child installation"
-                    ))
-                })?;
-                node.child_ids = child_ids;
-                for child in children {
-                    self.partitions.insert(child.id.clone(), child);
+                let (child_ids, children) =
+                    self.create_child_nodes(partition_id, child_counts, materializability_bound)?;
+                {
+                    let node = self.partition_mut(partition_id).map_err(|_| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "expandable partition {label:?} disappeared before child installation"
+                        ))
+                    })?;
+                    node.child_ids = child_ids;
                 }
+                self.partitions.extend(children);
             }
         }
 
@@ -3528,7 +3545,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             ));
         }
         if self.pending_partition_ids().is_empty() {
-            if self.partitions.values().any(|partition| {
+            if self.partitions.iter().any(|partition| {
                 !partition.terminal
                     && partition.pending_trainer.is_none()
                     && partition.routing.is_some()
@@ -3575,26 +3592,24 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             materializability_bound(&self.embedding_spec, self.block_size_target)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
 
-        let terminal_partitions = {
-            let mut partitions = topology
-                .partitions
-                .iter()
-                .filter(|partition| partition.terminal)
-                .cloned()
-                .collect::<Vec<_>>();
-            partitions.sort_by(|left, right| left.id.cmp(&right.id));
-            partitions
-        };
-        let mut terminal_ordinals = HashMap::new();
-        for (ordinal, partition) in terminal_partitions.iter().enumerate() {
-            terminal_ordinals.insert(partition.id.clone(), ordinal);
+        let mut terminal_partition_ids = self
+            .partitions
+            .iter()
+            .enumerate()
+            .filter(|(_, partition)| partition.terminal)
+            .map(|(index, _)| PartitionId(index))
+            .collect::<Vec<_>>();
+        terminal_partition_ids.sort_by_key(|&partition_id| self.partition_label(partition_id));
+        let mut terminal_ordinals = vec![None; self.partitions.len()];
+        for (ordinal, partition_id) in terminal_partition_ids.iter().copied().enumerate() {
+            terminal_ordinals[partition_id.0] = Some(ordinal);
         }
 
         let mut fingerprint = StreamingV2ReplayFingerprintTracker::new();
-        let mut replay_order_offsets = HashMap::<String, usize>::new();
+        let mut replay_order_offsets = vec![0; self.partitions.len()];
         let mut replay_count = 0usize;
         let mut persisted_ids = Vec::new();
-        let mut spill = PartitionSpillDirectory::new(terminal_partitions.len())?;
+        let mut spill = PartitionSpillDirectory::new(terminal_partition_ids.len())?;
 
         for batch in replay_batches {
             let items = batch.as_ref();
@@ -3618,13 +3633,19 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     embedding_hash,
                 );
                 let decoded = decode_embedding_as_f32(embedding.as_slice(), &self.embedding_spec)?;
-                let terminal_id =
-                    self.route_terminal_partition(decoded.as_slice(), &mut replay_order_offsets)?;
-                let partition_ordinal = *terminal_ordinals.get(&terminal_id).ok_or_else(|| {
-                    StreamingIndexerError::HierarchyValidation(format!(
-                        "terminal partition {terminal_id:?} is missing from the v2 topology"
-                    ))
-                })?;
+                let terminal_id = self.route_terminal_partition(
+                    decoded.as_slice(),
+                    replay_order_offsets.as_mut_slice(),
+                )?;
+                let partition_ordinal = terminal_ordinals
+                    .get(terminal_id.0)
+                    .and_then(|ordinal| *ordinal)
+                    .ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "terminal partition {:?} is missing from the v2 topology",
+                            self.partition_label(terminal_id)
+                        ))
+                    })?;
 
                 let leaf = build_leaf_block(
                     VERSION_1,
@@ -3674,13 +3695,16 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
 
         let spill = spill.finish()?;
-        let mut materialized_terminal_children = HashMap::<String, IndexedChild>::new();
-        for (partition_ordinal, partition) in terminal_partitions.iter().enumerate() {
+        let mut materialized_terminal_children = vec![None; self.partitions.len()];
+        for (partition_ordinal, partition_id) in terminal_partition_ids.iter().copied().enumerate()
+        {
+            let partition = self.partition(partition_id)?;
+            let partition_label = self.partition_label(partition_id);
             let leaf_children = spill.read_partition_children(partition_ordinal)?;
             if leaf_children.len() != partition.item_count {
                 return Err(StreamingIndexerError::ReplayMismatch(format!(
                     "terminal partition {:?} spill contained {} items but expected {}",
-                    partition.id,
+                    partition_label,
                     leaf_children.len(),
                     partition.item_count
                 )));
@@ -3688,7 +3712,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             if leaf_children.is_empty() {
                 return Err(StreamingIndexerError::ReplayMismatch(format!(
                     "terminal partition {:?} spill is empty",
-                    partition.id
+                    partition_label
                 )));
             }
             let child = if leaf_children.len() == 1 {
@@ -3696,26 +3720,19 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             } else {
                 self.v2_assemble_child_set(
                     leaf_children,
-                    partition.id == topology.root_partition_id,
+                    partition_id == ROOT_PARTITION_ID,
                     materializability_bound,
                     store,
                     &mut persisted_ids,
                 )
                 .await?
             };
-            materialized_terminal_children.insert(partition.id.clone(), child);
+            materialized_terminal_children[partition_id.0] = Some(child);
         }
 
-        let partitions = topology
-            .partitions
-            .iter()
-            .cloned()
-            .map(|partition| (partition.id.clone(), partition))
-            .collect::<HashMap<_, _>>();
         let root_child = self
             .materialize_v2_partition_from_terminal_children(
-                topology.root_partition_id.as_str(),
-                &partitions,
+                ROOT_PARTITION_ID,
                 &materialized_terminal_children,
                 materializability_bound,
                 store,
@@ -3733,19 +3750,63 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     fn current_topology(&self) -> StreamingV2PartitionTopology {
         let partitions = self
             .partitions
-            .values()
-            .map(|partition| StreamingV2Partition {
-                id: partition.id.clone(),
-                parent_id: partition.parent_id.clone(),
-                child_ids: partition.child_ids.clone(),
-                item_count: partition.item_count,
-                terminal: partition.terminal,
+            .iter()
+            .enumerate()
+            .map(|(index, partition)| {
+                let partition_id = PartitionId(index);
+                StreamingV2Partition {
+                    id: self.partition_label(partition_id),
+                    parent_id: partition
+                        .parent_id
+                        .map(|parent_id| self.partition_label(parent_id)),
+                    child_ids: partition
+                        .child_ids
+                        .iter()
+                        .map(|&child_id| self.partition_label(child_id))
+                        .collect(),
+                    item_count: partition.item_count,
+                    terminal: partition.terminal,
+                }
             })
             .collect::<Vec<_>>();
         StreamingV2PartitionTopology {
-            root_partition_id: "p0".into(),
+            root_partition_id: self.partition_label(ROOT_PARTITION_ID),
             partitions,
         }
+    }
+
+    fn allocate_partition_id(&mut self) -> PartitionId {
+        let id = PartitionId(self.next_partition_id);
+        self.next_partition_id += 1;
+        id
+    }
+
+    fn partition(
+        &self,
+        partition_id: PartitionId,
+    ) -> Result<&StreamingV2PartitionNode, StreamingIndexerError> {
+        self.partitions.get(partition_id.0).ok_or_else(|| {
+            StreamingIndexerError::HierarchyValidation(format!(
+                "partition {:?} is missing from the v2 topology",
+                compact_partition_label(partition_id)
+            ))
+        })
+    }
+
+    fn partition_mut(
+        &mut self,
+        partition_id: PartitionId,
+    ) -> Result<&mut StreamingV2PartitionNode, StreamingIndexerError> {
+        self.partitions.get_mut(partition_id.0).ok_or_else(|| {
+            StreamingIndexerError::HierarchyValidation(format!(
+                "partition {:?} is missing from the v2 topology",
+                compact_partition_label(partition_id)
+            ))
+        })
+    }
+
+    fn partition_label(&self, partition_id: PartitionId) -> String {
+        format_partition_label(&self.partitions, partition_id)
     }
 
     fn profile_settings(
@@ -3770,14 +3831,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
 
     fn create_partition_node(
         &self,
-        id: String,
-        parent_id: Option<String>,
+        parent_id: Option<PartitionId>,
         item_count: usize,
         materializability_bound: usize,
     ) -> Result<StreamingV2PartitionNode, StreamingIndexerError> {
         if item_count <= materializability_bound || item_count <= 1 {
             return Ok(StreamingV2PartitionNode {
-                id,
                 parent_id,
                 child_ids: Vec::new(),
                 item_count,
@@ -3805,7 +3864,6 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         )
         .map_err(map_clustering_error)?;
         Ok(StreamingV2PartitionNode {
-            id,
             parent_id,
             child_ids: Vec::new(),
             item_count,
@@ -3816,19 +3874,18 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     fn create_child_nodes(
-        &self,
-        parent_id: String,
+        &mut self,
+        parent_id: PartitionId,
         child_counts: Vec<usize>,
         materializability_bound: usize,
-    ) -> Result<(Vec<String>, Vec<StreamingV2PartitionNode>), StreamingIndexerError> {
+    ) -> Result<(Vec<PartitionId>, Vec<StreamingV2PartitionNode>), StreamingIndexerError> {
         let mut child_ids = Vec::with_capacity(child_counts.len());
         let mut children = Vec::with_capacity(child_counts.len());
-        for (index, child_count) in child_counts.into_iter().enumerate() {
-            let child_id = format!("{parent_id}.{index}");
-            child_ids.push(child_id.clone());
+        for child_count in child_counts {
+            let child_id = self.allocate_partition_id();
+            child_ids.push(child_id);
             children.push(self.create_partition_node(
-                child_id,
-                Some(parent_id.clone()),
+                Some(parent_id),
                 child_count,
                 materializability_bound,
             )?);
@@ -3836,28 +3893,30 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         Ok((child_ids, children))
     }
 
-    fn pending_partition_ids(&self) -> Vec<String> {
+    fn pending_partition_ids(&self) -> Vec<PartitionId> {
         self.partitions
-            .values()
-            .filter(|partition| partition.pending_trainer.is_some())
-            .map(|partition| partition.id.clone())
+            .iter()
+            .enumerate()
+            .filter(|(_, partition)| partition.pending_trainer.is_some())
+            .map(|(index, _)| PartitionId(index))
             .collect()
     }
 
     fn route_planning_target_in_partitions(
-        partitions: &BTreeMap<String, StreamingV2PartitionNode>,
+        partitions: &[StreamingV2PartitionNode],
         embedding: &[f32],
-        replay_order_offsets: &mut HashMap<String, usize>,
-        classifier_assignment_counts: &mut HashMap<String, Vec<usize>>,
-    ) -> Result<Option<String>, StreamingIndexerError> {
+        replay_order_offsets: &mut [usize],
+        classifier_assignment_counts: &mut [Option<Vec<usize>>],
+    ) -> Result<Option<PartitionId>, StreamingIndexerError> {
         if partitions.is_empty() {
             return Ok(None);
         }
-        let mut current = "p0".to_string();
+        let mut current = ROOT_PARTITION_ID;
         loop {
-            let partition = partitions.get(&current).ok_or_else(|| {
+            let partition = partitions.get(current.0).ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
-                    "partition {current:?} is missing from the v2 planning topology"
+                    "partition {:?} is missing from the v2 planning topology",
+                    compact_partition_label(current)
                 ))
             })?;
             if partition.terminal {
@@ -3869,7 +3928,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             let routing = partition.routing.as_ref().ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
                     "partition {:?} is neither terminal, pending, nor routed",
-                    partition.id
+                    format_partition_label(partitions, current)
                 ))
             })?;
             let child_index = match routing {
@@ -3882,9 +3941,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         })?
                 }
                 StreamingV2RoutingStrategy::ReplayOrder(plan) => {
-                    let seen = replay_order_offsets
-                        .entry(partition.id.clone())
-                        .or_insert(0);
+                    let seen = replay_order_offsets.get_mut(current.0).ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "partition {:?} is missing replay-order state",
+                            format_partition_label(partitions, current)
+                        ))
+                    })?;
                     let index = plan.child_index_for_seen(*seen).map_err(|error| {
                         StreamingIndexerError::HierarchyValidation(error.to_string())
                     })?;
@@ -3906,12 +3968,19 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     StreamingV2RoutingStrategy::ReplayOrder(_) => unreachable!(),
                 };
                 let counts = classifier_assignment_counts
-                    .entry(partition.id.clone())
-                    .or_insert_with(|| vec![0; expected_child_count]);
+                    .get_mut(current.0)
+                    .ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "partition {:?} is missing classifier-assignment state",
+                            format_partition_label(partitions, current)
+                        ))
+                    })?
+                    .get_or_insert_with(|| vec![0; expected_child_count]);
                 let slot = counts.get_mut(child_index).ok_or_else(|| {
                     StreamingIndexerError::HierarchyValidation(format!(
                         "classifier for partition {:?} routed to missing child count slot {}",
-                        partition.id, child_index
+                        format_partition_label(partitions, current),
+                        child_index
                     ))
                 })?;
                 *slot += 1;
@@ -3920,11 +3989,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             current = partition
                 .child_ids
                 .get(child_index)
-                .cloned()
+                .copied()
                 .ok_or_else(|| {
                     StreamingIndexerError::HierarchyValidation(format!(
                         "partition {:?} routed to missing child index {}",
-                        partition.id, child_index
+                        format_partition_label(partitions, current),
+                        child_index
                     ))
                 })?;
         }
@@ -3933,28 +4003,24 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     fn route_terminal_partition(
         &self,
         embedding: &[f32],
-        replay_order_offsets: &mut HashMap<String, usize>,
-    ) -> Result<String, StreamingIndexerError> {
-        let mut current = "p0".to_string();
+        replay_order_offsets: &mut [usize],
+    ) -> Result<PartitionId, StreamingIndexerError> {
+        let mut current = ROOT_PARTITION_ID;
         loop {
-            let partition = self.partitions.get(&current).ok_or_else(|| {
-                StreamingIndexerError::HierarchyValidation(format!(
-                    "partition {current:?} is missing from the v2 topology"
-                ))
-            })?;
+            let partition = self.partition(current)?;
             if partition.terminal {
-                return Ok(partition.id.clone());
+                return Ok(current);
             }
             if partition.pending_trainer.is_some() {
                 return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                     "partition {:?} is still awaiting planning completion",
-                    partition.id
+                    self.partition_label(current)
                 )));
             }
             let routing = partition.routing.as_ref().ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
                     "partition {:?} is missing a routing strategy",
-                    partition.id
+                    self.partition_label(current)
                 ))
             })?;
             let child_index = match routing {
@@ -3967,9 +4033,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         })?
                 }
                 StreamingV2RoutingStrategy::ReplayOrder(plan) => {
-                    let seen = replay_order_offsets
-                        .entry(partition.id.clone())
-                        .or_insert(0);
+                    let seen = replay_order_offsets.get_mut(current.0).ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "partition {:?} is missing replay-order state",
+                            self.partition_label(current)
+                        ))
+                    })?;
                     let index = plan.child_index_for_seen(*seen).map_err(|error| {
                         StreamingIndexerError::HierarchyValidation(error.to_string())
                     })?;
@@ -3980,11 +4049,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             current = partition
                 .child_ids
                 .get(child_index)
-                .cloned()
+                .copied()
                 .ok_or_else(|| {
                     StreamingIndexerError::HierarchyValidation(format!(
                         "partition {:?} routed to missing child index {}",
-                        partition.id, child_index
+                        self.partition_label(current),
+                        child_index
                     ))
                 })?;
         }
@@ -3993,25 +4063,21 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     #[async_recursion(?Send)]
     async fn materialize_v2_partition_from_terminal_children(
         &self,
-        partition_id: &str,
-        partitions: &HashMap<String, StreamingV2Partition>,
-        materialized_terminal_children: &HashMap<String, IndexedChild>,
+        partition_id: PartitionId,
+        materialized_terminal_children: &[Option<IndexedChild>],
         materializability_bound: usize,
         store: &dyn BlockStore,
         persisted_ids: &mut Vec<BlockHash>,
     ) -> Result<IndexedChild, StreamingIndexerError> {
-        let partition = partitions.get(partition_id).ok_or_else(|| {
-            StreamingIndexerError::HierarchyValidation(format!(
-                "v2 partition {partition_id:?} is missing during assembly"
-            ))
-        })?;
+        let partition = self.partition(partition_id)?;
         if partition.terminal {
             return materialized_terminal_children
-                .get(partition_id)
-                .cloned()
+                .get(partition_id.0)
+                .and_then(|child| child.clone())
                 .ok_or_else(|| {
                     StreamingIndexerError::ReplayMismatch(format!(
-                        "terminal v2 partition {partition_id:?} was not materialized"
+                        "terminal v2 partition {:?} was not materialized",
+                        self.partition_label(partition_id)
                     ))
                 });
         }
@@ -4019,8 +4085,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         for child_id in &partition.child_ids {
             children.push(
                 self.materialize_v2_partition_from_terminal_children(
-                    child_id,
-                    partitions,
+                    *child_id,
                     materialized_terminal_children,
                     materializability_bound,
                     store,
@@ -4031,7 +4096,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
         self.v2_assemble_child_set(
             children,
-            partition_id == "p0",
+            partition_id == ROOT_PARTITION_ID,
             materializability_bound,
             store,
             persisted_ids,
@@ -4253,8 +4318,18 @@ impl StreamingV2PassState {
     fn new() -> Self {
         Self {
             fingerprint: StreamingV2ReplayFingerprintTracker::new(),
-            replay_order_offsets: HashMap::new(),
-            classifier_assignment_counts: HashMap::new(),
+            replay_order_offsets: Vec::new(),
+            classifier_assignment_counts: Vec::new(),
+        }
+    }
+
+    fn ensure_partition_capacity(&mut self, partition_count: usize) {
+        if self.replay_order_offsets.len() < partition_count {
+            self.replay_order_offsets.resize(partition_count, 0);
+        }
+        if self.classifier_assignment_counts.len() < partition_count {
+            self.classifier_assignment_counts
+                .resize_with(partition_count, || None);
         }
     }
 }
@@ -4274,6 +4349,47 @@ impl StreamingV2ReplayOrderPlan {
             offset = limit;
         }
         Err("replay-order routing consumed more items than the partition expected")
+    }
+}
+
+fn compact_partition_label(partition_id: PartitionId) -> String {
+    format!("p{}", partition_id.0)
+}
+
+fn format_partition_label(
+    partitions: &[StreamingV2PartitionNode],
+    partition_id: PartitionId,
+) -> String {
+    if partition_id == ROOT_PARTITION_ID {
+        return "p0".into();
+    }
+    let mut path = Vec::new();
+    let mut current = partition_id;
+    loop {
+        let Some(partition) = partitions.get(current.0) else {
+            return compact_partition_label(partition_id);
+        };
+        let Some(parent_id) = partition.parent_id else {
+            break;
+        };
+        let Some(parent) = partitions.get(parent_id.0) else {
+            return compact_partition_label(partition_id);
+        };
+        let Some(child_index) = parent
+            .child_ids
+            .iter()
+            .position(|&child_id| child_id == current)
+        else {
+            return compact_partition_label(partition_id);
+        };
+        path.push(child_index.to_string());
+        current = parent_id;
+    }
+    path.reverse();
+    if path.is_empty() {
+        "p0".into()
+    } else {
+        format!("p0.{}", path.join("."))
     }
 }
 
