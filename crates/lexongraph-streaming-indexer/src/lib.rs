@@ -3493,7 +3493,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
 
         self.completed_passes += 1;
         let topology = self.current_topology();
-        let stats = streaming_v2_topology_stats(&topology);
+        let stats = streaming_v2_topology_stats(&topology)
+            .map_err(StreamingIndexerError::HierarchyValidation)?;
         Ok(IndexingPassReport {
             observed_item_count: fingerprint.observed_count,
             completed_pass_count: self.completed_passes,
@@ -4346,36 +4347,62 @@ fn validate_streaming_v2_topology(topology: &StreamingV2PartitionTopology) -> Re
     Ok(())
 }
 
-fn streaming_v2_topology_stats(topology: &StreamingV2PartitionTopology) -> HierarchyStats {
+fn streaming_v2_topology_stats(
+    topology: &StreamingV2PartitionTopology,
+) -> Result<HierarchyStats, String> {
     let partitions = topology
         .partitions
         .iter()
         .map(|partition| (partition.id.clone(), partition))
         .collect::<HashMap<_, _>>();
 
-    fn depth_of(partition_id: &str, partitions: &HashMap<String, &StreamingV2Partition>) -> usize {
-        let partition = partitions.get(partition_id).unwrap();
-        if partition.child_ids.is_empty() {
+    fn depth_of(
+        partition_id: &str,
+        partitions: &HashMap<String, &StreamingV2Partition>,
+        visiting: &mut BTreeSet<String>,
+        memo: &mut HashMap<String, usize>,
+    ) -> Result<usize, String> {
+        if let Some(depth) = memo.get(partition_id) {
+            return Ok(*depth);
+        }
+        let partition = partitions.get(partition_id).ok_or_else(|| {
+            format!("v2 partition topology stats referenced missing partition {partition_id:?}")
+        })?;
+        if !visiting.insert(partition_id.to_string()) {
+            return Err(format!(
+                "v2 partition topology stats detected a cycle at partition {partition_id:?}"
+            ));
+        }
+        let depth = if partition.child_ids.is_empty() {
             1
         } else {
             1 + partition
                 .child_ids
                 .iter()
-                .map(|child_id| depth_of(child_id, partitions))
+                .map(|child_id| depth_of(child_id, partitions, visiting, memo))
                 .max()
+                .transpose()?
                 .unwrap_or(0)
-        }
+        };
+        visiting.remove(partition_id);
+        memo.insert(partition_id.to_string(), depth);
+        Ok(depth)
     }
 
-    HierarchyStats {
+    Ok(HierarchyStats {
         partition_count: topology.partitions.len(),
         terminal_partition_count: topology.partitions.iter().filter(|p| p.terminal).count(),
         depth: if topology.partitions.is_empty() {
             0
         } else {
-            depth_of(&topology.root_partition_id, &partitions)
+            depth_of(
+                &topology.root_partition_id,
+                &partitions,
+                &mut BTreeSet::new(),
+                &mut HashMap::new(),
+            )?
         },
-    }
+    })
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -8641,10 +8668,11 @@ pub mod conformance {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildSummaryInput, DirectionalPcaAllocationPolicy, allocate_variable_bit_widths,
+        ChildSummaryInput, DirectionalPcaAllocationPolicy, StreamingV2Partition,
+        StreamingV2PartitionTopology, allocate_variable_bit_widths,
         effective_directional_pca_cluster_count, exact_centroid_child_summary,
-        fallback_partition_groups, fit_ebcp_rotation, uses_root_branch_budget,
-        weighted_mean_f32_embeddings,
+        fallback_partition_groups, fit_ebcp_rotation, streaming_v2_topology_stats,
+        uses_root_branch_budget, weighted_mean_f32_embeddings,
     };
     use crate::{BlockHash, EmbeddingSpec};
 
@@ -8737,5 +8765,26 @@ mod tests {
         );
         assert!(widths.iter().all(|width| (1..=31).contains(width)));
         assert_eq!(widths[0], 31);
+    }
+
+    #[test]
+    fn streaming_v2_topology_stats_reports_missing_children_instead_of_panicking() {
+        let result = streaming_v2_topology_stats(&StreamingV2PartitionTopology {
+            root_partition_id: "root".into(),
+            partitions: vec![StreamingV2Partition {
+                id: "root".into(),
+                parent_id: None,
+                child_ids: vec!["missing".into()],
+                item_count: 1,
+                terminal: false,
+            }],
+        });
+        let Err(error) = result else {
+            panic!("invalid topology should return an error");
+        };
+        assert_eq!(
+            error,
+            "v2 partition topology stats referenced missing partition \"missing\""
+        );
     }
 }
