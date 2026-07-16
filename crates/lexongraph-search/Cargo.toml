@@ -19,4 +19,4 @@ lexongraph-block-store = { path = "../lexongraph-block-store" }
 async-trait = "0.1"
 ciborium = "0.2.2"
 futures = "0.3"
-pollster = "0.4.0"
+pollster = "1.0.1"
