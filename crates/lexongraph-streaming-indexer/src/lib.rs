@@ -88,8 +88,8 @@ impl Default for StreamingV2PassMetricAccumulator {
             cluster_runs: 0,
             requested_cluster_count: None,
             realized_cluster_count: None,
-            quality_direction: MetricDirection::LargerIsBetter,
-            balance_direction: MetricDirection::LargerIsBetter,
+            quality_direction: MetricDirection::SmallerIsBetter,
+            balance_direction: MetricDirection::SmallerIsBetter,
         }
     }
 }
@@ -3112,9 +3112,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         block_size_target: usize,
     ) -> Result<Self, StreamingIndexerError> {
         if profile_version != PUBLISHED_PROFILE_V0_7_0 {
-            return Err(StreamingIndexerError::ClusteringFailure(format!(
-                "published indexing profile version {profile_version} is not yet supported on the streaming v2 surface"
-            )));
+            return Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(
+                profile_version,
+            ));
         }
         let profile = published_indexing_profile(profile_version)?;
         validate_published_profile_configuration(&profile, &embedding_spec, block_size_target)?;
@@ -3538,7 +3538,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub async fn finalize<I, B>(
-        &self,
+        &mut self,
         replay_batches: I,
         store: &dyn BlockStore,
     ) -> Result<StreamingIndexingResult, StreamingIndexerError>
@@ -3712,6 +3712,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             )
             .await?;
         dedup_sort_ids(&mut persisted_ids);
+        self.phase = RunPhase::Finalized;
         Ok(StreamingIndexingResult {
             root_id: root_child.child,
             block_ids: persisted_ids,

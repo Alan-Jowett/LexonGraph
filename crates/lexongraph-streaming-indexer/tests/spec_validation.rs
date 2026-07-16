@@ -5475,12 +5475,10 @@ fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
         Ok(_) => panic!("expected streaming v2 to reject non-0.7.0 published profiles"),
         Err(error) => error,
     };
-    assert!(matches!(error, StreamingIndexerError::ClusteringFailure(_)));
-    assert!(
-        error
-            .to_string()
-            .contains("is not yet supported on the streaming v2 surface")
-    );
+    assert!(matches!(
+        error,
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(PUBLISHED_PROFILE_V0_6_5)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -5505,6 +5503,14 @@ async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_ro
         .finalize(std::iter::once(items.as_slice()), &store)
         .await
         .unwrap();
+    assert!(run.finalized_partition_topology().is_some());
+    let second_finalize = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await;
+    assert!(matches!(
+        second_finalize,
+        Err(StreamingIndexerError::InvalidLifecycleTransition(_))
+    ));
     let root = store.get(&result.root_id).unwrap().unwrap();
     match into_entries(root) {
         TypedEntries::Branch(metadata, _) => {
