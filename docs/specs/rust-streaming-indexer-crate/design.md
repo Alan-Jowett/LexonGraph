@@ -72,6 +72,17 @@ streaming indexing run with the following observable lifecycle:
 7. read back each partition spill and assemble the finished index result
    bottom-up from the finalized partition hierarchy
 
+### DSG-STREAM-INDEXER-003A `Versioned surface coexistence`
+
+The crate may temporarily expose both:
+
+- a retained v1 compatibility surface kept stable for incremental migration
+- a new v2 streaming surface that owns true-streaming no-buffering conformance
+
+Documentation, validation, and runtime entry points distinguish the two
+surfaces explicitly. Unsupported v2 modes fail explicitly rather than silently
+delegating to v1 behavior.
+
 ### DSG-STREAM-INDEXER-004 `IndexItem`
 
 A public input type representing one application-supplied indexing unit. Each
@@ -102,6 +113,11 @@ The crate consumes:
 Caller-supplied policy seams remain conformant only when their public input and
 output shapes are themselves true-streaming rather than dataset-sized material
 views.
+
+The same bounded-state rule applies to implementation-owned adapters that bridge
+v2 replay ingestion into planning: conformant planning seams do not take or
+retain one full-pass decoded embedding slice, full-pass assignment vector, or
+equivalent replay-sized materialization.
 
 ### DSG-STREAM-INDEXER-006 `Built-in planning selection`
 
@@ -152,25 +168,29 @@ Deviation fails explicitly before claiming conformant continuation.
 
 ### DSG-STREAM-INDEXER-009 `Dataset-size-independent public surface`
 
-The public API requires the caller to replay the logical item set for repeated
-passes and final materialization rather than requiring the crate to keep the
-entire corpus resident or rematerializable through hidden caller-facing state.
+The v2 public API requires the caller to replay the logical item set for
+repeated passes and final materialization rather than requiring the crate to
+keep the entire corpus resident or rematerializable through hidden caller-facing
+state.
 
 Implementation-internal transient storage is permitted when it is bounded by
 the current batch or current work unit during planning.
+
+That allowance does not permit carrying a decoded embedding table for the full
+planning pass across `ingest_batch` and later `finish_pass` execution.
 
 After planning completion, the implementation may additionally use temporary
 local append-only spill scoped to terminal partitions while classifying the
 final materialization replay.
 
-Public planning, hierarchy, and finalization surfaces shall not require or
+Public v2 planning, hierarchy, and finalization surfaces shall not require or
 return full-dataset embedding slices, partition-membership vectors, or
 equivalent dataset-sized materializations.
 
 ### DSG-STREAM-INDEXER-010 `Caller-visible pass realization`
 
-Each completed pass over original indexing items performs, in deterministic item
-replay order:
+Each completed pass over original indexing items on the v2 streaming surface
+performs, in deterministic item replay order:
 
 1. content resolution for each item
 2. ordered embedding generation for each resolved item
@@ -192,6 +212,11 @@ replay order:
 
 The completed pass does not yet claim a finished persisted block tree or a
 materialized parent layer.
+
+Between those steps, conformant planning realization may revisit data only
+through caller-visible replay stages, bounded summaries, or bounded
+per-subproblem working sets rather than by retaining a decoded embedding table
+or assignment table for the full pass.
 
 ### DSG-STREAM-INDEXER-011 `Pass report surface`
 
@@ -382,11 +407,16 @@ direction-specific behavior remains covered by separate targeted cases.
 
 ### DSG-STREAM-INDEXER-023 `Planning boundary`
 
-The run maintains a deterministic partition hierarchy over the established
+The v2 run maintains a deterministic partition hierarchy over the established
 logical item set. Planning operates over replayed original-item embeddings or
 lower-layer planning units, depending on the selected built-in direction, and
 stores only the hierarchy state and replay-baseline information needed for
 later replay validation and bottom-up assembly.
+
+Planning state excludes implementation-owned full-pass decoded embedding tables,
+full-pass assignment vectors, and equivalent replay-sized materializations.
+Recursive subdivision may use bounded per-subproblem working sets only when
+those working sets do not themselves scale with the full logical dataset.
 
 Both built-in directions normalize into the same finalized partition-hierarchy
 representation before final materialization.
@@ -1167,10 +1197,11 @@ using the caller-supplied overridden values where applicable.
 | DSG-STREAM-INDEXER-001 | REQ-STREAM-INDEXER-002 |
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
-| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
+| DSG-STREAM-INDEXER-003A | REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021F |
+| DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043, REQ-STREAM-INDEXER-044 |
 | DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D |
-| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
+| DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
 | DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064 |
@@ -1179,7 +1210,7 @@ using the caller-supplied overridden values where applicable.
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
 | DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
-| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-034 |
+| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034 |
 | DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |

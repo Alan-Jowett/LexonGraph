@@ -71,11 +71,13 @@ pub struct DirectionalPcaStreamingTrainer {
 pub struct DirectionalPcaStreamingClassifier {
     config: StreamingClusteringConfig,
     centroids: Vec<Embedding>,
+    cluster_counts: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
 struct DirectionalPcaModel {
     centroids: Vec<Embedding>,
+    cluster_counts: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -571,7 +573,10 @@ impl DirectionalPcaStreamingTrainer {
         Ok((
             ReplayPhase::RealizePartition(pass.ready),
             report,
-            Some(DirectionalPcaModel { centroids }),
+            Some(DirectionalPcaModel {
+                centroids,
+                cluster_counts: pass.cell_stats.iter().map(|stats| stats.count).collect(),
+            }),
         ))
     }
 
@@ -722,6 +727,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
         Ok(DirectionalPcaStreamingClassifier {
             config: self.config,
             centroids: model.centroids,
+            cluster_counts: model.cluster_counts,
         })
     }
 }
@@ -741,6 +747,10 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
 }
 
 impl DirectionalPcaStreamingClassifier {
+    pub fn cluster_counts(&self) -> &[usize] {
+        self.cluster_counts.as_slice()
+    }
+
     pub fn assigned_distance(
         &self,
         embedding: &[f32],

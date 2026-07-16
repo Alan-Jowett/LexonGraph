@@ -33,15 +33,16 @@ batch-oriented indexing artifacts remaining present.
 Inspect the new crate's public surface and specification references.
 
 **Pass condition:** the crate exposes a caller-visible streaming replay
-lifecycle, remains subordinate to the indexing and block protocols, and
-consumes the shared streaming clustering contract, references the built-in DCBC,
-directional-PCA, and spherical-k-means specification packages for their owned
-clustering algorithms, and does not define a new clustering contract locally or
-depend on a retired legacy batch-oriented indexing crate/specification package
-as part of its normative boundary.
+lifecycle, distinguishes any retained v1 compatibility surface from the new v2
+streaming surface explicitly, remains subordinate to the indexing and block
+protocols, and consumes the shared streaming clustering contract, references the
+built-in DCBC, directional-PCA, and spherical-k-means specification packages
+for their owned clustering algorithms, and does not define a new clustering
+contract locally or depend on a retired legacy batch-oriented indexing
+crate/specification package as part of its normative boundary.
 
-**Traces to:** REQ-STREAM-INDEXER-002, REQ-STREAM-INDEXER-004,
-REQ-STREAM-INDEXER-010
+**Traces to:** REQ-STREAM-INDEXER-002, REQ-STREAM-INDEXER-003A,
+REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-010
 
 ### VAL-STREAM-INDEXER-003
 
@@ -100,20 +101,21 @@ REQ-STREAM-INDEXER-041
 
 ### VAL-STREAM-INDEXER-008
 
-Construct another streaming indexer through an explicit override path using
+Construct the v2 streaming indexer through an explicit override path using
 caller-supplied canonical-embedding, hierarchical-planning, or clustering
 implementations.
 
 **Pass condition:** the crate accepts those replacements without changing the
 rest of the streaming runtime contract, and the override seam does not require
 full-dataset embedding slices, full partition-membership vectors, or equivalent
-dataset-sized public API constructs.
+dataset-sized public API constructs, and the conformant path does not hide an
+implementation-owned full-pass decoded embedding table behind that seam.
 
 **Traces to:** REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015
 
 ### VAL-STREAM-INDEXER-009
 
-Complete one successful planning pass with multiple caller-chosen batches.
+Complete one successful v2 planning pass with multiple caller-chosen batches.
 
 **Pass condition:** the pass report is deterministic and includes the observed
 item count plus deterministic planning progress or quality information for the
@@ -320,7 +322,7 @@ traits exist only behind a non-default, test-oriented feature.
 
 ### VAL-STREAM-INDEXER-025
 
-Inspect the caller-visible API surface for dataset-size coupling.
+Inspect the caller-visible v2 API surface for dataset-size coupling.
 
 **Pass condition:** repeated planning passes and final materialization require
 caller replay of the logical item set rather than a default public API
@@ -333,25 +335,49 @@ or equivalent dataset-sized constructs.
 
 ### VAL-STREAM-INDEXER-025A
 
-Inspect the implementation-owned retained state used for replay verification,
-planning, and final materialization.
+Inspect the implementation-owned retained state used for v2 replay
+verification, planning, and final materialization.
 
 **Pass condition:** no conformant path retains, materializes, or spills
 full-dataset baseline tables, replayed embedding tables, partition membership
-tables, or equivalent implementation-owned full logical dataset state.
+tables, decoded full-pass embedding tables spanning `ingest_batch` to
+`finish_pass`, or equivalent implementation-owned full logical dataset state.
 
 **Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021A,
 REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D
 
 ### VAL-STREAM-INDEXER-025B
 
-Inspect one bounded-state realization path that requires revisiting prior data.
+Inspect one bounded-state v2 realization path that requires revisiting prior
+data.
 
 **Pass condition:** the revisit remains caller-visible as replay or staged
 progress rather than being simulated through hidden implementation-owned
 full-dataset retention or spill.
 
 **Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021D
+
+### VAL-STREAM-INDEXER-025C
+
+Inspect one v2 planning realization that performs recursive subdivision or
+assignment of planning units.
+
+**Pass condition:** the conformant path realizes that planning work through
+bounded-state replay stages, bounded summaries, or bounded per-subproblem
+working sets rather than requiring a full-pass decoded embedding table,
+full-pass assignment vector, or equivalent replay-sized materialization.
+
+**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021E
+
+### VAL-STREAM-INDEXER-025D
+
+Request a planning mode, direction, profile, or override path through the v2
+surface that has not yet been implemented on v2.
+
+**Pass condition:** the request fails explicitly and does not silently
+delegate to the retained v1 compatibility surface or any hidden buffering path.
+
+**Traces to:** REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021F
 
 ### VAL-STREAM-INDEXER-026
 
