@@ -411,7 +411,7 @@ impl EmbeddingProvider for IndexedWideF32EmbeddingProvider {
             .map_err(|error| FixtureError(format!("invalid numeric content: {error}")))?;
         let values = (0..spec.dims)
             .map(|dimension| {
-                let stride = u32::try_from((dimension % 17) + 1).unwrap();
+                let stride = (dimension % 17) as u32 + 1;
                 let bucket = ((index + stride) % 16) as f32;
                 bucket / 16.0
             })

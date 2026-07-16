@@ -1844,6 +1844,7 @@ struct StreamingV2ReplayFingerprintTracker {
 struct StreamingV2PassState {
     fingerprint: StreamingV2ReplayFingerprintTracker,
     replay_order_offsets: HashMap<String, usize>,
+    classifier_assignment_counts: HashMap<String, Vec<usize>>,
 }
 
 #[derive(Clone)]
@@ -3244,6 +3245,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         &self.partitions,
                         decoded.as_slice(),
                         &mut pass.replay_order_offsets,
+                        &mut pass.classifier_assignment_counts,
                     )?
                 };
                 if let Some(partition_id) = partition_id {
@@ -3340,40 +3342,53 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 })?;
                 let report = trainer.finish_pass().map_err(map_clustering_error)?;
                 metrics.observe(&report);
+                if report.observed_count != node.item_count {
+                    return Err(StreamingIndexerError::HierarchyValidation(format!(
+                        "pending partition {partition_id:?} observed {} items but expected {}",
+                        report.observed_count, node.item_count
+                    )));
+                }
                 match trainer.complete_training() {
                     Ok(()) => {
                         let trainer = node.pending_trainer.take().unwrap();
                         let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
-                        let child_counts = if classifier.cluster_counts().len() <= 1
+                        let realized_cluster_count =
+                            usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
+                                StreamingIndexerError::HierarchyValidation(
+                                    "classifier realized cluster count does not fit into usize"
+                                        .into(),
+                                )
+                            })?;
+                        let (routing, child_ids, children) = if realized_cluster_count <= 1
                             && node.item_count > materializability_bound
                         {
-                            balanced_groups(node.item_count, materializability_bound)
-                                .map_err(StreamingIndexerError::HierarchyValidation)?
-                                .into_iter()
-                                .map(|group| group.len())
-                                .collect::<Vec<_>>()
-                        } else {
-                            classifier.cluster_counts().to_vec()
-                        };
-                        if child_counts.is_empty() {
-                            return Err(StreamingIndexerError::HierarchyValidation(format!(
-                                "partition {partition_id:?} produced no child routing plan"
-                            )));
-                        }
-                        let routing = if classifier.cluster_counts().len() <= 1
-                            && node.item_count > materializability_bound
-                        {
-                            StreamingV2RoutingStrategy::ReplayOrder(
+                            let child_counts =
+                                balanced_groups(node.item_count, materializability_bound)
+                                    .map_err(StreamingIndexerError::HierarchyValidation)?
+                                    .into_iter()
+                                    .map(|group| group.len())
+                                    .collect::<Vec<_>>();
+                            if child_counts.is_empty() {
+                                return Err(StreamingIndexerError::HierarchyValidation(format!(
+                                    "partition {partition_id:?} produced no child routing plan"
+                                )));
+                            }
+                            let routing = StreamingV2RoutingStrategy::ReplayOrder(
                                 StreamingV2ReplayOrderPlan::new(child_counts.clone()),
-                            )
+                            );
+                            let (child_ids, children) = self.create_child_nodes(
+                                partition_id.clone(),
+                                child_counts,
+                                materializability_bound,
+                            )?;
+                            (routing, child_ids, children)
                         } else {
-                            StreamingV2RoutingStrategy::Classifier(classifier)
+                            (
+                                StreamingV2RoutingStrategy::Classifier(classifier),
+                                Vec::new(),
+                                Vec::new(),
+                            )
                         };
-                        let (child_ids, children) = self.create_child_nodes(
-                            partition_id.clone(),
-                            child_counts,
-                            materializability_bound,
-                        )?;
                         completed.push(StreamingV2CompletedPartition {
                             partition_id,
                             routing,
@@ -3396,6 +3411,80 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     node.terminal = false;
                 }
                 for child in partition.children {
+                    self.partitions.insert(child.id.clone(), child);
+                }
+            }
+
+            let expandable_ids = current_pass
+                .classifier_assignment_counts
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            for partition_id in expandable_ids {
+                let node = self.partitions.get(&partition_id).ok_or_else(|| {
+                    StreamingIndexerError::HierarchyValidation(format!(
+                        "expandable partition {partition_id:?} is missing"
+                    ))
+                })?;
+                let routing = node.routing.as_ref().ok_or_else(|| {
+                    StreamingIndexerError::HierarchyValidation(format!(
+                        "expandable partition {partition_id:?} is missing routing"
+                    ))
+                })?;
+                let expected_child_count = match routing {
+                    StreamingV2RoutingStrategy::Classifier(classifier) => {
+                        usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
+                            StreamingIndexerError::HierarchyValidation(
+                                "classifier realized cluster count does not fit into usize".into(),
+                            )
+                        })?
+                    }
+                    StreamingV2RoutingStrategy::ReplayOrder(_) => {
+                        return Err(StreamingIndexerError::HierarchyValidation(format!(
+                            "expandable partition {partition_id:?} unexpectedly uses replay-order routing"
+                        )));
+                    }
+                };
+                let child_counts = current_pass
+                    .classifier_assignment_counts
+                    .get(&partition_id)
+                    .ok_or_else(|| {
+                        StreamingIndexerError::HierarchyValidation(format!(
+                            "partition {partition_id:?} did not observe a full classifier replay before child sizing"
+                        ))
+                    })?
+                    .clone();
+                if child_counts.len() != expected_child_count {
+                    return Err(StreamingIndexerError::HierarchyValidation(format!(
+                        "partition {partition_id:?} observed {} classifier child buckets but expected {}",
+                        child_counts.len(),
+                        expected_child_count
+                    )));
+                }
+                if child_counts.contains(&0) {
+                    return Err(StreamingIndexerError::HierarchyValidation(format!(
+                        "partition {partition_id:?} classifier replay left at least one child empty"
+                    )));
+                }
+                let observed_child_total = child_counts.iter().sum::<usize>();
+                if observed_child_total != node.item_count {
+                    return Err(StreamingIndexerError::HierarchyValidation(format!(
+                        "partition {partition_id:?} classifier replay observed {} items but expected {}",
+                        observed_child_total, node.item_count
+                    )));
+                }
+                let (child_ids, children) = self.create_child_nodes(
+                    partition_id.clone(),
+                    child_counts,
+                    materializability_bound,
+                )?;
+                let node = self.partitions.get_mut(&partition_id).ok_or_else(|| {
+                    StreamingIndexerError::HierarchyValidation(format!(
+                        "expandable partition {partition_id:?} disappeared before child installation"
+                    ))
+                })?;
+                node.child_ids = child_ids;
+                for child in children {
                     self.partitions.insert(child.id.clone(), child);
                 }
             }
@@ -3746,6 +3835,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         partitions: &BTreeMap<String, StreamingV2PartitionNode>,
         embedding: &[f32],
         replay_order_offsets: &mut HashMap<String, usize>,
+        classifier_assignment_counts: &mut HashMap<String, Vec<usize>>,
     ) -> Result<Option<String>, StreamingIndexerError> {
         if partitions.is_empty() {
             return Ok(None);
@@ -3789,6 +3879,31 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     index
                 }
             };
+            if matches!(routing, StreamingV2RoutingStrategy::Classifier(_))
+                && partition.child_ids.is_empty()
+            {
+                let expected_child_count = match routing {
+                    StreamingV2RoutingStrategy::Classifier(classifier) => {
+                        usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
+                            StreamingIndexerError::HierarchyValidation(
+                                "classifier realized cluster count does not fit into usize".into(),
+                            )
+                        })?
+                    }
+                    StreamingV2RoutingStrategy::ReplayOrder(_) => unreachable!(),
+                };
+                let counts = classifier_assignment_counts
+                    .entry(partition.id.clone())
+                    .or_insert_with(|| vec![0; expected_child_count]);
+                let slot = counts.get_mut(child_index).ok_or_else(|| {
+                    StreamingIndexerError::HierarchyValidation(format!(
+                        "classifier for partition {:?} routed to missing child count slot {}",
+                        partition.id, child_index
+                    ))
+                })?;
+                *slot += 1;
+                return Ok(None);
+            }
             current = partition
                 .child_ids
                 .get(child_index)
@@ -4113,6 +4228,7 @@ impl StreamingV2PassState {
         Self {
             fingerprint: StreamingV2ReplayFingerprintTracker::new(),
             replay_order_offsets: HashMap::new(),
+            classifier_assignment_counts: HashMap::new(),
         }
     }
 }
