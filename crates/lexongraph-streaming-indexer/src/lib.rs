@@ -3149,8 +3149,13 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         })
     }
 
-    pub fn finalized_partition_topology(&self) -> Option<StreamingV2PartitionTopology> {
+    pub fn current_partition_topology(&self) -> Option<StreamingV2PartitionTopology> {
         (!self.partitions.is_empty()).then(|| self.current_topology())
+    }
+
+    pub fn finalized_partition_topology(&self) -> Option<StreamingV2PartitionTopology> {
+        matches!(self.phase, RunPhase::PlanningComplete | RunPhase::Finalized)
+            .then(|| self.current_topology())
     }
 
     async fn resolve_batch(
@@ -3496,7 +3501,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 continue;
             }
             let (contents, embeddings) = self.resolve_batch(items).await?;
-            for ((item, content), embedding) in items.iter().zip(contents).zip(embeddings.iter()) {
+            for ((item, content), embedding) in items.iter().zip(contents).zip(embeddings) {
                 let content_ref_hash = self
                     .resolver
                     .fingerprint(&item.content_ref)
@@ -3504,14 +3509,14 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 let metadata_hash = hash_metadata(&item.metadata)
                     .map_err(StreamingIndexerError::InvalidMetadata)?;
                 let content_hash = hash_content(&content);
-                let embedding_hash = hash_bytes(embedding);
+                let embedding_hash = hash_bytes(embedding.as_slice());
                 fingerprint.observe(
                     content_ref_hash,
                     metadata_hash,
                     content_hash,
                     embedding_hash,
                 );
-                let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
+                let decoded = decode_embedding_as_f32(embedding.as_slice(), &self.embedding_spec)?;
                 let terminal_id =
                     self.route_terminal_partition(decoded.as_slice(), &mut replay_order_offsets)?;
                 let partition_ordinal = *terminal_ordinals.get(&terminal_id).ok_or_else(|| {
@@ -3547,7 +3552,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         )
                     })?,
                     &IndexedChild {
-                        embedding: embedding.clone(),
+                        embedding,
                         child: block_id,
                         level: 0,
                         descendant_count: 1,

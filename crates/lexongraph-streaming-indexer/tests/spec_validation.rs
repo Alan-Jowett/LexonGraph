@@ -5497,7 +5497,9 @@ async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_ro
     .unwrap();
     run.ingest_batch(items.as_slice()).await.unwrap();
     run.finish_pass().unwrap();
+    assert!(run.finalized_partition_topology().is_none());
     run.mark_planning_complete().unwrap();
+    assert!(run.finalized_partition_topology().is_some());
 
     let result = run
         .finalize(std::iter::once(items.as_slice()), &store)
@@ -5541,8 +5543,9 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
     run.ingest_batch(items.as_slice()).await.unwrap();
     let first = run.finish_pass().unwrap();
     assert_eq!(first.completed_pass_count, 1);
-    let first_topology = run.finalized_partition_topology().unwrap();
+    let first_topology = run.current_partition_topology().unwrap();
     assert_eq!(first_topology.partitions.len(), 1);
+    assert!(run.finalized_partition_topology().is_none());
     let error = run.mark_planning_complete().unwrap_err();
     assert!(
         error
@@ -5555,7 +5558,7 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
         run.ingest_batch(items.as_slice()).await.unwrap();
         let report = run.finish_pass().unwrap();
         assert_eq!(report.completed_pass_count, expected_pass);
-        if let Some(topology) = run.finalized_partition_topology()
+        if let Some(topology) = run.current_partition_topology()
             && topology.partitions.len() > 1
         {
             saw_split_topology = true;
