@@ -4106,11 +4106,16 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 .collect::<Vec<_>>();
             let entries = normalize_branch_entries(raw_entries);
             let child_summaries = normalize_child_summary_inputs(raw_child_summaries);
-            if entries.len() < 2 || child_summaries.len() < 2 {
-                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
-                    "normalized child-bearing entry set has fewer than two unique children".into(),
-                ));
-            }
+if entries.len() < 2 {
+    return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+        "normalized child-bearing entry set has fewer than two unique children".into(),
+    ));
+}
+if child_summaries.len() < 2 {
+    return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+        "normalized child summary set has fewer than two unique children".into(),
+    ));
+}
             let encoded_branch = encode_branch_entries(
                 self.branch_encoding_policy,
                 &self.embedding_spec,
