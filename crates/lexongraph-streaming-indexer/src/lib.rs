@@ -356,7 +356,6 @@ pub enum StreamingIndexerError {
     EmptyInput,
     EmptyPass(String),
     UnsupportedPublishedProfileVersion(PublishedProfileVersion),
-    UnsupportedStreamingV2Profile(PublishedProfileVersion),
     ReplayMismatch(String),
     InvalidMetadata(String),
     ContentResolution(String),
@@ -387,12 +386,6 @@ impl fmt::Display for StreamingIndexerError {
                 write!(
                     f,
                     "unsupported published indexing profile version {version}"
-                )
-            }
-            Self::UnsupportedStreamingV2Profile(version) => {
-                write!(
-                    f,
-                    "published indexing profile version {version} is not yet supported on the streaming v2 surface"
                 )
             }
             Self::ReplayMismatch(m) => write!(f, "replay mismatch: {m}"),
@@ -3105,7 +3098,6 @@ struct StreamingV2CompletedPartition {
     routing: StreamingV2RoutingStrategy,
     child_ids: Vec<String>,
     children: Vec<StreamingV2PartitionNode>,
-    realized_cluster_count: u32,
 }
 
 impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
@@ -3117,9 +3109,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         block_size_target: usize,
     ) -> Result<Self, StreamingIndexerError> {
         if profile_version != PUBLISHED_PROFILE_V0_7_0 {
-            return Err(StreamingIndexerError::UnsupportedStreamingV2Profile(
-                profile_version,
-            ));
+            return Err(StreamingIndexerError::ClusteringFailure(format!(
+                "published indexing profile version {profile_version} is not yet supported on the streaming v2 surface"
+            )));
         }
         let profile = published_indexing_profile(profile_version)?;
         validate_published_profile_configuration(&profile, &embedding_spec, block_size_target)?;
@@ -3315,7 +3307,6 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             materializability_bound(&self.embedding_spec, self.block_size_target)
                 .map_err(StreamingIndexerError::TerminalPartitionMaterialization)?;
         let requested_cluster_count = Some(self.profile_settings()?.cluster_count);
-        let mut realized_cluster_count = None;
         let mut metrics = StreamingV2PassMetricAccumulator::default();
 
         if self.partitions.is_empty() {
@@ -3378,14 +3369,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             child_counts,
                             materializability_bound,
                         )?;
-                        realized_cluster_count =
-                            Some(realized_cluster_count.unwrap_or(0) + child_ids.len() as u32);
                         completed.push(StreamingV2CompletedPartition {
                             partition_id,
                             routing,
                             child_ids,
                             children,
-                            realized_cluster_count: report.realized_cluster_count.unwrap_or(0),
                         });
                     }
                     Err(StreamingClusteringError::InvalidTransition { state, operation })
@@ -3405,11 +3393,6 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 for child in partition.children {
                     self.partitions.insert(child.id.clone(), child);
                 }
-                realized_cluster_count = Some(
-                    realized_cluster_count
-                        .unwrap_or(0)
-                        .max(partition.realized_cluster_count),
-                );
             }
         }
 
@@ -3420,7 +3403,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             observed_item_count: fingerprint.observed_count,
             completed_pass_count: self.completed_passes,
             requested_planning_cluster_count: requested_cluster_count,
-            realized_planning_cluster_count: realized_cluster_count,
+            realized_planning_cluster_count: metrics.realized_cluster_count,
             planning_quality_metric: metrics.average_quality(),
             planning_balance_metric: metrics.average_balance(),
             planning_quality_direction: metrics.quality_direction,
@@ -4058,11 +4041,11 @@ impl StreamingV2PassMetricAccumulator {
         if self.cluster_runs == 0 {
             self.quality_direction = report.quality_direction;
             self.balance_direction = report.balance_direction;
+            self.realized_cluster_count = report.realized_cluster_count;
         }
         self.quality_sum += report.quality_metric;
         self.balance_sum += report.balance_metric;
         self.cluster_runs += 1;
-        self.realized_cluster_count = report.realized_cluster_count;
     }
 
     fn average_quality(&self) -> f64 {

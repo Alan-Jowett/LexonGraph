@@ -5475,10 +5475,7 @@ fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
         Ok(_) => panic!("expected streaming v2 to reject non-0.7.0 published profiles"),
         Err(error) => error,
     };
-    assert!(matches!(
-        error,
-        StreamingIndexerError::UnsupportedStreamingV2Profile(PUBLISHED_PROFILE_V0_6_5)
-    ));
+    assert!(matches!(error, StreamingIndexerError::ClusteringFailure(_)));
     assert!(
         error
             .to_string()
