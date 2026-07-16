@@ -222,9 +222,15 @@ selected published profile version into repository-owned defaults.
 
 ### REQ-STREAM-INDEXER-015
 
-The v2 streaming surface shall continue to provide explicit API paths that
-accept caller-supplied canonical-embedding, hierarchical planning, and
-streaming clustering policy implementations.
+The retained low-level streaming surface shall continue to provide explicit API
+paths that accept caller-supplied canonical-embedding, hierarchical planning,
+and streaming clustering policy implementations.
+
+The published-profile-only v2 streaming surface introduced in this revision is
+not yet required to expose corresponding override entry points. Until those v2
+override paths exist, attempts to request override behavior through v2 shall
+fail explicitly rather than silently delegating to the retained v1
+compatibility surface.
 
 Those override seams shall remain true-streaming. This revision shall not treat
 full-dataset embedding slices, full partition-membership tables, or equivalent

@@ -101,15 +101,19 @@ REQ-STREAM-INDEXER-041
 
 ### VAL-STREAM-INDEXER-008
 
-Construct the v2 streaming indexer through an explicit override path using
-caller-supplied canonical-embedding, hierarchical-planning, or clustering
-implementations.
+Construct the retained low-level streaming indexer through an explicit override
+path using caller-supplied canonical-embedding, hierarchical-planning, or
+clustering implementations.
 
 **Pass condition:** the crate accepts those replacements without changing the
 rest of the streaming runtime contract, and the override seam does not require
 full-dataset embedding slices, full partition-membership vectors, or equivalent
 dataset-sized public API constructs, and the conformant path does not hide an
 implementation-owned full-pass decoded embedding table behind that seam.
+
+The current published-profile-only v2 surface is validated separately: requests
+for override behavior on v2 shall fail explicitly under
+VAL-STREAM-INDEXER-025D until dedicated v2 override entry points exist.
 
 **Traces to:** REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015
 
