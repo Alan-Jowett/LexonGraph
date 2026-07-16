@@ -53,8 +53,8 @@ use lexongraph_streaming_indexer::{
     PublishedPlanningStrategy, PublishedProfilePlanningPolicy, PublishedProfileVersion,
     SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
-    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
-    published_indexing_profile,
+    StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingStatusState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -218,6 +218,13 @@ fn embedding_spec_f32() -> EmbeddingSpec {
     }
 }
 
+fn embedding_spec_f32_dims(dims: u32) -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: dims.into(),
+        encoding: "f32le".into(),
+    }
+}
+
 fn markdown_section<'a>(document: &'a str, heading: &str) -> &'a str {
     let marker = format!("### {heading}");
     let start = document
@@ -376,6 +383,39 @@ impl EmbeddingProvider for IndexedF32EmbeddingProvider {
             .parse::<u32>()
             .map_err(|error| FixtureError(format!("invalid numeric content: {error}")))?;
         let values = [index as f32, (index % 97) as f32];
+        Ok(values
+            .into_iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IndexedWideF32EmbeddingProvider;
+
+impl EmbeddingProvider for IndexedWideF32EmbeddingProvider {
+    type Error = FixtureError;
+
+    async fn embed(
+        &self,
+        input: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        if spec.encoding != "f32le" || spec.dims < 2 {
+            return Err(FixtureError("unexpected embedding spec".into()));
+        }
+        let text = std::str::from_utf8(input.body.as_slice())
+            .map_err(|error| FixtureError(format!("invalid utf-8 content: {error}")))?;
+        let index = text
+            .parse::<u32>()
+            .map_err(|error| FixtureError(format!("invalid numeric content: {error}")))?;
+        let values = (0..spec.dims)
+            .map(|dimension| {
+                let stride = (dimension % 17) as u32 + 1;
+                let bucket = ((index + stride) % 16) as f32;
+                bucket / 16.0
+            })
+            .collect::<Vec<_>>();
         Ok(values
             .into_iter()
             .flat_map(|value| value.to_le_bytes())
@@ -5421,4 +5461,128 @@ async fn regression_published_profile_terminal_short_circuit_does_not_claim_fine
             StreamingIndexingPhase::HierarchyPlanning { .. }
         )
     }));
+}
+
+#[test]
+fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
+    let error = match StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_6_5,
+        embedding_spec_f32(),
+        6000,
+    ) {
+        Ok(_) => panic!("expected streaming v2 to reject non-0.7.0 published profiles"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(PUBLISHED_PROFILE_V0_6_5)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_root_encoding() {
+    let items = vec![item("aa"), item("bb"), item("cc"), item("dd")];
+    let store = MemoryBlockStore::default();
+    let mut run = StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32(),
+        6000,
+    )
+    .unwrap();
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    run.finish_pass().unwrap();
+    assert!(run.finalized_partition_topology().is_none());
+    run.mark_planning_complete().unwrap();
+    assert!(run.finalized_partition_topology().is_some());
+
+    let result = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await
+        .unwrap();
+    assert!(run.finalized_partition_topology().is_some());
+    let second_finalize = run
+        .finalize(std::iter::once(items.as_slice()), &store)
+        .await;
+    assert!(matches!(
+        second_finalize,
+        Err(StreamingIndexerError::InvalidLifecycleTransition(_))
+    ));
+    let root = store.get(&result.root_id).unwrap().unwrap();
+    match into_entries(root) {
+        TypedEntries::Branch(metadata, _) => {
+            assert_eq!(metadata.embedding_spec.encoding, "ambient-delta-uq");
+            let descriptor =
+                parse_branch_ebcp_descriptor(&metadata.embedding_spec, metadata.ext.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert!(descriptor.rotation.is_none());
+            match descriptor.quantization.unwrap() {
+                EbcpQuantization::Uniform { bit_width, .. } => assert_eq!(bit_width, 12),
+                other => panic!("unexpected quantization: {other:?}"),
+            }
+        }
+        TypedEntries::Leaf(_, _) => panic!("expected a branch root"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple_replay_passes() {
+    let items = (0..1024)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: index.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+    )
+    .unwrap();
+
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let first = run.finish_pass().unwrap();
+    assert_eq!(first.completed_pass_count, 1);
+    assert_eq!(first.requested_planning_cluster_count, None);
+    assert_eq!(first.realized_planning_cluster_count, None);
+    let first_topology = run.current_partition_topology().unwrap();
+    assert_eq!(first_topology.partitions.len(), 1);
+    assert!(run.finalized_partition_topology().is_none());
+    let error = run.mark_planning_complete().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires every v2 partition to be terminal or routed")
+    );
+
+    let mut saw_split_topology = false;
+    for expected_pass in 2..=6 {
+        run.ingest_batch(items.as_slice()).await.unwrap();
+        let report = run.finish_pass().unwrap();
+        assert_eq!(report.completed_pass_count, expected_pass);
+        let error = run.mark_planning_complete().unwrap_err();
+        assert!(matches!(
+            error,
+            StreamingIndexerError::InvalidLifecycleTransition(_)
+        ));
+        if let Some(topology) = run.current_partition_topology()
+            && topology.partitions.len() > 1
+        {
+            saw_split_topology = true;
+            assert!(
+                topology
+                    .partitions
+                    .iter()
+                    .any(|partition| !partition.child_ids.is_empty())
+            );
+            break;
+        }
+    }
+    assert!(saw_split_topology);
 }

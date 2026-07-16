@@ -61,6 +61,13 @@ state scales with the size of the full logical dataset. Transient working memory
 may scale with the currently ingested batch or currently processed work unit,
 but not with the full logical dataset.
 
+`v1 compatibility surface` means the existing caller-facing API retained for
+incremental migration and backward compatibility during the bring-up of a new
+streaming surface.
+
+`v2 streaming surface` means the new authoritative caller-facing API in this
+crate that owns true-streaming conformance for the no-buffering indexing path.
+
 `Terminal partition` means one partition in that hierarchy chosen as a direct
 input to bottom-up parent construction over materialized leaves.
 
@@ -100,6 +107,19 @@ against `docs/protocol/indexing.md`, `docs/protocol/blocks.md`, and its owned
 subordinate specifications without making any retired legacy batch-oriented
 indexing crate or specification package part of the streaming crate's
 normative conformance boundary.
+
+### REQ-STREAM-INDEXER-003A
+
+The crate may expose both a retained v1 compatibility surface and a new v2
+streaming surface within `crates/lexongraph-streaming-indexer`.
+
+When both surfaces are present:
+
+- the v1 surface may remain available for migration compatibility
+- the v2 surface is the authoritative conformance target for the true-streaming
+  no-buffering indexing path
+- validation and documentation shall distinguish the two surfaces explicitly
+  rather than silently treating the v1 surface as conformant v2 behavior
 
 ### REQ-STREAM-INDEXER-004
 
@@ -202,13 +222,24 @@ selected published profile version into repository-owned defaults.
 
 ### REQ-STREAM-INDEXER-015
 
-The crate shall continue to provide explicit API paths that accept
-caller-supplied canonical-embedding, hierarchical planning, and streaming
-clustering policy implementations.
+The retained low-level streaming surface shall continue to provide explicit API
+paths that accept caller-supplied canonical-embedding, hierarchical planning,
+and streaming clustering policy implementations.
+
+The published-profile-only v2 streaming surface introduced in this revision is
+not yet required to expose corresponding override entry points. Until those v2
+override paths exist, attempts to request override behavior through v2 shall
+fail explicitly rather than silently delegating to the retained v1
+compatibility surface.
 
 Those override seams shall remain true-streaming. This revision shall not treat
 full-dataset embedding slices, full partition-membership tables, or equivalent
 dataset-sized override inputs or outputs as conformant public API shapes.
+
+The same restriction applies to implementation-owned planning boundaries used to
+realize those seams: a conformant path shall not require a full-pass decoded
+embedding table, full-pass assignment vector, or equivalent replay-sized
+materialization to cross from replay ingestion into planning.
 
 ### REQ-STREAM-INDEXER-016
 
@@ -224,10 +255,10 @@ implementation-owned retention or spill of the full logical dataset.
 
 ### REQ-STREAM-INDEXER-017
 
-The public contract shall remain dataset-size independent by requiring caller
-replay for repeated passes and final materialization rather than requiring the
-crate's default API surface to retain or rematerialize the full logical dataset
-on the caller's behalf.
+The v2 streaming surface shall remain dataset-size independent by requiring
+caller replay for repeated passes and final materialization rather than
+requiring the crate's v2 default API surface to retain or rematerialize the
+full logical dataset on the caller's behalf.
 
 A replay-shaped public API is not sufficient by itself: conformant public input,
 output, and extension-point shapes shall also avoid constructs whose memory
@@ -248,9 +279,10 @@ indexer shall remain authoritative for protocol conformance checks.
 
 ### REQ-STREAM-INDEXER-019
 
-For the caller-visible replay passes over original indexing items, the crate
-shall use the shared streaming clustering contract as the clustering boundary
-for deriving or refining a deterministic finalized partition hierarchy.
+For the caller-visible replay passes over original indexing items on the v2
+streaming surface, the crate shall use the shared streaming clustering contract
+as the clustering boundary for deriving or refining a deterministic finalized
+partition hierarchy.
 
 When the built-in planning path is selected:
 
@@ -265,6 +297,11 @@ hierarchy abstraction before final materialization.
 Any planning orchestration around the shared streaming clustering contract shall
 remain true-streaming and shall not depend on retained full-dataset embedding
 tables, replay-verification tables, or partition-membership tables.
+
+In particular, a conformant planning path shall not depend on carrying one
+implementation-owned decoded embedding table for the entire planning pass from
+`ingest_batch` through `finish_pass`, even when that table is later consumed
+only inside built-in or override planning logic.
 
 ### REQ-STREAM-INDEXER-020
 
@@ -308,19 +345,19 @@ early.
 
 ### REQ-STREAM-INDEXER-021A
 
-The crate shall be a true-streaming realization.
+The v2 streaming surface shall be a true-streaming realization.
 
 It shall not retain or materialize planning-time implementation-owned state
 whose size scales with the full logical dataset, including replayed embedding
-tables, partition membership tables, or equivalent replayable full-dataset
-state.
+tables, decoded full-pass embedding tables, partition membership tables, or
+equivalent replayable full-dataset state.
 
 ### REQ-STREAM-INDEXER-021B
 
-The crate shall not expose public planning, finalization, or hierarchy surfaces
-whose required inputs or returned state scale with the full logical dataset,
-including full embedding slices, full partition-membership vectors, or
-equivalent dataset-sized API constructs.
+The v2 streaming surface shall not expose public planning, finalization, or
+hierarchy surfaces whose required inputs or returned state scale with the full
+logical dataset, including full embedding slices, full partition-membership
+vectors, or equivalent dataset-sized API constructs.
 
 ### REQ-STREAM-INDEXER-021C
 
@@ -328,14 +365,46 @@ Transient working memory may scale with the currently ingested batch or the
 currently processed work unit, provided that such growth does not scale with the
 full logical dataset size.
 
+Such transient working memory shall not span the full planning pass merely to
+bridge replay ingestion and later planner execution.
+
 ### REQ-STREAM-INDEXER-021D
 
-A caller-visible replay lifecycle backed by hidden implementation-owned
+A caller-visible v2 replay lifecycle backed by hidden implementation-owned
 full-dataset planning-time buffering or spill is non-conformant.
+
+This includes hidden buffering or spill of decoded embeddings, planner-ready
+assignment state, or equivalent full-pass planning materializations retained so
+that later planning work can proceed without additional caller-visible replay.
 
 Implementation-owned temporary local spill used only after planning completion
 to stage terminal-partition materialization inputs is conformant in this
 revision.
+
+### REQ-STREAM-INDEXER-021E
+
+The v2 conformant planning boundary shall realize hierarchy derivation through
+bounded-state streaming summaries, caller-visible replay stages, or bounded
+per-subproblem working sets.
+
+If an exact planning realization cannot expose a final partition-ready
+hierarchy under those constraints, it shall surface deterministic readiness or
+progress state rather than silently retaining a full-pass decoded embedding
+table, full-pass assignment vector, or equivalent implementation-owned replay
+materialization.
+
+### REQ-STREAM-INDEXER-021F
+
+The crate shall support incremental migration from the v1 compatibility surface
+to the v2 streaming surface.
+
+During that migration:
+
+- any planning mode, direction, profile, or override path not yet implemented
+  on v2 shall fail explicitly when requested on v2
+- the crate shall not silently fall back from v2 to v1 buffering behavior
+- conformance claims for no-buffering streaming behavior apply only to the v2
+  surface and the explicitly validated v2 feature subset
 
 ### REQ-STREAM-INDEXER-022
 
