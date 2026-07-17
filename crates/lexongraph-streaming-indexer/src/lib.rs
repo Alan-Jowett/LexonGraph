@@ -3104,7 +3104,6 @@ struct StreamingV2PassMetricAccumulator {
 struct StreamingV2CompletedPartition {
     partition_id: PartitionId,
     routing: StreamingV2RoutingStrategy,
-    child_ids: Vec<PartitionId>,
     children: Vec<StreamingV2PartitionNode>,
 }
 
@@ -3336,13 +3335,18 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let mut metrics = StreamingV2PassMetricAccumulator::default();
 
         if self.partitions.is_empty() {
-            let root_id = self.allocate_partition_id();
-            debug_assert_eq!(root_id, ROOT_PARTITION_ID);
-            self.partitions.push(self.create_partition_node(
+            let root = self.create_partition_node(
                 None,
                 fingerprint.observed_count,
                 materializability_bound,
-            )?);
+            )?;
+            let root_id = self
+                .upcoming_partition_ids(1)
+                .into_iter()
+                .next()
+                .expect("single root partition id");
+            debug_assert_eq!(root_id, ROOT_PARTITION_ID);
+            self.append_partition_nodes(vec![root]);
         } else {
             let pending_ids = self.pending_partition_ids();
             let mut completed = Vec::new();
@@ -3392,7 +3396,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                 "classifier realized cluster count does not fit into usize".into(),
                             )
                         })?;
-                    let (routing, child_ids, children) =
+                    let (routing, children) =
                         if realized_cluster_count <= 1 && item_count > materializability_bound {
                             let child_counts = balanced_groups(item_count, materializability_bound)
                                 .map_err(StreamingIndexerError::HierarchyValidation)?
@@ -3407,37 +3411,36 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             let routing = StreamingV2RoutingStrategy::ReplayOrder(
                                 StreamingV2ReplayOrderPlan::new(child_counts.clone()),
                             );
-                            let (child_ids, children) = self.create_child_nodes(
+                            let children = self.create_child_nodes(
                                 partition_id,
                                 child_counts,
                                 materializability_bound,
                             )?;
-                            (routing, child_ids, children)
+                            (routing, children)
                         } else {
                             (
                                 StreamingV2RoutingStrategy::Classifier(classifier),
-                                Vec::new(),
                                 Vec::new(),
                             )
                         };
                     completed.push(StreamingV2CompletedPartition {
                         partition_id,
                         routing,
-                        child_ids,
                         children,
                     });
                 }
             }
 
             for partition in completed {
+                let child_ids = self.upcoming_partition_ids(partition.children.len());
                 {
                     let node = self.partition_mut(partition.partition_id)?;
                     node.pending_trainer = None;
                     node.routing = Some(partition.routing);
-                    node.child_ids = partition.child_ids.clone();
+                    node.child_ids = child_ids;
                     node.terminal = false;
                 }
-                self.partitions.extend(partition.children);
+                self.append_partition_nodes(partition.children);
             }
 
             for partition_id in expandable_ids {
@@ -3494,8 +3497,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         observed_child_total, node.item_count
                     )));
                 }
-                let (child_ids, children) =
+                let children =
                     self.create_child_nodes(partition_id, child_counts, materializability_bound)?;
+                let child_ids = self.upcoming_partition_ids(children.len());
                 {
                     let node = self.partition_mut(partition_id).map_err(|_| {
                         StreamingIndexerError::HierarchyValidation(format!(
@@ -3504,7 +3508,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     })?;
                     node.child_ids = child_ids;
                 }
-                self.partitions.extend(children);
+                self.append_partition_nodes(children);
             }
         }
 
@@ -3775,10 +3779,18 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
     }
 
-    fn allocate_partition_id(&mut self) -> PartitionId {
-        let id = PartitionId(self.next_partition_id);
-        self.next_partition_id += 1;
-        id
+    fn upcoming_partition_ids(&self, count: usize) -> Vec<PartitionId> {
+        debug_assert_eq!(self.next_partition_id, self.partitions.len());
+        debug_assert!(self.next_partition_id.checked_add(count).is_some());
+        (0..count)
+            .map(|offset| PartitionId(self.next_partition_id + offset))
+            .collect()
+    }
+
+    fn append_partition_nodes(&mut self, nodes: Vec<StreamingV2PartitionNode>) {
+        debug_assert_eq!(self.next_partition_id, self.partitions.len());
+        self.partitions.extend(nodes);
+        self.next_partition_id = self.partitions.len();
     }
 
     fn partition(
@@ -3874,23 +3886,20 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     fn create_child_nodes(
-        &mut self,
+        &self,
         parent_id: PartitionId,
         child_counts: Vec<usize>,
         materializability_bound: usize,
-    ) -> Result<(Vec<PartitionId>, Vec<StreamingV2PartitionNode>), StreamingIndexerError> {
-        let mut child_ids = Vec::with_capacity(child_counts.len());
+    ) -> Result<Vec<StreamingV2PartitionNode>, StreamingIndexerError> {
         let mut children = Vec::with_capacity(child_counts.len());
         for child_count in child_counts {
-            let child_id = self.allocate_partition_id();
-            child_ids.push(child_id);
             children.push(self.create_partition_node(
                 Some(parent_id),
                 child_count,
                 materializability_bound,
             )?);
         }
-        Ok((child_ids, children))
+        Ok(children)
     }
 
     fn pending_partition_ids(&self) -> Vec<PartitionId> {
@@ -4370,6 +4379,9 @@ fn format_partition_label(
             return compact_partition_label(partition_id);
         };
         let Some(parent_id) = partition.parent_id else {
+            if current != ROOT_PARTITION_ID {
+                return compact_partition_label(partition_id);
+            }
             break;
         };
         let Some(parent) = partitions.get(parent_id.0) else {
@@ -8799,13 +8811,16 @@ pub mod conformance {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildSummaryInput, DirectionalPcaAllocationPolicy, StreamingV2Partition,
-        StreamingV2PartitionTopology, allocate_variable_bit_widths,
+        BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy, EmbeddingSpec,
+        PUBLISHED_PROFILE_V0_1_0, RunPhase, StreamingIndexingRunV2, StreamingV2Partition,
+        StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
+        allocate_variable_bit_widths, branch_encoding_policy_for_profile,
         effective_directional_pca_cluster_count, exact_centroid_child_summary,
-        fallback_partition_groups, fit_ebcp_rotation, streaming_v2_topology_stats,
-        uses_root_branch_budget, weighted_mean_f32_embeddings,
+        fallback_partition_groups, fit_ebcp_rotation, format_partition_label,
+        published_indexing_profile, streaming_v2_topology_stats, uses_root_branch_budget,
+        weighted_mean_f32_embeddings,
     };
-    use crate::{BlockHash, EmbeddingSpec};
+    use std::marker::PhantomData;
 
     #[test]
     fn weighted_representative_embedding_uses_item_counts() {
@@ -8917,5 +8932,99 @@ mod tests {
             error,
             "v2 partition topology stats referenced missing partition \"missing\""
         );
+    }
+
+    fn make_streaming_v2_run(
+        profile_version: super::PublishedProfileVersion,
+    ) -> StreamingIndexingRunV2<(), (), ()> {
+        let profile = published_indexing_profile(profile_version).expect("profile should exist");
+        let branch_encoding_policy = branch_encoding_policy_for_profile(&profile);
+        StreamingIndexingRunV2 {
+            resolver: (),
+            embedding_provider: (),
+            profile,
+            branch_encoding_policy,
+            embedding_spec: EmbeddingSpec {
+                dims: 1,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 256,
+            phase: RunPhase::Planning,
+            completed_passes: 0,
+            baseline_fingerprint: None,
+            current_pass: None,
+            partitions: Vec::new(),
+            next_partition_id: 0,
+            _item_ref: PhantomData,
+        }
+    }
+
+    #[test]
+    fn format_partition_label_uses_compact_label_for_orphaned_non_root_partition() {
+        let partitions = vec![
+            StreamingV2PartitionNode {
+                parent_id: None,
+                child_ids: Vec::new(),
+                item_count: 3,
+                terminal: false,
+                pending_trainer: None,
+                routing: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: None,
+                child_ids: Vec::new(),
+                item_count: 1,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+            },
+        ];
+
+        assert_eq!(
+            format_partition_label(&partitions, super::PartitionId(1)),
+            "p1"
+        );
+    }
+
+    #[test]
+    fn finish_pass_keeps_root_partition_id_counter_stable_on_root_creation_error() {
+        let mut run = make_streaming_v2_run(PUBLISHED_PROFILE_V0_1_0);
+        run.block_size_target = super::serialized_branch_size(&run.embedding_spec, 2)
+            .expect("minimum branch size should serialize");
+        let mut current_pass = StreamingV2PassState::new();
+        current_pass.fingerprint.observed_count = 3;
+        run.current_pass = Some(current_pass);
+
+        let error = run.finish_pass().expect_err("root creation should fail");
+
+        assert!(matches!(
+            error,
+            super::StreamingIndexerError::ClusteringFailure(_)
+        ));
+        assert!(run.partitions.is_empty());
+        assert_eq!(run.next_partition_id, 0);
+    }
+
+    #[test]
+    fn create_child_nodes_keeps_partition_id_counter_stable_on_child_creation_error() {
+        let mut run = make_streaming_v2_run(PUBLISHED_PROFILE_V0_1_0);
+        run.partitions.push(StreamingV2PartitionNode {
+            parent_id: None,
+            child_ids: Vec::new(),
+            item_count: 3,
+            terminal: false,
+            pending_trainer: None,
+            routing: None,
+        });
+        run.next_partition_id = 1;
+
+        let result = run.create_child_nodes(super::PartitionId(0), vec![3], 2);
+
+        assert!(matches!(
+            result,
+            Err(super::StreamingIndexerError::ClusteringFailure(_))
+        ));
+        assert_eq!(run.partitions.len(), 1);
+        assert_eq!(run.next_partition_id, 1);
     }
 }
