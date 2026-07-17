@@ -3603,7 +3603,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             .filter(|(_, partition)| partition.terminal)
             .map(|(index, _)| PartitionId(index))
             .collect::<Vec<_>>();
-        terminal_partition_ids.sort_by_key(|&partition_id| self.partition_label(partition_id));
+        terminal_partition_ids
+            .sort_by_cached_key(|&partition_id| self.partition_label(partition_id));
         let mut terminal_ordinals = vec![None; self.partitions.len()];
         for (ordinal, partition_id) in terminal_partition_ids.iter().copied().enumerate() {
             terminal_ordinals[partition_id.0] = Some(ordinal);
