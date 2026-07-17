@@ -3782,10 +3782,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
 
     fn upcoming_partition_ids(&self, count: usize) -> Vec<PartitionId> {
         debug_assert_eq!(self.next_partition_id, self.partitions.len());
-        debug_assert!(self.next_partition_id.checked_add(count).is_some());
-        (0..count)
-            .map(|offset| PartitionId(self.next_partition_id + offset))
-            .collect()
+        let end = self
+            .next_partition_id
+            .checked_add(count)
+            .expect("partition id allocation overflowed usize");
+        (self.next_partition_id..end).map(PartitionId).collect()
     }
 
     fn append_partition_nodes(&mut self, nodes: Vec<StreamingV2PartitionNode>) {

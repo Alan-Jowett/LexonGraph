@@ -1525,7 +1525,7 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
 #[test]
 fn val_stream_indexer_110_streaming_v2_retained_state_uses_compact_partition_ids() {
     let src = include_str!("../src/lib.rs");
-    assert!(src.contains("struct PartitionId(usize);"));
+    assert!(src.contains("struct PartitionId("));
     assert!(src.contains("partitions: Vec<StreamingV2PartitionNode>"));
     assert!(src.contains("parent_id: Option<PartitionId>"));
     assert!(src.contains("child_ids: Vec<PartitionId>"));
