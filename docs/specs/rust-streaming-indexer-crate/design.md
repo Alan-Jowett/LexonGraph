@@ -338,6 +338,11 @@ for:
 - `completed_planner_invocation_count`
 - `fallback_count`
 
+The current planning-unit identifier exposed through `current_partition_path`
+or an equivalent stable partition-identity field is boundary-derived metadata.
+It does not require the implementation to retain the same label as the primary
+internal partition key.
+
 Each detail field is optional and is represented as unavailable when it is not
 relevant or not yet knowable for the current phase. Existing consumers that
 only inspect phase, lifecycle state, and coarse progress counts therefore
@@ -413,6 +418,13 @@ lower-layer planning units, depending on the selected built-in direction, and
 stores only the hierarchy state and replay-baseline information needed for
 later replay validation and bottom-up assembly.
 
+For the v2 surface, retained hierarchy state is represented in a compact
+repository-owned form. Internally generated partition metadata, ancestry links,
+per-pass routing offsets, and similar retained planning structures use dense
+partition-local identifiers and contiguous or identifier-indexed storage where
+practical, rather than making externally formatted partition labels the primary
+in-memory key.
+
 Planning state excludes implementation-owned full-pass decoded embedding tables,
 full-pass assignment vectors, and equivalent replay-sized materializations.
 Recursive subdivision may use bounded per-subproblem working sets only when
@@ -426,10 +438,17 @@ not require full-dataset item-membership vectors as a public API obligation.
 
 ### DSG-STREAM-INDEXER-024 `Partition identity and ancestry`
 
-Every partition in the finalized hierarchy has a deterministic identity derived
-from stable ancestry plus deterministic local child ordering so independent
-subpartition processing does not change observable IDs or parent-child
-relations.
+Every partition in the finalized hierarchy has a deterministic identity and
+ancestry relation.
+
+The implementation may realize that identity internally through opaque dense
+partition identifiers assigned in deterministic discovery or construction
+order. Any caller-visible topology, status, or diagnostic partition label is
+derived deterministically from that internal hierarchy state at the reporting
+boundary.
+
+Independent subpartition processing therefore does not change observable
+ancestry, deterministic reporting identity, or parent-child relations.
 
 ### DSG-STREAM-INDEXER-025 `Terminal partition normalization`
 
@@ -755,9 +774,13 @@ partition-planning invocation, `InProgress` periodically while that invocation
 remains active, `Completed` when the invocation produces a child split or
 terminal decision, and `Failed` if it aborts explicitly.
 
-`current_partition_path` is derived from the deterministic hierarchy path being
-explored (`p0`, `p0.1`, ...) or an equivalent stable pre-finalization path that
-maps one-to-one onto the eventual partition ancestry.
+The recursive-planning status surface reports a deterministic current
+planning-unit identity, which may be a hierarchy-path string (`p0`, `p0.1`,
+...) or any equivalent stable boundary label derived one-to-one from the
+internal partition ancestry for that run.
+
+The choice of external label format does not require the implementation to
+retain that label as the primary in-memory partition key.
 
 `discovered_unit_count`, `visited_partition_count`, `finalized_partition_count`,
 `terminal_partition_count`, `completed_planner_invocation_count`, and
@@ -1190,6 +1213,19 @@ The derived-profile execution surface applies the same compatibility and
 materializability checks as the version-selected published-profile surface,
 using the caller-supplied overridden values where applicable.
 
+### DSG-STREAM-INDEXER-114 `Compact retained v2 partition state`
+
+The v2 planning implementation stores retained partition state in compact
+repository-owned structures keyed by dense internal partition identifiers.
+
+Parent references, child references, replay-order offsets,
+classifier-assignment counters, and similar per-partition retained state use
+contiguous or identifier-indexed storage whenever the partition set is
+internally generated and deterministically addressable.
+
+String formatting for partition identity is deferred to topology conversion,
+observer reporting, or diagnostics when such formatting is needed externally.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1204,14 +1240,14 @@ using the caller-supplied overridden values where applicable.
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |
-| DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064 |
+| DSG-STREAM-INDEXER-017 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |
 | DSG-STREAM-INDEXER-018 | REQ-STREAM-INDEXER-024 |
 | DSG-STREAM-INDEXER-019 | REQ-STREAM-INDEXER-026, REQ-STREAM-INDEXER-037 |
 | DSG-STREAM-INDEXER-020 | REQ-STREAM-INDEXER-028 |
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
 | DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
-| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034 |
-| DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-037 |
+| DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-120 |
+| DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-120 |
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
@@ -1294,4 +1330,5 @@ using the caller-supplied overridden values where applicable.
 | DSG-STREAM-INDEXER-111 | REQ-STREAM-INDEXER-117 |
 | DSG-STREAM-INDEXER-112 | REQ-STREAM-INDEXER-118 |
 | DSG-STREAM-INDEXER-113 | REQ-STREAM-INDEXER-119 |
-| DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |
+| DSG-STREAM-INDEXER-114 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-120 |
+| DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

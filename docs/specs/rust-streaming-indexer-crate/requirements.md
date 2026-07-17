@@ -298,6 +298,12 @@ Any planning orchestration around the shared streaming clustering contract shall
 remain true-streaming and shall not depend on retained full-dataset embedding
 tables, replay-verification tables, or partition-membership tables.
 
+Retained implementation-owned planning metadata for the v2 surface shall also
+avoid unnecessary per-partition heap overhead when the partition set is
+repository-generated and deterministically ordered, including avoidable
+string-keyed lookup tables or duplicated string ancestry state where
+equivalent compact internal identifiers and contiguous storage suffice.
+
 In particular, a conformant planning path shall not depend on carrying one
 implementation-owned decoded embedding table for the entire planning pass from
 `ingest_batch` through `finish_pass`, even when that table is later consumed
@@ -351,6 +357,11 @@ It shall not retain or materialize planning-time implementation-owned state
 whose size scales with the full logical dataset, including replayed embedding
 tables, decoded full-pass embedding tables, partition membership tables, or
 equivalent replayable full-dataset state.
+
+The retained hierarchy state that remains necessary for v2 planning may scale
+with discovered partition count, but shall use a compact representation that
+does not make externally formatted partition identifiers or string-keyed
+indexing structures the primary retained identity on the hot in-memory path.
 
 ### REQ-STREAM-INDEXER-021B
 
@@ -1316,6 +1327,21 @@ When the crate executes a caller-derived configuration based on a resolved
 published profile, it shall enforce the same compatibility and materializability
 constraints that would apply to the originating published semantics, except
 where the caller's explicit override changes the checked value itself.
+
+### REQ-STREAM-INDEXER-120
+
+The v2 streaming implementation may represent planning partitions internally
+using opaque repository-owned identifiers and compact storage layouts that are
+independent of caller-visible partition-label formatting.
+
+If the crate surfaces partition identities through topology, status, or
+diagnostics, those surfaced identities shall be derived deterministically from
+the internal hierarchy state at the external boundary rather than serving as
+the primary retained in-memory key.
+
+Internal identifier compaction shall not change replay validation semantics,
+parent-child topology semantics, pass-report semantics, or final materialization
+behavior for successful runs.
 
 ## Out of Scope
 

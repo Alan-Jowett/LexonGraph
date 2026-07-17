@@ -1522,6 +1522,21 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
     assert!(manifest.contains("lexongraph-streaming-clustering"));
 }
 
+#[test]
+fn val_stream_indexer_110_streaming_v2_retained_state_uses_compact_partition_ids() {
+    let src = include_str!("../src/lib.rs");
+    assert!(src.contains("struct PartitionId("));
+    assert!(src.contains("partitions: Vec<StreamingV2PartitionNode>"));
+    assert!(src.contains("parent_id: Option<PartitionId>"));
+    assert!(src.contains("child_ids: Vec<PartitionId>"));
+    assert!(src.contains("replay_order_offsets: Vec<usize>"));
+    assert!(src.contains("classifier_assignment_counts: Vec<Option<Vec<usize>>>"));
+    assert!(src.contains("format_partition_label("));
+    assert!(!src.contains("partitions: BTreeMap<String, StreamingV2PartitionNode>"));
+    assert!(!src.contains("replay_order_offsets: HashMap<String, usize>"));
+    assert!(!src.contains("classifier_assignment_counts: HashMap<String, Vec<usize>>"));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn val_stream_indexer_003_empty_pass_and_empty_run_fail() {
     for case in built_in_cases() {
