@@ -54,7 +54,7 @@ use lexongraph_streaming_indexer::{
     SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
     StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, published_indexing_profile,
+    StreamingIndexingStatusState, StreamingIndexingTrainerSubphase, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -1523,7 +1523,7 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
 }
 
 #[test]
-fn val_stream_indexer_110_streaming_v2_retained_state_uses_compact_partition_ids() {
+fn val_stream_indexer_108_streaming_v2_retained_state_uses_compact_partition_ids() {
     let src = include_str!("../src/lib.rs");
     assert!(src.contains("struct PartitionId("));
     assert!(src.contains("partitions: Vec<StreamingV2PartitionNode>"));
@@ -5479,7 +5479,7 @@ async fn regression_published_profile_terminal_short_circuit_does_not_claim_fine
 }
 
 #[test]
-fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
+fn regression_streaming_v2_rejects_non_v0_7_0_profiles() {
     let error = match StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
         MapResolver,
         AsciiF32EmbeddingProvider,
@@ -5497,7 +5497,7 @@ fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_root_encoding() {
+async fn regression_streaming_v2_v0_7_0_preserves_ambient_uniform_root_encoding() {
     let items = vec![item("aa"), item("bb"), item("cc"), item("dd")];
     let store = MemoryBlockStore::default();
     let mut run = StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
@@ -5545,7 +5545,7 @@ async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_ro
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple_replay_passes() {
+async fn regression_streaming_v2_materializes_topology_over_multiple_replay_passes() {
     let items = (0..1024)
         .map(|index| IndexItem {
             metadata: vec![],
@@ -5600,4 +5600,138 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
         }
     }
     assert!(saw_split_topology);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_109_streaming_v2_observer_reports_pass_progress_and_custom_hierarchy_updates()
+ {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = (0..1024)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: index.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+    )
+    .unwrap()
+    .with_observer(observer);
+
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    run.finish_pass().unwrap();
+    for chunk in items.chunks(256) {
+        run.ingest_batch(chunk).await.unwrap();
+    }
+
+    let statuses = statuses.lock().unwrap().clone();
+    let planning_pass_two: Vec<_> = statuses
+        .iter()
+        .filter(|status| status.phase == StreamingIndexingPhase::PlanningPass { pass_number: 2 })
+        .collect();
+    assert!(planning_pass_two.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::Started
+            && status.completed_unit_count == 0
+            && status.phase_total_unit_count == Some(items.len())
+    }));
+    assert!(planning_pass_two.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress
+            && status.completed_unit_count == 256
+            && status.remaining_unit_count == Some(items.len() - 256)
+    }));
+    assert!(planning_pass_two.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress
+            && status.completed_unit_count == 1024
+            && status.remaining_unit_count == Some(0)
+    }));
+
+    let hierarchy_statuses: Vec<_> = statuses
+        .iter()
+        .filter(|status| {
+            status.phase
+                == StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom,
+                }
+        })
+        .collect();
+    assert!(hierarchy_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::Started
+            && status.progress_unit_kind
+                == Some(StreamingIndexingProgressUnitKind::PartitionPlanningInvocation)
+    }));
+    assert!(hierarchy_statuses.iter().any(|status| {
+        status.state == StreamingIndexingStatusState::InProgress
+            && status.current_partition_path.as_deref() == Some("p0")
+            && status.current_partition_size == Some(items.len())
+            && status.current_recursion_depth == Some(0)
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_110_streaming_v2_observer_reports_pending_partition_detail() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = (0..1024)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: index.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+    )
+    .unwrap()
+    .with_observer(observer);
+
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    run.finish_pass().unwrap();
+    run.ingest_batch(&items[..256]).await.unwrap();
+    run.ingest_batch(&items[256..512]).await.unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    let root_progress = statuses
+        .iter()
+        .find(|status| {
+            status.phase
+                == StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom,
+                }
+                && status.state == StreamingIndexingStatusState::InProgress
+                && status.current_partition_path.as_deref() == Some("p0")
+                && status.pending_partition_count == Some(1)
+        })
+        .expect("v2 root hierarchy progress status");
+    let pending = root_progress
+        .v2_pending_partitions
+        .as_ref()
+        .expect("v2 pending partition detail");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].partition_path, "p0");
+    assert_eq!(pending[0].expected_item_count, items.len());
+    assert_eq!(
+        pending[0].trainer_subphase,
+        Some(StreamingIndexingTrainerSubphase::AnalyzePca)
+    );
+    assert!(
+        pending[0]
+            .observed_replay_progress
+            .is_some_and(|observed| (256..=512).contains(&observed))
+    );
+    assert!(pending[0].routing_bucket_fill_counts.is_none());
+    assert!(root_progress.suspected_stall.is_none());
 }

@@ -313,6 +313,9 @@ structured progress updates for:
 - final materialization progress
 - bottom-up assembly progress
 
+The v2 / published-profile `0.7.0` execution surface reuses the same observer
+contract rather than introducing a separate logging-only telemetry API.
+
 Each status update includes:
 
 - phase identity
@@ -353,6 +356,10 @@ state for the phase rather than a heartbeat carrying only a fixed total. If a
 quantity is not knowable for a phase at a given moment, the observer represents
 that explicitly as unavailable rather than by reusing another field with
 ambiguous meaning.
+
+When the v2 path needs to surface detail that is more specific than the generic
+fields above, it does so through additive optional detail rather than by
+changing the meaning of unrelated existing fields.
 
 The observer surface is sink-agnostic and does not require console output,
 tracing integration, or repository-specific telemetry.
@@ -486,13 +493,14 @@ schedule-independent.
 The observer contract defines phase-native work-unit semantics as follows:
 
 - `PlanningPass { pass_number }`: units are logical input items in the current
-  replayed planning pass; the total is the established pass item count; the
-  completed count is an envelope count that remains zero for non-terminal
-  planning-pass status updates and advances to the pass total only when the
-  planning pass completes. Measurable intra-pass work is surfaced through the
-  stage-specific `HierarchyPlanning { stage }` updates rather than by
-  aggregating overlapping recursive planning units into one misleading pass-wide
-  partial count.
+  replayed planning pass. For the original buffered planning path, the total is
+  the established pass item count and the completed count remains an envelope
+  count that stays zero for non-terminal planning-pass status updates before
+  advancing to the pass total on completion. For the v2 / published-profile
+  `0.7.0` path, the completed count advances with observed logical input items
+  during the pass, the total may remain unavailable during the first pass until
+  the baseline item count is established, and later passes report the
+  established total and derived remaining count.
 - `HierarchyPlanning { stage }`: units are declared by `progress_unit_kind`.
   Legacy hierarchy stage observers that do not provide recursive partition
   detail report `HierarchyPlanningItem` units. Recursive or divisive planning
@@ -503,7 +511,10 @@ The observer contract defines phase-native work-unit semantics as follows:
   planning unit. The eventual total may be unavailable because recursive work
   is discovered incrementally; when so, `discovered_unit_count` and the
   aggregate partition counters provide the best current boundary of known work
-  without guessing.
+  without guessing. On the v2 path, `HierarchyPlanning { stage: Custom }`
+  updates may run alongside `PlanningPass` updates so the observer can see both
+  pass-wide replay advancement and pending partition-training activity within
+  the same pass.
 - `FinalMaterializationReplay`: units are replayed logical items materialized
   into leaf blocks; the total is the baseline logical item count; the completed
   count advances as replay-verified items are persisted as leaf blocks.
@@ -1226,6 +1237,45 @@ internally generated and deterministically addressable.
 String formatting for partition identity is deferred to topology conversion,
 observer reporting, or diagnostics when such formatting is needed externally.
 
+### DSG-STREAM-INDEXER-115 `V2 dual-phase intra-pass observer composition`
+
+The v2 / published-profile `0.7.0` execution surface exposes the same
+caller-supplied observer type as the existing indexer path.
+
+For non-trivial planning passes, that surface may emit both:
+
+- `PlanningPass { pass_number }` updates for pass-wide observed-item progress
+- `HierarchyPlanning { stage: Custom }` updates for pending partition-planning
+  activity inside the same pass
+
+This dual emission is intentional: the planning-pass stream answers whether the
+pass is still ingesting or replaying items, while the hierarchy-planning stream
+answers which pending partition work is active and whether that work is
+advancing.
+
+### DSG-STREAM-INDEXER-116 `V2 pending-partition detail and stall diagnostics`
+
+V2 hierarchy-planning observer updates carry additive optional detail sufficient
+to summarize pending partition work without abandoning the compact retained v2
+state model.
+
+When relevant and knowable from the retained state, those additive details
+include:
+
+- the current pending-partition count
+- each pending partition's deterministic external identity
+- each pending partition's expected logical item count
+- each pending partition's observed replay progress
+- classifier child-bucket fill or replay-order child progress when available
+- each pending partition's coarse directional-PCA trainer subphase
+
+The same detail surface may additionally expose an explicit suspected-stall
+indicator derived from unchanged observer-visible state across reported
+intervals, such as unchanged pass-observed counts, unchanged pending-partition
+progress, unchanged child-bucket fill, or an unchanged trainer subphase. This
+indicator is descriptive of observable non-advancement; it is not a fabricated
+percentage-to-convergence.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1251,7 +1301,7 @@ observer reporting, or diagnostics when such formatting is needed externally.
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
-| DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064 |
+| DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-121 |
 | DSG-STREAM-INDEXER-030 | REQ-STREAM-INDEXER-040 |
 | DSG-STREAM-INDEXER-031 | REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-032 | REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-042 |
@@ -1331,4 +1381,6 @@ observer reporting, or diagnostics when such formatting is needed externally.
 | DSG-STREAM-INDEXER-112 | REQ-STREAM-INDEXER-118 |
 | DSG-STREAM-INDEXER-113 | REQ-STREAM-INDEXER-119 |
 | DSG-STREAM-INDEXER-114 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-120 |
+| DSG-STREAM-INDEXER-115 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-121 |
+| DSG-STREAM-INDEXER-116 | REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-121, REQ-STREAM-INDEXER-122 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

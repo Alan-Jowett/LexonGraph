@@ -426,6 +426,11 @@ assembly progress.
 Status updates shall be emitted as structured data suitable for arbitrary
 caller-owned handling and shall not require any particular sink.
 
+The same optional observer contract shall be available on the caller-visible
+v2 / published-profile `0.7.0` execution surface. That surface may reuse the
+existing structured status payload with additive optional detail rather than
+requiring a separate log-only telemetry channel.
+
 For each reported phase, the observer contract shall expose:
 
 - the total planned work units for that phase when knowable
@@ -469,6 +474,11 @@ For long-running recursive planning, those periodic updates shall also report
 the latest available current-unit detail and discovered-unit counters so a
 caller can distinguish active work within one expensive planning unit from a
 run whose observable state is not advancing at all.
+
+For v2 planning, those periodic updates shall cover both pass-wide progress and
+planning-unit progress when both are available from retained state, so a
+downstream caller can distinguish replay advancement from pending-partition
+trainer work.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -707,6 +717,9 @@ for the progress-count fields exposed to the status observer, including:
 - what structured fields identify the current planning unit and its elapsed time
   when counts alone are insufficient to disambiguate active progress from a
   suspected stall
+- for v2 planning, what fields summarize pending partitions, per-partition
+  replay advancement, coarse trainer subphase, and any explicit
+  suspected-stall indicator
 
 These semantics shall be phase-specific for at least:
 
@@ -897,6 +910,11 @@ descriptor changes when work moves to a different partition.
 The crate may rate-limit repeated in-progress updates for the same unit, but it
 shall not regress to per-pass heartbeats that leave long-running recursive
 planning indistinguishable from a stuck computation.
+
+For the v2 / published-profile `0.7.0` divisive path, the crate shall emit
+`PlanningPass` and `HierarchyPlanning` updates together when that combination is
+needed to represent both observed pass advancement and pending
+partition-planning activity without collapsing one into the other.
 
 ### REQ-STREAM-INDEXER-065
 
@@ -1342,6 +1360,44 @@ the primary retained in-memory key.
 Internal identifier compaction shall not change replay validation semantics,
 parent-child topology semantics, pass-report semantics, or final materialization
 behavior for successful runs.
+
+When surfaced through telemetry, per-partition replay counters, routing
+bucket-fill counters, trainer subphase summaries, and suspected-stall
+diagnostics shall be derived from the compact retained state at the reporting
+boundary and shall not require string-keyed primary retained structures.
+
+### REQ-STREAM-INDEXER-121
+
+The v2 / published-profile `0.7.0` execution surface shall expose structured
+intra-pass telemetry sufficient for a downstream caller to determine whether a
+planning pass is still ingesting or replaying items, which pending partitions
+still require planning work, and which coarse directional-PCA trainer subphase
+each active pending partition is currently executing.
+
+When relevant and knowable without material extra per-item instrumentation, that
+telemetry shall expose:
+
+- the current pass number
+- the current pass observed-item count
+- the current pass total and remaining counts when the baseline item count is
+  already established
+- the current pending-partition count
+- each pending partition's deterministic external identity
+- each pending partition's expected logical item count
+- each pending partition's observed replay progress or child-routing bucket-fill
+  progress when available
+- each pending partition's coarse directional-PCA trainer subphase
+
+### REQ-STREAM-INDEXER-122
+
+The v2 intra-pass telemetry shall additionally surface explicit
+suspected-stall indicators derived from observer-visible retained state rather
+than from host-resource sampling.
+
+Those indicators may summarize unchanged pass-observed counts, unchanged
+pending-partition replay progress, unchanged child-routing bucket-fill state, or
+an unchanged trainer subphase across reported intervals, but shall not claim a
+fabricated percentage-to-convergence unsupported by the retained planning state.
 
 ## Out of Scope
 

@@ -854,6 +854,39 @@ boundaries.
 
 **Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-120
 
+### VAL-STREAM-INDEXER-109
+
+Attach a caller-owned in-memory status observer to the v2 / published-profile
+`0.7.0` execution surface and run a deterministic fixture that requires more
+than one planning pass before planning can complete.
+
+**Pass condition:** the observer receives both `PlanningPass { pass_number }`
+and `HierarchyPlanning { stage: Custom }` updates before the enclosing pass
+completes. Within one `PlanningPass` execution, `completed_unit_count` advances
+with observed logical items, the first pass may report an unavailable total
+until the baseline item count is established, and later passes report
+deterministic total and remaining counts derived from that baseline.
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
+REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-121
+
+### VAL-STREAM-INDEXER-110
+
+Run a deterministic v2 / published-profile `0.7.0` fixture whose planning pass
+leaves multiple pending partitions active long enough to emit repeated
+in-progress hierarchy-planning updates.
+
+**Pass condition:** the v2 observer detail exposes deterministic pending
+partition identity, pending-partition count, expected logical item counts,
+observed replay or child-bucket progress when those quantities are knowable,
+and each active partition's coarse directional-PCA trainer subphase. Any
+explicit suspected-stall indication is derived from unchanged observer-visible
+state across reported intervals rather than from host-resource sampling or a
+fabricated percentage-to-convergence.
+
+**Traces to:** REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-120,
+REQ-STREAM-INDEXER-121, REQ-STREAM-INDEXER-122
+
 ### VAL-STREAM-INDEXER-061
 
 Resolve published indexing profile `0.3.1` through the convenience surface.
