@@ -3467,12 +3467,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             Some(_) if repeated_prior_completed_pass_number.is_some() => {
                 StreamingV2ConvergenceState::RepeatedPriorState
             }
-            Some(previous)
-                if snapshot.pending_partitions.len() < previous.pending_partitions.len()
-                    || snapshot.terminal_partition_count > previous.terminal_partition_count
-                    || snapshot.routed_partition_paths.len()
-                        > previous.routed_partition_paths.len() =>
-            {
+            Some(previous) if unresolved_work_shrank(previous, &snapshot) => {
                 StreamingV2ConvergenceState::UnresolvedWorkShrank
             }
             Some(_) => StreamingV2ConvergenceState::UnresolvedWorkChanged,
@@ -5393,6 +5388,20 @@ fn summarize_streaming_v2_partition_blocker(
         realized_cell_count: status.realized_cell_count,
         planner_state_fingerprint_hex: status.planner_state_fingerprint_hex.clone(),
     }
+}
+
+fn unresolved_work_shrank(
+    previous: &StreamingV2CompletedPassSnapshot,
+    current: &StreamingV2CompletedPassSnapshot,
+) -> bool {
+    let pending_count_decreased =
+        current.pending_partitions.len() < previous.pending_partitions.len();
+    let pending_count_unchanged =
+        current.pending_partitions.len() == previous.pending_partitions.len();
+    let terminal_or_routed_grew = current.terminal_partition_count
+        > previous.terminal_partition_count
+        || current.routed_partition_paths.len() > previous.routed_partition_paths.len();
+    pending_count_decreased || (pending_count_unchanged && terminal_or_routed_grew)
 }
 
 fn usize_delta(current: usize, previous: usize) -> Option<isize> {
@@ -9953,13 +9962,14 @@ pub mod conformance {
 mod tests {
     use super::{
         BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy, EmbeddingSpec,
-        PUBLISHED_PROFILE_V0_1_0, RunPhase, StreamingIndexingRunV2, StreamingV2Partition,
+        PUBLISHED_PROFILE_V0_1_0, RunPhase, StreamingIndexingRunV2,
+        StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot, StreamingV2Partition,
         StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
-        allocate_variable_bit_widths, branch_encoding_policy_for_profile,
-        effective_directional_pca_cluster_count, exact_centroid_child_summary,
-        fallback_partition_groups, fit_ebcp_rotation, format_partition_label,
-        published_indexing_profile, streaming_v2_topology_stats, uses_root_branch_budget,
-        weighted_mean_f32_embeddings,
+        StreamingV2PendingPartitionStatus, allocate_variable_bit_widths,
+        branch_encoding_policy_for_profile, effective_directional_pca_cluster_count,
+        exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
+        format_partition_label, published_indexing_profile, streaming_v2_topology_stats,
+        unresolved_work_shrank, uses_root_branch_budget, weighted_mean_f32_embeddings,
     };
     use std::marker::PhantomData;
 
@@ -10100,6 +10110,73 @@ mod tests {
             partitions: Vec::new(),
             next_partition_id: 0,
             _item_ref: PhantomData,
+        }
+    }
+
+    #[test]
+    fn unresolved_work_shrank_requires_pending_reduction_or_equal_pending_with_more_resolution() {
+        let previous = StreamingV2CompletedPassSnapshot {
+            pass_number: 1,
+            planned_partition_count: 3,
+            terminal_partition_count: 1,
+            routed_partition_paths: vec!["p0".into()],
+            terminal_partition_paths: vec!["p0.0".into()],
+            hierarchy_depth: 2,
+            topology_fingerprint_hex: "a".repeat(64),
+            pending_partition_fingerprint_hex: "b".repeat(64),
+            combined_fingerprint_hex: "c".repeat(64),
+            pending_partitions: vec![pending_partition("p0.1"), pending_partition("p0.2")],
+        };
+        let pending_grew_but_routed_grew = StreamingV2CompletedPassSnapshot {
+            pass_number: 2,
+            planned_partition_count: 5,
+            terminal_partition_count: 1,
+            routed_partition_paths: vec!["p0".into(), "p0.1".into()],
+            terminal_partition_paths: vec!["p0.0".into()],
+            hierarchy_depth: 3,
+            topology_fingerprint_hex: "d".repeat(64),
+            pending_partition_fingerprint_hex: "e".repeat(64),
+            combined_fingerprint_hex: "f".repeat(64),
+            pending_partitions: vec![
+                pending_partition("p0.1.0"),
+                pending_partition("p0.1.1"),
+                pending_partition("p0.2"),
+            ],
+        };
+        let equal_pending_and_more_terminal = StreamingV2CompletedPassSnapshot {
+            pass_number: 2,
+            planned_partition_count: 4,
+            terminal_partition_count: 2,
+            routed_partition_paths: vec!["p0".into()],
+            terminal_partition_paths: vec!["p0.0".into(), "p0.1".into()],
+            hierarchy_depth: 2,
+            topology_fingerprint_hex: "g".repeat(64),
+            pending_partition_fingerprint_hex: "h".repeat(64),
+            combined_fingerprint_hex: "i".repeat(64),
+            pending_partitions: vec![pending_partition("p0.2"), pending_partition("p0.3")],
+        };
+        assert!(!unresolved_work_shrank(
+            &previous,
+            &pending_grew_but_routed_grew
+        ));
+        assert!(unresolved_work_shrank(
+            &previous,
+            &equal_pending_and_more_terminal
+        ));
+    }
+
+    fn pending_partition(path: &str) -> StreamingV2PendingPartitionStatus {
+        StreamingV2PendingPartitionStatus {
+            partition_path: path.into(),
+            expected_item_count: 1,
+            observed_replay_progress: None,
+            routing_bucket_fill_counts: None,
+            trainer_subphase: Some(StreamingIndexingTrainerSubphase::AnalyzePca),
+            ready_axis_plan_count: None,
+            total_axis_plan_count: None,
+            populated_cell_count: None,
+            realized_cell_count: None,
+            planner_state_fingerprint_hex: "0".repeat(64),
         }
     }
 

@@ -3,6 +3,7 @@
 
 //! Streaming directional-PCA clustering for LexonGraph.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use lexongraph_pca::{PcaAccumulator, PcaError, PcaTransform};
@@ -65,6 +66,7 @@ pub struct DirectionalPcaStreamingTrainer {
     baseline_fingerprint: Option<PassFingerprint>,
     quality_metric: f64,
     model: Option<DirectionalPcaModel>,
+    cached_telemetry: RefCell<Option<DirectionalPcaTrainerTelemetry>>,
 }
 
 #[derive(Clone, Debug)]
@@ -641,12 +643,18 @@ impl DirectionalPcaStreamingTrainer {
             baseline_fingerprint: None,
             quality_metric: 0.0,
             model: None,
+            cached_telemetry: RefCell::new(None),
         })
+    }
+
+    fn invalidate_cached_telemetry(&self) {
+        self.cached_telemetry.replace(None);
     }
 
     fn invalid_transition(&mut self, operation: &str) -> StreamingClusteringError {
         let state = self.state;
         self.state = TrainerState::Error;
+        self.invalidate_cached_telemetry();
         StreamingClusteringError::InvalidTransition {
             state,
             operation: operation.into(),
@@ -656,10 +664,14 @@ impl DirectionalPcaStreamingTrainer {
     fn fail(&mut self, error: StreamingClusteringError) -> StreamingClusteringError {
         self.state = TrainerState::Error;
         self.active_pass = None;
+        self.invalidate_cached_telemetry();
         error
     }
 
     pub fn telemetry(&self) -> DirectionalPcaTrainerTelemetry {
+        if let Some(cached) = self.cached_telemetry.borrow().as_ref() {
+            return cached.clone();
+        }
         let subphase = match self.phase {
             ReplayPhase::AnalyzePca => DirectionalPcaTrainerSubphase::AnalyzePca,
             ReplayPhase::PlanCuts(_) => DirectionalPcaTrainerSubphase::PlanCuts,
@@ -676,7 +688,7 @@ impl DirectionalPcaStreamingTrainer {
                 ActivePassState::RealizePartition(pass) => pass.tracker.observed_count,
             });
         let detail = directional_pca_telemetry_detail(&self.phase, self.active_pass.as_ref());
-        DirectionalPcaTrainerTelemetry {
+        let telemetry = DirectionalPcaTrainerTelemetry {
             subphase,
             observed_count,
             ready_axis_plan_count: detail.ready_axis_plan_count,
@@ -684,7 +696,9 @@ impl DirectionalPcaStreamingTrainer {
             populated_cell_count: detail.populated_cell_count,
             realized_cell_count: detail.realized_cell_count,
             state_fingerprint_hex: detail.state_fingerprint_hex,
-        }
+        };
+        self.cached_telemetry.replace(Some(telemetry.clone()));
+        telemetry
     }
 
     fn ensure_active_pass(&mut self) {
@@ -729,12 +743,14 @@ impl DirectionalPcaStreamingTrainer {
                 })
             }
         });
+        self.invalidate_cached_telemetry();
     }
 
     fn finish_pass_impl(&mut self) -> Result<PassReport, StreamingClusteringError> {
         if self.state != TrainerState::Ingesting {
             return Err(self.invalid_transition("finish_pass"));
         }
+        self.invalidate_cached_telemetry();
         let active_pass = self
             .active_pass
             .take()
@@ -1019,6 +1035,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                 return Err(self.invalid_transition("ingest_batch"));
             }
         }
+        self.invalidate_cached_telemetry();
 
         let active_pass = self
             .active_pass
@@ -1109,6 +1126,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             });
         }
         self.state = TrainerState::TrainingComplete;
+        self.invalidate_cached_telemetry();
         Ok(())
     }
 
