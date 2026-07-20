@@ -73,6 +73,20 @@ pub struct DirectionalPcaStreamingClassifier {
     centroids: Vec<Embedding>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectionalPcaTrainerSubphase {
+    AnalyzePca,
+    PlanCuts,
+    CountCells,
+    RealizePartition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirectionalPcaTrainerTelemetry {
+    pub subphase: DirectionalPcaTrainerSubphase,
+    pub observed_count: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 struct DirectionalPcaModel {
     centroids: Vec<Embedding>,
@@ -279,6 +293,28 @@ impl DirectionalPcaStreamingTrainer {
         self.state = TrainerState::Error;
         self.active_pass = None;
         error
+    }
+
+    pub fn telemetry(&self) -> DirectionalPcaTrainerTelemetry {
+        let subphase = match self.phase {
+            ReplayPhase::AnalyzePca => DirectionalPcaTrainerSubphase::AnalyzePca,
+            ReplayPhase::PlanCuts(_) => DirectionalPcaTrainerSubphase::PlanCuts,
+            ReplayPhase::CountCells(_) => DirectionalPcaTrainerSubphase::CountCells,
+            ReplayPhase::RealizePartition(_) => DirectionalPcaTrainerSubphase::RealizePartition,
+        };
+        let observed_count = self
+            .active_pass
+            .as_ref()
+            .map(|active_pass| match active_pass {
+                ActivePassState::AnalyzePca(pass) => pass.tracker.observed_count,
+                ActivePassState::PlanCuts(pass) => pass.tracker.observed_count,
+                ActivePassState::CountCells(pass) => pass.tracker.observed_count,
+                ActivePassState::RealizePartition(pass) => pass.tracker.observed_count,
+            });
+        DirectionalPcaTrainerTelemetry {
+            subphase,
+            observed_count,
+        }
     }
 
     fn ensure_active_pass(&mut self) {

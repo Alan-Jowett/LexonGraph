@@ -55,6 +55,7 @@ use lexongraph_directional_pca::{
     DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
     DirectionalPcaClusterCardinalityMode, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
     DirectionalPcaStreamingClassifier, DirectionalPcaStreamingTrainer,
+    DirectionalPcaTrainerSubphase,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_pca::fit;
@@ -469,6 +470,37 @@ pub enum StreamingIndexingProgressUnitKind {
     AssemblyGroup,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamingIndexingTrainerSubphase {
+    AnalyzePca,
+    PlanCuts,
+    CountCells,
+    RealizePartition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamingIndexingSuspectedStallReason {
+    UnchangedPassObservedCount,
+    UnchangedPendingPartitionProgress,
+    UnchangedRoutingBucketFill,
+    UnchangedTrainerSubphase,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamingIndexingSuspectedStall {
+    pub reason: StreamingIndexingSuspectedStallReason,
+    pub duration_without_progress: Duration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamingV2PendingPartitionStatus {
+    pub partition_path: String,
+    pub expected_item_count: usize,
+    pub observed_replay_progress: Option<usize>,
+    pub routing_bucket_fill_counts: Option<Vec<usize>>,
+    pub trainer_subphase: Option<StreamingIndexingTrainerSubphase>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HierarchyPlanningStatusEvent {
     pub stage: PlanningStage,
@@ -537,6 +569,9 @@ pub struct StreamingIndexingStatus {
     pub terminal_partition_count: Option<usize>,
     pub completed_planner_invocation_count: Option<usize>,
     pub fallback_count: Option<usize>,
+    pub pending_partition_count: Option<usize>,
+    pub v2_pending_partitions: Option<Vec<StreamingV2PendingPartitionStatus>>,
+    pub suspected_stall: Option<StreamingIndexingSuspectedStall>,
     pub elapsed: Duration,
     pub last_progress_at: Option<Duration>,
     pub error: Option<String>,
@@ -1851,6 +1886,11 @@ struct StreamingV2PassState {
     fingerprint: StreamingV2ReplayFingerprintTracker,
     replay_order_offsets: Vec<usize>,
     classifier_assignment_counts: Vec<Option<Vec<usize>>>,
+    started: Instant,
+    last_progress_at: Option<Duration>,
+    planning_started_emitted: bool,
+    hierarchy_started_emitted: bool,
+    partition_unit_started: Vec<Option<Instant>>,
 }
 
 #[derive(Clone)]
@@ -3078,6 +3118,7 @@ where
 pub struct StreamingIndexingRunV2<R, CR, EP> {
     resolver: CR,
     embedding_provider: EP,
+    observer: Option<StreamingIndexingStatusObserver>,
     profile: PublishedIndexingProfile,
     branch_encoding_policy: BranchEncodingPolicy,
     embedding_spec: EmbeddingSpec,
@@ -3143,6 +3184,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         Ok(Self {
             resolver,
             embedding_provider,
+            observer: None,
             branch_encoding_policy: branch_encoding_policy_for_profile(&profile),
             profile,
             embedding_spec,
@@ -3164,6 +3206,168 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     pub fn finalized_partition_topology(&self) -> Option<StreamingV2PartitionTopology> {
         matches!(self.phase, RunPhase::PlanningComplete | RunPhase::Finalized)
             .then(|| self.current_topology())
+    }
+
+    pub fn with_observer(mut self, observer: StreamingIndexingStatusObserver) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    fn v2_planning_pass_total(&self) -> Option<usize> {
+        self.baseline_fingerprint
+            .as_ref()
+            .map(|fingerprint| fingerprint.observed_count)
+    }
+
+    fn partition_depth(&self, partition_id: PartitionId) -> Result<usize, StreamingIndexerError> {
+        let mut depth = 0;
+        let mut current = self.partition(partition_id)?.parent_id;
+        while let Some(parent_id) = current {
+            depth += 1;
+            current = self.partition(parent_id)?.parent_id;
+        }
+        Ok(depth)
+    }
+
+    fn v2_pending_partition_statuses(
+        &self,
+        classifier_assignment_counts: &[Option<Vec<usize>>],
+    ) -> Result<Vec<StreamingV2PendingPartitionStatus>, StreamingIndexerError> {
+        let mut statuses = Vec::new();
+        for (index, partition) in self.partitions.iter().enumerate() {
+            let partition_id = PartitionId(index);
+            let partition_path = self.partition_label(partition_id);
+            if let Some(trainer) = partition.pending_trainer.as_ref() {
+                let telemetry = trainer.telemetry();
+                statuses.push(StreamingV2PendingPartitionStatus {
+                    partition_path,
+                    expected_item_count: partition.item_count,
+                    observed_replay_progress: telemetry.observed_count,
+                    routing_bucket_fill_counts: None,
+                    trainer_subphase: Some(map_v2_trainer_subphase(telemetry.subphase)),
+                });
+                continue;
+            }
+            let Some(bucket_fill_counts) = classifier_assignment_counts
+                .get(index)
+                .and_then(|counts| counts.as_ref())
+            else {
+                continue;
+            };
+            if !partition.child_ids.is_empty() {
+                continue;
+            }
+            statuses.push(StreamingV2PendingPartitionStatus {
+                partition_path,
+                expected_item_count: partition.item_count,
+                observed_replay_progress: Some(bucket_fill_counts.iter().sum()),
+                routing_bucket_fill_counts: Some(bucket_fill_counts.clone()),
+                trainer_subphase: None,
+            });
+        }
+        statuses.sort_by(|left, right| left.partition_path.cmp(&right.partition_path));
+        Ok(statuses)
+    }
+
+    fn emit_v2_planning_pass_status(
+        &self,
+        current_pass: &mut StreamingV2PassState,
+        state: StreamingIndexingStatusState,
+        error: Option<String>,
+    ) -> Result<StreamingIndexingStatus, StreamingIndexerError> {
+        let elapsed = current_pass.started.elapsed();
+        let completed_unit_count = match state {
+            StreamingIndexingStatusState::Started => 0,
+            _ => current_pass.fingerprint.observed_count,
+        };
+        let pending =
+            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+        let status = build_v2_planning_pass_status(
+            self.completed_passes + 1,
+            state,
+            self.v2_planning_pass_total(),
+            completed_unit_count,
+            elapsed,
+            match state {
+                StreamingIndexingStatusState::Started => Some(Duration::ZERO),
+                _ => current_pass.last_progress_at.or(Some(elapsed)),
+            },
+            error,
+            pending,
+        );
+        emit_status(&self.observer, status.clone());
+        if state == StreamingIndexingStatusState::Started {
+            current_pass.planning_started_emitted = true;
+        }
+        Ok(status)
+    }
+
+    fn emit_v2_hierarchy_status(
+        &self,
+        current_pass: &mut StreamingV2PassState,
+        partition_id: PartitionId,
+        state: StreamingIndexingStatusState,
+        completed_unit_count: usize,
+        error: Option<String>,
+    ) -> Result<StreamingIndexingStatus, StreamingIndexerError> {
+        let unit_started = current_pass
+            .partition_unit_started
+            .get_mut(partition_id.0)
+            .ok_or_else(|| {
+                StreamingIndexerError::HierarchyValidation(format!(
+                    "partition {:?} is missing unit-start state",
+                    self.partition_label(partition_id)
+                ))
+            })?;
+        if unit_started.is_none() {
+            *unit_started = Some(Instant::now());
+        }
+        let current_unit_started = *unit_started;
+        let elapsed = current_pass.started.elapsed();
+        let pending =
+            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+        let partition = self.partition(partition_id)?;
+        let mut status = status_with_hierarchy_details(
+            StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Custom,
+            },
+            state,
+            None,
+            completed_unit_count,
+            elapsed,
+            error,
+            HierarchyPlanningDetailFields {
+                legacy_item_count: Some(partition.item_count),
+                progress_unit_kind: Some(
+                    StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+                ),
+                discovered_unit_count: Some(pending.len()),
+                current_unit_elapsed: match state {
+                    StreamingIndexingStatusState::Started => Some(Duration::ZERO),
+                    _ => current_unit_started.map(|started| started.elapsed()),
+                },
+                current_partition_path: Some(self.partition_label(partition_id)),
+                current_partition_size: Some(partition.item_count),
+                current_recursion_depth: Some(self.partition_depth(partition_id)?),
+                started_subproblem_count: None,
+                completed_subproblem_count: None,
+                visited_partition_count: None,
+                finalized_partition_count: None,
+                terminal_partition_count: None,
+                completed_planner_invocation_count: Some(completed_unit_count),
+                fallback_count: None,
+                last_progress_at: match state {
+                    StreamingIndexingStatusState::Started => Some(Duration::ZERO),
+                    _ => current_pass.last_progress_at.or(Some(elapsed)),
+                },
+            },
+        );
+        apply_v2_pending_partition_detail(&mut status, pending);
+        emit_status(&self.observer, status.clone());
+        if state == StreamingIndexingStatusState::Started {
+            current_pass.hierarchy_started_emitted = true;
+        }
+        Ok(status)
     }
 
     async fn resolve_batch(
@@ -3230,63 +3434,109 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
 
         let (contents, embeddings) = self.resolve_batch(batch).await?;
-        let mut grouped = HashMap::<PartitionId, Vec<Vec<f32>>>::new();
-
-        for ((item, content), embedding) in batch.iter().zip(contents.iter()).zip(embeddings.iter())
-        {
-            let content_ref_hash = self
-                .resolver
-                .fingerprint(&item.content_ref)
-                .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
-            let metadata_hash =
-                hash_metadata(&item.metadata).map_err(StreamingIndexerError::InvalidMetadata)?;
-            let content_hash = hash_content(content);
-            let embedding_hash = hash_bytes(embedding);
+        let mut current_pass = self
+            .current_pass
+            .take()
+            .unwrap_or_else(StreamingV2PassState::new);
+        if !current_pass.planning_started_emitted {
+            let _ = self.emit_v2_planning_pass_status(
+                &mut current_pass,
+                StreamingIndexingStatusState::Started,
+                None,
+            )?;
             if !self.partitions.is_empty() {
-                let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
-                let partition_id = {
-                    let pass = self
-                        .current_pass
-                        .get_or_insert_with(StreamingV2PassState::new);
-                    pass.ensure_partition_capacity(self.partitions.len());
-                    Self::route_planning_target_in_partitions(
-                        &self.partitions,
-                        decoded.as_slice(),
-                        pass.replay_order_offsets.as_mut_slice(),
-                        pass.classifier_assignment_counts.as_mut_slice(),
-                    )?
-                };
-                if let Some(partition_id) = partition_id {
-                    grouped.entry(partition_id).or_default().push(decoded);
+                current_pass.ensure_partition_capacity(self.partitions.len());
+                let pending_ids = self.pending_partition_ids();
+                if let Some(&partition_id) = pending_ids.first() {
+                    let _ = self.emit_v2_hierarchy_status(
+                        &mut current_pass,
+                        partition_id,
+                        StreamingIndexingStatusState::Started,
+                        0,
+                        None,
+                    )?;
                 }
             }
-            self.current_pass
-                .get_or_insert_with(StreamingV2PassState::new)
-                .fingerprint
-                .observe(
+        }
+        let outcome = (|| -> Result<Vec<PartitionId>, StreamingIndexerError> {
+            let mut grouped = HashMap::<PartitionId, Vec<Vec<f32>>>::new();
+
+            for ((item, content), embedding) in
+                batch.iter().zip(contents.iter()).zip(embeddings.iter())
+            {
+                let content_ref_hash = self
+                    .resolver
+                    .fingerprint(&item.content_ref)
+                    .map_err(|e| StreamingIndexerError::ContentResolution(e.to_string()))?;
+                let metadata_hash = hash_metadata(&item.metadata)
+                    .map_err(StreamingIndexerError::InvalidMetadata)?;
+                let content_hash = hash_content(content);
+                let embedding_hash = hash_bytes(embedding);
+                if !self.partitions.is_empty() {
+                    let decoded = decode_embedding_as_f32(embedding, &self.embedding_spec)?;
+                    let partition_id = {
+                        current_pass.ensure_partition_capacity(self.partitions.len());
+                        Self::route_planning_target_in_partitions(
+                            &self.partitions,
+                            decoded.as_slice(),
+                            current_pass.replay_order_offsets.as_mut_slice(),
+                            current_pass.classifier_assignment_counts.as_mut_slice(),
+                        )?
+                    };
+                    if let Some(partition_id) = partition_id {
+                        grouped.entry(partition_id).or_default().push(decoded);
+                    }
+                }
+                current_pass.fingerprint.observe(
                     content_ref_hash,
                     metadata_hash,
                     content_hash,
                     embedding_hash,
                 );
-        }
+            }
 
-        for (partition_id, partition_embeddings) in grouped {
-            let label = self.partition_label(partition_id);
-            let node = self.partition_mut(partition_id).map_err(|_| {
-                StreamingIndexerError::HierarchyValidation(format!(
-                    "planning partition {label:?} is missing"
-                ))
-            })?;
-            let trainer = node.pending_trainer.as_mut().ok_or_else(|| {
-                StreamingIndexerError::HierarchyValidation(format!(
-                    "planning partition {label:?} is not awaiting replay input"
-                ))
-            })?;
-            trainer
-                .ingest_batch(partition_embeddings.as_slice())
-                .map_err(map_clustering_error)?;
+            let touched_partition_ids = grouped.keys().copied().collect::<Vec<_>>();
+            for (partition_id, partition_embeddings) in grouped {
+                let label = self.partition_label(partition_id);
+                let node = self.partition_mut(partition_id).map_err(|_| {
+                    StreamingIndexerError::HierarchyValidation(format!(
+                        "planning partition {label:?} is missing"
+                    ))
+                })?;
+                let trainer = node.pending_trainer.as_mut().ok_or_else(|| {
+                    StreamingIndexerError::HierarchyValidation(format!(
+                        "planning partition {label:?} is not awaiting replay input"
+                    ))
+                })?;
+                trainer
+                    .ingest_batch(partition_embeddings.as_slice())
+                    .map_err(map_clustering_error)?;
+            }
+            Ok(touched_partition_ids)
+        })();
+        let touched_partition_ids = match outcome {
+            Ok(touched_partition_ids) => touched_partition_ids,
+            Err(error) => {
+                self.current_pass = Some(current_pass);
+                return Err(error);
+            }
+        };
+        current_pass.last_progress_at = Some(current_pass.started.elapsed());
+        let _ = self.emit_v2_planning_pass_status(
+            &mut current_pass,
+            StreamingIndexingStatusState::InProgress,
+            None,
+        )?;
+        for partition_id in touched_partition_ids {
+            let _ = self.emit_v2_hierarchy_status(
+                &mut current_pass,
+                partition_id,
+                StreamingIndexingStatusState::InProgress,
+                0,
+                None,
+            )?;
         }
+        self.current_pass = Some(current_pass);
         Ok(())
     }
 
@@ -3297,23 +3547,46 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 self.phase
             )));
         }
-        let Some(current_pass) = self.current_pass.take() else {
+        let Some(mut current_pass) = self.current_pass.take() else {
             return Err(StreamingIndexerError::EmptyPass(
                 "at least one item must be ingested before completing a pass".into(),
             ));
         };
-        let StreamingV2PassState {
-            fingerprint,
-            replay_order_offsets: _,
-            classifier_assignment_counts,
-        } = current_pass;
-        let expandable_ids = classifier_assignment_counts
+        if !current_pass.planning_started_emitted {
+            let _ = self.emit_v2_planning_pass_status(
+                &mut current_pass,
+                StreamingIndexingStatusState::Started,
+                None,
+            )?;
+        }
+        current_pass.last_progress_at = current_pass
+            .last_progress_at
+            .or(Some(current_pass.started.elapsed()));
+        let planning_in_progress = self.emit_v2_planning_pass_status(
+            &mut current_pass,
+            StreamingIndexingStatusState::InProgress,
+            None,
+        )?;
+        let mut planning_heartbeat = StatusHeartbeatGuard::new(start_snapshot_status_heartbeat(
+            &self.observer,
+            planning_in_progress,
+            current_pass.started,
+            None,
+        ));
+        let pass_observed_count = current_pass.fingerprint.observed_count;
+        let fingerprint = std::mem::replace(
+            &mut current_pass.fingerprint,
+            StreamingV2ReplayFingerprintTracker::new(),
+        )
+        .finish();
+        let expandable_ids = current_pass
+            .classifier_assignment_counts
             .iter()
             .enumerate()
             .filter_map(|(index, counts)| counts.as_ref().map(|_| PartitionId(index)))
             .collect::<Vec<_>>();
-        let fingerprint = fingerprint.finish();
         if fingerprint.observed_count == 0 {
+            planning_heartbeat.stop();
             return Err(StreamingIndexerError::EmptyPass(
                 "at least one item must be ingested before completing a pass".into(),
             ));
@@ -3321,6 +3594,18 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
 
         if let Some(baseline) = &self.baseline_fingerprint {
             if baseline != &fingerprint {
+                planning_heartbeat.stop();
+                let status = build_v2_planning_pass_status(
+                    self.completed_passes + 1,
+                    StreamingIndexingStatusState::Failed,
+                    self.v2_planning_pass_total(),
+                    pass_observed_count,
+                    current_pass.started.elapsed(),
+                    current_pass.last_progress_at,
+                    Some("planning replay differs from the established v2 baseline".into()),
+                    self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?,
+                );
+                emit_status(&self.observer, status);
                 return Err(StreamingIndexerError::ReplayMismatch(
                     "planning replay differs from the established v2 baseline".into(),
                 ));
@@ -3350,8 +3635,39 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         } else {
             let pending_ids = self.pending_partition_ids();
             let mut completed = Vec::new();
+            let mut completed_unit_count = 0;
             for partition_id in pending_ids {
+                current_pass.last_progress_at = Some(current_pass.started.elapsed());
+                if !current_pass.hierarchy_started_emitted {
+                    let _ = self.emit_v2_hierarchy_status(
+                        &mut current_pass,
+                        partition_id,
+                        StreamingIndexingStatusState::Started,
+                        completed_unit_count,
+                        None,
+                    )?;
+                }
+                let in_progress = self.emit_v2_hierarchy_status(
+                    &mut current_pass,
+                    partition_id,
+                    StreamingIndexingStatusState::InProgress,
+                    completed_unit_count,
+                    None,
+                )?;
+                let unit_started = current_pass
+                    .partition_unit_started
+                    .get(partition_id.0)
+                    .copied()
+                    .flatten();
+                let mut unit_heartbeat =
+                    StatusHeartbeatGuard::new(start_snapshot_status_heartbeat(
+                        &self.observer,
+                        in_progress,
+                        current_pass.started,
+                        unit_started,
+                    ));
                 let label = self.partition_label(partition_id);
+                let expected_item_count = self.partition(partition_id)?.item_count;
                 let completed_training = {
                     let node = self.partition_mut(partition_id).map_err(|_| {
                         StreamingIndexerError::HierarchyValidation(format!(
@@ -3365,10 +3681,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     })?;
                     let report = trainer.finish_pass().map_err(map_clustering_error)?;
                     metrics.observe(&report);
-                    if report.observed_count != node.item_count {
+                    if report.observed_count != expected_item_count {
                         return Err(StreamingIndexerError::HierarchyValidation(format!(
                             "pending partition {label:?} observed {} items but expected {}",
-                            report.observed_count, node.item_count
+                            report.observed_count, expected_item_count
                         )));
                     }
                     match trainer.complete_training() {
@@ -3382,7 +3698,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         Err(error) => return Err(map_clustering_error(error)),
                     }
                 };
+                unit_heartbeat.stop();
                 if completed_training {
+                    completed_unit_count += 1;
                     let trainer = self
                         .partition_mut(partition_id)?
                         .pending_trainer
@@ -3428,6 +3746,23 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         routing,
                         children,
                     });
+                    current_pass.last_progress_at = Some(current_pass.started.elapsed());
+                    let _ = self.emit_v2_hierarchy_status(
+                        &mut current_pass,
+                        partition_id,
+                        StreamingIndexingStatusState::Completed,
+                        completed_unit_count,
+                        None,
+                    )?;
+                } else {
+                    current_pass.last_progress_at = Some(current_pass.started.elapsed());
+                    let _ = self.emit_v2_hierarchy_status(
+                        &mut current_pass,
+                        partition_id,
+                        StreamingIndexingStatusState::InProgress,
+                        completed_unit_count,
+                        None,
+                    )?;
                 }
             }
 
@@ -3469,7 +3804,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         )));
                     }
                 };
-                let child_counts = classifier_assignment_counts
+                let child_counts = current_pass
+                    .classifier_assignment_counts
                     .get(partition_id.0)
                     .and_then(|counts| counts.as_ref())
                     .ok_or_else(|| {
@@ -3512,10 +3848,22 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             }
         }
 
+        planning_heartbeat.stop();
         self.completed_passes += 1;
         let topology = self.current_topology();
         let stats = streaming_v2_topology_stats(&topology)
             .map_err(StreamingIndexerError::HierarchyValidation)?;
+        let completed_status = build_v2_planning_pass_status(
+            self.completed_passes,
+            StreamingIndexingStatusState::Completed,
+            Some(pass_observed_count),
+            pass_observed_count,
+            current_pass.started.elapsed(),
+            Some(current_pass.started.elapsed()),
+            None,
+            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?,
+        );
+        emit_status(&self.observer, completed_status);
         Ok(IndexingPassReport {
             observed_item_count: fingerprint.observed_count,
             completed_pass_count: self.completed_passes,
@@ -4331,6 +4679,11 @@ impl StreamingV2PassState {
             fingerprint: StreamingV2ReplayFingerprintTracker::new(),
             replay_order_offsets: Vec::new(),
             classifier_assignment_counts: Vec::new(),
+            started: Instant::now(),
+            last_progress_at: None,
+            planning_started_emitted: false,
+            hierarchy_started_emitted: false,
+            partition_unit_started: Vec::new(),
         }
     }
 
@@ -4341,6 +4694,9 @@ impl StreamingV2PassState {
         if self.classifier_assignment_counts.len() < partition_count {
             self.classifier_assignment_counts
                 .resize_with(partition_count, || None);
+        }
+        if self.partition_unit_started.len() < partition_count {
+            self.partition_unit_started.resize(partition_count, None);
         }
     }
 }
@@ -6257,6 +6613,9 @@ fn status_with_progress(
         terminal_partition_count: None,
         completed_planner_invocation_count: None,
         fallback_count: None,
+        pending_partition_count: None,
+        v2_pending_partitions: None,
+        suspected_stall: None,
         elapsed,
         last_progress_at: None,
         error,
@@ -6345,6 +6704,107 @@ fn with_legacy_item_count(
     status
 }
 
+fn map_v2_trainer_subphase(
+    subphase: DirectionalPcaTrainerSubphase,
+) -> StreamingIndexingTrainerSubphase {
+    match subphase {
+        DirectionalPcaTrainerSubphase::AnalyzePca => StreamingIndexingTrainerSubphase::AnalyzePca,
+        DirectionalPcaTrainerSubphase::PlanCuts => StreamingIndexingTrainerSubphase::PlanCuts,
+        DirectionalPcaTrainerSubphase::CountCells => StreamingIndexingTrainerSubphase::CountCells,
+        DirectionalPcaTrainerSubphase::RealizePartition => {
+            StreamingIndexingTrainerSubphase::RealizePartition
+        }
+    }
+}
+
+fn apply_v2_pending_partition_detail(
+    status: &mut StreamingIndexingStatus,
+    pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
+) {
+    status.pending_partition_count = Some(pending_partitions.len());
+    status.v2_pending_partitions = Some(pending_partitions);
+    status.suspected_stall = None;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_v2_planning_pass_status(
+    pass_number: usize,
+    state: StreamingIndexingStatusState,
+    phase_total_unit_count: Option<usize>,
+    observed_count: usize,
+    elapsed: Duration,
+    last_progress_at: Option<Duration>,
+    error: Option<String>,
+    pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
+) -> StreamingIndexingStatus {
+    let mut status = match phase_total_unit_count {
+        Some(total) => status_with_known_total(
+            StreamingIndexingPhase::PlanningPass { pass_number },
+            state,
+            total,
+            observed_count,
+            elapsed,
+            error,
+        ),
+        None => status_with_progress(
+            StreamingIndexingPhase::PlanningPass { pass_number },
+            state,
+            None,
+            observed_count,
+            elapsed,
+            error,
+        ),
+    };
+    status.last_progress_at = last_progress_at;
+    apply_v2_pending_partition_detail(&mut status, pending_partitions);
+    status
+}
+
+fn maybe_mark_v2_suspected_stall(
+    status: &mut StreamingIndexingStatus,
+    heartbeat_covers_current_unit: bool,
+) {
+    let Some(last_progress_at) = status.last_progress_at else {
+        return;
+    };
+    let Some(duration_without_progress) = status.elapsed.checked_sub(last_progress_at) else {
+        return;
+    };
+    if duration_without_progress.is_zero() || status.pending_partition_count.is_none() {
+        return;
+    }
+    let reason = if matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. }) {
+        StreamingIndexingSuspectedStallReason::UnchangedPassObservedCount
+    } else if status
+        .v2_pending_partitions
+        .as_ref()
+        .is_some_and(|partitions| {
+            partitions
+                .iter()
+                .any(|partition| partition.routing_bucket_fill_counts.is_some())
+        })
+    {
+        StreamingIndexingSuspectedStallReason::UnchangedRoutingBucketFill
+    } else if heartbeat_covers_current_unit
+        && status
+            .v2_pending_partitions
+            .as_ref()
+            .is_some_and(|partitions| {
+                partitions
+                    .iter()
+                    .any(|partition| partition.trainer_subphase.is_some())
+            })
+    {
+        StreamingIndexingSuspectedStallReason::UnchangedTrainerSubphase
+    } else {
+        StreamingIndexingSuspectedStallReason::UnchangedPendingPartitionProgress
+    };
+    status.suspected_stall = Some(StreamingIndexingSuspectedStall {
+        reason,
+        duration_without_progress,
+    });
+}
+
 fn emit_status(
     observer: &Option<StreamingIndexingStatusObserver>,
     status: StreamingIndexingStatus,
@@ -6378,6 +6838,7 @@ fn start_hierarchy_status_heartbeat(
                 status.current_unit_elapsed = snapshot
                     .current_unit_started
                     .map(|started| started.elapsed());
+                maybe_mark_v2_suspected_stall(&mut status, snapshot.current_unit_started.is_some());
                 if active_snapshot_generation.load(AtomicOrdering::SeqCst)
                     != snapshot.snapshot_generation
                 {
@@ -6419,6 +6880,39 @@ fn start_status_heartbeat(
                 } else {
                     status
                 })
+            }));
+        }
+    });
+    Some((stop_tx, handle))
+}
+
+fn start_snapshot_status_heartbeat(
+    observer: &Option<StreamingIndexingStatusObserver>,
+    status: StreamingIndexingStatus,
+    started: Instant,
+    current_unit_started: Option<Instant>,
+) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
+    let observer = observer.as_ref().map(Arc::clone)?;
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        while matches!(
+            stop_rx.recv_timeout(STATUS_HEARTBEAT_INTERVAL),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ) {
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let mut heartbeat_status = status.clone();
+                heartbeat_status.state = StreamingIndexingStatusState::InProgress;
+                heartbeat_status.elapsed = started.elapsed();
+                heartbeat_status.current_unit_elapsed =
+                    match (current_unit_started, heartbeat_status.current_unit_elapsed) {
+                        (Some(unit_started), _) => Some(unit_started.elapsed()),
+                        (None, current_unit_elapsed) => current_unit_elapsed,
+                    };
+                maybe_mark_v2_suspected_stall(
+                    &mut heartbeat_status,
+                    current_unit_started.is_some(),
+                );
+                observer(heartbeat_status);
             }));
         }
     });
@@ -8944,6 +9438,7 @@ mod tests {
         StreamingIndexingRunV2 {
             resolver: (),
             embedding_provider: (),
+            observer: None,
             profile,
             branch_encoding_policy,
             embedding_spec: EmbeddingSpec {
