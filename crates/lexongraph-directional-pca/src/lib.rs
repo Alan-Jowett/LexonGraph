@@ -83,7 +83,7 @@ pub enum DirectionalPcaTrainerSubphase {
     RealizePartition,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirectionalPcaTrainerTelemetry {
     pub subphase: DirectionalPcaTrainerSubphase,
     pub observed_count: Option<usize>,
@@ -91,7 +91,7 @@ pub struct DirectionalPcaTrainerTelemetry {
     pub total_axis_plan_count: Option<usize>,
     pub populated_cell_count: Option<usize>,
     pub realized_cell_count: Option<usize>,
-    pub state_fingerprint_hex: String,
+    pub state_fingerprint: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
@@ -272,7 +272,7 @@ struct DirectionalPcaTelemetryDetail {
     total_axis_plan_count: Option<usize>,
     populated_cell_count: Option<usize>,
     realized_cell_count: Option<usize>,
-    state_fingerprint_hex: String,
+    state_fingerprint: [u8; 32],
 }
 
 fn directional_pca_telemetry_detail(
@@ -285,7 +285,7 @@ fn directional_pca_telemetry_detail(
             total_axis_plan_count: None,
             populated_cell_count: None,
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_active_pca_pass(pass)),
+            state_fingerprint: hash_active_pca_pass(pass),
         },
         Some(ActivePassState::PlanCuts(pass)) => DirectionalPcaTelemetryDetail {
             ready_axis_plan_count: Some(
@@ -297,21 +297,21 @@ fn directional_pca_telemetry_detail(
             total_axis_plan_count: Some(pass.planners.len()),
             populated_cell_count: None,
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_active_cut_planning_pass(pass)),
+            state_fingerprint: hash_active_cut_planning_pass(pass),
         },
         Some(ActivePassState::CountCells(pass)) => DirectionalPcaTelemetryDetail {
             ready_axis_plan_count: Some(pass.partition.axis_plans.len()),
             total_axis_plan_count: Some(pass.partition.axis_plans.len()),
             populated_cell_count: Some(pass.cell_summaries.len()),
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_active_cell_counting_pass(pass)),
+            state_fingerprint: hash_active_cell_counting_pass(pass),
         },
         Some(ActivePassState::RealizePartition(pass)) => DirectionalPcaTelemetryDetail {
             ready_axis_plan_count: Some(pass.ready.partition.axis_plans.len()),
             total_axis_plan_count: Some(pass.ready.partition.axis_plans.len()),
             populated_cell_count: Some(pass.ready.cells.len()),
             realized_cell_count: Some(pass.cell_stats.len()),
-            state_fingerprint_hex: encode_digest_hex(hash_active_partition_realization_pass(pass)),
+            state_fingerprint: hash_active_partition_realization_pass(pass),
         },
         None => telemetry_detail_from_phase(phase),
     }
@@ -324,7 +324,7 @@ fn telemetry_detail_from_phase(phase: &ReplayPhase) -> DirectionalPcaTelemetryDe
             total_axis_plan_count: None,
             populated_cell_count: None,
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_replay_phase(phase)),
+            state_fingerprint: hash_replay_phase(phase),
         },
         ReplayPhase::PlanCuts(replay) => DirectionalPcaTelemetryDetail {
             ready_axis_plan_count: Some(
@@ -337,21 +337,21 @@ fn telemetry_detail_from_phase(phase: &ReplayPhase) -> DirectionalPcaTelemetryDe
             total_axis_plan_count: Some(replay.planners.len()),
             populated_cell_count: None,
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_replay_phase(phase)),
+            state_fingerprint: hash_replay_phase(phase),
         },
         ReplayPhase::CountCells(partition) => DirectionalPcaTelemetryDetail {
             ready_axis_plan_count: Some(partition.axis_plans.len()),
             total_axis_plan_count: Some(partition.axis_plans.len()),
             populated_cell_count: None,
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_replay_phase(phase)),
+            state_fingerprint: hash_replay_phase(phase),
         },
         ReplayPhase::RealizePartition(ready) => DirectionalPcaTelemetryDetail {
             ready_axis_plan_count: Some(ready.partition.axis_plans.len()),
             total_axis_plan_count: Some(ready.partition.axis_plans.len()),
             populated_cell_count: Some(ready.cells.len()),
             realized_cell_count: None,
-            state_fingerprint_hex: encode_digest_hex(hash_replay_phase(phase)),
+            state_fingerprint: hash_replay_phase(phase),
         },
     }
 }
@@ -570,23 +570,6 @@ fn hash_with(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn encode_digest_hex(bytes: [u8; 32]) -> String {
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push(hex_nibble(byte >> 4));
-        text.push(hex_nibble(byte & 0x0f));
-    }
-    text
-}
-
-fn hex_nibble(value: u8) -> char {
-    match value {
-        0..=9 => char::from(b'0' + value),
-        10..=15 => char::from(b'a' + (value - 10)),
-        _ => unreachable!("hex nibble out of range"),
-    }
-}
-
 fn hash_usize(hasher: &mut Sha256, value: usize) {
     hasher.update((value as u64).to_le_bytes());
 }
@@ -670,7 +653,7 @@ impl DirectionalPcaStreamingTrainer {
 
     pub fn telemetry(&self) -> DirectionalPcaTrainerTelemetry {
         if let Some(cached) = self.cached_telemetry.borrow().as_ref() {
-            return cached.clone();
+            return *cached;
         }
         let subphase = match self.phase {
             ReplayPhase::AnalyzePca => DirectionalPcaTrainerSubphase::AnalyzePca,
@@ -695,9 +678,9 @@ impl DirectionalPcaStreamingTrainer {
             total_axis_plan_count: detail.total_axis_plan_count,
             populated_cell_count: detail.populated_cell_count,
             realized_cell_count: detail.realized_cell_count,
-            state_fingerprint_hex: detail.state_fingerprint_hex,
+            state_fingerprint: detail.state_fingerprint,
         };
-        self.cached_telemetry.replace(Some(telemetry.clone()));
+        self.cached_telemetry.replace(Some(telemetry));
         telemetry
     }
 

@@ -3368,7 +3368,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     total_axis_plan_count: telemetry.total_axis_plan_count,
                     populated_cell_count: telemetry.populated_cell_count,
                     realized_cell_count: telemetry.realized_cell_count,
-                    planner_state_fingerprint_hex: telemetry.state_fingerprint_hex,
+                    planner_state_fingerprint_hex: encode_digest_hex(telemetry.state_fingerprint),
                 });
                 continue;
             }
@@ -5356,21 +5356,26 @@ fn summarize_streaming_v2_partition_blocker(
             ),
         ),
         None => {
-            let observed = status.observed_replay_progress.unwrap_or(0);
-            if observed < status.expected_item_count {
-                (
+            match status.observed_replay_progress {
+                Some(observed) if observed < status.expected_item_count => (
                     StreamingV2BlockerKind::ReplayIncomplete,
                     format!(
                         "partition replay is incomplete; observed {observed} of expected {} items",
                         status.expected_item_count
                     ),
-                )
-            } else {
-                (
+                ),
+                Some(_) => (
                     StreamingV2BlockerKind::Unknown,
                     "partition remains unresolved but retained state does not expose a stronger blocker"
                         .into(),
-                )
+                ),
+                None => (
+                    StreamingV2BlockerKind::Unknown,
+                    format!(
+                        "partition remains unresolved and replay progress is unknown; retained state does not expose a stronger blocker for expected {} items",
+                        status.expected_item_count
+                    ),
+                ),
             }
         }
     };
@@ -9969,7 +9974,8 @@ mod tests {
         branch_encoding_policy_for_profile, effective_directional_pca_cluster_count,
         exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
         format_partition_label, published_indexing_profile, streaming_v2_topology_stats,
-        unresolved_work_shrank, uses_root_branch_budget, weighted_mean_f32_embeddings,
+        summarize_streaming_v2_partition_blocker, unresolved_work_shrank, uses_root_branch_budget,
+        weighted_mean_f32_embeddings,
     };
     use std::marker::PhantomData;
 
@@ -10178,6 +10184,26 @@ mod tests {
             realized_cell_count: None,
             planner_state_fingerprint_hex: "0".repeat(64),
         }
+    }
+
+    #[test]
+    fn unresolved_blocker_without_progress_stays_unknown() {
+        let blocker =
+            summarize_streaming_v2_partition_blocker(&StreamingV2PendingPartitionStatus {
+                partition_path: "p0".into(),
+                expected_item_count: 10,
+                observed_replay_progress: None,
+                routing_bucket_fill_counts: None,
+                trainer_subphase: None,
+                ready_axis_plan_count: None,
+                total_axis_plan_count: None,
+                populated_cell_count: None,
+                realized_cell_count: None,
+                planner_state_fingerprint_hex: "0".repeat(64),
+            });
+        assert_eq!(blocker.blocker_kind, super::StreamingV2BlockerKind::Unknown);
+        assert!(blocker.blocker_detail.contains("unknown"));
+        assert!(!blocker.blocker_detail.contains("observed 0"));
     }
 
     #[test]
