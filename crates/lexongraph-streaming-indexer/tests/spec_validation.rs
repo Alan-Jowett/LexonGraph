@@ -1523,7 +1523,7 @@ fn val_stream_indexer_002_public_surface_uses_planning_terms() {
 }
 
 #[test]
-fn val_stream_indexer_110_streaming_v2_retained_state_uses_compact_partition_ids() {
+fn val_stream_indexer_108_streaming_v2_retained_state_uses_compact_partition_ids() {
     let src = include_str!("../src/lib.rs");
     assert!(src.contains("struct PartitionId("));
     assert!(src.contains("partitions: Vec<StreamingV2PartitionNode>"));
@@ -5479,7 +5479,7 @@ async fn regression_published_profile_terminal_short_circuit_does_not_claim_fine
 }
 
 #[test]
-fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
+fn regression_streaming_v2_rejects_non_v0_7_0_profiles() {
     let error = match StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
         MapResolver,
         AsciiF32EmbeddingProvider,
@@ -5497,7 +5497,7 @@ fn val_stream_indexer_107_streaming_v2_rejects_non_v0_7_0_profiles() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_root_encoding() {
+async fn regression_streaming_v2_v0_7_0_preserves_ambient_uniform_root_encoding() {
     let items = vec![item("aa"), item("bb"), item("cc"), item("dd")];
     let store = MemoryBlockStore::default();
     let mut run = StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
@@ -5545,7 +5545,7 @@ async fn val_stream_indexer_108_streaming_v2_v0_7_0_preserves_ambient_uniform_ro
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple_replay_passes() {
+async fn regression_streaming_v2_materializes_topology_over_multiple_replay_passes() {
     let items = (0..1024)
         .map(|index| IndexItem {
             metadata: vec![],
@@ -5603,7 +5603,8 @@ async fn val_stream_indexer_109_streaming_v2_materializes_topology_over_multiple
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn regression_streaming_v2_observer_reports_pass_progress_and_custom_hierarchy_updates() {
+async fn val_stream_indexer_109_streaming_v2_observer_reports_pass_progress_and_custom_hierarchy_updates()
+ {
     let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let observer: StreamingIndexingStatusObserver = {
         let statuses = Arc::clone(&statuses);
@@ -5675,7 +5676,7 @@ async fn regression_streaming_v2_observer_reports_pass_progress_and_custom_hiera
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn regression_streaming_v2_observer_reports_pending_partition_detail() {
+async fn val_stream_indexer_110_streaming_v2_observer_reports_pending_partition_detail() {
     let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let observer: StreamingIndexingStatusObserver = {
         let statuses = Arc::clone(&statuses);

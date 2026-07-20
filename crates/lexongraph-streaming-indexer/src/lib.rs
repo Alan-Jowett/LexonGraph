@@ -3269,6 +3269,17 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         Ok(statuses)
     }
 
+    fn maybe_v2_pending_partition_statuses(
+        &self,
+        classifier_assignment_counts: &[Option<Vec<usize>>],
+    ) -> Result<Option<Vec<StreamingV2PendingPartitionStatus>>, StreamingIndexerError> {
+        if self.observer.is_none() {
+            return Ok(None);
+        }
+        self.v2_pending_partition_statuses(classifier_assignment_counts)
+            .map(Some)
+    }
+
     fn emit_v2_planning_pass_status(
         &self,
         current_pass: &mut StreamingV2PassState,
@@ -3281,7 +3292,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             _ => current_pass.fingerprint.observed_count,
         };
         let pending =
-            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+            self.maybe_v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
         let status = build_v2_planning_pass_status(
             self.completed_passes + 1,
             state,
@@ -3325,7 +3336,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let current_unit_started = *unit_started;
         let elapsed = current_pass.started.elapsed();
         let pending =
-            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+            self.maybe_v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
         let partition = self.partition(partition_id)?;
         let mut status = status_with_hierarchy_details(
             StreamingIndexingPhase::HierarchyPlanning {
@@ -3341,7 +3352,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 progress_unit_kind: Some(
                     StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
                 ),
-                discovered_unit_count: Some(pending.len()),
+                discovered_unit_count: pending.as_ref().map(Vec::len),
                 current_unit_elapsed: match state {
                     StreamingIndexingStatusState::Started => Some(Duration::ZERO),
                     _ => current_unit_started.map(|started| started.elapsed()),
@@ -3603,7 +3614,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     current_pass.started.elapsed(),
                     current_pass.last_progress_at,
                     Some("planning replay differs from the established v2 baseline".into()),
-                    self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?,
+                    self.maybe_v2_pending_partition_statuses(
+                        &current_pass.classifier_assignment_counts,
+                    )?,
                 );
                 emit_status(&self.observer, status);
                 return Err(StreamingIndexerError::ReplayMismatch(
@@ -3861,7 +3874,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             current_pass.started.elapsed(),
             Some(current_pass.started.elapsed()),
             None,
-            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?,
+            self.maybe_v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?,
         );
         emit_status(&self.observer, completed_status);
         Ok(IndexingPassReport {
@@ -6719,8 +6732,11 @@ fn map_v2_trainer_subphase(
 
 fn apply_v2_pending_partition_detail(
     status: &mut StreamingIndexingStatus,
-    pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
+    pending_partitions: Option<Vec<StreamingV2PendingPartitionStatus>>,
 ) {
+    let Some(pending_partitions) = pending_partitions else {
+        return;
+    };
     status.pending_partition_count = Some(pending_partitions.len());
     status.v2_pending_partitions = Some(pending_partitions);
     status.suspected_stall = None;
@@ -6735,7 +6751,7 @@ fn build_v2_planning_pass_status(
     elapsed: Duration,
     last_progress_at: Option<Duration>,
     error: Option<String>,
-    pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
+    pending_partitions: Option<Vec<StreamingV2PendingPartitionStatus>>,
 ) -> StreamingIndexingStatus {
     let mut status = match phase_total_unit_count {
         Some(total) => status_with_known_total(
