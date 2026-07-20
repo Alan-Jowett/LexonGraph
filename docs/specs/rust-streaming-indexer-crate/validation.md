@@ -887,6 +887,54 @@ fabricated percentage-to-convergence.
 **Traces to:** REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-120,
 REQ-STREAM-INDEXER-121, REQ-STREAM-INDEXER-122
 
+### VAL-STREAM-INDEXER-111
+
+Run a deterministic v2 / published-profile `0.7.0` fixture that requires at
+least three completed planning passes before planning can complete, or repeats
+an unresolved planning state across at least two completed passes.
+
+Capture the completed-pass telemetry summaries and compare pass `N` with pass
+`N-1`.
+
+**Pass condition:** each completed pass exposes deterministic completed-pass
+convergence evidence sufficient for a downstream caller to classify whether the
+unresolved planning state shrank, changed shape, remained effectively
+unchanged, or repeated a prior completed-pass state, without relying on
+free-form logs or a fabricated percentage-to-convergence.
+
+**Traces to:** REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039,
+REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125
+
+### VAL-STREAM-INDEXER-112
+
+Run a deterministic v2 / published-profile `0.7.0` fixture whose completed
+planning pass remains unresolved and whose retained planning state makes at
+least one blocker attributable to a specific unresolved partition or planner
+subphase.
+
+Inspect the completed-pass blocker summary.
+
+**Pass condition:** the summary names the unresolved partition identity and the
+strongest retained-state blocker evidence that still prevents planning
+completion when that evidence is knowable. If stronger attribution is not
+knowable, the summary marks that uncertainty explicitly rather than guessing.
+
+**Traces to:** REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-122,
+REQ-STREAM-INDEXER-124
+
+### VAL-STREAM-INDEXER-113
+
+Run the same deterministic unresolved v2 fixture twice and compare the
+completed-pass delta or fingerprint summaries across the repeated executions.
+
+**Pass condition:** the pass-to-pass fingerprints, explicit deltas, repeated
+state detection, and any surfaced topology or unresolved-partition comparison
+artifacts are deterministic across repeated identical runs and do not require
+string-keyed hot-path retained state.
+
+**Traces to:** REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-123,
+REQ-STREAM-INDEXER-125
+
 ### VAL-STREAM-INDEXER-061
 
 Resolve published indexing profile `0.3.1` through the convenience surface.

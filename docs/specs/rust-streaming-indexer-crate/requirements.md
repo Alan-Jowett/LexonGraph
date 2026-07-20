@@ -480,6 +480,12 @@ planning-unit progress when both are available from retained state, so a
 downstream caller can distinguish replay advancement from pending-partition
 trainer work.
 
+For v2 planning, the observer-visible telemetry across repeated periodic
+updates and completed pass boundaries shall expose enough deterministic visible
+state for a caller to distinguish advancing replay, advancing planner state,
+unchanged planner state, and change that appears only when one pass is compared
+to the previous completed pass.
+
 ### REQ-STREAM-INDEXER-024
 
 The crate shall surface explicit failure when:
@@ -720,6 +726,9 @@ for the progress-count fields exposed to the status observer, including:
 - for v2 planning, what fields summarize pending partitions, per-partition
   replay advancement, coarse trainer subphase, and any explicit
   suspected-stall indicator
+- for v2 planning, what fields summarize completed-pass boundary deltas or
+  fingerprints so a caller can compare pass `N` with earlier completed passes
+  without inferring semantics from logs
 
 These semantics shall be phase-specific for at least:
 
@@ -915,6 +924,12 @@ For the v2 / published-profile `0.7.0` divisive path, the crate shall emit
 `PlanningPass` and `HierarchyPlanning` updates together when that combination is
 needed to represent both observed pass advancement and pending
 partition-planning activity without collapsing one into the other.
+
+When a v2 planning run remains unresolved across multiple completed passes, the
+observer-visible status and pass-boundary telemetry together shall preserve
+enough deterministic partition-local state to attribute repeated
+non-advancement to the same unresolved partition or planner subphase whenever
+that attribution is knowable from retained state.
 
 ### REQ-STREAM-INDEXER-065
 
@@ -1366,6 +1381,11 @@ bucket-fill counters, trainer subphase summaries, and suspected-stall
 diagnostics shall be derived from the compact retained state at the reporting
 boundary and shall not require string-keyed primary retained structures.
 
+If the crate surfaces completed-pass convergence summaries, blocker summaries,
+or pass-to-pass fingerprints, those summaries shall likewise be derived from
+compact retained state or deterministic summaries thereof rather than from
+string-keyed hot-path state or host-resource sampling.
+
 ### REQ-STREAM-INDEXER-121
 
 The v2 / published-profile `0.7.0` execution surface shall expose structured
@@ -1387,6 +1407,10 @@ telemetry shall expose:
 - each pending partition's observed replay progress or child-routing bucket-fill
   progress when available
 - each pending partition's coarse directional-PCA trainer subphase
+- any additional deterministic pending-partition state summary that is needed to
+  distinguish changed planner state from unchanged planner state while that
+  partition remains unresolved, when knowable without material extra per-item
+  instrumentation
 
 ### REQ-STREAM-INDEXER-122
 
@@ -1398,6 +1422,46 @@ Those indicators may summarize unchanged pass-observed counts, unchanged
 pending-partition replay progress, unchanged child-routing bucket-fill state, or
 an unchanged trainer subphase across reported intervals, but shall not claim a
 fabricated percentage-to-convergence unsupported by the retained planning state.
+
+When the strongest reason a v2 planning run remains unresolved is knowable from
+observer-visible retained state at a completed-pass boundary, the crate shall
+surface that blocker evidence explicitly and identify the responsible
+unresolved partition or planner subphase deterministically rather than only
+reporting a generic stuck symptom.
+
+### REQ-STREAM-INDEXER-123
+
+Each completed v2 / published-profile `0.7.0` planning pass shall expose a
+deterministic pass-boundary convergence summary sufficient for a downstream
+caller to determine whether unresolved planning work is shrinking, changing
+shape, repeating a prior completed-pass state, or remaining effectively
+unchanged.
+
+That summary shall be based on observer-visible retained state and may use
+deterministic fingerprints or structured deltas, but shall not fabricate a
+percentage-to-convergence unsupported by the retained planning state.
+
+### REQ-STREAM-INDEXER-124
+
+When a completed v2 planning pass cannot yet complete planning, the crate shall
+expose a deterministic blocker summary naming the unresolved partitions that
+still prevent completion and the strongest observer-visible blocker evidence for
+each such partition when that evidence is knowable from retained state.
+
+If the blocker is not knowable from the retained state, the summary shall
+represent that uncertainty explicitly rather than guessing.
+
+### REQ-STREAM-INDEXER-125
+
+Each completed v2 planning pass shall expose deterministic pass-to-pass delta
+evidence sufficient for a downstream caller to answer "what changed from pass
+`N-1` to pass `N`?" for the unresolved planning state.
+
+That delta evidence shall include deterministic summaries, fingerprints, or
+explicit field deltas covering at least pending partitions, terminal or routed
+partitions when present, and any topology or planner-visible unresolved state
+whose change or non-change is required to distinguish advancement, stalling, or
+cycling across passes.
 
 ## Out of Scope
 

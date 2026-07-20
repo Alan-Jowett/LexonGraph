@@ -3,6 +3,7 @@
 
 //! Streaming directional-PCA clustering for LexonGraph.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use lexongraph_pca::{PcaAccumulator, PcaError, PcaTransform};
@@ -65,6 +66,7 @@ pub struct DirectionalPcaStreamingTrainer {
     baseline_fingerprint: Option<PassFingerprint>,
     quality_metric: f64,
     model: Option<DirectionalPcaModel>,
+    cached_telemetry: RefCell<Option<DirectionalPcaTrainerTelemetry>>,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +87,11 @@ pub enum DirectionalPcaTrainerSubphase {
 pub struct DirectionalPcaTrainerTelemetry {
     pub subphase: DirectionalPcaTrainerSubphase,
     pub observed_count: Option<usize>,
+    pub ready_axis_plan_count: Option<usize>,
+    pub total_axis_plan_count: Option<usize>,
+    pub populated_cell_count: Option<usize>,
+    pub realized_cell_count: Option<usize>,
+    pub state_fingerprint: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
@@ -260,6 +267,348 @@ struct PassFingerprint {
     digest: [u8; 32],
 }
 
+struct DirectionalPcaTelemetryDetail {
+    ready_axis_plan_count: Option<usize>,
+    total_axis_plan_count: Option<usize>,
+    populated_cell_count: Option<usize>,
+    realized_cell_count: Option<usize>,
+    state_fingerprint: [u8; 32],
+}
+
+fn directional_pca_telemetry_detail(
+    phase: &ReplayPhase,
+    active_pass: Option<&ActivePassState>,
+) -> DirectionalPcaTelemetryDetail {
+    match active_pass {
+        Some(ActivePassState::AnalyzePca(pass)) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: None,
+            total_axis_plan_count: None,
+            populated_cell_count: None,
+            realized_cell_count: None,
+            state_fingerprint: hash_active_pca_pass(pass),
+        },
+        Some(ActivePassState::PlanCuts(pass)) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: Some(
+                pass.planners
+                    .iter()
+                    .filter(|planner| matches!(planner, AxisPlanner::Ready(_)))
+                    .count(),
+            ),
+            total_axis_plan_count: Some(pass.planners.len()),
+            populated_cell_count: None,
+            realized_cell_count: None,
+            state_fingerprint: hash_active_cut_planning_pass(pass),
+        },
+        Some(ActivePassState::CountCells(pass)) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: Some(pass.partition.axis_plans.len()),
+            total_axis_plan_count: Some(pass.partition.axis_plans.len()),
+            populated_cell_count: Some(pass.cell_summaries.len()),
+            realized_cell_count: None,
+            state_fingerprint: hash_active_cell_counting_pass(pass),
+        },
+        Some(ActivePassState::RealizePartition(pass)) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: Some(pass.ready.partition.axis_plans.len()),
+            total_axis_plan_count: Some(pass.ready.partition.axis_plans.len()),
+            populated_cell_count: Some(pass.ready.cells.len()),
+            realized_cell_count: Some(pass.cell_stats.len()),
+            state_fingerprint: hash_active_partition_realization_pass(pass),
+        },
+        None => telemetry_detail_from_phase(phase),
+    }
+}
+
+fn telemetry_detail_from_phase(phase: &ReplayPhase) -> DirectionalPcaTelemetryDetail {
+    match phase {
+        ReplayPhase::AnalyzePca => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: None,
+            total_axis_plan_count: None,
+            populated_cell_count: None,
+            realized_cell_count: None,
+            state_fingerprint: hash_replay_phase(phase),
+        },
+        ReplayPhase::PlanCuts(replay) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: Some(
+                replay
+                    .planners
+                    .iter()
+                    .filter(|planner| matches!(planner, AxisPlanner::Ready(_)))
+                    .count(),
+            ),
+            total_axis_plan_count: Some(replay.planners.len()),
+            populated_cell_count: None,
+            realized_cell_count: None,
+            state_fingerprint: hash_replay_phase(phase),
+        },
+        ReplayPhase::CountCells(partition) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: Some(partition.axis_plans.len()),
+            total_axis_plan_count: Some(partition.axis_plans.len()),
+            populated_cell_count: None,
+            realized_cell_count: None,
+            state_fingerprint: hash_replay_phase(phase),
+        },
+        ReplayPhase::RealizePartition(ready) => DirectionalPcaTelemetryDetail {
+            ready_axis_plan_count: Some(ready.partition.axis_plans.len()),
+            total_axis_plan_count: Some(ready.partition.axis_plans.len()),
+            populated_cell_count: Some(ready.cells.len()),
+            realized_cell_count: None,
+            state_fingerprint: hash_replay_phase(phase),
+        },
+    }
+}
+
+fn hash_active_pca_pass(pass: &ActivePcaPass) -> [u8; 32] {
+    hash_with(|hasher| {
+        hasher.update(b"active-analyze-pca");
+        hash_pass_tracker(hasher, &pass.tracker);
+    })
+}
+
+fn hash_active_cut_planning_pass(pass: &ActiveCutPlanningPass) -> [u8; 32] {
+    hash_with(|hasher| {
+        hasher.update(b"active-plan-cuts");
+        hash_pass_tracker(hasher, &pass.tracker);
+        hash_partition_analysis_plan(hasher, &pass.plan);
+        hash_axis_planners(hasher, &pass.planners);
+    })
+}
+
+fn hash_active_cell_counting_pass(pass: &ActiveCellCountingPass) -> [u8; 32] {
+    hash_with(|hasher| {
+        hasher.update(b"active-count-cells");
+        hash_pass_tracker(hasher, &pass.tracker);
+        hash_partition_plan(hasher, &pass.partition);
+        hash_axis_cursor_state(hasher, &pass.cursor_state);
+        hash_cell_duplicate_summaries(hasher, &pass.cell_summaries);
+    })
+}
+
+fn hash_active_partition_realization_pass(pass: &ActivePartitionRealizationPass) -> [u8; 32] {
+    hash_with(|hasher| {
+        hasher.update(b"active-realize-partition");
+        hash_pass_tracker(hasher, &pass.tracker);
+        hash_ready_partition_plan(hasher, &pass.ready);
+        hash_axis_cursor_state(hasher, &pass.cursor_state);
+        hash_usizes(hasher, &pass.cell_seen_counts);
+        hash_cell_stats(hasher, &pass.cell_stats);
+    })
+}
+
+fn hash_replay_phase(phase: &ReplayPhase) -> [u8; 32] {
+    hash_with(|hasher| match phase {
+        ReplayPhase::AnalyzePca => {
+            hasher.update(b"phase-analyze-pca");
+        }
+        ReplayPhase::PlanCuts(replay) => {
+            hasher.update(b"phase-plan-cuts");
+            hash_partition_analysis_plan(hasher, &replay.plan);
+            hash_axis_planners(hasher, &replay.planners);
+        }
+        ReplayPhase::CountCells(partition) => {
+            hasher.update(b"phase-count-cells");
+            hash_partition_plan(hasher, partition);
+        }
+        ReplayPhase::RealizePartition(ready) => {
+            hasher.update(b"phase-realize-partition");
+            hash_ready_partition_plan(hasher, ready);
+        }
+    })
+}
+
+fn hash_partition_analysis_plan(hasher: &mut Sha256, plan: &PartitionAnalysisPlan) {
+    hash_pca_transform(hasher, &plan.transform);
+    hash_usizes(hasher, &plan.axis_bin_counts);
+    hash_usize(hasher, plan.total_count);
+    hash_usize(
+        hasher,
+        match plan.binning_policy {
+            DirectionalPcaBinningPolicy::Quantile => 0,
+            DirectionalPcaBinningPolicy::DensityValley => 1,
+        },
+    );
+}
+
+fn hash_partition_plan(hasher: &mut Sha256, plan: &PartitionPlan) {
+    hash_pca_transform(hasher, &plan.transform);
+    hash_usize(hasher, plan.axis_plans.len());
+    for axis_plan in &plan.axis_plans {
+        hash_axis_plan(hasher, axis_plan);
+    }
+}
+
+fn hash_ready_partition_plan(hasher: &mut Sha256, ready: &ReadyPartitionPlan) {
+    hash_partition_plan(hasher, &ready.partition);
+    hash_usize(hasher, ready.cells.len());
+    for cell in &ready.cells {
+        hash_usizes(hasher, &cell.key);
+        hash_usize(hasher, cell.count);
+        hash_usize(hasher, cell.extra_clusters);
+        hash_usize(hasher, cell.cluster_offset);
+    }
+}
+
+fn hash_axis_planners(hasher: &mut Sha256, planners: &[AxisPlanner]) {
+    hash_usize(hasher, planners.len());
+    for planner in planners {
+        hash_axis_planner(hasher, planner);
+    }
+}
+
+fn hash_axis_planner(hasher: &mut Sha256, planner: &AxisPlanner) {
+    match planner {
+        AxisPlanner::Quantile(planner) => {
+            hasher.update(b"planner-quantile");
+            hash_usizes(hasher, &planner.targets);
+            hash_usize(hasher, planner.next_target_index);
+            hash_usize(hasher, planner.consumed_count);
+            hash_optional_f32(hasher, planner.lower_bound);
+            hash_usize(hasher, planner.candidate_groups.len());
+            for group in &planner.candidate_groups {
+                hash_f32(hasher, group.value);
+                hash_usize(hasher, group.count);
+            }
+            hash_usize(hasher, planner.groups.len());
+            for group in &planner.groups {
+                hash_f32(hasher, group.value);
+                hash_usizes(hasher, &group.quotas);
+            }
+            hash_usize(hasher, planner.candidate_capacity);
+        }
+        AxisPlanner::DensityMinMax(planner) => {
+            hasher.update(b"planner-density-minmax");
+            hash_usize(hasher, planner.bin_count);
+            hash_optional_f32(hasher, planner.minimum);
+            hash_optional_f32(hasher, planner.maximum);
+        }
+        AxisPlanner::DensityHistogram(planner) => {
+            hasher.update(b"planner-density-histogram");
+            hash_f32(hasher, planner.minimum);
+            hash_f32(hasher, planner.maximum);
+            hash_usize(hasher, planner.bin_count);
+            hash_usizes(hasher, &planner.counts);
+        }
+        AxisPlanner::Ready(plan) => {
+            hasher.update(b"planner-ready");
+            hash_axis_plan(hasher, plan);
+        }
+    }
+}
+
+fn hash_axis_plan(hasher: &mut Sha256, plan: &AxisPlan) {
+    match plan {
+        AxisPlan::SingleBin => {
+            hasher.update(b"axis-plan-single-bin");
+        }
+        AxisPlan::Quantile(plan) => {
+            hasher.update(b"axis-plan-quantile");
+            hash_usize(hasher, plan.groups.len());
+            for group in &plan.groups {
+                hash_f32(hasher, group.value);
+                hash_usizes(hasher, &group.quotas);
+            }
+        }
+        AxisPlan::Thresholds(thresholds) => {
+            hasher.update(b"axis-plan-thresholds");
+            hash_usize(hasher, thresholds.len());
+            for threshold in thresholds {
+                hash_f32(hasher, *threshold);
+            }
+        }
+    }
+}
+
+fn hash_axis_cursor_state(hasher: &mut Sha256, cursor_state: &AxisCursorState) {
+    hash_usize(hasher, cursor_state.quantile_positions.len());
+    for positions in &cursor_state.quantile_positions {
+        hash_usizes(hasher, positions);
+    }
+}
+
+fn hash_cell_duplicate_summaries(
+    hasher: &mut Sha256,
+    cell_summaries: &BTreeMap<Vec<usize>, CellDuplicateSummary>,
+) {
+    hash_usize(hasher, cell_summaries.len());
+    for (key, summary) in cell_summaries {
+        hash_usizes(hasher, key);
+        hash_usize(hasher, summary.count);
+        hash_f64s(hasher, &summary.coordinate_sums);
+        hash_f64s(hasher, &summary.coordinate_sum_squares);
+    }
+}
+
+fn hash_cell_stats(hasher: &mut Sha256, stats: &[CellStats]) {
+    hash_usize(hasher, stats.len());
+    for cell in stats {
+        hash_usize(hasher, cell.count);
+        hash_f64s(hasher, &cell.sums);
+    }
+}
+
+fn hash_pca_transform(hasher: &mut Sha256, transform: &PcaTransform) {
+    hash_usize(hasher, transform.input_dim);
+    hash_usize(hasher, transform.output_dim);
+    hash_f32s(hasher, &transform.mean);
+    hash_f32s(hasher, &transform.basis);
+    match &transform.explained_variance {
+        Some(explained_variance) => {
+            hasher.update([1]);
+            hash_f32s(hasher, explained_variance);
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update(transform.schema_version.to_le_bytes());
+}
+
+fn hash_pass_tracker(hasher: &mut Sha256, tracker: &PassTracker) {
+    hash_usize(hasher, tracker.observed_count);
+    hasher.update(tracker.hasher.clone().finalize());
+}
+
+fn hash_with(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    update(&mut hasher);
+    hasher.finalize().into()
+}
+
+fn hash_usize(hasher: &mut Sha256, value: usize) {
+    hasher.update((value as u64).to_le_bytes());
+}
+
+fn hash_usizes(hasher: &mut Sha256, values: &[usize]) {
+    hash_usize(hasher, values.len());
+    for value in values {
+        hash_usize(hasher, *value);
+    }
+}
+
+fn hash_f32(hasher: &mut Sha256, value: f32) {
+    hasher.update(value.to_bits().to_le_bytes());
+}
+
+fn hash_optional_f32(hasher: &mut Sha256, value: Option<f32>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hash_f32(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_f32s(hasher: &mut Sha256, values: &[f32]) {
+    hash_usize(hasher, values.len());
+    for value in values {
+        hash_f32(hasher, *value);
+    }
+}
+
+fn hash_f64s(hasher: &mut Sha256, values: &[f64]) {
+    hash_usize(hasher, values.len());
+    for value in values {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+}
+
 impl DirectionalPcaStreamingTrainer {
     pub fn new(
         config: StreamingClusteringConfig,
@@ -277,12 +626,18 @@ impl DirectionalPcaStreamingTrainer {
             baseline_fingerprint: None,
             quality_metric: 0.0,
             model: None,
+            cached_telemetry: RefCell::new(None),
         })
+    }
+
+    fn invalidate_cached_telemetry(&self) {
+        self.cached_telemetry.replace(None);
     }
 
     fn invalid_transition(&mut self, operation: &str) -> StreamingClusteringError {
         let state = self.state;
         self.state = TrainerState::Error;
+        self.invalidate_cached_telemetry();
         StreamingClusteringError::InvalidTransition {
             state,
             operation: operation.into(),
@@ -292,10 +647,14 @@ impl DirectionalPcaStreamingTrainer {
     fn fail(&mut self, error: StreamingClusteringError) -> StreamingClusteringError {
         self.state = TrainerState::Error;
         self.active_pass = None;
+        self.invalidate_cached_telemetry();
         error
     }
 
     pub fn telemetry(&self) -> DirectionalPcaTrainerTelemetry {
+        if let Some(cached) = self.cached_telemetry.borrow().as_ref() {
+            return *cached;
+        }
         let subphase = match self.phase {
             ReplayPhase::AnalyzePca => DirectionalPcaTrainerSubphase::AnalyzePca,
             ReplayPhase::PlanCuts(_) => DirectionalPcaTrainerSubphase::PlanCuts,
@@ -311,10 +670,18 @@ impl DirectionalPcaStreamingTrainer {
                 ActivePassState::CountCells(pass) => pass.tracker.observed_count,
                 ActivePassState::RealizePartition(pass) => pass.tracker.observed_count,
             });
-        DirectionalPcaTrainerTelemetry {
+        let detail = directional_pca_telemetry_detail(&self.phase, self.active_pass.as_ref());
+        let telemetry = DirectionalPcaTrainerTelemetry {
             subphase,
             observed_count,
-        }
+            ready_axis_plan_count: detail.ready_axis_plan_count,
+            total_axis_plan_count: detail.total_axis_plan_count,
+            populated_cell_count: detail.populated_cell_count,
+            realized_cell_count: detail.realized_cell_count,
+            state_fingerprint: detail.state_fingerprint,
+        };
+        self.cached_telemetry.replace(Some(telemetry));
+        telemetry
     }
 
     fn ensure_active_pass(&mut self) {
@@ -359,12 +726,14 @@ impl DirectionalPcaStreamingTrainer {
                 })
             }
         });
+        self.invalidate_cached_telemetry();
     }
 
     fn finish_pass_impl(&mut self) -> Result<PassReport, StreamingClusteringError> {
         if self.state != TrainerState::Ingesting {
             return Err(self.invalid_transition("finish_pass"));
         }
+        self.invalidate_cached_telemetry();
         let active_pass = self
             .active_pass
             .take()
@@ -649,6 +1018,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                 return Err(self.invalid_transition("ingest_batch"));
             }
         }
+        self.invalidate_cached_telemetry();
 
         let active_pass = self
             .active_pass
@@ -739,6 +1109,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             });
         }
         self.state = TrainerState::TrainingComplete;
+        self.invalidate_cached_telemetry();
         Ok(())
     }
 
@@ -1746,5 +2117,31 @@ mod tests {
         assert_eq!(cuts.len(), 1);
         assert!(cuts[0] > 3.0);
         assert!(cuts[0] < 7.0);
+    }
+
+    #[test]
+    fn phase_only_realize_partition_telemetry_does_not_claim_realized_cells() {
+        let detail =
+            telemetry_detail_from_phase(&ReplayPhase::RealizePartition(ReadyPartitionPlan {
+                partition: PartitionPlan {
+                    transform: PcaTransform {
+                        input_dim: 1,
+                        output_dim: 1,
+                        mean: vec![0.0],
+                        basis: vec![1.0],
+                        explained_variance: Some(vec![1.0]),
+                        schema_version: 1,
+                    },
+                    axis_plans: vec![AxisPlan::SingleBin],
+                },
+                cells: vec![ReadyCellPlan {
+                    key: vec![0],
+                    count: 2,
+                    extra_clusters: 0,
+                    cluster_offset: 0,
+                }],
+            }));
+        assert_eq!(detail.populated_cell_count, Some(1));
+        assert_eq!(detail.realized_cell_count, None);
     }
 }

@@ -54,7 +54,8 @@ use lexongraph_streaming_indexer::{
     SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
     StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, StreamingIndexingTrainerSubphase, published_indexing_profile,
+    StreamingIndexingStatusState, StreamingIndexingTrainerSubphase, StreamingV2BlockerKind,
+    StreamingV2ConvergenceState, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -5733,5 +5734,171 @@ async fn val_stream_indexer_110_streaming_v2_observer_reports_pending_partition_
             .is_some_and(|observed| (256..=512).contains(&observed))
     );
     assert!(pending[0].routing_bucket_fill_counts.is_none());
+    assert!(pending[0].planner_state_fingerprint_hex.len() == 64);
+    assert_eq!(pending[0].ready_axis_plan_count, None);
+    assert_eq!(pending[0].total_axis_plan_count, None);
     assert!(root_progress.suspected_stall.is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_111_streaming_v2_completed_pass_summary_reports_convergence_deltas() {
+    let statuses: Arc<Mutex<Vec<StreamingIndexingStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    let observer: StreamingIndexingStatusObserver = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status| statuses.lock().unwrap().push(status))
+    };
+    let items = (0..1024)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: index.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+    )
+    .unwrap()
+    .with_observer(observer);
+
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let first = run.finish_pass().unwrap();
+    let first_summary = first
+        .v2_completed_pass_summary
+        .expect("first v2 completed pass summary");
+    assert_eq!(
+        first_summary.convergence_state,
+        StreamingV2ConvergenceState::InitialPass
+    );
+    assert_eq!(first_summary.delta.previous_completed_pass_number, None);
+    assert_eq!(
+        first_summary.delta.current_pending_partition_paths,
+        vec!["p0"]
+    );
+
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let second = run.finish_pass().unwrap();
+    let second_summary = second
+        .v2_completed_pass_summary
+        .expect("second v2 completed pass summary");
+    assert_eq!(second_summary.delta.previous_completed_pass_number, Some(1));
+    assert_eq!(
+        second_summary.delta.current_pending_partition_paths,
+        vec!["p0"]
+    );
+    assert_eq!(
+        second_summary.blockers[0].trainer_subphase,
+        Some(StreamingIndexingTrainerSubphase::PlanCuts)
+    );
+    assert_eq!(
+        second_summary.blockers[0].blocker_kind,
+        StreamingV2BlockerKind::PlanCutsPending
+    );
+    assert_eq!(second_summary.blockers[0].partition_path, "p0");
+    assert_eq!(
+        second_summary.blockers[0]
+            .planner_state_fingerprint_hex
+            .len(),
+        64
+    );
+    assert!(second_summary.delta.topology_fingerprint_hex.len() == 64);
+    assert!(second_summary.delta.pending_partition_fingerprint_hex.len() == 64);
+    assert!(
+        second_summary.delta.pending_partitions_changed == Some(true)
+            || !second_summary.delta.changed_pending_partitions.is_empty()
+    );
+
+    let statuses = statuses.lock().unwrap().clone();
+    let completed_status = statuses
+        .iter()
+        .find(|status| {
+            status.phase == StreamingIndexingPhase::PlanningPass { pass_number: 2 }
+                && status.state == StreamingIndexingStatusState::Completed
+        })
+        .expect("completed second-pass status");
+    assert_eq!(
+        completed_status.v2_completed_pass_summary.as_ref(),
+        Some(&second_summary)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_112_streaming_v2_completed_pass_summary_reports_blocker_attribution() {
+    let items = (0..1024)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: index.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+    )
+    .unwrap();
+
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    run.finish_pass().unwrap();
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let second = run.finish_pass().unwrap();
+    let blocker = second
+        .v2_completed_pass_summary
+        .expect("second pass summary")
+        .blockers
+        .into_iter()
+        .find(|blocker| blocker.partition_path == "p0")
+        .expect("p0 blocker");
+    assert_eq!(
+        blocker.blocker_kind,
+        StreamingV2BlockerKind::PlanCutsPending
+    );
+    assert_eq!(
+        blocker.trainer_subphase,
+        Some(StreamingIndexingTrainerSubphase::PlanCuts)
+    );
+    assert!(blocker.blocker_detail.contains("cut planning"));
+    assert!(!blocker.blocker_detail.contains("Some("));
+    assert!(!blocker.blocker_detail.contains("None"));
+    assert_eq!(blocker.expected_item_count, items.len());
+    assert!(blocker.total_axis_plan_count.is_some());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_113_streaming_v2_completed_pass_summaries_are_deterministic() {
+    async fn collect_summaries()
+    -> Vec<lexongraph_streaming_indexer::StreamingV2CompletedPassSummary> {
+        let items = (0..1024)
+            .map(|index| IndexItem {
+                metadata: vec![],
+                content_ref: index.to_string(),
+            })
+            .collect::<Vec<_>>();
+        let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+            MapResolver,
+            IndexedWideF32EmbeddingProvider,
+            PUBLISHED_PROFILE_V0_7_0,
+            embedding_spec_f32_dims(384),
+            104_000,
+        )
+        .unwrap();
+        let mut summaries = Vec::new();
+        for _ in 0..3 {
+            run.ingest_batch(items.as_slice()).await.unwrap();
+            summaries.push(
+                run.finish_pass()
+                    .unwrap()
+                    .v2_completed_pass_summary
+                    .expect("completed pass summary"),
+            );
+        }
+        summaries
+    }
+
+    let left = collect_summaries().await;
+    let right = collect_summaries().await;
+    assert_eq!(left, right);
 }
