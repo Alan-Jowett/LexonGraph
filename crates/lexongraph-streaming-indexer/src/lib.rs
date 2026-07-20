@@ -565,7 +565,7 @@ pub struct StreamingV2PartitionBlockerSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamingV2CompletedPassDelta {
-    pub previous_completed_pass_count: Option<usize>,
+    pub previous_completed_pass_number: Option<usize>,
     pub previous_topology_fingerprint_hex: Option<String>,
     pub topology_fingerprint_hex: String,
     pub previous_pending_partition_fingerprint_hex: Option<String>,
@@ -2015,6 +2015,12 @@ struct StreamingV2CompletedPassSnapshot {
     pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
 }
 
+#[derive(Clone)]
+struct StreamingV2CompletedPassHistoryEntry {
+    pass_number: usize,
+    combined_fingerprint_hex: String,
+}
+
 enum StreamingV2RoutingStrategy {
     Classifier(DirectionalPcaStreamingClassifier),
     ReplayOrder(StreamingV2ReplayOrderPlan),
@@ -3236,7 +3242,8 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
     completed_passes: usize,
     baseline_fingerprint: Option<StreamingV2ReplayFingerprint>,
     current_pass: Option<StreamingV2PassState>,
-    completed_pass_snapshots: Vec<StreamingV2CompletedPassSnapshot>,
+    latest_completed_pass_snapshot: Option<StreamingV2CompletedPassSnapshot>,
+    completed_pass_history: Vec<StreamingV2CompletedPassHistoryEntry>,
     partitions: Vec<StreamingV2PartitionNode>,
     next_partition_id: usize,
     _item_ref: PhantomData<R>,
@@ -3303,7 +3310,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             completed_passes: 0,
             baseline_fingerprint: None,
             current_pass: None,
-            completed_pass_snapshots: Vec::new(),
+            latest_completed_pass_snapshot: None,
+            completed_pass_history: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
             _item_ref: PhantomData,
@@ -3444,12 +3452,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             combined_fingerprint_hex: combined_fingerprint_hex.clone(),
             pending_partitions: pending_partitions.clone(),
         };
-        let previous = self.completed_pass_snapshots.last();
+        let previous = self.latest_completed_pass_snapshot.as_ref();
         let repeated_prior_completed_pass_number = self
-            .completed_pass_snapshots
+            .completed_pass_history
             .iter()
             .rev()
-            .skip(1)
             .find(|prior| prior.combined_fingerprint_hex == combined_fingerprint_hex)
             .map(|prior| prior.pass_number);
         let convergence_state = match previous {
@@ -3490,12 +3497,17 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     fn retain_v2_completed_pass_snapshot(&mut self, snapshot: StreamingV2CompletedPassSnapshot) {
-        const MAX_V2_COMPLETED_PASS_SNAPSHOTS: usize = 16;
-        self.completed_pass_snapshots.push(snapshot);
-        if self.completed_pass_snapshots.len() > MAX_V2_COMPLETED_PASS_SNAPSHOTS {
-            let remove = self.completed_pass_snapshots.len() - MAX_V2_COMPLETED_PASS_SNAPSHOTS;
-            self.completed_pass_snapshots.drain(0..remove);
+        const MAX_V2_COMPLETED_PASS_HISTORY: usize = 16;
+        self.completed_pass_history
+            .push(StreamingV2CompletedPassHistoryEntry {
+                pass_number: snapshot.pass_number,
+                combined_fingerprint_hex: snapshot.combined_fingerprint_hex.clone(),
+            });
+        if self.completed_pass_history.len() > MAX_V2_COMPLETED_PASS_HISTORY {
+            let remove = self.completed_pass_history.len() - MAX_V2_COMPLETED_PASS_HISTORY;
+            self.completed_pass_history.drain(0..remove);
         }
+        self.latest_completed_pass_snapshot = Some(snapshot);
     }
 
     fn emit_v2_planning_pass_status(
@@ -5161,7 +5173,7 @@ fn summarize_streaming_v2_completed_pass_delta(
         .collect::<Vec<_>>();
     let Some(previous) = previous else {
         return StreamingV2CompletedPassDelta {
-            previous_completed_pass_count: None,
+            previous_completed_pass_number: None,
             previous_topology_fingerprint_hex: None,
             topology_fingerprint_hex: current.topology_fingerprint_hex.clone(),
             previous_pending_partition_fingerprint_hex: None,
@@ -5267,7 +5279,7 @@ fn summarize_streaming_v2_completed_pass_delta(
         .collect::<BTreeSet<_>>();
 
     StreamingV2CompletedPassDelta {
-        previous_completed_pass_count: Some(previous.pass_number),
+        previous_completed_pass_number: Some(previous.pass_number),
         previous_topology_fingerprint_hex: Some(previous.topology_fingerprint_hex.clone()),
         topology_fingerprint_hex: current.topology_fingerprint_hex.clone(),
         previous_pending_partition_fingerprint_hex: Some(
@@ -10075,7 +10087,8 @@ mod tests {
             completed_passes: 0,
             baseline_fingerprint: None,
             current_pass: None,
-            completed_pass_snapshots: Vec::new(),
+            latest_completed_pass_snapshot: None,
+            completed_pass_history: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
             _item_ref: PhantomData,

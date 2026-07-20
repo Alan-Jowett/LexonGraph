@@ -5772,7 +5772,7 @@ async fn val_stream_indexer_111_streaming_v2_completed_pass_summary_reports_conv
         first_summary.convergence_state,
         StreamingV2ConvergenceState::InitialPass
     );
-    assert_eq!(first_summary.delta.previous_completed_pass_count, None);
+    assert_eq!(first_summary.delta.previous_completed_pass_number, None);
     assert_eq!(
         first_summary.delta.current_pending_partition_paths,
         vec!["p0"]
@@ -5783,7 +5783,7 @@ async fn val_stream_indexer_111_streaming_v2_completed_pass_summary_reports_conv
     let second_summary = second
         .v2_completed_pass_summary
         .expect("second v2 completed pass summary");
-    assert_eq!(second_summary.delta.previous_completed_pass_count, Some(1));
+    assert_eq!(second_summary.delta.previous_completed_pass_number, Some(1));
     assert_eq!(
         second_summary.delta.current_pending_partition_paths,
         vec!["p0"]
