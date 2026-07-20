@@ -1268,6 +1268,9 @@ include:
 - each pending partition's observed replay progress
 - classifier child-bucket fill or replay-order child progress when available
 - each pending partition's coarse directional-PCA trainer subphase
+- any additional deterministic pending-partition state summary required to
+  distinguish changed planner state from unchanged planner state while a
+  partition remains unresolved
 
 The same detail surface may additionally expose an explicit suspected-stall
 indicator derived from unchanged observer-visible state across reported
@@ -1275,6 +1278,59 @@ intervals, such as unchanged pass-observed counts, unchanged pending-partition
 progress, unchanged child-bucket fill, or an unchanged trainer subphase. This
 indicator is descriptive of observable non-advancement; it is not a fabricated
 percentage-to-convergence.
+
+When a completed pass leaves unresolved partitions, the same observer-derived
+detail surface may additionally expose explicit blocker evidence naming the
+unresolved partition and the strongest retained-state reason known at that
+boundary.
+
+### DSG-STREAM-INDEXER-117 `V2 completed-pass convergence summary`
+
+Each completed v2 / published-profile `0.7.0` pass produces a deterministic
+completed-pass summary derived from retained observer-visible state rather than
+from free-form logs.
+
+That summary compares the just-completed pass with at least the immediately
+previous completed pass and classifies whether unresolved planning work shrank,
+changed shape, remained effectively unchanged, or repeated a prior
+completed-pass state.
+
+This classification is evidence-based. It is expressed through deterministic
+field deltas and/or fingerprints over unresolved planning state rather than a
+fabricated percentage-to-convergence.
+
+### DSG-STREAM-INDEXER-118 `V2 unresolved-partition blocker attribution`
+
+When a completed v2 pass cannot mark planning complete, the implementation
+derives a deterministic blocker summary from the unresolved partitions that
+still prevent terminal-or-routed completion.
+
+For each unresolved partition whose blocker is knowable from retained state, the
+summary names the partition's external identity, the relevant trainer or
+planner subphase, and the strongest observable blocker evidence available at the
+boundary.
+
+If the retained state does not support stronger attribution, the summary
+surfaces that uncertainty explicitly instead of guessing.
+
+### DSG-STREAM-INDEXER-119 `V2 pass-to-pass fingerprints and deltas`
+
+The v2 completed-pass summary includes deterministic pass-to-pass comparison
+artifacts sufficient to answer "what changed from pass `N-1` to pass `N`?" for
+the unresolved planning state.
+
+Those artifacts may include explicit deltas, deterministic fingerprints, or
+both, covering at least:
+
+- the unresolved pending-partition set
+- terminal or routed partition counts or identities when present
+- externally visible topology shape when it changes
+- unresolved planner-visible partition state needed to distinguish changed
+  planner work from unchanged planner work
+
+The implementation may retain a bounded in-memory history of completed-pass
+fingerprints so a caller can detect immediate repeats or longer cycles without
+requiring unbounded retained telemetry state.
 
 ## Traceability
 
@@ -1383,4 +1439,7 @@ percentage-to-convergence.
 | DSG-STREAM-INDEXER-114 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-120 |
 | DSG-STREAM-INDEXER-115 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-121 |
 | DSG-STREAM-INDEXER-116 | REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-121, REQ-STREAM-INDEXER-122 |
+| DSG-STREAM-INDEXER-117 | REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125 |
+| DSG-STREAM-INDEXER-118 | REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-122, REQ-STREAM-INDEXER-124 |
+| DSG-STREAM-INDEXER-119 | REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

@@ -116,6 +116,7 @@ pub struct IndexingPassReport {
     pub planned_partition_count: usize,
     pub terminal_partition_count: usize,
     pub hierarchy_depth: usize,
+    pub v2_completed_pass_summary: Option<StreamingV2CompletedPassSummary>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -499,6 +500,98 @@ pub struct StreamingV2PendingPartitionStatus {
     pub observed_replay_progress: Option<usize>,
     pub routing_bucket_fill_counts: Option<Vec<usize>>,
     pub trainer_subphase: Option<StreamingIndexingTrainerSubphase>,
+    pub ready_axis_plan_count: Option<usize>,
+    pub total_axis_plan_count: Option<usize>,
+    pub populated_cell_count: Option<usize>,
+    pub realized_cell_count: Option<usize>,
+    pub planner_state_fingerprint_hex: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamingV2ConvergenceState {
+    InitialPass,
+    UnresolvedWorkShrank,
+    UnresolvedWorkChanged,
+    NoVisibleChange,
+    RepeatedPriorState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamingV2BlockerKind {
+    ReplayIncomplete,
+    AnalyzePcaPending,
+    PlanCutsPending,
+    CountCellsPending,
+    RealizePartitionPending,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamingV2PendingPartitionDelta {
+    pub partition_path: String,
+    pub previous_trainer_subphase: Option<StreamingIndexingTrainerSubphase>,
+    pub trainer_subphase: Option<StreamingIndexingTrainerSubphase>,
+    pub previous_observed_replay_progress: Option<usize>,
+    pub observed_replay_progress: Option<usize>,
+    pub previous_routing_bucket_fill_counts: Option<Vec<usize>>,
+    pub routing_bucket_fill_counts: Option<Vec<usize>>,
+    pub previous_ready_axis_plan_count: Option<usize>,
+    pub ready_axis_plan_count: Option<usize>,
+    pub previous_total_axis_plan_count: Option<usize>,
+    pub total_axis_plan_count: Option<usize>,
+    pub previous_populated_cell_count: Option<usize>,
+    pub populated_cell_count: Option<usize>,
+    pub previous_realized_cell_count: Option<usize>,
+    pub realized_cell_count: Option<usize>,
+    pub previous_planner_state_fingerprint_hex: Option<String>,
+    pub planner_state_fingerprint_hex: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamingV2PartitionBlockerSummary {
+    pub partition_path: String,
+    pub expected_item_count: usize,
+    pub trainer_subphase: Option<StreamingIndexingTrainerSubphase>,
+    pub blocker_kind: StreamingV2BlockerKind,
+    pub blocker_detail: String,
+    pub observed_replay_progress: Option<usize>,
+    pub routing_bucket_fill_counts: Option<Vec<usize>>,
+    pub ready_axis_plan_count: Option<usize>,
+    pub total_axis_plan_count: Option<usize>,
+    pub populated_cell_count: Option<usize>,
+    pub realized_cell_count: Option<usize>,
+    pub planner_state_fingerprint_hex: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamingV2CompletedPassDelta {
+    pub previous_completed_pass_count: Option<usize>,
+    pub previous_topology_fingerprint_hex: Option<String>,
+    pub topology_fingerprint_hex: String,
+    pub previous_pending_partition_fingerprint_hex: Option<String>,
+    pub pending_partition_fingerprint_hex: String,
+    pub pending_partition_count_delta: Option<isize>,
+    pub terminal_partition_count_delta: Option<isize>,
+    pub routed_partition_count_delta: Option<isize>,
+    pub planned_partition_count_delta: Option<isize>,
+    pub hierarchy_depth_delta: Option<isize>,
+    pub topology_changed: Option<bool>,
+    pub pending_partitions_changed: Option<bool>,
+    pub repeated_prior_completed_pass_number: Option<usize>,
+    pub current_pending_partition_paths: Vec<String>,
+    pub added_pending_partition_paths: Vec<String>,
+    pub removed_pending_partition_paths: Vec<String>,
+    pub unchanged_pending_partition_paths: Vec<String>,
+    pub changed_pending_partitions: Vec<StreamingV2PendingPartitionDelta>,
+    pub newly_terminal_partition_paths: Vec<String>,
+    pub newly_routed_partition_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamingV2CompletedPassSummary {
+    pub convergence_state: StreamingV2ConvergenceState,
+    pub delta: StreamingV2CompletedPassDelta,
+    pub blockers: Vec<StreamingV2PartitionBlockerSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -571,6 +664,7 @@ pub struct StreamingIndexingStatus {
     pub fallback_count: Option<usize>,
     pub pending_partition_count: Option<usize>,
     pub v2_pending_partitions: Option<Vec<StreamingV2PendingPartitionStatus>>,
+    pub v2_completed_pass_summary: Option<StreamingV2CompletedPassSummary>,
     pub suspected_stall: Option<StreamingIndexingSuspectedStall>,
     pub elapsed: Duration,
     pub last_progress_at: Option<Duration>,
@@ -1907,6 +2001,20 @@ struct StreamingV2PartitionNode {
     routing: Option<StreamingV2RoutingStrategy>,
 }
 
+#[derive(Clone)]
+struct StreamingV2CompletedPassSnapshot {
+    pass_number: usize,
+    planned_partition_count: usize,
+    terminal_partition_count: usize,
+    routed_partition_paths: Vec<String>,
+    terminal_partition_paths: Vec<String>,
+    hierarchy_depth: usize,
+    topology_fingerprint_hex: String,
+    pending_partition_fingerprint_hex: String,
+    combined_fingerprint_hex: String,
+    pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
+}
+
 enum StreamingV2RoutingStrategy {
     Classifier(DirectionalPcaStreamingClassifier),
     ReplayOrder(StreamingV2ReplayOrderPlan),
@@ -2452,6 +2560,7 @@ where
             planned_partition_count: hierarchy_stats.partition_count,
             terminal_partition_count: hierarchy_stats.terminal_partition_count,
             hierarchy_depth: hierarchy_stats.depth,
+            v2_completed_pass_summary: None,
         })
     }
 
@@ -3127,6 +3236,7 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
     completed_passes: usize,
     baseline_fingerprint: Option<StreamingV2ReplayFingerprint>,
     current_pass: Option<StreamingV2PassState>,
+    completed_pass_snapshots: Vec<StreamingV2CompletedPassSnapshot>,
     partitions: Vec<StreamingV2PartitionNode>,
     next_partition_id: usize,
     _item_ref: PhantomData<R>,
@@ -3193,6 +3303,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             completed_passes: 0,
             baseline_fingerprint: None,
             current_pass: None,
+            completed_pass_snapshots: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
             _item_ref: PhantomData,
@@ -3245,6 +3356,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     observed_replay_progress: telemetry.observed_count,
                     routing_bucket_fill_counts: None,
                     trainer_subphase: Some(map_v2_trainer_subphase(telemetry.subphase)),
+                    ready_axis_plan_count: telemetry.ready_axis_plan_count,
+                    total_axis_plan_count: telemetry.total_axis_plan_count,
+                    populated_cell_count: telemetry.populated_cell_count,
+                    realized_cell_count: telemetry.realized_cell_count,
+                    planner_state_fingerprint_hex: telemetry.state_fingerprint_hex,
                 });
                 continue;
             }
@@ -3263,6 +3379,13 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 observed_replay_progress: Some(bucket_fill_counts.iter().sum()),
                 routing_bucket_fill_counts: Some(bucket_fill_counts.clone()),
                 trainer_subphase: None,
+                ready_axis_plan_count: None,
+                total_axis_plan_count: None,
+                populated_cell_count: None,
+                realized_cell_count: None,
+                planner_state_fingerprint_hex: hash_streaming_v2_bucket_fill_counts_hex(
+                    bucket_fill_counts,
+                ),
             });
         }
         statuses.sort_by(|left, right| left.partition_path.cmp(&right.partition_path));
@@ -3278,6 +3401,101 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
         self.v2_pending_partition_statuses(classifier_assignment_counts)
             .map(Some)
+    }
+
+    fn build_v2_completed_pass_summary(
+        &self,
+        pass_number: usize,
+        stats: &HierarchyStats,
+        topology: &StreamingV2PartitionTopology,
+        pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
+    ) -> (
+        StreamingV2CompletedPassSummary,
+        StreamingV2CompletedPassSnapshot,
+    ) {
+        let topology_fingerprint_hex = hash_streaming_v2_topology_hex(topology);
+        let pending_partition_fingerprint_hex =
+            hash_streaming_v2_pending_partitions_hex(&pending_partitions);
+        let combined_fingerprint_hex = hash_streaming_v2_completed_pass_state_hex(
+            &topology_fingerprint_hex,
+            &pending_partition_fingerprint_hex,
+        );
+        let terminal_partition_paths = topology
+            .partitions
+            .iter()
+            .filter(|partition| partition.terminal)
+            .map(|partition| partition.id.clone())
+            .collect::<Vec<_>>();
+        let routed_partition_paths = topology
+            .partitions
+            .iter()
+            .filter(|partition| !partition.terminal && !partition.child_ids.is_empty())
+            .map(|partition| partition.id.clone())
+            .collect::<Vec<_>>();
+        let snapshot = StreamingV2CompletedPassSnapshot {
+            pass_number,
+            planned_partition_count: stats.partition_count,
+            terminal_partition_count: stats.terminal_partition_count,
+            routed_partition_paths: routed_partition_paths.clone(),
+            terminal_partition_paths: terminal_partition_paths.clone(),
+            hierarchy_depth: stats.depth,
+            topology_fingerprint_hex: topology_fingerprint_hex.clone(),
+            pending_partition_fingerprint_hex: pending_partition_fingerprint_hex.clone(),
+            combined_fingerprint_hex: combined_fingerprint_hex.clone(),
+            pending_partitions: pending_partitions.clone(),
+        };
+        let previous = self.completed_pass_snapshots.last();
+        let repeated_prior_completed_pass_number = self
+            .completed_pass_snapshots
+            .iter()
+            .rev()
+            .skip(1)
+            .find(|prior| prior.combined_fingerprint_hex == combined_fingerprint_hex)
+            .map(|prior| prior.pass_number);
+        let convergence_state = match previous {
+            None => StreamingV2ConvergenceState::InitialPass,
+            Some(previous) if previous.combined_fingerprint_hex == combined_fingerprint_hex => {
+                StreamingV2ConvergenceState::NoVisibleChange
+            }
+            Some(_) if repeated_prior_completed_pass_number.is_some() => {
+                StreamingV2ConvergenceState::RepeatedPriorState
+            }
+            Some(previous)
+                if snapshot.pending_partitions.len() < previous.pending_partitions.len()
+                    || snapshot.terminal_partition_count > previous.terminal_partition_count
+                    || snapshot.routed_partition_paths.len()
+                        > previous.routed_partition_paths.len() =>
+            {
+                StreamingV2ConvergenceState::UnresolvedWorkShrank
+            }
+            Some(_) => StreamingV2ConvergenceState::UnresolvedWorkChanged,
+        };
+        let delta = summarize_streaming_v2_completed_pass_delta(
+            previous,
+            &snapshot,
+            repeated_prior_completed_pass_number,
+        );
+        let blockers = pending_partitions
+            .iter()
+            .map(summarize_streaming_v2_partition_blocker)
+            .collect();
+        (
+            StreamingV2CompletedPassSummary {
+                convergence_state,
+                delta,
+                blockers,
+            },
+            snapshot,
+        )
+    }
+
+    fn retain_v2_completed_pass_snapshot(&mut self, snapshot: StreamingV2CompletedPassSnapshot) {
+        const MAX_V2_COMPLETED_PASS_SNAPSHOTS: usize = 16;
+        self.completed_pass_snapshots.push(snapshot);
+        if self.completed_pass_snapshots.len() > MAX_V2_COMPLETED_PASS_SNAPSHOTS {
+            let remove = self.completed_pass_snapshots.len() - MAX_V2_COMPLETED_PASS_SNAPSHOTS;
+            self.completed_pass_snapshots.drain(0..remove);
+        }
     }
 
     fn emit_v2_planning_pass_status(
@@ -3866,7 +4084,17 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let topology = self.current_topology();
         let stats = streaming_v2_topology_stats(&topology)
             .map_err(StreamingIndexerError::HierarchyValidation)?;
-        let completed_status = build_v2_planning_pass_status(
+        let pending_partitions =
+            self.v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+        let (completed_pass_summary, completed_pass_snapshot) = self
+            .build_v2_completed_pass_summary(
+                self.completed_passes,
+                &stats,
+                &topology,
+                pending_partitions.clone(),
+            );
+        self.retain_v2_completed_pass_snapshot(completed_pass_snapshot);
+        let mut completed_status = build_v2_planning_pass_status(
             self.completed_passes,
             StreamingIndexingStatusState::Completed,
             Some(pass_observed_count),
@@ -3874,8 +4102,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             current_pass.started.elapsed(),
             Some(current_pass.started.elapsed()),
             None,
-            self.maybe_v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?,
+            Some(pending_partitions.clone()),
         );
+        completed_status.v2_completed_pass_summary = Some(completed_pass_summary.clone());
         emit_status(&self.observer, completed_status);
         Ok(IndexingPassReport {
             observed_item_count: fingerprint.observed_count,
@@ -3889,6 +4118,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             planned_partition_count: stats.partition_count,
             terminal_partition_count: stats.terminal_partition_count,
             hierarchy_depth: stats.depth,
+            v2_completed_pass_summary: Some(completed_pass_summary),
         })
     }
 
@@ -4917,6 +5147,384 @@ fn streaming_v2_topology_stats(
             )?
         },
     })
+}
+
+fn summarize_streaming_v2_completed_pass_delta(
+    previous: Option<&StreamingV2CompletedPassSnapshot>,
+    current: &StreamingV2CompletedPassSnapshot,
+    repeated_prior_completed_pass_number: Option<usize>,
+) -> StreamingV2CompletedPassDelta {
+    let current_pending_partition_paths = current
+        .pending_partitions
+        .iter()
+        .map(|status| status.partition_path.clone())
+        .collect::<Vec<_>>();
+    let Some(previous) = previous else {
+        return StreamingV2CompletedPassDelta {
+            previous_completed_pass_count: None,
+            previous_topology_fingerprint_hex: None,
+            topology_fingerprint_hex: current.topology_fingerprint_hex.clone(),
+            previous_pending_partition_fingerprint_hex: None,
+            pending_partition_fingerprint_hex: current.pending_partition_fingerprint_hex.clone(),
+            pending_partition_count_delta: None,
+            terminal_partition_count_delta: None,
+            routed_partition_count_delta: None,
+            planned_partition_count_delta: None,
+            hierarchy_depth_delta: None,
+            topology_changed: None,
+            pending_partitions_changed: None,
+            repeated_prior_completed_pass_number,
+            current_pending_partition_paths,
+            added_pending_partition_paths: Vec::new(),
+            removed_pending_partition_paths: Vec::new(),
+            unchanged_pending_partition_paths: Vec::new(),
+            changed_pending_partitions: Vec::new(),
+            newly_terminal_partition_paths: current.terminal_partition_paths.clone(),
+            newly_routed_partition_paths: current.routed_partition_paths.clone(),
+        };
+    };
+
+    let previous_pending = previous
+        .pending_partitions
+        .iter()
+        .map(|status| (status.partition_path.as_str(), status))
+        .collect::<HashMap<_, _>>();
+    let current_pending = current
+        .pending_partitions
+        .iter()
+        .map(|status| (status.partition_path.as_str(), status))
+        .collect::<HashMap<_, _>>();
+
+    let mut added_pending_partition_paths = current
+        .pending_partitions
+        .iter()
+        .filter(|status| !previous_pending.contains_key(status.partition_path.as_str()))
+        .map(|status| status.partition_path.clone())
+        .collect::<Vec<_>>();
+    let mut removed_pending_partition_paths = previous
+        .pending_partitions
+        .iter()
+        .filter(|status| !current_pending.contains_key(status.partition_path.as_str()))
+        .map(|status| status.partition_path.clone())
+        .collect::<Vec<_>>();
+    let mut unchanged_pending_partition_paths = Vec::new();
+    let mut changed_pending_partitions = Vec::new();
+    for status in &current.pending_partitions {
+        let Some(previous_status) = previous_pending.get(status.partition_path.as_str()) else {
+            continue;
+        };
+        if *previous_status == status {
+            unchanged_pending_partition_paths.push(status.partition_path.clone());
+            continue;
+        }
+        changed_pending_partitions.push(StreamingV2PendingPartitionDelta {
+            partition_path: status.partition_path.clone(),
+            previous_trainer_subphase: previous_status.trainer_subphase,
+            trainer_subphase: status.trainer_subphase,
+            previous_observed_replay_progress: previous_status.observed_replay_progress,
+            observed_replay_progress: status.observed_replay_progress,
+            previous_routing_bucket_fill_counts: previous_status.routing_bucket_fill_counts.clone(),
+            routing_bucket_fill_counts: status.routing_bucket_fill_counts.clone(),
+            previous_ready_axis_plan_count: previous_status.ready_axis_plan_count,
+            ready_axis_plan_count: status.ready_axis_plan_count,
+            previous_total_axis_plan_count: previous_status.total_axis_plan_count,
+            total_axis_plan_count: status.total_axis_plan_count,
+            previous_populated_cell_count: previous_status.populated_cell_count,
+            populated_cell_count: status.populated_cell_count,
+            previous_realized_cell_count: previous_status.realized_cell_count,
+            realized_cell_count: status.realized_cell_count,
+            previous_planner_state_fingerprint_hex: Some(
+                previous_status.planner_state_fingerprint_hex.clone(),
+            ),
+            planner_state_fingerprint_hex: status.planner_state_fingerprint_hex.clone(),
+        });
+    }
+    added_pending_partition_paths.sort();
+    removed_pending_partition_paths.sort();
+    unchanged_pending_partition_paths.sort();
+    changed_pending_partitions
+        .sort_by(|left, right| left.partition_path.cmp(&right.partition_path));
+
+    let previous_terminal = previous
+        .terminal_partition_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let current_terminal = current
+        .terminal_partition_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let previous_routed = previous
+        .routed_partition_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let current_routed = current
+        .routed_partition_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    StreamingV2CompletedPassDelta {
+        previous_completed_pass_count: Some(previous.pass_number),
+        previous_topology_fingerprint_hex: Some(previous.topology_fingerprint_hex.clone()),
+        topology_fingerprint_hex: current.topology_fingerprint_hex.clone(),
+        previous_pending_partition_fingerprint_hex: Some(
+            previous.pending_partition_fingerprint_hex.clone(),
+        ),
+        pending_partition_fingerprint_hex: current.pending_partition_fingerprint_hex.clone(),
+        pending_partition_count_delta: usize_delta(
+            current.pending_partitions.len(),
+            previous.pending_partitions.len(),
+        ),
+        terminal_partition_count_delta: usize_delta(
+            current.terminal_partition_count,
+            previous.terminal_partition_count,
+        ),
+        routed_partition_count_delta: usize_delta(
+            current.routed_partition_paths.len(),
+            previous.routed_partition_paths.len(),
+        ),
+        planned_partition_count_delta: usize_delta(
+            current.planned_partition_count,
+            previous.planned_partition_count,
+        ),
+        hierarchy_depth_delta: usize_delta(current.hierarchy_depth, previous.hierarchy_depth),
+        topology_changed: Some(
+            current.topology_fingerprint_hex != previous.topology_fingerprint_hex,
+        ),
+        pending_partitions_changed: Some(
+            current.pending_partition_fingerprint_hex != previous.pending_partition_fingerprint_hex,
+        ),
+        repeated_prior_completed_pass_number,
+        current_pending_partition_paths,
+        added_pending_partition_paths,
+        removed_pending_partition_paths,
+        unchanged_pending_partition_paths,
+        changed_pending_partitions,
+        newly_terminal_partition_paths: current_terminal
+            .difference(&previous_terminal)
+            .cloned()
+            .collect(),
+        newly_routed_partition_paths: current_routed
+            .difference(&previous_routed)
+            .cloned()
+            .collect(),
+    }
+}
+
+fn summarize_streaming_v2_partition_blocker(
+    status: &StreamingV2PendingPartitionStatus,
+) -> StreamingV2PartitionBlockerSummary {
+    let (blocker_kind, blocker_detail) = match status.trainer_subphase {
+        Some(StreamingIndexingTrainerSubphase::AnalyzePca) => (
+            StreamingV2BlockerKind::AnalyzePcaPending,
+            format!(
+                "partition still requires PCA analysis replay; observed {:?} of expected {} items",
+                status.observed_replay_progress, status.expected_item_count
+            ),
+        ),
+        Some(StreamingIndexingTrainerSubphase::PlanCuts) => (
+            StreamingV2BlockerKind::PlanCutsPending,
+            format!(
+                "partition still requires cut planning; ready axes {:?} of {:?}",
+                status.ready_axis_plan_count, status.total_axis_plan_count
+            ),
+        ),
+        Some(StreamingIndexingTrainerSubphase::CountCells) => (
+            StreamingV2BlockerKind::CountCellsPending,
+            format!(
+                "partition still requires cell counting; populated cells observed {:?}",
+                status.populated_cell_count
+            ),
+        ),
+        Some(StreamingIndexingTrainerSubphase::RealizePartition) => (
+            StreamingV2BlockerKind::RealizePartitionPending,
+            format!(
+                "partition still requires partition realization; realized cells {:?}",
+                status.realized_cell_count
+            ),
+        ),
+        None => {
+            let observed = status.observed_replay_progress.unwrap_or(0);
+            if observed < status.expected_item_count {
+                (
+                    StreamingV2BlockerKind::ReplayIncomplete,
+                    format!(
+                        "partition replay is incomplete; observed {observed} of expected {} items",
+                        status.expected_item_count
+                    ),
+                )
+            } else {
+                (
+                    StreamingV2BlockerKind::Unknown,
+                    "partition remains unresolved but retained state does not expose a stronger blocker"
+                        .into(),
+                )
+            }
+        }
+    };
+    StreamingV2PartitionBlockerSummary {
+        partition_path: status.partition_path.clone(),
+        expected_item_count: status.expected_item_count,
+        trainer_subphase: status.trainer_subphase,
+        blocker_kind,
+        blocker_detail,
+        observed_replay_progress: status.observed_replay_progress,
+        routing_bucket_fill_counts: status.routing_bucket_fill_counts.clone(),
+        ready_axis_plan_count: status.ready_axis_plan_count,
+        total_axis_plan_count: status.total_axis_plan_count,
+        populated_cell_count: status.populated_cell_count,
+        realized_cell_count: status.realized_cell_count,
+        planner_state_fingerprint_hex: status.planner_state_fingerprint_hex.clone(),
+    }
+}
+
+fn usize_delta(current: usize, previous: usize) -> Option<isize> {
+    let current = i128::try_from(current).ok()?;
+    let previous = i128::try_from(previous).ok()?;
+    isize::try_from(current - previous).ok()
+}
+
+fn hash_streaming_v2_topology_hex(topology: &StreamingV2PartitionTopology) -> String {
+    encode_digest_hex(hash_with_sha256(|hasher| {
+        hash_string(hasher, &topology.root_partition_id);
+        hash_usize_sha256(hasher, topology.partitions.len());
+        for partition in &topology.partitions {
+            hash_string(hasher, &partition.id);
+            hash_optional_string(hasher, partition.parent_id.as_deref());
+            hash_strings(hasher, &partition.child_ids);
+            hash_usize_sha256(hasher, partition.item_count);
+            hasher.update([u8::from(partition.terminal)]);
+        }
+    }))
+}
+
+fn hash_streaming_v2_pending_partitions_hex(
+    pending_partitions: &[StreamingV2PendingPartitionStatus],
+) -> String {
+    encode_digest_hex(hash_with_sha256(|hasher| {
+        hash_usize_sha256(hasher, pending_partitions.len());
+        for partition in pending_partitions {
+            hash_string(hasher, &partition.partition_path);
+            hash_usize_sha256(hasher, partition.expected_item_count);
+            hash_optional_usize(hasher, partition.observed_replay_progress);
+            hash_optional_usizes(hasher, partition.routing_bucket_fill_counts.as_deref());
+            hash_optional_usize(
+                hasher,
+                partition
+                    .trainer_subphase
+                    .map(streaming_v2_trainer_subphase_code),
+            );
+            hash_optional_usize(hasher, partition.ready_axis_plan_count);
+            hash_optional_usize(hasher, partition.total_axis_plan_count);
+            hash_optional_usize(hasher, partition.populated_cell_count);
+            hash_optional_usize(hasher, partition.realized_cell_count);
+            hash_string(hasher, &partition.planner_state_fingerprint_hex);
+        }
+    }))
+}
+
+fn hash_streaming_v2_completed_pass_state_hex(
+    topology_fingerprint_hex: &str,
+    pending_partition_fingerprint_hex: &str,
+) -> String {
+    encode_digest_hex(hash_with_sha256(|hasher| {
+        hash_string(hasher, topology_fingerprint_hex);
+        hash_string(hasher, pending_partition_fingerprint_hex);
+    }))
+}
+
+fn hash_streaming_v2_bucket_fill_counts_hex(bucket_fill_counts: &[usize]) -> String {
+    encode_digest_hex(hash_with_sha256(|hasher| {
+        hash_usizes_sha256(hasher, bucket_fill_counts);
+    }))
+}
+
+fn hash_with_sha256(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    update(&mut hasher);
+    hasher.finalize().into()
+}
+
+fn encode_digest_hex(bytes: [u8; 32]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(hex_nibble(byte >> 4));
+        text.push(hex_nibble(byte & 0x0f));
+    }
+    text
+}
+
+fn hex_nibble(value: u8) -> char {
+    match value {
+        0..=9 => char::from(b'0' + value),
+        10..=15 => char::from(b'a' + (value - 10)),
+        _ => unreachable!("hex nibble out of range"),
+    }
+}
+
+fn hash_usize_sha256(hasher: &mut Sha256, value: usize) {
+    hasher.update((value as u64).to_le_bytes());
+}
+
+fn hash_optional_usize(hasher: &mut Sha256, value: Option<usize>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hash_usize_sha256(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_usizes_sha256(hasher: &mut Sha256, values: &[usize]) {
+    hash_usize_sha256(hasher, values.len());
+    for value in values {
+        hash_usize_sha256(hasher, *value);
+    }
+}
+
+fn hash_optional_usizes(hasher: &mut Sha256, values: Option<&[usize]>) {
+    match values {
+        Some(values) => {
+            hasher.update([1]);
+            hash_usizes_sha256(hasher, values);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_string(hasher: &mut Sha256, value: &str) {
+    hash_usize_sha256(hasher, value.len());
+    hasher.update(value.as_bytes());
+}
+
+fn hash_optional_string(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hash_string(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn hash_strings(hasher: &mut Sha256, values: &[String]) {
+    hash_usize_sha256(hasher, values.len());
+    for value in values {
+        hash_string(hasher, value);
+    }
+}
+
+fn streaming_v2_trainer_subphase_code(subphase: StreamingIndexingTrainerSubphase) -> usize {
+    match subphase {
+        StreamingIndexingTrainerSubphase::AnalyzePca => 0,
+        StreamingIndexingTrainerSubphase::PlanCuts => 1,
+        StreamingIndexingTrainerSubphase::CountCells => 2,
+        StreamingIndexingTrainerSubphase::RealizePartition => 3,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -6628,6 +7236,7 @@ fn status_with_progress(
         fallback_count: None,
         pending_partition_count: None,
         v2_pending_partitions: None,
+        v2_completed_pass_summary: None,
         suspected_stall: None,
         elapsed,
         last_progress_at: None,
@@ -9466,6 +10075,7 @@ mod tests {
             completed_passes: 0,
             baseline_fingerprint: None,
             current_pass: None,
+            completed_pass_snapshots: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
             _item_ref: PhantomData,
