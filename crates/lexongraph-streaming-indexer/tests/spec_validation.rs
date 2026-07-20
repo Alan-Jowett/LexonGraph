@@ -5861,6 +5861,8 @@ async fn val_stream_indexer_112_streaming_v2_completed_pass_summary_reports_bloc
         Some(StreamingIndexingTrainerSubphase::PlanCuts)
     );
     assert!(blocker.blocker_detail.contains("cut planning"));
+    assert!(!blocker.blocker_detail.contains("Some("));
+    assert!(!blocker.blocker_detail.contains("None"));
     assert_eq!(blocker.expected_item_count, items.len());
     assert!(blocker.total_axis_plan_count.is_some());
 }

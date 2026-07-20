@@ -348,7 +348,7 @@ fn telemetry_detail_from_phase(phase: &ReplayPhase) -> DirectionalPcaTelemetryDe
             ready_axis_plan_count: Some(ready.partition.axis_plans.len()),
             total_axis_plan_count: Some(ready.partition.axis_plans.len()),
             populated_cell_count: Some(ready.cells.len()),
-            realized_cell_count: Some(ready.cells.len()),
+            realized_cell_count: None,
             state_fingerprint_hex: encode_digest_hex(hash_replay_phase(phase)),
         },
     }
@@ -2116,5 +2116,31 @@ mod tests {
         assert_eq!(cuts.len(), 1);
         assert!(cuts[0] > 3.0);
         assert!(cuts[0] < 7.0);
+    }
+
+    #[test]
+    fn phase_only_realize_partition_telemetry_does_not_claim_realized_cells() {
+        let detail =
+            telemetry_detail_from_phase(&ReplayPhase::RealizePartition(ReadyPartitionPlan {
+                partition: PartitionPlan {
+                    transform: PcaTransform {
+                        input_dim: 1,
+                        output_dim: 1,
+                        mean: vec![0.0],
+                        basis: vec![1.0],
+                        explained_variance: Some(vec![1.0]),
+                        schema_version: 1,
+                    },
+                    axis_plans: vec![AxisPlan::SingleBin],
+                },
+                cells: vec![ReadyCellPlan {
+                    key: vec![0],
+                    count: 2,
+                    extra_clusters: 0,
+                    cluster_offset: 0,
+                }],
+            }));
+        assert_eq!(detail.populated_cell_count, Some(1));
+        assert_eq!(detail.realized_cell_count, None);
     }
 }

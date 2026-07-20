@@ -5333,29 +5333,31 @@ fn summarize_streaming_v2_partition_blocker(
         Some(StreamingIndexingTrainerSubphase::AnalyzePca) => (
             StreamingV2BlockerKind::AnalyzePcaPending,
             format!(
-                "partition still requires PCA analysis replay; observed {:?} of expected {} items",
-                status.observed_replay_progress, status.expected_item_count
+                "partition still requires PCA analysis replay; observed {} of expected {} items",
+                format_optional_usize(status.observed_replay_progress),
+                status.expected_item_count
             ),
         ),
         Some(StreamingIndexingTrainerSubphase::PlanCuts) => (
             StreamingV2BlockerKind::PlanCutsPending,
             format!(
-                "partition still requires cut planning; ready axes {:?} of {:?}",
-                status.ready_axis_plan_count, status.total_axis_plan_count
+                "partition still requires cut planning; ready axes {} of {}",
+                format_optional_usize(status.ready_axis_plan_count),
+                format_optional_usize(status.total_axis_plan_count)
             ),
         ),
         Some(StreamingIndexingTrainerSubphase::CountCells) => (
             StreamingV2BlockerKind::CountCellsPending,
             format!(
-                "partition still requires cell counting; populated cells observed {:?}",
-                status.populated_cell_count
+                "partition still requires cell counting; populated cells observed {}",
+                format_optional_usize(status.populated_cell_count)
             ),
         ),
         Some(StreamingIndexingTrainerSubphase::RealizePartition) => (
             StreamingV2BlockerKind::RealizePartitionPending,
             format!(
-                "partition still requires partition realization; realized cells {:?}",
-                status.realized_cell_count
+                "partition still requires partition realization; realized cells {}",
+                format_optional_usize(status.realized_cell_count)
             ),
         ),
         None => {
@@ -5452,6 +5454,12 @@ fn hash_streaming_v2_bucket_fill_counts_hex(bucket_fill_counts: &[usize]) -> Str
     encode_digest_hex(hash_with_sha256(|hasher| {
         hash_usizes_sha256(hasher, bucket_fill_counts);
     }))
+}
+
+fn format_optional_usize(value: Option<usize>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 fn hash_with_sha256(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
