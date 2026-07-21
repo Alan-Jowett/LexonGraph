@@ -1978,10 +1978,10 @@ struct StreamingV2QuantilePlannerState {
 struct StreamingV2QuantilePassFiles {
     expected_value_count: usize,
     paths: Vec<PathBuf>,
-    writers: Vec<WindowedMmapF32Writer>,
+    writers: Vec<BufferedF32Writer>,
 }
 
-struct WindowedMmapF32Writer {
+struct BufferedF32Writer {
     writer: BufWriter<File>,
     total_values: usize,
     written_values: usize,
@@ -9517,7 +9517,7 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
         let mut writers = Vec::with_capacity(axis_count);
         for axis_index in 0..axis_count {
             let path = self.dir.path().join(format!("axis-{axis_index:04}.bin"));
-            match WindowedMmapF32Writer::create(&path, expected_value_count, window_bytes) {
+            match BufferedF32Writer::create(&path, expected_value_count, window_bytes) {
                 Ok(writer) => {
                     paths.push(path);
                     writers.push(writer);
@@ -9613,7 +9613,7 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
     }
 }
 
-impl WindowedMmapF32Writer {
+impl BufferedF32Writer {
     fn create(path: &Path, total_values: usize, window_bytes: usize) -> Result<Self, String> {
         let file = OpenOptions::new()
             .read(true)
