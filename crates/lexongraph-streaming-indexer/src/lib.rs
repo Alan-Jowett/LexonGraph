@@ -9673,7 +9673,6 @@ impl WindowedMmapF32Writer {
             .checked_add(V2_PLANNER_STATE_VALUE_BYTES)
             .ok_or_else(|| "planner state local value range overflowed".to_string())?;
         map[local_offset..value_end].copy_from_slice(&value.to_le_bytes());
-        self.unmap_current()?;
         self.written_values += 1;
         Ok(())
     }
