@@ -1968,6 +1968,7 @@ struct PartitionSpillDirectory {
 
 const V2_PLANNER_STATE_WINDOW_BYTES: usize = 1024 * 1024;
 const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
+const V2_PLANNER_STATE_VALUE_BYTES: usize = std::mem::size_of::<f32>();
 
 struct StreamingV2QuantilePlannerState {
     dir: TempDir,
@@ -9595,10 +9596,8 @@ impl WindowedMmapF32Writer {
                     path.display()
                 )
             })?;
-        let total_bytes = u64::try_from(total_values)
-            .ok()
-            .and_then(|value_count| value_count.checked_mul(4))
-            .ok_or_else(|| "planner state file length overflowed".to_string())?;
+        let total_bytes = u64::try_from(total_byte_len(total_values)?)
+            .map_err(|_| "planner state file length overflowed".to_string())?;
         file.set_len(total_bytes).map_err(|error| {
             format!(
                 "could not size planner state file {}: {error}",
@@ -9634,7 +9633,10 @@ impl WindowedMmapF32Writer {
             .map
             .as_mut()
             .ok_or_else(|| "planner state write window is not mapped".to_string())?;
-        map[local_offset..local_offset + 4].copy_from_slice(&value.to_le_bytes());
+        let value_end = local_offset
+            .checked_add(V2_PLANNER_STATE_VALUE_BYTES)
+            .ok_or_else(|| "planner state local value range overflowed".to_string())?;
+        map[local_offset..value_end].copy_from_slice(&value.to_le_bytes());
         self.written_values += 1;
         Ok(())
     }
@@ -9659,7 +9661,7 @@ impl WindowedMmapF32Writer {
                 .map_err(|_| "planner state byte offset overflowed".to_string())?,
             V2_MMAP_ALLOCATION_GRANULARITY,
         );
-        let total_bytes = self.total_values * 4;
+        let total_bytes = total_byte_len(self.total_values)?;
         let remaining = total_bytes
             .checked_sub(
                 usize::try_from(aligned_start)
@@ -9682,7 +9684,10 @@ impl WindowedMmapF32Writer {
 
     fn window_contains(&self, byte_offset: usize) -> bool {
         let start = usize::try_from(self.map_start).unwrap_or(usize::MAX);
-        byte_offset >= start && byte_offset + 4 <= start + self.map_len
+        let Some(end) = byte_offset.checked_add(V2_PLANNER_STATE_VALUE_BYTES) else {
+            return false;
+        };
+        byte_offset >= start && end <= start.saturating_add(self.map_len)
     }
 
     fn unmap_current(&mut self) -> Result<(), String> {
@@ -9731,10 +9736,13 @@ impl WindowedMmapF32Reader {
                 .map
                 .as_ref()
                 .ok_or_else(|| "planner state read window is not mapped".to_string())?;
+            let value_end = local_offset
+                .checked_add(V2_PLANNER_STATE_VALUE_BYTES)
+                .ok_or_else(|| "planner state local value range overflowed".to_string())?;
             let value =
-                f32::from_le_bytes(map[local_offset..local_offset + 4].try_into().map_err(
-                    |_| "planner state window returned an invalid value size".to_string(),
-                )?);
+                f32::from_le_bytes(map[local_offset..value_end].try_into().map_err(|_| {
+                    "planner state window returned an invalid value size".to_string()
+                })?);
             observe(value)?;
             self.read_values += 1;
         }
@@ -9753,7 +9761,7 @@ impl WindowedMmapF32Reader {
                 .map_err(|_| "planner state byte offset overflowed".to_string())?,
             V2_MMAP_ALLOCATION_GRANULARITY,
         );
-        let total_bytes = self.total_values * 4;
+        let total_bytes = total_byte_len(self.total_values)?;
         let remaining = total_bytes
             .checked_sub(
                 usize::try_from(aligned_start)
@@ -9776,12 +9784,21 @@ impl WindowedMmapF32Reader {
 
     fn window_contains(&self, byte_offset: usize) -> bool {
         let start = usize::try_from(self.map_start).unwrap_or(usize::MAX);
-        byte_offset >= start && byte_offset + 4 <= start + self.map_len
+        let Some(end) = byte_offset.checked_add(V2_PLANNER_STATE_VALUE_BYTES) else {
+            return false;
+        };
+        byte_offset >= start && end <= start.saturating_add(self.map_len)
     }
 }
 
 fn align_down(value: u64, alignment: u64) -> u64 {
     value / alignment * alignment
+}
+
+fn total_byte_len(total_values: usize) -> Result<usize, String> {
+    total_values
+        .checked_mul(V2_PLANNER_STATE_VALUE_BYTES)
+        .ok_or_else(|| "planner state file length overflowed".to_string())
 }
 
 impl PartitionSpillDirectory {
