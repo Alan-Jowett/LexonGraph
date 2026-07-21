@@ -9519,8 +9519,26 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
         let mut writers = Vec::with_capacity(axis_count);
         for axis_index in 0..axis_count {
             let path = self.dir.path().join(format!("axis-{axis_index:04}.bin"));
-            paths.push(path.clone());
-            writers.push(WindowedMmapF32Writer::create(&path, expected_value_count)?);
+            match WindowedMmapF32Writer::create(&path, expected_value_count) {
+                Ok(writer) => {
+                    paths.push(path);
+                    writers.push(writer);
+                }
+                Err(error) => {
+                    drop(writers);
+                    for stale_path in &paths {
+                        if let Err(remove_error) = std::fs::remove_file(stale_path)
+                            && remove_error.kind() != std::io::ErrorKind::NotFound
+                        {
+                            return Err(format!(
+                                "{error}; additionally could not remove planner state file {}: {remove_error}",
+                                stale_path.display()
+                            ));
+                        }
+                    }
+                    return Err(error);
+                }
+            }
         }
         self.quantile_pass = Some(StreamingV2QuantilePassFiles {
             expected_value_count,
@@ -10498,6 +10516,28 @@ mod tests {
 
         assert!(planner_state.quantile_pass.is_none());
         assert!(axis_paths.iter().all(|path| !path.exists()));
+    }
+
+    #[test]
+    fn quantile_planner_state_begin_quantile_pass_cleans_up_partial_files_on_error() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let mut planner_state =
+            StreamingV2QuantilePlannerState::new(&root).expect("planner state should initialize");
+        let blocked_path = planner_state.dir.path().join("axis-0001.bin");
+        std::fs::create_dir(&blocked_path)
+            .expect("test should be able to block second axis file creation");
+
+        let error =
+            DirectionalPcaOutOfCorePlannerState::begin_quantile_pass(&mut planner_state, 2, 3)
+                .unwrap_err();
+
+        assert!(
+            error.contains("could not create planner state file"),
+            "unexpected error: {error}"
+        );
+        assert!(planner_state.quantile_pass.is_none());
+        assert!(!planner_state.dir.path().join("axis-0000.bin").exists());
+        assert!(blocked_path.is_dir());
     }
 
     fn make_streaming_v2_run(

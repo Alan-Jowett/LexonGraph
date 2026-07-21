@@ -977,9 +977,15 @@ impl DirectionalPcaStreamingTrainer {
             .out_of_core_state
             .as_mut()
             .ok_or_else(|| invalid_configuration("missing out-of-core planner state"))?;
-        out_of_core_state
-            .finish_quantile_pass()
-            .map_err(out_of_core_state_error)?;
+        if let Err(error) = out_of_core_state.finish_quantile_pass() {
+            let clear_result = out_of_core_state.clear_quantile_pass();
+            return match clear_result {
+                Ok(()) => Err(out_of_core_state_error(error)),
+                Err(clear_error) => Err(unsatisfiable_constraint(format!(
+                    "out-of-core planner state failed: {error}; additionally failed to clear planner state: {clear_error}"
+                ))),
+            };
+        }
 
         let result = planners
             .into_iter()
@@ -2214,6 +2220,10 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[derive(Default)]
     struct TestOutOfCorePlannerState {
@@ -2222,6 +2232,10 @@ mod tests {
     }
 
     struct FailingBeginOutOfCorePlannerState;
+
+    struct FailingFinishOutOfCorePlannerState {
+        clear_called: Arc<AtomicBool>,
+    }
 
     impl DirectionalPcaOutOfCorePlannerState for TestOutOfCorePlannerState {
         fn begin_quantile_pass(
@@ -2311,6 +2325,37 @@ mod tests {
         }
 
         fn clear_quantile_pass(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    impl DirectionalPcaOutOfCorePlannerState for FailingFinishOutOfCorePlannerState {
+        fn begin_quantile_pass(
+            &mut self,
+            _axis_count: usize,
+            _expected_value_count: usize,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn append_quantile_values(&mut self, _values: &[f32]) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn finish_quantile_pass(&mut self) -> Result<(), String> {
+            Err("synthetic finish_quantile_pass failure".into())
+        }
+
+        fn scan_quantile_axis(
+            &self,
+            _axis_index: usize,
+            _observe: &mut dyn FnMut(f32) -> Result<(), String>,
+        ) -> Result<(), String> {
+            Err("scan_quantile_axis should not be called after finish failure".into())
+        }
+
+        fn clear_quantile_pass(&mut self) -> Result<(), String> {
+            self.clear_called.store(true, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -2477,5 +2522,36 @@ mod tests {
             DirectionalPcaTrainerSubphase::PlanCuts
         );
         assert_eq!(trainer.telemetry().observed_count, None);
+    }
+
+    #[test]
+    fn failing_out_of_core_finish_still_clears_planner_state() {
+        let embeddings = (0..8).map(|value| vec![value as f32]).collect::<Vec<_>>();
+        let config = StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 1,
+            balance_constraints: None,
+            random_seed: None,
+        };
+        let clear_called = Arc::new(AtomicBool::new(false));
+
+        let mut trainer = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
+            .unwrap()
+            .with_out_of_core_planner_state(Box::new(FailingFinishOutOfCorePlannerState {
+                clear_called: clear_called.clone(),
+            }));
+        trainer.ingest_batch(&embeddings).unwrap();
+        trainer.finish_pass().unwrap();
+        trainer.ingest_batch(&embeddings).unwrap();
+
+        let error = trainer.finish_pass().unwrap_err();
+        assert_eq!(
+            error,
+            unsatisfiable_constraint(
+                "out-of-core planner state failed: synthetic finish_quantile_pass failure"
+            )
+        );
+        assert!(clear_called.load(Ordering::Relaxed));
+        assert_eq!(trainer.state(), TrainerState::Error);
     }
 }
