@@ -68,8 +68,10 @@ Exercise one pass with multiple batches whose concatenated order is known.
 **Pass condition:** `finish_pass()` realizes exactly one caller-visible
 directional-PCA pass over the concatenated pass dataset order and does not
 perform hidden extra passes or require implementation-owned full-dataset
-retention/spill to do so. The pass may report `AnalysisOnly` status when exact
-partitioning requires later replay passes.
+retention or hidden spill to do so. Deterministic temporary spill for the
+active replay phase or current planning subproblem is permitted when it does
+not change the observable pass boundary. The pass may report `AnalysisOnly`
+status when exact partitioning requires later replay passes.
 
 **Traces to:** REQ-DPCA-STREAM-008, REQ-DPCA-STREAM-009
 
@@ -349,16 +351,18 @@ boundary rather than silently switching to the adaptive retained-axis policy.
 Inspect or execute a conformant implementation while exercising passes whose
 full logical dataset is larger than one chunk.
 
-**Pass condition:** implementation-owned memory and scratch/storage remain
-bounded by current chunk size, PCA/statistical summaries, and fixed
-configuration terms rather than by full completed-pass dataset size `N`.
+**Pass condition:** implementation-owned resident memory remains bounded by
+current chunk size, PCA/statistical summaries, fixed configuration terms, and
+any deterministic temporary spill for the active replay phase or current
+planning subproblem rather than by full completed-pass dataset size `N`.
 
 **Traces to:** REQ-DPCA-STREAM-029
 
 ### VAL-DPCA-STREAM-032
 
 Assess an implementation whose public API is batch-streaming shaped but whose
-normal execution retains or spills the full pass.
+normal execution retains or spills the full pass as a hidden substitute for
+caller-visible replay.
 
 **Pass condition:** the implementation is classified as non-conformant under
 this revision.

@@ -342,13 +342,15 @@ or equivalent dataset-sized constructs.
 Inspect the implementation-owned retained state used for v2 replay
 verification, planning, and final materialization.
 
-**Pass condition:** no conformant path retains, materializes, or spills
-full-dataset baseline tables, replayed embedding tables, partition membership
-tables, decoded full-pass embedding tables spanning `ingest_batch` to
-`finish_pass`, or equivalent implementation-owned full logical dataset state.
+**Pass condition:** no conformant path retains or materializes full-dataset
+baseline tables, replayed embedding tables, partition membership tables,
+decoded full-pass embedding tables spanning `ingest_batch` to `finish_pass`, or
+equivalent implementation-owned full logical dataset state. Deterministic
+temporary planning spill is permitted only when it is cleanup-scoped and does
+not replace the caller-visible replay lifecycle.
 
 **Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021A,
-REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D
+REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021G
 
 ### VAL-STREAM-INDEXER-025B
 
@@ -357,9 +359,11 @@ data.
 
 **Pass condition:** the revisit remains caller-visible as replay or staged
 progress rather than being simulated through hidden implementation-owned
-full-dataset retention or spill.
+full-dataset retention or spill. Temporary planning spill may stage bounded
+subproblem work, but it shall not become a hidden substitute for replay.
 
-**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021D
+**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021D,
+REQ-STREAM-INDEXER-021G
 
 ### VAL-STREAM-INDEXER-025C
 
@@ -367,11 +371,28 @@ Inspect one v2 planning realization that performs recursive subdivision or
 assignment of planning units.
 
 **Pass condition:** the conformant path realizes that planning work through
-bounded-state replay stages, bounded summaries, or bounded per-subproblem
-working sets rather than requiring a full-pass decoded embedding table,
-full-pass assignment vector, or equivalent replay-sized materialization.
+bounded-state replay stages, bounded summaries, bounded per-subproblem working
+sets, or deterministic temporary spill rather than requiring a full-pass
+decoded embedding table, full-pass assignment vector, or equivalent replay-sized
+materialization.
 
-**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021E
+**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021E,
+REQ-STREAM-INDEXER-021G
+
+### VAL-STREAM-INDEXER-025E
+
+Exercise a v2 planning workload large enough to require bounded unresolved-frontier
+processing or temporary planning spill in order to stay within the intended
+resident-memory envelope.
+
+**Pass condition:** the implementation preserves replay validation,
+deterministic completed-pass summaries, and finalized partition-hierarchy
+semantics while reducing peak resident-memory pressure through bounded active
+planning work or deterministic temporary spill. Any temporary planning spill is
+cleaned up on both success and explicit failure.
+
+**Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024,
+REQ-STREAM-INDEXER-021G
 
 ### VAL-STREAM-INDEXER-025D
 

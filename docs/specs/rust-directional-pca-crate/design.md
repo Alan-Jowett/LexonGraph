@@ -342,20 +342,23 @@ changing the semantics of the selected binning or cardinality policies.
 
 ### DSG-DPCA-STREAM-027 `Bounded implementation-owned working set`
 
-The concrete crate bounds implementation-owned memory and scratch/storage
-independently of the full completed-pass dataset size.
+The concrete crate bounds implementation-owned resident memory independently of
+the full completed-pass dataset size.
 
 Allowed growth is limited to the currently processed chunk, PCA sufficient
-statistics, streaming-compatible continuity summaries, and other fixed
-configuration-bounded state.
+statistics, streaming-compatible continuity summaries, other fixed
+configuration-bounded state, and optional deterministic temporary spill for the
+active replay phase or current planning subproblem when that spill reduces peak
+resident memory.
 
 ### DSG-DPCA-STREAM-028 `Assessment rule for streaming-shaped APIs`
 
 Conformance is determined by the actual execution model, not by a streaming-
 shaped public API alone.
 
-An implementation that exposes `ingest_batch()` but still requires full-pass
-materialization or dataset spill is non-conformant under this revision.
+An implementation that exposes `ingest_batch()` but still requires hidden
+full-pass materialization or dataset spill as a substitute for caller-visible
+replay is non-conformant under this revision.
 
 ## Traceability
 

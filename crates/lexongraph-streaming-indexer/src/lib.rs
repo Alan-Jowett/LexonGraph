@@ -1980,6 +1980,7 @@ struct StreamingV2PassState {
     fingerprint: StreamingV2ReplayFingerprintTracker,
     replay_order_offsets: Vec<usize>,
     classifier_assignment_counts: Vec<Option<Vec<usize>>>,
+    active_pending_partitions: Vec<bool>,
     started: Instant,
     last_progress_at: Option<Duration>,
     planning_started_emitted: bool,
@@ -2000,6 +2001,9 @@ struct StreamingV2PartitionNode {
     pending_trainer: Option<DirectionalPcaStreamingTrainer>,
     routing: Option<StreamingV2RoutingStrategy>,
 }
+
+const V2_ACTIVE_PENDING_PARTITION_WORKING_SET_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+const V2_PENDING_PARTITION_MIN_ESTIMATE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct StreamingV2CompletedPassSnapshot {
@@ -3682,8 +3686,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             )?;
             if !self.partitions.is_empty() {
                 current_pass.ensure_partition_capacity(self.partitions.len());
-                let pending_ids = self.pending_partition_ids();
-                if let Some(&partition_id) = pending_ids.first() {
+                let active_pending_ids = self.v2_active_pending_partition_ids()?;
+                current_pass.set_active_pending_partitions(
+                    self.partitions.len(),
+                    active_pending_ids.as_slice(),
+                );
+                if let Some(&partition_id) = active_pending_ids.first() {
                     let _ = self.emit_v2_hierarchy_status(
                         &mut current_pass,
                         partition_id,
@@ -3717,6 +3725,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             decoded.as_slice(),
                             current_pass.replay_order_offsets.as_mut_slice(),
                             current_pass.classifier_assignment_counts.as_mut_slice(),
+                            current_pass.active_pending_partitions.as_slice(),
                         )?
                     };
                     if let Some(partition_id) = partition_id {
@@ -3871,7 +3880,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             debug_assert_eq!(root_id, ROOT_PARTITION_ID);
             self.append_partition_nodes(vec![root]);
         } else {
-            let pending_ids = self.pending_partition_ids();
+            let pending_ids = current_pass.active_pending_partition_ids();
             let mut completed = Vec::new();
             let mut completed_unit_count = 0;
             for partition_id in pending_ids {
@@ -4441,6 +4450,71 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         })
     }
 
+    fn estimate_v2_pending_partition_working_set_bytes(
+        &self,
+        partition_id: PartitionId,
+    ) -> Result<usize, StreamingIndexerError> {
+        let partition = self.partition(partition_id)?;
+        let trainer = partition.pending_trainer.as_ref().ok_or_else(|| {
+            StreamingIndexerError::HierarchyValidation(format!(
+                "pending partition {:?} is missing its trainer",
+                self.partition_label(partition_id)
+            ))
+        })?;
+        let dimensions = self.dimensions()?;
+        let cluster_count = usize::try_from(trainer.config().cluster_count).map_err(|_| {
+            StreamingIndexerError::HierarchyValidation(
+                "directional-PCA cluster count does not fit into usize".into(),
+            )
+        })?;
+        let square_matrix_bytes = dimensions
+            .saturating_mul(dimensions)
+            .saturating_mul(std::mem::size_of::<f64>());
+        let per_cluster_vector_bytes = cluster_count
+            .saturating_mul(dimensions)
+            .saturating_mul(std::mem::size_of::<f64>());
+        let estimate = match trainer.telemetry().subphase {
+            DirectionalPcaTrainerSubphase::AnalyzePca => square_matrix_bytes.saturating_mul(2),
+            DirectionalPcaTrainerSubphase::PlanCuts => {
+                square_matrix_bytes.saturating_add(cluster_count.saturating_mul(256))
+            }
+            DirectionalPcaTrainerSubphase::CountCells => per_cluster_vector_bytes.saturating_mul(2),
+            DirectionalPcaTrainerSubphase::RealizePartition => {
+                per_cluster_vector_bytes.saturating_mul(3)
+            }
+        };
+        Ok(estimate.max(V2_PENDING_PARTITION_MIN_ESTIMATE_BYTES))
+    }
+
+    fn v2_active_pending_partition_ids(&self) -> Result<Vec<PartitionId>, StreamingIndexerError> {
+        let pending_ids = self.pending_partition_ids();
+        if pending_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut active = Vec::new();
+        let mut estimated_bytes = 0usize;
+        for partition_id in pending_ids {
+            let estimate = self.estimate_v2_pending_partition_working_set_bytes(partition_id)?;
+            if !active.is_empty()
+                && estimated_bytes.saturating_add(estimate)
+                    > V2_ACTIVE_PENDING_PARTITION_WORKING_SET_BUDGET_BYTES
+            {
+                break;
+            }
+            estimated_bytes = estimated_bytes.saturating_add(estimate);
+            active.push(partition_id);
+        }
+        if active.is_empty() {
+            active.push(
+                self.pending_partition_ids()
+                    .into_iter()
+                    .next()
+                    .expect("non-empty pending partition set"),
+            );
+        }
+        Ok(active)
+    }
+
     fn create_partition_node(
         &self,
         parent_id: Option<PartitionId>,
@@ -4516,6 +4590,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         embedding: &[f32],
         replay_order_offsets: &mut [usize],
         classifier_assignment_counts: &mut [Option<Vec<usize>>],
+        active_pending_partitions: &[bool],
     ) -> Result<Option<PartitionId>, StreamingIndexerError> {
         if partitions.is_empty() {
             return Ok(None);
@@ -4532,7 +4607,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 return Ok(None);
             }
             if partition.pending_trainer.is_some() {
-                return Ok(Some(current));
+                return Ok(active_pending_partitions
+                    .get(current.0)
+                    .copied()
+                    .unwrap_or(false)
+                    .then_some(current));
             }
             let routing = partition.routing.as_ref().ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
@@ -4929,6 +5008,7 @@ impl StreamingV2PassState {
             fingerprint: StreamingV2ReplayFingerprintTracker::new(),
             replay_order_offsets: Vec::new(),
             classifier_assignment_counts: Vec::new(),
+            active_pending_partitions: Vec::new(),
             started: Instant::now(),
             last_progress_at: None,
             planning_started_emitted: false,
@@ -4945,9 +5025,35 @@ impl StreamingV2PassState {
             self.classifier_assignment_counts
                 .resize_with(partition_count, || None);
         }
+        if self.active_pending_partitions.len() < partition_count {
+            self.active_pending_partitions
+                .resize(partition_count, false);
+        }
         if self.partition_unit_started.len() < partition_count {
             self.partition_unit_started.resize(partition_count, None);
         }
+    }
+
+    fn set_active_pending_partitions(
+        &mut self,
+        partition_count: usize,
+        active_pending_ids: &[PartitionId],
+    ) {
+        self.ensure_partition_capacity(partition_count);
+        self.active_pending_partitions.fill(false);
+        for &partition_id in active_pending_ids {
+            if let Some(active) = self.active_pending_partitions.get_mut(partition_id.0) {
+                *active = true;
+            }
+        }
+    }
+
+    fn active_pending_partition_ids(&self) -> Vec<PartitionId> {
+        self.active_pending_partitions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, active)| active.then_some(PartitionId(index)))
+            .collect()
     }
 }
 
@@ -10273,5 +10379,64 @@ mod tests {
         ));
         assert_eq!(run.partitions.len(), 1);
         assert_eq!(run.next_partition_id, 1);
+    }
+
+    #[test]
+    fn streaming_v2_active_pending_partition_budget_is_deterministic() {
+        let mut run = make_streaming_v2_run(super::PUBLISHED_PROFILE_V0_7_0);
+        run.embedding_spec.dims = 4096;
+        run.partitions = vec![
+            run.create_partition_node(None, 2048, 64)
+                .expect("partition should be created"),
+            run.create_partition_node(None, 2048, 64)
+                .expect("partition should be created"),
+            run.create_partition_node(None, 2048, 64)
+                .expect("partition should be created"),
+        ];
+
+        assert_eq!(
+            run.v2_active_pending_partition_ids()
+                .expect("active partition selection should succeed"),
+            vec![super::PartitionId(0)]
+        );
+        assert_eq!(
+            run.v2_active_pending_partition_ids()
+                .expect("selection should stay deterministic"),
+            vec![super::PartitionId(0)]
+        );
+    }
+
+    #[test]
+    fn route_planning_target_skips_inactive_pending_partitions() {
+        let run = make_streaming_v2_run(super::PUBLISHED_PROFILE_V0_7_0);
+        let root = run
+            .create_partition_node(None, 2048, 64)
+            .expect("root partition should be created");
+        let partitions = vec![root];
+        let mut replay_order_offsets = vec![0];
+        let mut classifier_assignment_counts = vec![None];
+
+        assert_eq!(
+            StreamingIndexingRunV2::<(), (), ()>::route_planning_target_in_partitions(
+                partitions.as_slice(),
+                &[0.0],
+                replay_order_offsets.as_mut_slice(),
+                classifier_assignment_counts.as_mut_slice(),
+                &[false],
+            )
+            .expect("routing should succeed"),
+            None
+        );
+        assert_eq!(
+            StreamingIndexingRunV2::<(), (), ()>::route_planning_target_in_partitions(
+                partitions.as_slice(),
+                &[0.0],
+                replay_order_offsets.as_mut_slice(),
+                classifier_assignment_counts.as_mut_slice(),
+                &[true],
+            )
+            .expect("routing should succeed"),
+            Some(super::ROOT_PARTITION_ID)
+        );
     }
 }

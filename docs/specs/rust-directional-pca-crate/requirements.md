@@ -360,8 +360,8 @@ log-bit allocation.
 ### REQ-DPCA-STREAM-029
 
 A conformant implementation shall realize indexing and training with
-implementation-owned memory and scratch/storage bounded independently of the
-full completed-pass dataset size `N`.
+implementation-owned resident memory bounded independently of the full
+completed-pass dataset size `N`.
 
 Allowed implementation-owned growth may depend on:
 
@@ -371,18 +371,23 @@ Allowed implementation-owned growth may depend on:
 - other fixed documented configuration parameters
 
 The crate shall not require retaining the completed dataset, retained-coordinate
-tables for all members, replay logs, or spill files whose footprint scales with
-the full dataset size `N`.
+tables for all members, replay logs, or resident in-memory state whose
+footprint scales with the full dataset size `N`.
+
+Deterministic temporary local spill for the active replay phase or current
+planning subproblem is conformant when it reduces peak resident memory without
+replacing caller-visible replay across passes.
 
 ### REQ-DPCA-STREAM-030
 
 When evaluating a concrete implementation against this revision, any design
-that requires implementation-owned storage scaling with the full completed-pass
-dataset size `N` is non-conformant even if the public API is batch-streaming
-shaped.
+that requires hidden implementation-owned retained state or spill as a
+substitute for caller-visible replay across the full completed-pass dataset is
+non-conformant even if the public API is batch-streaming shaped.
 
-Transient storage scaling with the currently processed chunk remains
-conformant.
+Transient storage scaling with the currently processed chunk, or deterministic
+temporary spill scoped to the active replay phase or current planning
+subproblem, remains conformant.
 
 ### REQ-DPCA-STREAM-021
 

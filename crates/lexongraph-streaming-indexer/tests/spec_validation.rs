@@ -1532,6 +1532,7 @@ fn val_stream_indexer_108_streaming_v2_retained_state_uses_compact_partition_ids
     assert!(src.contains("child_ids: Vec<PartitionId>"));
     assert!(src.contains("replay_order_offsets: Vec<usize>"));
     assert!(src.contains("classifier_assignment_counts: Vec<Option<Vec<usize>>>"));
+    assert!(src.contains("active_pending_partitions: Vec<bool>"));
     assert!(src.contains("format_partition_label("));
     assert!(!src.contains("partitions: BTreeMap<String, StreamingV2PartitionNode>"));
     assert!(!src.contains("replay_order_offsets: HashMap<String, usize>"));

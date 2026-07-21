@@ -268,6 +268,10 @@ This restriction does not forbid implementation-owned temporary local spill
 used only after planning completion to stage per-terminal-partition
 materialization inputs.
 
+It also does not forbid deterministic, implementation-owned temporary local
+spill during planning when that spill is used only to reduce peak resident
+memory and does not widen the caller-visible replay API.
+
 ### REQ-STREAM-INDEXER-018
 
 The core streaming indexer shall own the protocol-required orchestration, leaf
@@ -363,6 +367,11 @@ with discovered partition count, but shall use a compact representation that
 does not make externally formatted partition identifiers or string-keyed
 indexing structures the primary retained identity on the hot in-memory path.
 
+Resident-memory reduction may instead be achieved through deterministic,
+temporary local spill or caller-visible additional replay passes, provided that
+the retained in-memory state still avoids those replayable full-dataset
+materializations.
+
 ### REQ-STREAM-INDEXER-021B
 
 The v2 streaming surface shall not expose public planning, finalization, or
@@ -379,10 +388,15 @@ full logical dataset size.
 Such transient working memory shall not span the full planning pass merely to
 bridge replay ingestion and later planner execution.
 
+When implementation-owned temporary local spill is used during planning, it may
+trade local I/O or additional deterministic staging for lower peak resident
+memory, but it shall not change the caller-visible replay lifecycle.
+
 ### REQ-STREAM-INDEXER-021D
 
 A caller-visible v2 replay lifecycle backed by hidden implementation-owned
-full-dataset planning-time buffering or spill is non-conformant.
+full-dataset planning-time buffering or spill that substitutes for caller-
+visible replay is non-conformant.
 
 This includes hidden buffering or spill of decoded embeddings, planner-ready
 assignment state, or equivalent full-pass planning materializations retained so
@@ -390,7 +404,9 @@ that later planning work can proceed without additional caller-visible replay.
 
 Implementation-owned temporary local spill used only after planning completion
 to stage terminal-partition materialization inputs is conformant in this
-revision.
+revision. Deterministic temporary local spill used during planning is also
+conformant when it is cleanup-scoped, does not widen the public API, and does
+not replace caller-visible replay with a hidden retained full-dataset path.
 
 ### REQ-STREAM-INDEXER-021E
 
@@ -403,6 +419,18 @@ hierarchy under those constraints, it shall surface deterministic readiness or
 progress state rather than silently retaining a full-pass decoded embedding
 table, full-pass assignment vector, or equivalent implementation-owned replay
 materialization.
+
+### REQ-STREAM-INDEXER-021G
+
+If the v2 planning path uses implementation-owned spill to reduce peak resident
+memory, that spill shall be:
+
+- deterministic for identical replay input and configuration
+- temporary and cleanup-scoped
+- behavior-preserving with respect to replay validation, pass-report semantics,
+  and finalized partition-hierarchy semantics
+- subordinate to the caller-visible replay lifecycle rather than a hidden
+  substitute for it
 
 ### REQ-STREAM-INDEXER-021F
 

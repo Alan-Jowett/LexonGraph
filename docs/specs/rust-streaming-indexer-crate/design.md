@@ -179,6 +179,11 @@ the current batch or current work unit during planning.
 That allowance does not permit carrying a decoded embedding table for the full
 planning pass across `ingest_batch` and later `finish_pass` execution.
 
+During planning, the implementation may also use deterministic temporary local
+spill to reduce peak resident memory, provided that the spill remains
+subordinate to the caller-visible replay lifecycle and does not widen the
+public v2 API.
+
 After planning completion, the implementation may additionally use temporary
 local append-only spill scoped to terminal partitions while classifying the
 final materialization replay.
@@ -214,9 +219,14 @@ The completed pass does not yet claim a finished persisted block tree or a
 materialized parent layer.
 
 Between those steps, conformant planning realization may revisit data only
-through caller-visible replay stages, bounded summaries, or bounded
-per-subproblem working sets rather than by retaining a decoded embedding table
-or assignment table for the full pass.
+through caller-visible replay stages, bounded summaries, bounded
+per-subproblem working sets, or deterministic temporary local spill that keeps
+resident memory bounded without substituting for caller-visible replay.
+
+The planner may therefore choose to advance only a bounded deterministic subset
+of unresolved partitions per replay pass when doing so reduces peak resident
+memory while preserving deterministic pass summaries and finalized hierarchy
+semantics.
 
 ### DSG-STREAM-INDEXER-011 `Pass report surface`
 
