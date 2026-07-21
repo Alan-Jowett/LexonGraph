@@ -65,7 +65,7 @@ use lexongraph_streaming_clustering::{
     ClusterId, PassReadiness, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
     StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
-use memmap2::{Mmap, MmapMut, MmapOptions};
+use memmap2::{Mmap, MmapOptions};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -1971,8 +1971,8 @@ const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 const V2_PLANNER_STATE_VALUE_BYTES: usize = std::mem::size_of::<f32>();
 
 struct StreamingV2QuantilePlannerState {
-    dir: TempDir,
     quantile_pass: Option<StreamingV2QuantilePassFiles>,
+    dir: TempDir,
 }
 
 struct StreamingV2QuantilePassFiles {
@@ -1982,13 +1982,9 @@ struct StreamingV2QuantilePassFiles {
 }
 
 struct WindowedMmapF32Writer {
-    file: File,
+    writer: BufWriter<File>,
     total_values: usize,
     written_values: usize,
-    window_bytes: usize,
-    map: Option<MmapMut>,
-    map_start: u64,
-    map_len: usize,
 }
 
 struct WindowedMmapF32Reader {
@@ -9503,8 +9499,8 @@ impl StreamingV2QuantilePlannerState {
                 ))
             })?;
         Ok(Self {
-            dir,
             quantile_pass: None,
+            dir,
         })
     }
 }
@@ -9640,13 +9636,9 @@ impl WindowedMmapF32Writer {
             )
         })?;
         Ok(Self {
-            file,
+            writer: BufWriter::with_capacity(window_bytes.max(V2_PLANNER_STATE_VALUE_BYTES), file),
             total_values,
             written_values: 0,
-            window_bytes: window_bytes.max(minimum_writer_window_bytes()),
-            map: None,
-            map_start: 0,
-            map_len: 0,
         })
     }
 
@@ -9654,25 +9646,9 @@ impl WindowedMmapF32Writer {
         if self.written_values >= self.total_values {
             return Err("planner state received more values than expected".into());
         }
-        let byte_offset = self
-            .written_values
-            .checked_mul(V2_PLANNER_STATE_VALUE_BYTES)
-            .ok_or_else(|| "planner state write offset overflowed".to_string())?;
-        self.ensure_window(byte_offset)?;
-        let local_offset = byte_offset
-            .checked_sub(
-                usize::try_from(self.map_start)
-                    .map_err(|_| "planner map start overflowed".to_string())?,
-            )
-            .ok_or_else(|| "planner state local offset underflowed".to_string())?;
-        let map = self
-            .map
-            .as_mut()
-            .ok_or_else(|| "planner state write window is not mapped".to_string())?;
-        let value_end = local_offset
-            .checked_add(V2_PLANNER_STATE_VALUE_BYTES)
-            .ok_or_else(|| "planner state local value range overflowed".to_string())?;
-        map[local_offset..value_end].copy_from_slice(&value.to_le_bytes());
+        self.writer
+            .write_all(&value.to_le_bytes())
+            .map_err(|error| format!("could not write planner state value: {error}"))?;
         self.written_values += 1;
         Ok(())
     }
@@ -9684,62 +9660,9 @@ impl WindowedMmapF32Writer {
                 self.written_values, self.total_values
             ));
         }
-        self.unmap_current()
-    }
-
-    fn ensure_window(&mut self, byte_offset: usize) -> Result<(), String> {
-        if self.map.is_some() && self.window_contains(byte_offset) {
-            return Ok(());
-        }
-        self.unmap_current()?;
-        let aligned_start = align_down(
-            u64::try_from(byte_offset)
-                .map_err(|_| "planner state byte offset overflowed".to_string())?,
-            V2_MMAP_ALLOCATION_GRANULARITY,
-        );
-        let aligned_start_usize = usize::try_from(aligned_start)
-            .map_err(|_| "planner map start overflowed".to_string())?;
-        let total_bytes = total_byte_len(self.total_values)?;
-        let remaining = total_bytes
-            .checked_sub(aligned_start_usize)
-            .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
-        let required_len = byte_offset
-            .checked_sub(aligned_start_usize)
-            .and_then(|offset| offset.checked_add(V2_PLANNER_STATE_VALUE_BYTES))
-            .ok_or_else(|| "planner state required window length overflowed".to_string())?;
-        let map_len = remaining.min(self.window_bytes.max(required_len));
-        // SAFETY: the file length is fixed by create(); aligned_start is allocation-granularity
-        // aligned and checked against total_bytes above; map_len is non-zero and stays within the
-        // sized file range for the lifetime of self.file.
-        let map = unsafe {
-            MmapOptions::new()
-                .offset(aligned_start)
-                .len(map_len)
-                .map_mut(&self.file)
-        }
-        .map_err(|error| format!("could not map planner state window: {error}"))?;
-        self.map_start = aligned_start;
-        self.map_len = map_len;
-        self.map = Some(map);
-        Ok(())
-    }
-
-    fn window_contains(&self, byte_offset: usize) -> bool {
-        let start = usize::try_from(self.map_start).unwrap_or(usize::MAX);
-        let Some(end) = byte_offset.checked_add(V2_PLANNER_STATE_VALUE_BYTES) else {
-            return false;
-        };
-        byte_offset >= start && end <= start.saturating_add(self.map_len)
-    }
-
-    fn unmap_current(&mut self) -> Result<(), String> {
-        if let Some(map) = self.map.as_mut() {
-            map.flush()
-                .map_err(|error| format!("could not flush planner state window: {error}"))?;
-        }
-        self.map = None;
-        self.map_len = 0;
-        Ok(())
+        self.writer
+            .flush()
+            .map_err(|error| format!("could not flush planner state writer: {error}"))
     }
 }
 
@@ -9750,14 +9673,8 @@ fn per_axis_planner_state_window_bytes(axis_count: usize) -> Result<usize, Strin
     let per_axis = V2_PLANNER_STATE_WINDOW_BYTES
         .checked_div(axis_count)
         .unwrap_or(0)
-        .max(minimum_writer_window_bytes());
+        .max(V2_PLANNER_STATE_VALUE_BYTES);
     Ok(per_axis)
-}
-
-fn minimum_writer_window_bytes() -> usize {
-    usize::try_from(V2_MMAP_ALLOCATION_GRANULARITY)
-        .unwrap_or(usize::MAX)
-        .max(V2_PLANNER_STATE_VALUE_BYTES)
 }
 
 impl WindowedMmapF32Reader {
@@ -10564,6 +10481,26 @@ mod tests {
     }
 
     #[test]
+    fn quantile_planner_state_drop_cleans_up_open_axis_files() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let planner_dir_path = {
+            let mut planner_state = StreamingV2QuantilePlannerState::new(&root)
+                .expect("planner state should initialize");
+            DirectionalPcaOutOfCorePlannerState::begin_quantile_pass(&mut planner_state, 2, 3)
+                .expect("quantile pass should initialize");
+            for values in [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]] {
+                DirectionalPcaOutOfCorePlannerState::append_quantile_values(
+                    &mut planner_state,
+                    &values,
+                )
+                .expect("quantile pass should capture values");
+            }
+            planner_state.dir.path().to_path_buf()
+        };
+        assert!(!planner_dir_path.exists());
+    }
+
+    #[test]
     fn quantile_planner_state_begin_quantile_pass_cleans_up_partial_files_on_error() {
         let root = tempfile::tempdir().expect("test planner state root should exist");
         let mut planner_state =
@@ -10602,20 +10539,20 @@ mod tests {
             quantile_pass
                 .writers
                 .iter()
-                .all(|writer| writer.window_bytes == super::V2_PLANNER_STATE_WINDOW_BYTES / 8)
+                .all(|writer| writer.writer.capacity() == super::V2_PLANNER_STATE_WINDOW_BYTES / 8)
         );
         assert_eq!(
             quantile_pass
                 .writers
                 .iter()
-                .map(|writer| writer.window_bytes)
+                .map(|writer| writer.writer.capacity())
                 .sum::<usize>(),
             super::V2_PLANNER_STATE_WINDOW_BYTES
         );
     }
 
     #[test]
-    fn quantile_planner_state_writer_windows_floor_at_mapping_granularity() {
+    fn quantile_planner_state_writer_windows_preserve_total_budget() {
         let root = tempfile::tempdir().expect("test planner state root should exist");
         let mut planner_state =
             StreamingV2QuantilePlannerState::new(&root).expect("planner state should initialize");
@@ -10632,7 +10569,16 @@ mod tests {
             quantile_pass
                 .writers
                 .iter()
-                .all(|writer| writer.window_bytes == super::minimum_writer_window_bytes())
+                .all(|writer| writer.writer.capacity()
+                    == super::V2_PLANNER_STATE_WINDOW_BYTES / axis_count)
+        );
+        assert_eq!(
+            quantile_pass
+                .writers
+                .iter()
+                .map(|writer| writer.writer.capacity())
+                .sum::<usize>(),
+            super::V2_PLANNER_STATE_WINDOW_BYTES
         );
     }
 
