@@ -1149,6 +1149,15 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             }
         }
         self.invalidate_cached_telemetry();
+        let capture_quantile_values = self.out_of_core_state.is_some()
+            && matches!(
+                self.active_pass.as_ref(),
+                Some(ActivePassState::PlanCuts(pass))
+                    if pass
+                        .planners
+                        .iter()
+                        .any(|planner| matches!(planner, AxisPlanner::Quantile(_)))
+            );
 
         let active_pass = self
             .active_pass
@@ -1168,10 +1177,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                         .transform
                         .apply(embedding)
                         .map_err(map_pca_error)?;
-                    if pass
-                        .planners
-                        .iter()
-                        .any(|planner| matches!(planner, AxisPlanner::Quantile(_)))
+                    if capture_quantile_values
                         && let Some(out_of_core_state) = self.out_of_core_state.as_mut()
                     {
                         out_of_core_state
