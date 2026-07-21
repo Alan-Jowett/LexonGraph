@@ -733,7 +733,7 @@ impl DirectionalPcaStreamingTrainer {
         if self.active_pass.is_some() {
             return Ok(());
         }
-        self.active_pass = Some(match &self.phase {
+        let active_pass = match &self.phase {
             ReplayPhase::AnalyzePca => ActivePassState::AnalyzePca(ActivePcaPass {
                 tracker: PassTracker::new(),
                 accumulator: PcaAccumulator::new(self.config.dimensions),
@@ -770,9 +770,9 @@ impl DirectionalPcaStreamingTrainer {
                         .collect(),
                 })
             }
-        });
+        };
         if let Some(out_of_core_state) = self.out_of_core_state.as_mut()
-            && let Some(ActivePassState::PlanCuts(pass)) = self.active_pass.as_ref()
+            && let ActivePassState::PlanCuts(pass) = &active_pass
             && pass
                 .planners
                 .iter()
@@ -782,6 +782,7 @@ impl DirectionalPcaStreamingTrainer {
                 .begin_quantile_pass(pass.planners.len(), pass.plan.total_count)
                 .map_err(out_of_core_state_error)?;
         }
+        self.active_pass = Some(active_pass);
         self.invalidate_cached_telemetry();
         Ok(())
     }
@@ -1139,8 +1140,8 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
     fn ingest_batch(&mut self, embeddings: &[Embedding]) -> Result<(), StreamingClusteringError> {
         match self.state {
             TrainerState::Idle | TrainerState::PassComplete => {
-                self.state = TrainerState::Ingesting;
                 self.ensure_active_pass()?;
+                self.state = TrainerState::Ingesting;
             }
             TrainerState::Ingesting => {}
             TrainerState::TrainingComplete | TrainerState::Error => {
@@ -2214,6 +2215,8 @@ mod tests {
         axis_values: Vec<Vec<f32>>,
     }
 
+    struct FailingBeginOutOfCorePlannerState;
+
     impl DirectionalPcaOutOfCorePlannerState for TestOutOfCorePlannerState {
         fn begin_quantile_pass(
             &mut self,
@@ -2272,6 +2275,36 @@ mod tests {
         fn clear_quantile_pass(&mut self) -> Result<(), String> {
             self.expected_value_count = 0;
             self.axis_values.clear();
+            Ok(())
+        }
+    }
+
+    impl DirectionalPcaOutOfCorePlannerState for FailingBeginOutOfCorePlannerState {
+        fn begin_quantile_pass(
+            &mut self,
+            _axis_count: usize,
+            _expected_value_count: usize,
+        ) -> Result<(), String> {
+            Err("synthetic begin_quantile_pass failure".into())
+        }
+
+        fn append_quantile_values(&mut self, _values: &[f32]) -> Result<(), String> {
+            Err("append_quantile_values should not be called after begin failure".into())
+        }
+
+        fn finish_quantile_pass(&mut self) -> Result<(), String> {
+            Err("finish_quantile_pass should not be called after begin failure".into())
+        }
+
+        fn scan_quantile_axis(
+            &self,
+            _axis_index: usize,
+            _observe: &mut dyn FnMut(f32) -> Result<(), String>,
+        ) -> Result<(), String> {
+            Err("scan_quantile_axis should not be called after begin failure".into())
+        }
+
+        fn clear_quantile_pass(&mut self) -> Result<(), String> {
             Ok(())
         }
     }
@@ -2405,5 +2438,38 @@ mod tests {
             accelerated.telemetry().subphase,
             DirectionalPcaTrainerSubphase::CountCells
         );
+    }
+
+    #[test]
+    fn failing_out_of_core_initialization_does_not_leave_half_open_pass_state() {
+        let embeddings = (0..8).map(|value| vec![value as f32]).collect::<Vec<_>>();
+        let config = StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 1,
+            balance_constraints: None,
+            random_seed: None,
+        };
+
+        let mut trainer = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
+            .unwrap()
+            .with_out_of_core_planner_state(Box::new(FailingBeginOutOfCorePlannerState));
+        trainer.ingest_batch(&embeddings).unwrap();
+        trainer.finish_pass().unwrap();
+        assert_eq!(trainer.state(), TrainerState::PassComplete);
+
+        let error = trainer.ingest_batch(&embeddings).unwrap_err();
+        assert_eq!(
+            error,
+            unsatisfiable_constraint(
+                "out-of-core planner state failed: synthetic begin_quantile_pass failure"
+            )
+        );
+        assert_eq!(trainer.state(), TrainerState::PassComplete);
+        assert!(trainer.active_pass.is_none());
+        assert_eq!(
+            trainer.telemetry().subphase,
+            DirectionalPcaTrainerSubphase::PlanCuts
+        );
+        assert_eq!(trainer.telemetry().observed_count, None);
     }
 }
