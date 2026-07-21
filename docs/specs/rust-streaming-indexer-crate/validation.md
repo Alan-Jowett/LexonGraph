@@ -333,22 +333,28 @@ caller replay of the logical item set rather than a default public API
 obligation for the crate to retain or rematerialize the entire dataset on the
 caller's behalf, and the public planning/finalization/hierarchy seams do not
 require or return full-dataset embedding slices, partition-membership vectors,
-or equivalent dataset-sized constructs.
+or equivalent dataset-sized constructs. The v2 surface requires a
+caller-provided planner-state root directory rather than ad hoc planner state
+file paths.
 
-**Traces to:** REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021B
+**Traces to:** REQ-STREAM-INDEXER-004A, REQ-STREAM-INDEXER-017,
+REQ-STREAM-INDEXER-021B
 
 ### VAL-STREAM-INDEXER-025A
 
 Inspect the implementation-owned retained state used for v2 replay
 verification, planning, and final materialization.
 
-**Pass condition:** no conformant path retains, materializes, or spills
-full-dataset baseline tables, replayed embedding tables, partition membership
-tables, decoded full-pass embedding tables spanning `ingest_batch` to
-`finish_pass`, or equivalent implementation-owned full logical dataset state.
+**Pass condition:** no conformant path retains or materializes replay-sized
+baseline tables, replayed embedding tables, partition membership tables,
+decoded full-pass embedding tables spanning `ingest_batch` to `finish_pass`, or
+equivalent implementation-owned full logical dataset state in resident memory.
+Dataset-sized planner-managed out-of-core state beneath the caller-provided
+root is permitted when it preserves the caller-visible replay lifecycle and does
+not let planner-owned resident pages float with total mapped file size.
 
 **Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021A,
-REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D
+REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021G
 
 ### VAL-STREAM-INDEXER-025B
 
@@ -357,9 +363,11 @@ data.
 
 **Pass condition:** the revisit remains caller-visible as replay or staged
 progress rather than being simulated through hidden implementation-owned
-full-dataset retention or spill.
+full-dataset retention. Planner-managed out-of-core state may accelerate later
+planning work, but it shall not become a hidden substitute for replay.
 
-**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021D
+**Traces to:** REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-021D,
+REQ-STREAM-INDEXER-021G
 
 ### VAL-STREAM-INDEXER-025C
 
@@ -367,11 +375,56 @@ Inspect one v2 planning realization that performs recursive subdivision or
 assignment of planning units.
 
 **Pass condition:** the conformant path realizes that planning work through
-bounded-state replay stages, bounded summaries, or bounded per-subproblem
-working sets rather than requiring a full-pass decoded embedding table,
-full-pass assignment vector, or equivalent replay-sized materialization.
+caller-visible replay stages together with bounded summaries, bounded
+per-subproblem working sets, or planner-managed out-of-core state rather than
+requiring a full-pass decoded embedding table, full-pass assignment vector, or
+equivalent replay-sized resident-memory materialization.
 
-**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021E
+**Traces to:** REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021E,
+REQ-STREAM-INDEXER-021G
+
+### VAL-STREAM-INDEXER-025E
+
+Exercise a v2 planning workload large enough to require planner-managed
+out-of-core state in order to stay within the intended resident-memory
+envelope while still making meaningful planning progress.
+
+**Pass condition:** the implementation preserves replay validation,
+deterministic completed-pass summaries, and finalized partition-hierarchy
+semantics while reducing peak resident-memory pressure through planner-managed
+out-of-core state. The planner state is rooted beneath the caller-provided
+directory, remains reusable across passes of the same run, enforces a
+documented upper bound for planner-owned resident pages through a
+cross-platform residency-management abstraction, and is rejected explicitly
+when that root is unavailable or unusable.
+
+**Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024,
+REQ-STREAM-INDEXER-021G, REQ-STREAM-INDEXER-021H
+
+### VAL-STREAM-INDEXER-025F
+
+Attempt to construct a v2 run without a planner-state root, and again with a
+planner-state root that is present but unusable for required planner-managed
+state creation or reopening.
+
+**Pass condition:** both cases fail explicitly before the implementation claims
+conformant v2 planning execution.
+
+**Traces to:** REQ-STREAM-INDEXER-004A, REQ-STREAM-INDEXER-021H
+
+### VAL-STREAM-INDEXER-025G
+
+Inspect or execute a large v2 planning workload whose planner-managed state is
+substantially larger than the intended resident-memory envelope.
+
+**Pass condition:** inactive mapped regions are actively de-prioritized or
+released through a cross-platform residency-management abstraction whose
+backend is valid on the exercised target, and the planner-owned resident page
+footprint stays within the documented bound instead of growing proportionally
+with total mapped size.
+
+**Traces to:** REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021C,
+REQ-STREAM-INDEXER-021G
 
 ### VAL-STREAM-INDEXER-025D
 

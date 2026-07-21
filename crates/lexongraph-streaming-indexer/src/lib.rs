@@ -25,7 +25,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -53,9 +53,9 @@ use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{
     DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
-    DirectionalPcaClusterCardinalityMode, DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy,
-    DirectionalPcaStreamingClassifier, DirectionalPcaStreamingTrainer,
-    DirectionalPcaTrainerSubphase,
+    DirectionalPcaClusterCardinalityMode, DirectionalPcaOutOfCorePlannerState,
+    DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingClassifier,
+    DirectionalPcaStreamingTrainer, DirectionalPcaTrainerSubphase,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_pca::fit;
@@ -65,6 +65,7 @@ use lexongraph_streaming_clustering::{
     ClusterId, PassReadiness, PassReport, StreamingClusterClassifier, StreamingClusterTrainer,
     StreamingClusteringConfig, StreamingClusteringError, TrainerState,
 };
+use memmap2::{Mmap, MmapMut, MmapOptions};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -1965,6 +1966,38 @@ struct PartitionSpillDirectory {
     writers: Vec<Option<BufWriter<File>>>,
 }
 
+const V2_PLANNER_STATE_WINDOW_BYTES: usize = 1024 * 1024;
+const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
+
+struct StreamingV2QuantilePlannerState {
+    dir: TempDir,
+    quantile_pass: Option<StreamingV2QuantilePassFiles>,
+}
+
+struct StreamingV2QuantilePassFiles {
+    expected_value_count: usize,
+    paths: Vec<PathBuf>,
+    writers: Vec<WindowedMmapF32Writer>,
+}
+
+struct WindowedMmapF32Writer {
+    file: File,
+    total_values: usize,
+    written_values: usize,
+    map: Option<MmapMut>,
+    map_start: u64,
+    map_len: usize,
+}
+
+struct WindowedMmapF32Reader {
+    file: File,
+    total_values: usize,
+    read_values: usize,
+    map: Option<Mmap>,
+    map_start: u64,
+    map_len: usize,
+}
+
 #[derive(Clone)]
 struct StreamingV2ReplayFingerprint {
     observed_count: usize,
@@ -3246,6 +3279,7 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
     completed_pass_history: Vec<StreamingV2CompletedPassHistoryEntry>,
     partitions: Vec<StreamingV2PartitionNode>,
     next_partition_id: usize,
+    planner_state_root: TempDir,
     _item_ref: PhantomData<R>,
 }
 
@@ -3272,6 +3306,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         profile_version: PublishedProfileVersion,
         embedding_spec: EmbeddingSpec,
         block_size_target: usize,
+        planner_state_root: impl AsRef<Path>,
     ) -> Result<Self, StreamingIndexerError> {
         if profile_version != PUBLISHED_PROFILE_V0_7_0 {
             return Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(
@@ -3298,6 +3333,15 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 "streaming v2 currently supports only the exact 0.7.0 ambient-delta-uq branch encoding contract".into(),
             ));
         }
+        let planner_state_root = tempfile::Builder::new()
+            .prefix("streaming-v2-")
+            .tempdir_in(planner_state_root.as_ref())
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not initialize planner state root {}: {error}",
+                    planner_state_root.as_ref().display()
+                ))
+            })?;
         Ok(Self {
             resolver,
             embedding_provider,
@@ -3314,6 +3358,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             completed_pass_history: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
+            planner_state_root,
             _item_ref: PhantomData,
         })
     }
@@ -4465,6 +4510,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             settings.params.allocation_policy,
         )
         .map_err(map_clustering_configuration_error)?;
+        let planner_state = StreamingV2QuantilePlannerState::new(&self.planner_state_root)?;
         let trainer = DirectionalPcaStreamingTrainer::new(
             StreamingClusteringConfig {
                 cluster_count,
@@ -4474,6 +4520,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             },
             settings.params.clone(),
         )
+        .map(|trainer| trainer.with_out_of_core_planner_state(Box::new(planner_state)))
         .map_err(map_clustering_error)?;
         Ok(StreamingV2PartitionNode {
             parent_id,
@@ -9442,6 +9489,301 @@ impl PartitionRoutingReader {
     }
 }
 
+impl StreamingV2QuantilePlannerState {
+    fn new(parent: &TempDir) -> Result<Self, StreamingIndexerError> {
+        let dir = tempfile::Builder::new()
+            .prefix("partition-")
+            .tempdir_in(parent.path())
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not create v2 planner state directory under {}: {error}",
+                    parent.path().display()
+                ))
+            })?;
+        Ok(Self {
+            dir,
+            quantile_pass: None,
+        })
+    }
+}
+
+impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
+    fn begin_quantile_pass(
+        &mut self,
+        axis_count: usize,
+        expected_value_count: usize,
+    ) -> Result<(), String> {
+        self.quantile_pass = None;
+        let mut paths = Vec::with_capacity(axis_count);
+        let mut writers = Vec::with_capacity(axis_count);
+        for axis_index in 0..axis_count {
+            let path = self.dir.path().join(format!("axis-{axis_index:04}.bin"));
+            paths.push(path.clone());
+            writers.push(WindowedMmapF32Writer::create(&path, expected_value_count)?);
+        }
+        self.quantile_pass = Some(StreamingV2QuantilePassFiles {
+            expected_value_count,
+            paths,
+            writers,
+        });
+        Ok(())
+    }
+
+    fn append_quantile_values(&mut self, values: &[f32]) -> Result<(), String> {
+        let quantile_pass = self
+            .quantile_pass
+            .as_mut()
+            .ok_or_else(|| "quantile planner state is not initialized".to_string())?;
+        if values.len() != quantile_pass.writers.len() {
+            return Err(format!(
+                "observed {} axis values but expected {}",
+                values.len(),
+                quantile_pass.writers.len()
+            ));
+        }
+        for (writer, value) in quantile_pass.writers.iter_mut().zip(values.iter().copied()) {
+            writer.write_f32(value)?;
+        }
+        Ok(())
+    }
+
+    fn finish_quantile_pass(&mut self) -> Result<(), String> {
+        let quantile_pass = self
+            .quantile_pass
+            .as_mut()
+            .ok_or_else(|| "quantile planner state is not initialized".to_string())?;
+        for writer in &mut quantile_pass.writers {
+            writer.finish()?;
+        }
+        Ok(())
+    }
+
+    fn scan_quantile_axis(
+        &self,
+        axis_index: usize,
+        observe: &mut dyn FnMut(f32) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let quantile_pass = self
+            .quantile_pass
+            .as_ref()
+            .ok_or_else(|| "quantile planner state is not initialized".to_string())?;
+        let path = quantile_pass
+            .paths
+            .get(axis_index)
+            .ok_or_else(|| format!("missing quantile planner axis file {axis_index}"))?;
+        let mut reader = WindowedMmapF32Reader::open(path, quantile_pass.expected_value_count)?;
+        reader.scan(observe)
+    }
+
+    fn clear_quantile_pass(&mut self) -> Result<(), String> {
+        self.quantile_pass = None;
+        Ok(())
+    }
+}
+
+impl WindowedMmapF32Writer {
+    fn create(path: &Path, total_values: usize) -> Result<Self, String> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|error| {
+                format!(
+                    "could not create planner state file {}: {error}",
+                    path.display()
+                )
+            })?;
+        let total_bytes = u64::try_from(total_values)
+            .ok()
+            .and_then(|value_count| value_count.checked_mul(4))
+            .ok_or_else(|| "planner state file length overflowed".to_string())?;
+        file.set_len(total_bytes).map_err(|error| {
+            format!(
+                "could not size planner state file {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            file,
+            total_values,
+            written_values: 0,
+            map: None,
+            map_start: 0,
+            map_len: 0,
+        })
+    }
+
+    fn write_f32(&mut self, value: f32) -> Result<(), String> {
+        if self.written_values >= self.total_values {
+            return Err("planner state received more values than expected".into());
+        }
+        let byte_offset = self
+            .written_values
+            .checked_mul(4)
+            .ok_or_else(|| "planner state write offset overflowed".to_string())?;
+        self.ensure_window(byte_offset)?;
+        let local_offset = byte_offset
+            .checked_sub(
+                usize::try_from(self.map_start)
+                    .map_err(|_| "planner map start overflowed".to_string())?,
+            )
+            .ok_or_else(|| "planner state local offset underflowed".to_string())?;
+        let map = self
+            .map
+            .as_mut()
+            .ok_or_else(|| "planner state write window is not mapped".to_string())?;
+        map[local_offset..local_offset + 4].copy_from_slice(&value.to_le_bytes());
+        self.written_values += 1;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if self.written_values != self.total_values {
+            return Err(format!(
+                "planner state captured {} values but expected {}",
+                self.written_values, self.total_values
+            ));
+        }
+        self.unmap_current()
+    }
+
+    fn ensure_window(&mut self, byte_offset: usize) -> Result<(), String> {
+        if self.map.is_some() && self.window_contains(byte_offset) {
+            return Ok(());
+        }
+        self.unmap_current()?;
+        let aligned_start = align_down(
+            u64::try_from(byte_offset)
+                .map_err(|_| "planner state byte offset overflowed".to_string())?,
+            V2_MMAP_ALLOCATION_GRANULARITY,
+        );
+        let total_bytes = self.total_values * 4;
+        let remaining = total_bytes
+            .checked_sub(
+                usize::try_from(aligned_start)
+                    .map_err(|_| "planner map start overflowed".to_string())?,
+            )
+            .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
+        let map_len = remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(4));
+        let map = unsafe {
+            MmapOptions::new()
+                .offset(aligned_start)
+                .len(map_len)
+                .map_mut(&self.file)
+        }
+        .map_err(|error| format!("could not map planner state window: {error}"))?;
+        self.map_start = aligned_start;
+        self.map_len = map_len;
+        self.map = Some(map);
+        Ok(())
+    }
+
+    fn window_contains(&self, byte_offset: usize) -> bool {
+        let start = usize::try_from(self.map_start).unwrap_or(usize::MAX);
+        byte_offset >= start && byte_offset + 4 <= start + self.map_len
+    }
+
+    fn unmap_current(&mut self) -> Result<(), String> {
+        if let Some(map) = self.map.as_mut() {
+            map.flush()
+                .map_err(|error| format!("could not flush planner state window: {error}"))?;
+        }
+        self.map = None;
+        self.map_len = 0;
+        Ok(())
+    }
+}
+
+impl WindowedMmapF32Reader {
+    fn open(path: &Path, total_values: usize) -> Result<Self, String> {
+        let file = File::open(path).map_err(|error| {
+            format!(
+                "could not open planner state file {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            file,
+            total_values,
+            read_values: 0,
+            map: None,
+            map_start: 0,
+            map_len: 0,
+        })
+    }
+
+    fn scan(&mut self, observe: &mut dyn FnMut(f32) -> Result<(), String>) -> Result<(), String> {
+        while self.read_values < self.total_values {
+            let byte_offset = self
+                .read_values
+                .checked_mul(4)
+                .ok_or_else(|| "planner state read offset overflowed".to_string())?;
+            self.ensure_window(byte_offset)?;
+            let local_offset = byte_offset
+                .checked_sub(
+                    usize::try_from(self.map_start)
+                        .map_err(|_| "planner map start overflowed".to_string())?,
+                )
+                .ok_or_else(|| "planner state local offset underflowed".to_string())?;
+            let map = self
+                .map
+                .as_ref()
+                .ok_or_else(|| "planner state read window is not mapped".to_string())?;
+            let value =
+                f32::from_le_bytes(map[local_offset..local_offset + 4].try_into().map_err(
+                    |_| "planner state window returned an invalid value size".to_string(),
+                )?);
+            observe(value)?;
+            self.read_values += 1;
+        }
+        self.map = None;
+        self.map_len = 0;
+        Ok(())
+    }
+
+    fn ensure_window(&mut self, byte_offset: usize) -> Result<(), String> {
+        if self.map.is_some() && self.window_contains(byte_offset) {
+            return Ok(());
+        }
+        self.map = None;
+        let aligned_start = align_down(
+            u64::try_from(byte_offset)
+                .map_err(|_| "planner state byte offset overflowed".to_string())?,
+            V2_MMAP_ALLOCATION_GRANULARITY,
+        );
+        let total_bytes = self.total_values * 4;
+        let remaining = total_bytes
+            .checked_sub(
+                usize::try_from(aligned_start)
+                    .map_err(|_| "planner map start overflowed".to_string())?,
+            )
+            .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
+        let map_len = remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(4));
+        let map = unsafe {
+            MmapOptions::new()
+                .offset(aligned_start)
+                .len(map_len)
+                .map(&self.file)
+        }
+        .map_err(|error| format!("could not map planner state window: {error}"))?;
+        self.map_start = aligned_start;
+        self.map_len = map_len;
+        self.map = Some(map);
+        Ok(())
+    }
+
+    fn window_contains(&self, byte_offset: usize) -> bool {
+        let start = usize::try_from(self.map_start).unwrap_or(usize::MAX);
+        byte_offset >= start && byte_offset + 4 <= start + self.map_len
+    }
+}
+
+fn align_down(value: u64, alignment: u64) -> u64 {
+    value / alignment * alignment
+}
+
 impl PartitionSpillDirectory {
     fn new(partition_count: usize) -> Result<Self, StreamingIndexerError> {
         let dir = tempfile::tempdir().map_err(|error| {
@@ -10096,6 +10438,7 @@ mod tests {
     ) -> StreamingIndexingRunV2<(), (), ()> {
         let profile = published_indexing_profile(profile_version).expect("profile should exist");
         let branch_encoding_policy = branch_encoding_policy_for_profile(&profile);
+        let planner_state_root = tempfile::tempdir().expect("test planner state root should exist");
         StreamingIndexingRunV2 {
             resolver: (),
             embedding_provider: (),
@@ -10115,6 +10458,7 @@ mod tests {
             completed_pass_history: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
+            planner_state_root,
             _item_ref: PhantomData,
         }
     }

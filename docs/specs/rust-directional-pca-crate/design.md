@@ -99,8 +99,10 @@ The crate does not materialize block IDs, loaded blocks, or representative
 embedding records at this boundary.
 
 Implementation-owned transient state at this boundary may scale with the
-currently processed batch/chunk size and fixed configuration terms, but not
-with the full completed-pass dataset size.
+currently processed batch/chunk size and fixed configuration terms, but not as
+resident memory with the full completed-pass dataset size. Planner-managed
+out-of-core state supplied by the surrounding v2 streaming surface may scale
+with the completed-pass dataset when needed to preserve bounded resident memory.
 
 ### DSG-DPCA-STREAM-007 `First-pass baseline and cross-pass continuity`
 
@@ -139,8 +141,9 @@ The crate does not perform hidden extra passes.
 
 Conformant execution uses streaming or mergeable PCA accumulation and other
 streaming-compatible summaries over caller-replayed passes. A path that
-requires materializing the full pass in implementation-owned memory or spill is
-non-conformant.
+requires materializing the full pass in implementation-owned resident memory is
+non-conformant; planner-managed out-of-core state subordinate to the caller-
+visible replay lifecycle is permitted.
 
 When exact partitioning semantics require additional caller-visible replay
 passes, earlier passes may legitimately report `AnalysisOnly` status before a
@@ -346,16 +349,24 @@ The concrete crate bounds implementation-owned memory and scratch/storage
 independently of the full completed-pass dataset size.
 
 Allowed growth is limited to the currently processed chunk, PCA sufficient
-statistics, streaming-compatible continuity summaries, and other fixed
-configuration-bounded state.
+statistics, streaming-compatible continuity summaries, other fixed
+configuration-bounded state, and optional planner-managed out-of-core state for
+the active replay phase or current planning subproblem when that state reduces
+peak resident memory.
+
+For mmap-backed realizations, inactive regions are actively advised away or
+otherwise residency-managed through a cross-platform abstraction so the
+resident working set remains bounded independently of the total mapped extent.
 
 ### DSG-DPCA-STREAM-028 `Assessment rule for streaming-shaped APIs`
 
 Conformance is determined by the actual execution model, not by a streaming-
 shaped public API alone.
 
-An implementation that exposes `ingest_batch()` but still requires full-pass
-materialization or dataset spill is non-conformant under this revision.
+An implementation that exposes `ingest_batch()` but still requires hidden
+full-pass resident-memory materialization or hidden retained state as a
+substitute for caller-visible
+replay is non-conformant under this revision.
 
 ## Traceability
 

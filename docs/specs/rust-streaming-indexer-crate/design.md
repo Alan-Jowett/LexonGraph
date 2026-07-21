@@ -77,7 +77,8 @@ streaming indexing run with the following observable lifecycle:
 The crate may temporarily expose both:
 
 - a retained v1 compatibility surface kept stable for incremental migration
-- a new v2 streaming surface that owns true-streaming no-buffering conformance
+- a new v2 streaming surface that owns replay-driven,
+  resident-memory-bounded conformance
 
 Documentation, validation, and runtime entry points distinguish the two
 surfaces explicitly. Unsupported v2 modes fail explicitly rather than silently
@@ -111,8 +112,8 @@ The crate consumes:
   planning rule, used by bottom-up assembly
 
 Caller-supplied policy seams remain conformant only when their public input and
-output shapes are themselves true-streaming rather than dataset-sized material
-views.
+output shapes are themselves replay-driven and resident-memory-bounded rather
+than dataset-sized material views.
 
 The same bounded-state rule applies to implementation-owned adapters that bridge
 v2 replay ingestion into planning: conformant planning seams do not take or
@@ -173,12 +174,29 @@ repeated passes and final materialization rather than requiring the crate to
 keep the entire corpus resident or rematerializable through hidden caller-facing
 state.
 
+The same v2 public API also requires a caller-provided planner-state root
+directory that the implementation uses for planner-managed out-of-core state.
+
+Construction of a v2 run fails explicitly if that root is omitted or unusable
+for the planner's required state lifecycle.
+
 Implementation-internal transient storage is permitted when it is bounded by
 the current batch or current work unit during planning.
 
 That allowance does not permit carrying a decoded embedding table for the full
-planning pass across `ingest_batch` and later `finish_pass` execution.
+planning pass in resident memory across `ingest_batch` and later `finish_pass`
+execution.
 
+During planning, the implementation may use planner-managed mmap-backed or
+equivalent out-of-core state beneath the caller-provided root so long as that
+state remains subordinate to the caller-visible replay lifecycle and does not
+widen the public v2 API beyond requiring that root.
+
+When such state is mmap-backed, the implementation actively manages residency
+for inactive regions through a cross-platform abstraction whose per-target
+backends may use native primitives such as `madvise`, so the planner's resident
+page footprint stays within a documented bound rather than tracking the full
+mapped extent.
 After planning completion, the implementation may additionally use temporary
 local append-only spill scoped to terminal partitions while classifying the
 final materialization replay.
@@ -214,9 +232,17 @@ The completed pass does not yet claim a finished persisted block tree or a
 materialized parent layer.
 
 Between those steps, conformant planning realization may revisit data only
-through caller-visible replay stages, bounded summaries, or bounded
-per-subproblem working sets rather than by retaining a decoded embedding table
-or assignment table for the full pass.
+through caller-visible replay stages, bounded summaries, bounded
+per-subproblem working sets, or planner-managed out-of-core state that keeps
+resident memory bounded without substituting for caller-visible replay.
+
+The out-of-core state may scale with the logical dataset and may be reopened
+across passes of the same run, but it remains an implementation detail rooted
+under the caller-provided directory rather than a public dataset payload.
+
+The implementation may rotate or window the actively mapped subregions of that
+state, but it does not rely on passive kernel eviction alone to keep planner
+memory bounded.
 
 ### DSG-STREAM-INDEXER-011 `Pass report surface`
 
@@ -232,8 +258,9 @@ or assignment table for the full pass.
 - structured state sufficient for caller stop/continue decisions
 
 If planning has not yet produced a final partition-ready hierarchy under the
-true-streaming bounded-state constraints, the report exposes deterministic
-analysis/progress state rather than claiming final readiness early.
+replay-driven, resident-memory-bounded constraints, the report exposes
+deterministic analysis/progress state rather than claiming final readiness
+early.
 
 The report remains deterministic for a fixed indexing context and replay order.
 
@@ -1338,11 +1365,11 @@ requiring unbounded retained telemetry state.
 |---|---|
 | DSG-STREAM-INDEXER-001 | REQ-STREAM-INDEXER-002 |
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
-| DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
+| DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-004A, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
 | DSG-STREAM-INDEXER-003A | REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021F |
 | DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043, REQ-STREAM-INDEXER-044 |
-| DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D |
+| DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021G, REQ-STREAM-INDEXER-021H |
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |

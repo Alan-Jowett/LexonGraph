@@ -5481,12 +5481,14 @@ async fn regression_published_profile_terminal_short_circuit_does_not_claim_fine
 
 #[test]
 fn regression_streaming_v2_rejects_non_v0_7_0_profiles() {
+    let planner_state_root = tempfile::tempdir().unwrap();
     let error = match StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
         MapResolver,
         AsciiF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_6_5,
         embedding_spec_f32(),
         6000,
+        planner_state_root.path(),
     ) {
         Ok(_) => panic!("expected streaming v2 to reject non-0.7.0 published profiles"),
         Err(error) => error,
@@ -5497,16 +5499,36 @@ fn regression_streaming_v2_rejects_non_v0_7_0_profiles() {
     ));
 }
 
+#[test]
+fn val_stream_indexer_025f_streaming_v2_rejects_unusable_planner_state_root() {
+    let unusable_root = tempfile::NamedTempFile::new().unwrap();
+    let error = match StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
+        MapResolver,
+        AsciiF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32(),
+        6000,
+        unusable_root.path(),
+    ) {
+        Ok(_) => panic!("expected unusable planner state root to fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, StreamingIndexerError::LocalSpill(_)));
+    assert!(error.to_string().contains("planner state root"));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn regression_streaming_v2_v0_7_0_preserves_ambient_uniform_root_encoding() {
     let items = vec![item("aa"), item("bb"), item("cc"), item("dd")];
     let store = MemoryBlockStore::default();
+    let planner_state_root = tempfile::tempdir().unwrap();
     let mut run = StreamingIndexingRunV2::<&'static str, _, _>::with_published_profile(
         MapResolver,
         AsciiF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_7_0,
         embedding_spec_f32(),
         6000,
+        planner_state_root.path(),
     )
     .unwrap();
     run.ingest_batch(items.as_slice()).await.unwrap();
@@ -5553,12 +5575,14 @@ async fn regression_streaming_v2_materializes_topology_over_multiple_replay_pass
             content_ref: index.to_string(),
         })
         .collect::<Vec<_>>();
+    let planner_state_root = tempfile::tempdir().unwrap();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         IndexedWideF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_7_0,
         embedding_spec_f32_dims(384),
         104_000,
+        planner_state_root.path(),
     )
     .unwrap();
 
@@ -5617,12 +5641,14 @@ async fn val_stream_indexer_109_streaming_v2_observer_reports_pass_progress_and_
             content_ref: index.to_string(),
         })
         .collect::<Vec<_>>();
+    let planner_state_root = tempfile::tempdir().unwrap();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         IndexedWideF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_7_0,
         embedding_spec_f32_dims(384),
         104_000,
+        planner_state_root.path(),
     )
     .unwrap()
     .with_observer(observer);
@@ -5689,12 +5715,14 @@ async fn val_stream_indexer_110_streaming_v2_observer_reports_pending_partition_
             content_ref: index.to_string(),
         })
         .collect::<Vec<_>>();
+    let planner_state_root = tempfile::tempdir().unwrap();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         IndexedWideF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_7_0,
         embedding_spec_f32_dims(384),
         104_000,
+        planner_state_root.path(),
     )
     .unwrap()
     .with_observer(observer);
@@ -5753,12 +5781,14 @@ async fn val_stream_indexer_111_streaming_v2_completed_pass_summary_reports_conv
             content_ref: index.to_string(),
         })
         .collect::<Vec<_>>();
+    let planner_state_root = tempfile::tempdir().unwrap();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         IndexedWideF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_7_0,
         embedding_spec_f32_dims(384),
         104_000,
+        planner_state_root.path(),
     )
     .unwrap()
     .with_observer(observer);
@@ -5832,12 +5862,14 @@ async fn val_stream_indexer_112_streaming_v2_completed_pass_summary_reports_bloc
             content_ref: index.to_string(),
         })
         .collect::<Vec<_>>();
+    let planner_state_root = tempfile::tempdir().unwrap();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         IndexedWideF32EmbeddingProvider,
         PUBLISHED_PROFILE_V0_7_0,
         embedding_spec_f32_dims(384),
         104_000,
+        planner_state_root.path(),
     )
     .unwrap();
 
@@ -5877,12 +5909,14 @@ async fn val_stream_indexer_113_streaming_v2_completed_pass_summaries_are_determ
                 content_ref: index.to_string(),
             })
             .collect::<Vec<_>>();
+        let planner_state_root = tempfile::tempdir().unwrap();
         let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
             MapResolver,
             IndexedWideF32EmbeddingProvider,
             PUBLISHED_PROFILE_V0_7_0,
             embedding_spec_f32_dims(384),
             104_000,
+            planner_state_root.path(),
         )
         .unwrap();
         let mut summaries = Vec::new();

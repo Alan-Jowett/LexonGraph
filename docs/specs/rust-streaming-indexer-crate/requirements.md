@@ -56,17 +56,18 @@ all batches in one completed planning pass.
 the replayed logical item set that is finalized before bottom-up block
 assembly.
 
-`True streaming` means neither the public API nor implementation-owned retained
-state scales with the size of the full logical dataset. Transient working memory
-may scale with the currently ingested batch or currently processed work unit,
-but not with the full logical dataset.
+`Replay-driven resident-memory-bounded` means the public API advances through
+caller-visible replay while implementation-owned resident memory does not scale
+with the size of the full logical dataset. Planner-managed out-of-core state
+may scale with the dataset when the public contract explicitly requires it.
 
 `v1 compatibility surface` means the existing caller-facing API retained for
 incremental migration and backward compatibility during the bring-up of a new
 streaming surface.
 
 `v2 streaming surface` means the new authoritative caller-facing API in this
-crate that owns true-streaming conformance for the no-buffering indexing path.
+crate that owns replay-driven, resident-memory-bounded conformance for the
+memory-reduced indexing path.
 
 `Terminal partition` means one partition in that hierarchy chosen as a direct
 input to bottom-up parent construction over materialized leaves.
@@ -116,8 +117,8 @@ streaming surface within `crates/lexongraph-streaming-indexer`.
 When both surfaces are present:
 
 - the v1 surface may remain available for migration compatibility
-- the v2 surface is the authoritative conformance target for the true-streaming
-  no-buffering indexing path
+- the v2 surface is the authoritative conformance target for the replay-driven,
+  resident-memory-bounded indexing path
 - validation and documentation shall distinguish the two surfaces explicitly
   rather than silently treating the v1 surface as conformant v2 behavior
 
@@ -135,6 +136,16 @@ includes:
   implementation-owned temporary per-terminal-partition spill files before
   assembling the finished block tree bottom-up from the finalized partition
   hierarchy
+
+### REQ-STREAM-INDEXER-004A
+
+The v2 streaming surface shall require the caller to provide a writable
+directory root for planner-managed out-of-core state.
+
+That planner-state root is part of the v2 run-construction contract. The
+implementation manages concrete file names, mmap layout, and lifecycle beneath
+that root rather than requiring the caller to provide individual state-file
+paths.
 
 ### REQ-STREAM-INDEXER-005
 
@@ -232,9 +243,10 @@ override paths exist, attempts to request override behavior through v2 shall
 fail explicitly rather than silently delegating to the retained v1
 compatibility surface.
 
-Those override seams shall remain true-streaming. This revision shall not treat
-full-dataset embedding slices, full partition-membership tables, or equivalent
-dataset-sized override inputs or outputs as conformant public API shapes.
+Those override seams shall remain replay-driven and resident-memory-bounded.
+This revision shall not treat full-dataset embedding slices, full partition-
+membership tables, or equivalent dataset-sized override inputs or outputs as
+conformant public API shapes.
 
 The same restriction applies to implementation-owned planning boundaries used to
 realize those seams: a conformant path shall not require a full-pass decoded
@@ -264,9 +276,10 @@ A replay-shaped public API is not sufficient by itself: conformant public input,
 output, and extension-point shapes shall also avoid constructs whose memory
 footprint scales `O(full logical dataset size)`.
 
-This restriction does not forbid implementation-owned temporary local spill
-used only after planning completion to stage per-terminal-partition
-materialization inputs.
+This restriction does not forbid the v2 implementation from retaining
+dataset-sized planner-managed out-of-core state beneath the caller-provided
+planner-state root, provided the caller-visible API still uses replay rather
+than full-dataset payloads as the progression contract.
 
 ### REQ-STREAM-INDEXER-018
 
@@ -295,8 +308,9 @@ Both modes shall normalize into the same deterministic finalized partition
 hierarchy abstraction before final materialization.
 
 Any planning orchestration around the shared streaming clustering contract shall
-remain true-streaming and shall not depend on retained full-dataset embedding
-tables, replay-verification tables, or partition-membership tables.
+remain replay-driven at the caller-visible boundary and shall not depend on
+retained full-dataset in-memory embedding tables, replay-verification tables,
+or partition-membership tables.
 
 Retained implementation-owned planning metadata for the v2 surface shall also
 avoid unnecessary per-partition heap overhead when the partition set is
@@ -305,9 +319,9 @@ string-keyed lookup tables or duplicated string ancestry state where
 equivalent compact internal identifiers and contiguous storage suffice.
 
 In particular, a conformant planning path shall not depend on carrying one
-implementation-owned decoded embedding table for the entire planning pass from
-`ingest_batch` through `finish_pass`, even when that table is later consumed
-only inside built-in or override planning logic.
+implementation-owned decoded embedding table for the entire planning pass in
+resident memory from `ingest_batch` through `finish_pass`, even when that table
+is later consumed only inside built-in or override planning logic.
 
 ### REQ-STREAM-INDEXER-020
 
@@ -351,18 +365,22 @@ early.
 
 ### REQ-STREAM-INDEXER-021A
 
-The v2 streaming surface shall be a true-streaming realization.
+The v2 streaming surface shall be a replay-driven, resident-memory-bounded
+realization.
 
-It shall not retain or materialize planning-time implementation-owned state
-whose size scales with the full logical dataset, including replayed embedding
-tables, decoded full-pass embedding tables, partition membership tables, or
-equivalent replayable full-dataset state.
+It may retain planning-time implementation-owned state whose on-disk footprint
+scales with the full logical dataset, but that state shall live beneath the
+caller-provided planner-state root rather than as replay-sized resident-memory
+materialization.
 
-The retained hierarchy state that remains necessary for v2 planning may scale
-with discovered partition count, but shall use a compact representation that
-does not make externally formatted partition identifiers or string-keyed
-indexing structures the primary retained identity on the hot in-memory path.
+Planner-owned resident pages for that state shall remain bounded independently
+of the full logical dataset size rather than growing with the mapped file size.
 
+The retained in-memory hierarchy state that remains necessary for v2 planning
+may scale with discovered partition count, but shall use a compact
+representation that does not make externally formatted partition identifiers or
+string-keyed indexing structures the primary retained identity on the hot
+in-memory path.
 ### REQ-STREAM-INDEXER-021B
 
 The v2 streaming surface shall not expose public planning, finalization, or
@@ -379,10 +397,20 @@ full logical dataset size.
 Such transient working memory shall not span the full planning pass merely to
 bridge replay ingestion and later planner execution.
 
+Planner-managed mmap-backed or equivalent out-of-core state may bridge replay
+ingestion and later planner execution, provided that the resident-memory working
+set remains bounded and the caller-visible replay lifecycle is unchanged.
+
+That bound shall be enforced by active residency management for inactive mapped
+regions, through a cross-platform abstraction that is realizable on each
+supported OS target rather than relying solely on ambient kernel eviction
+heuristics.
+
 ### REQ-STREAM-INDEXER-021D
 
 A caller-visible v2 replay lifecycle backed by hidden implementation-owned
-full-dataset planning-time buffering or spill is non-conformant.
+full-dataset planning-time buffering or retained state that substitutes for
+caller-visible replay is non-conformant.
 
 This includes hidden buffering or spill of decoded embeddings, planner-ready
 assignment state, or equivalent full-pass planning materializations retained so
@@ -390,13 +418,16 @@ that later planning work can proceed without additional caller-visible replay.
 
 Implementation-owned temporary local spill used only after planning completion
 to stage terminal-partition materialization inputs is conformant in this
-revision.
+revision. During planning, planner-managed mmap-backed or equivalent out-of-core
+state is conformant only when it is part of the documented v2 contract,
+subordinate to caller-visible replay, and not a hidden replacement for it.
 
 ### REQ-STREAM-INDEXER-021E
 
 The v2 conformant planning boundary shall realize hierarchy derivation through
-bounded-state streaming summaries, caller-visible replay stages, or bounded
-per-subproblem working sets.
+caller-visible replay stages together with bounded in-memory summaries,
+bounded per-subproblem working sets, or planner-managed out-of-core state under
+the caller-provided planner-state root.
 
 If an exact planning realization cannot expose a final partition-ready
 hierarchy under those constraints, it shall surface deterministic readiness or
@@ -404,6 +435,27 @@ progress state rather than silently retaining a full-pass decoded embedding
 table, full-pass assignment vector, or equivalent implementation-owned replay
 materialization.
 
+### REQ-STREAM-INDEXER-021G
+
+If the v2 planning path uses planner-managed out-of-core state beneath the
+caller-provided planner-state root, that state shall be:
+
+- deterministic for identical replay input and configuration
+- rooted beneath the caller-provided directory
+- writable and reopenable across repeated passes of the same run
+- actively residency-managed so planner-owned resident pages stay within a
+  documented bound independent of total mapped file size, through a
+  cross-platform residency-management abstraction
+- behavior-preserving with respect to replay validation, pass-report semantics,
+  and finalized partition-hierarchy semantics
+- subordinate to the caller-visible replay lifecycle rather than a hidden
+  substitute for it
+
+### REQ-STREAM-INDEXER-021H
+
+Construction of a v2 run shall fail explicitly when the caller omits the
+planner-state root or when the supplied root is unusable for the planner's
+required out-of-core state model.
 ### REQ-STREAM-INDEXER-021F
 
 The crate shall support incremental migration from the v1 compatibility surface
@@ -414,8 +466,8 @@ During that migration:
 - any planning mode, direction, profile, or override path not yet implemented
   on v2 shall fail explicitly when requested on v2
 - the crate shall not silently fall back from v2 to v1 buffering behavior
-- conformance claims for no-buffering streaming behavior apply only to the v2
-  surface and the explicitly validated v2 feature subset
+- conformance claims for replay-driven, resident-memory-bounded behavior apply
+  only to the v2 surface and the explicitly validated v2 feature subset
 
 ### REQ-STREAM-INDEXER-022
 

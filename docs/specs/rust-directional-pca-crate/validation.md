@@ -68,8 +68,10 @@ Exercise one pass with multiple batches whose concatenated order is known.
 **Pass condition:** `finish_pass()` realizes exactly one caller-visible
 directional-PCA pass over the concatenated pass dataset order and does not
 perform hidden extra passes or require implementation-owned full-dataset
-retention/spill to do so. The pass may report `AnalysisOnly` status when exact
-partitioning requires later replay passes.
+resident-memory retention to do so. Planner-managed out-of-core state for the
+active replay phase or current planning subproblem is permitted when it does
+not change the observable pass boundary. The pass may report `AnalysisOnly`
+status when exact partitioning requires later replay passes.
 
 **Traces to:** REQ-DPCA-STREAM-008, REQ-DPCA-STREAM-009
 
@@ -349,9 +351,13 @@ boundary rather than silently switching to the adaptive retained-axis policy.
 Inspect or execute a conformant implementation while exercising passes whose
 full logical dataset is larger than one chunk.
 
-**Pass condition:** implementation-owned memory and scratch/storage remain
-bounded by current chunk size, PCA/statistical summaries, and fixed
-configuration terms rather than by full completed-pass dataset size `N`.
+**Pass condition:** implementation-owned resident memory remains bounded by
+current chunk size, PCA/statistical summaries, fixed configuration terms, and
+any planner-managed out-of-core state for the active replay phase or current
+planning subproblem rather than by full completed-pass dataset size `N`.
+For mmap-backed realizations, inactive mapped regions are actively managed
+through a cross-platform abstraction whose backend is valid on the exercised
+target so resident pages stay within the intended bound.
 
 **Traces to:** REQ-DPCA-STREAM-029
 
