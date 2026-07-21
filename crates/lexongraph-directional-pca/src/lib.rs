@@ -916,7 +916,22 @@ impl DirectionalPcaStreamingTrainer {
     ) -> Result<(ReplayPhase, PassReport, Option<DirectionalPcaModel>), StreamingClusteringError>
     {
         let fingerprint = pass.tracker.finish();
-        self.validate_replayed_pass(&fingerprint)?;
+        if let Err(error) = self.validate_replayed_pass(&fingerprint) {
+            if self.out_of_core_state.is_some() && !pass.quantile_axis_indices.is_empty() {
+                let clear_result = self
+                    .out_of_core_state
+                    .as_mut()
+                    .ok_or_else(|| invalid_configuration("missing out-of-core planner state"))?
+                    .clear_quantile_pass();
+                return match clear_result {
+                    Ok(()) => Err(error),
+                    Err(clear_error) => Err(unsatisfiable_constraint(format!(
+                        "{error}; additionally failed to clear planner state: {clear_error}"
+                    ))),
+                };
+            }
+            return Err(error);
+        }
 
         let advanced_planners = if self.out_of_core_state.is_some()
             && pass
@@ -2280,6 +2295,10 @@ mod tests {
         clear_called: Arc<AtomicBool>,
     }
 
+    struct ClearingOutOfCorePlannerState {
+        clear_called: Arc<AtomicBool>,
+    }
+
     struct RecordingOutOfCorePlannerState {
         begin_axis_counts: Arc<Mutex<Vec<usize>>>,
         append_value_widths: Arc<Mutex<Vec<usize>>>,
@@ -2442,6 +2461,37 @@ mod tests {
         }
 
         fn clear_quantile_pass(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    impl DirectionalPcaOutOfCorePlannerState for ClearingOutOfCorePlannerState {
+        fn begin_quantile_pass(
+            &mut self,
+            _axis_count: usize,
+            _expected_value_count: usize,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn append_quantile_values(&mut self, _values: &[f32]) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn finish_quantile_pass(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn scan_quantile_axis(
+            &self,
+            _axis_index: usize,
+            _observe: &mut dyn FnMut(f32) -> Result<(), String>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn clear_quantile_pass(&mut self) -> Result<(), String> {
+            self.clear_called.store(true, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -2633,6 +2683,38 @@ mod tests {
                 .all(|&width| width == begin_axis_counts[0]),
             "captured out-of-core rows should include only quantile axes"
         );
+    }
+
+    #[test]
+    fn replay_mismatch_clears_out_of_core_quantile_state() {
+        let config = StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 1,
+            balance_constraints: None,
+            random_seed: None,
+        };
+        let clear_called = Arc::new(AtomicBool::new(false));
+
+        let mut trainer = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
+            .unwrap()
+            .with_out_of_core_planner_state(Box::new(ClearingOutOfCorePlannerState {
+                clear_called: clear_called.clone(),
+            }));
+        trainer
+            .ingest_batch(&[vec![0.0], vec![1.0], vec![2.0], vec![3.0]])
+            .unwrap();
+        trainer.finish_pass().unwrap();
+        trainer
+            .ingest_batch(&[vec![0.0], vec![1.0], vec![2.0]])
+            .unwrap();
+
+        let error = trainer.finish_pass().unwrap_err();
+        assert_eq!(
+            error,
+            malformed_input("later passes must replay the same logical dataset in the same order")
+        );
+        assert!(clear_called.load(Ordering::Relaxed));
+        assert_eq!(trainer.state(), TrainerState::Error);
     }
 
     #[test]
