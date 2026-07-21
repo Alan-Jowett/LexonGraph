@@ -9705,6 +9705,9 @@ impl WindowedMmapF32Writer {
             )
             .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
         let map_len = remaining.min(self.window_bytes);
+        // SAFETY: the file length is fixed by create(); aligned_start is allocation-granularity
+        // aligned and checked against total_bytes above; map_len is non-zero and stays within the
+        // sized file range for the lifetime of self.file.
         let map = unsafe {
             MmapOptions::new()
                 .offset(aligned_start)
@@ -9817,6 +9820,9 @@ impl WindowedMmapF32Reader {
             .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
         let map_len =
             remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(V2_PLANNER_STATE_VALUE_BYTES));
+        // SAFETY: open() validated the file length from total_values; aligned_start is
+        // allocation-granularity aligned and checked against total_bytes above; map_len is
+        // non-zero and the mapping stays within the file range for the lifetime of self.file.
         let map = unsafe {
             MmapOptions::new()
                 .offset(aligned_start)
