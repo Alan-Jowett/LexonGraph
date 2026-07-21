@@ -9769,6 +9769,23 @@ impl WindowedMmapF32Reader {
                 path.display()
             )
         })?;
+        let expected_len = u64::try_from(total_byte_len(total_values)?)
+            .map_err(|_| "planner state file length overflowed".to_string())?;
+        let actual_len = file
+            .metadata()
+            .map_err(|error| {
+                format!(
+                    "could not inspect planner state file {}: {error}",
+                    path.display()
+                )
+            })?
+            .len();
+        if actual_len < expected_len {
+            return Err(format!(
+                "planner state file {} is truncated: expected at least {expected_len} bytes but found {actual_len}",
+                path.display()
+            ));
+        }
         Ok(Self {
             file,
             total_values,
@@ -10618,6 +10635,19 @@ mod tests {
                 .iter()
                 .all(|writer| writer.window_bytes == super::minimum_writer_window_bytes())
         );
+    }
+
+    #[test]
+    fn windowed_mmap_reader_rejects_truncated_files() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let path = root.path().join("truncated-axis.bin");
+        std::fs::write(&path, [0u8; 4]).expect("test should create truncated planner state file");
+
+        let error = match super::WindowedMmapF32Reader::open(&path, 2) {
+            Ok(_) => panic!("truncated planner state file should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("is truncated"), "unexpected error: {error}");
     }
 
     fn make_streaming_v2_run(
