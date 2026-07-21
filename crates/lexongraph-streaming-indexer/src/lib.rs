@@ -9577,7 +9577,22 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
     }
 
     fn clear_quantile_pass(&mut self) -> Result<(), String> {
-        self.quantile_pass = None;
+        if let Some(quantile_pass) = self.quantile_pass.take() {
+            let StreamingV2QuantilePassFiles {
+                expected_value_count: _,
+                paths,
+                writers,
+            } = quantile_pass;
+            drop(writers);
+            for path in paths {
+                std::fs::remove_file(&path).map_err(|error| {
+                    format!(
+                        "could not remove planner state file {}: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+        }
         Ok(())
     }
 }
@@ -9620,7 +9635,7 @@ impl WindowedMmapF32Writer {
         }
         let byte_offset = self
             .written_values
-            .checked_mul(4)
+            .checked_mul(V2_PLANNER_STATE_VALUE_BYTES)
             .ok_or_else(|| "planner state write offset overflowed".to_string())?;
         self.ensure_window(byte_offset)?;
         let local_offset = byte_offset
@@ -9668,7 +9683,8 @@ impl WindowedMmapF32Writer {
                     .map_err(|_| "planner map start overflowed".to_string())?,
             )
             .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
-        let map_len = remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(4));
+        let map_len =
+            remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(V2_PLANNER_STATE_VALUE_BYTES));
         let map = unsafe {
             MmapOptions::new()
                 .offset(aligned_start)
@@ -9723,7 +9739,7 @@ impl WindowedMmapF32Reader {
         while self.read_values < self.total_values {
             let byte_offset = self
                 .read_values
-                .checked_mul(4)
+                .checked_mul(V2_PLANNER_STATE_VALUE_BYTES)
                 .ok_or_else(|| "planner state read offset overflowed".to_string())?;
             self.ensure_window(byte_offset)?;
             let local_offset = byte_offset
@@ -9768,7 +9784,8 @@ impl WindowedMmapF32Reader {
                     .map_err(|_| "planner map start overflowed".to_string())?,
             )
             .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
-        let map_len = remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(4));
+        let map_len =
+            remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(V2_PLANNER_STATE_VALUE_BYTES));
         let map = unsafe {
             MmapOptions::new()
                 .offset(aligned_start)
@@ -10325,14 +10342,15 @@ pub mod conformance {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy, EmbeddingSpec,
-        PUBLISHED_PROFILE_V0_1_0, RunPhase, StreamingIndexingRunV2,
-        StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot, StreamingV2Partition,
-        StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
-        StreamingV2PendingPartitionStatus, allocate_variable_bit_widths,
-        branch_encoding_policy_for_profile, effective_directional_pca_cluster_count,
-        exact_centroid_child_summary, fallback_partition_groups, fit_ebcp_rotation,
-        format_partition_label, published_indexing_profile, streaming_v2_topology_stats,
+        BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy,
+        DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0, RunPhase,
+        StreamingIndexingRunV2, StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot,
+        StreamingV2Partition, StreamingV2PartitionNode, StreamingV2PartitionTopology,
+        StreamingV2PassState, StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
+        allocate_variable_bit_widths, branch_encoding_policy_for_profile,
+        effective_directional_pca_cluster_count, exact_centroid_child_summary,
+        fallback_partition_groups, fit_ebcp_rotation, format_partition_label,
+        published_indexing_profile, streaming_v2_topology_stats,
         summarize_streaming_v2_partition_blocker, unresolved_work_shrank, uses_root_branch_budget,
         weighted_mean_f32_embeddings,
     };
@@ -10448,6 +10466,38 @@ mod tests {
             error,
             "v2 partition topology stats referenced missing partition \"missing\""
         );
+    }
+
+    #[test]
+    fn quantile_planner_state_clear_quantile_pass_removes_axis_files() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let mut planner_state =
+            StreamingV2QuantilePlannerState::new(&root).expect("planner state should initialize");
+        DirectionalPcaOutOfCorePlannerState::begin_quantile_pass(&mut planner_state, 2, 3)
+            .expect("quantile pass should initialize");
+        for values in [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]] {
+            DirectionalPcaOutOfCorePlannerState::append_quantile_values(
+                &mut planner_state,
+                &values,
+            )
+            .expect("quantile pass should capture values");
+        }
+        DirectionalPcaOutOfCorePlannerState::finish_quantile_pass(&mut planner_state)
+            .expect("quantile pass should finish");
+
+        let axis_paths = planner_state
+            .quantile_pass
+            .as_ref()
+            .expect("quantile pass should remain available")
+            .paths
+            .clone();
+        assert!(axis_paths.iter().all(|path| path.exists()));
+
+        DirectionalPcaOutOfCorePlannerState::clear_quantile_pass(&mut planner_state)
+            .expect("quantile pass should clear");
+
+        assert!(planner_state.quantile_pass.is_none());
+        assert!(axis_paths.iter().all(|path| !path.exists()));
     }
 
     fn make_streaming_v2_run(
