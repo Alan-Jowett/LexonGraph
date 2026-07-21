@@ -1985,6 +1985,7 @@ struct WindowedMmapF32Writer {
     file: File,
     total_values: usize,
     written_values: usize,
+    window_bytes: usize,
     map: Option<MmapMut>,
     map_start: u64,
     map_len: usize,
@@ -9515,11 +9516,12 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
         expected_value_count: usize,
     ) -> Result<(), String> {
         self.quantile_pass = None;
+        let window_bytes = per_axis_planner_state_window_bytes(axis_count)?;
         let mut paths = Vec::with_capacity(axis_count);
         let mut writers = Vec::with_capacity(axis_count);
         for axis_index in 0..axis_count {
             let path = self.dir.path().join(format!("axis-{axis_index:04}.bin"));
-            match WindowedMmapF32Writer::create(&path, expected_value_count) {
+            match WindowedMmapF32Writer::create(&path, expected_value_count, window_bytes) {
                 Ok(writer) => {
                     paths.push(path);
                     writers.push(writer);
@@ -9616,7 +9618,7 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
 }
 
 impl WindowedMmapF32Writer {
-    fn create(path: &Path, total_values: usize) -> Result<Self, String> {
+    fn create(path: &Path, total_values: usize, window_bytes: usize) -> Result<Self, String> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -9641,6 +9643,7 @@ impl WindowedMmapF32Writer {
             file,
             total_values,
             written_values: 0,
+            window_bytes: window_bytes.max(V2_PLANNER_STATE_VALUE_BYTES),
             map: None,
             map_start: 0,
             map_len: 0,
@@ -9701,8 +9704,7 @@ impl WindowedMmapF32Writer {
                     .map_err(|_| "planner map start overflowed".to_string())?,
             )
             .ok_or_else(|| "planner state remaining window underflowed".to_string())?;
-        let map_len =
-            remaining.min(V2_PLANNER_STATE_WINDOW_BYTES.max(V2_PLANNER_STATE_VALUE_BYTES));
+        let map_len = remaining.min(self.window_bytes);
         let map = unsafe {
             MmapOptions::new()
                 .offset(aligned_start)
@@ -9733,6 +9735,17 @@ impl WindowedMmapF32Writer {
         self.map_len = 0;
         Ok(())
     }
+}
+
+fn per_axis_planner_state_window_bytes(axis_count: usize) -> Result<usize, String> {
+    if axis_count == 0 {
+        return Err("quantile planner state requires at least one axis".into());
+    }
+    let per_axis = V2_PLANNER_STATE_WINDOW_BYTES
+        .checked_div(axis_count)
+        .unwrap_or(0)
+        .max(V2_PLANNER_STATE_VALUE_BYTES);
+    Ok(per_axis)
 }
 
 impl WindowedMmapF32Reader {
@@ -10538,6 +10551,35 @@ mod tests {
         assert!(planner_state.quantile_pass.is_none());
         assert!(!planner_state.dir.path().join("axis-0000.bin").exists());
         assert!(blocked_path.is_dir());
+    }
+
+    #[test]
+    fn quantile_planner_state_splits_writer_window_budget_across_axes() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let mut planner_state =
+            StreamingV2QuantilePlannerState::new(&root).expect("planner state should initialize");
+        DirectionalPcaOutOfCorePlannerState::begin_quantile_pass(&mut planner_state, 8, 3)
+            .expect("quantile pass should initialize");
+
+        let quantile_pass = planner_state
+            .quantile_pass
+            .as_ref()
+            .expect("quantile pass should remain available");
+        assert_eq!(quantile_pass.writers.len(), 8);
+        assert!(
+            quantile_pass
+                .writers
+                .iter()
+                .all(|writer| writer.window_bytes == super::V2_PLANNER_STATE_WINDOW_BYTES / 8)
+        );
+        assert_eq!(
+            quantile_pass
+                .writers
+                .iter()
+                .map(|writer| writer.window_bytes)
+                .sum::<usize>(),
+            super::V2_PLANNER_STATE_WINDOW_BYTES
+        );
     }
 
     fn make_streaming_v2_run(
