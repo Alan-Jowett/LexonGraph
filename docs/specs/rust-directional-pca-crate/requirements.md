@@ -78,12 +78,14 @@ execution boundary, representative-embedding derivation from loaded blocks, or
 block-store-specific result and error ownership.
 
 The public crate boundary shall also not imply or require
-implementation-owned retention, replay buffering, or spill of the completed
-dataset as part of conformant execution.
+implementation-owned resident-memory retention or replay buffering of the
+completed dataset as part of conformant execution.
 
 Implementation-owned working state may scale with the currently processed
-batch/chunk size and fixed configuration terms, but not with the full
-completed-pass dataset size.
+batch/chunk size and fixed configuration terms. When directional-PCA is used by
+the v2 streaming indexer planning path, planner-managed out-of-core state may
+also scale with the completed-pass dataset size so long as the caller-visible
+replay lifecycle remains unchanged.
 
 ### REQ-DPCA-STREAM-005
 
@@ -142,9 +144,11 @@ shared pass lifecycle with an independent iteration API.
 
 When a later caller-visible pass must revisit the logical dataset, the replay
 shall come from the caller re-streaming that dataset rather than from
-implementation-owned full-pass retention, pass snapshots, or spill files.
+implementation-owned full-pass retention or pass snapshots.
 
-Per-batch transient working state remains conformant.
+Per-batch transient working state remains conformant. Planner-managed
+out-of-core state may persist across caller-visible passes when the surrounding
+v2 streaming surface explicitly provides that contract.
 
 ### REQ-DPCA-STREAM-010
 
@@ -167,7 +171,9 @@ sufficient-statistics behavior and shall not rely on a full-pass convenience
 fitting path over a materialized embedding collection.
 
 Transient implementation-owned working memory proportional to the current chunk
-is conformant; materialization of the full completed pass is not.
+is conformant; resident-memory materialization of the full completed pass is
+not. Planner-managed out-of-core state is conformant when it preserves the
+shared caller-visible replay contract.
 
 ### REQ-DPCA-STREAM-012
 
@@ -371,8 +377,17 @@ Allowed implementation-owned growth may depend on:
 - other fixed documented configuration parameters
 
 The crate shall not require retaining the completed dataset, retained-coordinate
-tables for all members, replay logs, or spill files whose footprint scales with
-the full dataset size `N`.
+tables for all members, replay logs, or other resident in-memory state whose
+footprint scales with the full dataset size `N`.
+
+Planner-managed out-of-core state for the active replay phase or current
+planning subproblem is conformant when it reduces peak resident memory without
+replacing caller-visible replay across passes.
+
+When that state is mmap-backed, conformant execution actively bounds resident
+pages for inactive regions through a cross-platform abstraction that maps to
+valid target-native primitives rather than relying solely on passive kernel
+eviction.
 
 ### REQ-DPCA-STREAM-030
 
@@ -381,7 +396,8 @@ that requires implementation-owned storage scaling with the full completed-pass
 dataset size `N` is non-conformant even if the public API is batch-streaming
 shaped.
 
-Transient storage scaling with the currently processed chunk remains
+Transient storage scaling with the currently processed chunk, or documented
+planner-managed out-of-core state subordinate to caller-visible replay, is
 conformant.
 
 ### REQ-DPCA-STREAM-021
