@@ -9511,7 +9511,7 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
         axis_count: usize,
         expected_value_count: usize,
     ) -> Result<(), String> {
-        self.quantile_pass = None;
+        self.clear_quantile_pass()?;
         let window_bytes = per_axis_planner_state_window_bytes(axis_count)?;
         let mut paths = Vec::with_capacity(axis_count);
         let mut writers = Vec::with_capacity(axis_count);
@@ -9524,6 +9524,15 @@ impl DirectionalPcaOutOfCorePlannerState for StreamingV2QuantilePlannerState {
                 }
                 Err(error) => {
                     drop(writers);
+                    if path.is_file()
+                        && let Err(remove_error) = std::fs::remove_file(&path)
+                        && remove_error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return Err(format!(
+                            "{error}; additionally could not remove planner state file {}: {remove_error}",
+                            path.display()
+                        ));
+                    }
                     for stale_path in &paths {
                         if let Err(remove_error) = std::fs::remove_file(stale_path)
                             && remove_error.kind() != std::io::ErrorKind::NotFound
@@ -10478,6 +10487,32 @@ mod tests {
 
         assert!(planner_state.quantile_pass.is_none());
         assert!(axis_paths.iter().all(|path| !path.exists()));
+    }
+
+    #[test]
+    fn quantile_planner_state_begin_quantile_pass_clears_prior_axis_files() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let mut planner_state =
+            StreamingV2QuantilePlannerState::new(&root).expect("planner state should initialize");
+        DirectionalPcaOutOfCorePlannerState::begin_quantile_pass(&mut planner_state, 3, 2)
+            .expect("initial quantile pass should initialize");
+        let stale_axis_path = planner_state
+            .quantile_pass
+            .as_ref()
+            .expect("quantile pass should remain available")
+            .paths[2]
+            .clone();
+        assert!(stale_axis_path.exists());
+
+        DirectionalPcaOutOfCorePlannerState::begin_quantile_pass(&mut planner_state, 2, 2)
+            .expect("replacement quantile pass should initialize");
+
+        assert!(!stale_axis_path.exists());
+        let quantile_pass = planner_state
+            .quantile_pass
+            .as_ref()
+            .expect("replacement quantile pass should remain available");
+        assert_eq!(quantile_pass.paths.len(), 2);
     }
 
     #[test]
