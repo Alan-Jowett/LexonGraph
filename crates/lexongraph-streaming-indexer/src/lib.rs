@@ -27,7 +27,7 @@ use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1972,7 +1972,7 @@ const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 const V2_PLANNER_STATE_VALUE_BYTES: usize = std::mem::size_of::<f32>();
 struct StreamingV2QuantilePlannerState {
     quantile_pass: Option<StreamingV2QuantilePassFiles>,
-    dir: TempDir,
+    dir: PlannerStateScratchDir,
 }
 
 struct StreamingV2QuantilePassFiles {
@@ -3285,10 +3285,18 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
 struct PlannerStateRoot {
     dir: Option<TempDir>,
     preserved_path: Option<PathBuf>,
+    preserve_nested_state: Arc<AtomicBool>,
+}
+
+struct PlannerStateScratchDir {
+    dir: Option<TempDir>,
+    preserved_path: Option<PathBuf>,
+    preserve_on_drop: Arc<AtomicBool>,
 }
 
 impl PlannerStateRoot {
     fn new(parent: impl AsRef<Path>) -> Result<Self, StreamingIndexerError> {
+        let preserve_nested_state = Arc::new(AtomicBool::new(false));
         let dir = tempfile::Builder::new()
             .prefix("streaming-v2-")
             .tempdir_in(parent.as_ref())
@@ -3301,6 +3309,7 @@ impl PlannerStateRoot {
         Ok(Self {
             dir: Some(dir),
             preserved_path: None,
+            preserve_nested_state,
         })
     }
 
@@ -3316,15 +3325,68 @@ impl PlannerStateRoot {
         if self.preserved_path.is_some() {
             return;
         }
+        self.preserve_nested_state
+            .store(true, AtomicOrdering::Relaxed);
         if let Some(dir) = self.dir.take() {
             self.preserved_path = Some(dir.keep());
         }
+    }
+
+    fn nested_preserve_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.preserve_nested_state)
     }
 }
 
 impl AsRef<Path> for PlannerStateRoot {
     fn as_ref(&self) -> &Path {
         self.path()
+    }
+}
+
+impl PlannerStateScratchDir {
+    fn new(
+        parent: impl AsRef<Path>,
+        preserve_on_drop: Arc<AtomicBool>,
+    ) -> Result<Self, StreamingIndexerError> {
+        let dir = tempfile::Builder::new()
+            .prefix("partition-")
+            .tempdir_in(parent.as_ref())
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not create v2 planner state directory under {}: {error}",
+                    parent.as_ref().display()
+                ))
+            })?;
+        Ok(Self {
+            dir: Some(dir),
+            preserved_path: None,
+            preserve_on_drop,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.dir
+            .as_ref()
+            .map(TempDir::path)
+            .or(self.preserved_path.as_deref())
+            .expect("planner scratch dir should always have a path")
+    }
+
+    fn preserve(&mut self) {
+        if self.preserved_path.is_some() {
+            return;
+        }
+        if let Some(dir) = self.dir.take() {
+            self.preserved_path = Some(dir.keep());
+        }
+    }
+}
+
+impl Drop for PlannerStateScratchDir {
+    fn drop(&mut self) {
+        if self.preserve_on_drop.load(AtomicOrdering::Relaxed) {
+            self.preserve();
+        }
     }
 }
 
@@ -4779,7 +4841,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             settings.params.allocation_policy,
         )
         .map_err(map_clustering_configuration_error)?;
-        let planner_state = StreamingV2QuantilePlannerState::new(&self.planner_state_root)?;
+        let planner_state =
+            StreamingV2QuantilePlannerState::new_under_root(&self.planner_state_root)?;
         let trainer = DirectionalPcaStreamingTrainer::new(
             StreamingClusteringConfig {
                 cluster_count,
@@ -9907,16 +9970,17 @@ impl PartitionRoutingReader {
 }
 
 impl StreamingV2QuantilePlannerState {
+    #[cfg(test)]
     fn new(parent: impl AsRef<Path>) -> Result<Self, StreamingIndexerError> {
-        let dir = tempfile::Builder::new()
-            .prefix("partition-")
-            .tempdir_in(parent.as_ref())
-            .map_err(|error| {
-                StreamingIndexerError::LocalSpill(format!(
-                    "could not create v2 planner state directory under {}: {error}",
-                    parent.as_ref().display()
-                ))
-            })?;
+        let dir = PlannerStateScratchDir::new(parent, Arc::new(AtomicBool::new(false)))?;
+        Ok(Self {
+            quantile_pass: None,
+            dir,
+        })
+    }
+
+    fn new_under_root(root: &PlannerStateRoot) -> Result<Self, StreamingIndexerError> {
+        let dir = PlannerStateScratchDir::new(root.path(), root.nested_preserve_signal())?;
         Ok(Self {
             quantile_pass: None,
             dir,
@@ -10758,6 +10822,9 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
     use super::{
         BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy,
         DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0,
@@ -11087,6 +11154,7 @@ mod tests {
             planner_state_root: PlannerStateRoot {
                 dir: Some(planner_state_root),
                 preserved_path: None,
+                preserve_nested_state: Arc::new(AtomicBool::new(false)),
             },
             _item_ref: PhantomData,
         }
@@ -11128,6 +11196,22 @@ mod tests {
         drop(run);
 
         assert!(planner_state_path.exists());
+    }
+
+    #[test]
+    fn preserving_root_keeps_nested_quantile_planner_state_directory() {
+        let parent = tempfile::tempdir().expect("test parent root should exist");
+        let mut planner_state_root =
+            PlannerStateRoot::new(parent.path()).expect("planner state root should initialize");
+        let planner_state = StreamingV2QuantilePlannerState::new_under_root(&planner_state_root)
+            .expect("nested planner state should initialize");
+        let nested_path = planner_state.dir.path().to_path_buf();
+
+        planner_state_root.preserve();
+        drop(planner_state);
+        drop(planner_state_root);
+
+        assert!(nested_path.exists());
     }
 
     #[test]
