@@ -1061,32 +1061,34 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             .ok_or_else(|| malformed_input("missing active directional-PCA pass state"))?;
         match active_pass {
             ActivePassState::AnalyzePca(pass) => {
-                validate_and_track_batch(&mut pass.tracker, embeddings, dimensions)?;
+                validate_batch(embeddings, dimensions)?;
                 for embedding in embeddings {
                     pass.accumulator.update(embedding).map_err(map_pca_error)?;
+                    pass.tracker.update(embedding);
                 }
             }
             ActivePassState::PlanCuts(pass) => {
-                validate_and_track_batch(&mut pass.tracker, embeddings, dimensions)?;
+                validate_batch(embeddings, dimensions)?;
                 let coordinates = project_embeddings_in_replay_order(
                     &pass.plan.transform,
                     embeddings,
                     projection_execution,
                 )?;
-                for axis_coordinates in coordinates {
+                for (embedding, axis_coordinates) in embeddings.iter().zip(coordinates) {
                     for (planner, value) in pass.planners.iter_mut().zip(axis_coordinates) {
                         planner.observe(value);
                     }
+                    pass.tracker.update(embedding);
                 }
             }
             ActivePassState::CountCells(pass) => {
-                validate_and_track_batch(&mut pass.tracker, embeddings, dimensions)?;
+                validate_batch(embeddings, dimensions)?;
                 let coordinates = project_embeddings_in_replay_order(
                     &pass.partition.transform,
                     embeddings,
                     projection_execution,
                 )?;
-                for axis_coordinates in coordinates {
+                for (embedding, axis_coordinates) in embeddings.iter().zip(coordinates) {
                     let key = pass.partition.assign_point_to_cell(
                         axis_coordinates.as_slice(),
                         &mut pass.cursor_state,
@@ -1097,10 +1099,11 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                             CellDuplicateSummary::new(pass.partition.transform.output_dim)
                         })
                         .observe(axis_coordinates.as_slice());
+                    pass.tracker.update(embedding);
                 }
             }
             ActivePassState::RealizePartition(pass) => {
-                validate_and_track_batch(&mut pass.tracker, embeddings, dimensions)?;
+                validate_batch(embeddings, dimensions)?;
                 let coordinates = project_embeddings_in_replay_order(
                     &pass.ready.partition.transform,
                     embeddings,
@@ -1128,6 +1131,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                         cell.cluster_offset + 1 + (seen - base_count)
                     };
                     pass.cell_stats[cluster_index].observe(embedding);
+                    pass.tracker.update(embedding);
                 }
             }
         }
@@ -2060,14 +2064,12 @@ fn quality_metric_from_transform(transform: &PcaTransform) -> f64 {
     )
 }
 
-fn validate_and_track_batch(
-    tracker: &mut PassTracker,
+fn validate_batch(
     embeddings: &[Embedding],
     dimensions: usize,
 ) -> Result<(), StreamingClusteringError> {
     for embedding in embeddings {
         validate_embedding(embedding, dimensions)?;
-        tracker.update(embedding);
     }
     Ok(())
 }
