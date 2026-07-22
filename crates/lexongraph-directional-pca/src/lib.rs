@@ -1255,18 +1255,9 @@ impl From<DensityValleyHistogramPlanner> for AxisPlanner {
 impl QuantileAxisPlanner {
     fn observe(&mut self, value: f32) {
         self.observed_count += 1;
-        let insert_index = match self
+        let insert_index = self
             .summary
-            .binary_search_by(|entry| entry.value.total_cmp(&value))
-        {
-            Ok(mut index) => {
-                while index < self.summary.len() && self.summary[index].value == value {
-                    index += 1;
-                }
-                index
-            }
-            Err(index) => index,
-        };
+            .partition_point(|entry| entry.value.total_cmp(&value).is_le());
         let delta = if insert_index == 0 || insert_index == self.summary.len() {
             0
         } else {
@@ -1319,16 +1310,21 @@ impl QuantileAxisPlanner {
             return;
         }
         let threshold = self.compress_threshold();
-        let mut index = self.summary.len() - 2;
-        while index > 0 {
+        let mut compacted = Vec::with_capacity(self.summary.len());
+        let mut merged_right = *self.summary.last().expect("summary length checked above");
+        for index in (1..self.summary.len() - 1).rev() {
             let left = self.summary[index];
-            let right = self.summary[index + 1];
-            if left.gap + right.gap + right.delta <= threshold {
-                self.summary[index + 1].gap += left.gap;
-                self.summary.remove(index);
+            if left.gap + merged_right.gap + merged_right.delta <= threshold {
+                merged_right.gap += left.gap;
+            } else {
+                compacted.push(merged_right);
+                merged_right = left;
             }
-            index -= 1;
         }
+        compacted.push(merged_right);
+        compacted.push(self.summary[0]);
+        compacted.reverse();
+        self.summary = compacted;
     }
 
     fn approximate_quantile_value(
@@ -2255,6 +2251,57 @@ mod tests {
         for (target_rank, realized_rank) in targets.into_iter().zip(realized_ranks) {
             assert!(realized_rank.abs_diff(target_rank) <= rank_error);
         }
+    }
+
+    #[test]
+    fn gk_quantile_planner_keeps_total_cmp_order_for_signed_zero_values() {
+        let mut planner = AxisPlanner::new_quantile(2, 4);
+        for value in [0.0f32, -0.0, 0.0, -0.0] {
+            planner.observe(value);
+        }
+        let AxisPlanner::Quantile(planner) = planner else {
+            panic!("expected quantile planner during plan-cuts pass");
+        };
+        assert!(
+            planner
+                .summary
+                .windows(2)
+                .all(|pair| pair[0].value.total_cmp(&pair[1].value).is_le())
+        );
+    }
+
+    #[test]
+    fn threshold_assignment_keeps_cut_equal_values_in_the_lower_bin() {
+        let partition = PartitionPlan {
+            transform: PcaTransform {
+                input_dim: 1,
+                output_dim: 1,
+                mean: vec![0.0],
+                basis: vec![1.0],
+                explained_variance: Some(vec![1.0]),
+                schema_version: 1,
+            },
+            axis_plans: vec![AxisPlan::Thresholds(vec![1.0, 2.0])],
+        };
+        let mut cursor_state = AxisCursorState::for_partition(&partition);
+        assert_eq!(
+            partition
+                .assign_point_to_cell(&[1.0], &mut cursor_state)
+                .unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            partition
+                .assign_point_to_cell(&[2.0], &mut cursor_state)
+                .unwrap(),
+            vec![1]
+        );
+        assert_eq!(
+            partition
+                .assign_point_to_cell(&[2.5], &mut cursor_state)
+                .unwrap(),
+            vec![2]
+        );
     }
 
     #[test]
