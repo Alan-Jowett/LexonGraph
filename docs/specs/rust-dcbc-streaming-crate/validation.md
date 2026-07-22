@@ -92,13 +92,13 @@ resulting cluster sizes satisfy those bounds.
 ### VAL-DCBC-STREAM-008
 
 Inspect the first completed protocol pass on a fixture with unique farthest
-candidates.
+candidates and a known pass-dataset order.
 
 **Pass condition:** initialization chooses the first embedding in pass dataset
 order as the first centroid and later centroids follow the protocol's
 deterministic farthest-point rule.
 
-**Traces to:** REQ-DCBC-STREAM-010
+**Traces to:** REQ-DCBC-STREAM-006, REQ-DCBC-STREAM-010
 
 ### VAL-DCBC-STREAM-009
 

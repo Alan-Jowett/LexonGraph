@@ -16,12 +16,15 @@ validation surface.
 
 ### VAL-AZURE-SDK-STORE-001
 
-Construct the SDK-backed store with a valid container-root SAS URL.
+Inspect the SDK-backed crate boundary and construct the store with a valid
+container-root SAS URL.
 
-**Pass condition:** construction succeeds and callers do not need to know the
-deterministic blob-name layout.
+**Pass condition:** the crate uses the official Azure Rust SDK client surface
+for container-root construction and blob operations, construction succeeds, and
+callers do not need to know the deterministic blob-name layout.
 
-**Traces to:** REQ-AZURE-SDK-STORE-002, REQ-AZURE-SDK-STORE-004
+**Traces to:** REQ-AZURE-SDK-STORE-002, REQ-AZURE-SDK-STORE-003,
+REQ-AZURE-SDK-STORE-004
 
 ### VAL-AZURE-SDK-STORE-002
 

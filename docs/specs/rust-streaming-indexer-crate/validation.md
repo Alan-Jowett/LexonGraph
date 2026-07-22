@@ -115,7 +115,8 @@ The current published-profile-only v2 surface is validated separately: requests
 for override behavior on v2 shall fail explicitly under
 VAL-STREAM-INDEXER-025D until dedicated v2 override entry points exist.
 
-**Traces to:** REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015
+**Traces to:** REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015,
+REQ-STREAM-INDEXER-057
 
 ### VAL-STREAM-INDEXER-009
 
@@ -788,7 +789,8 @@ materialization behavior, requested cluster count, random seed, retained
 dimension count, variance exponent, temperature, minimum input count, minimum
 effective rank, and minimum cumulative variance.
 
-**Traces to:** REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-059, REQ-STREAM-INDEXER-060
+**Traces to:** REQ-STREAM-INDEXER-051, REQ-STREAM-INDEXER-055,
+REQ-STREAM-INDEXER-058, REQ-STREAM-INDEXER-059, REQ-STREAM-INDEXER-060
 
 ### VAL-STREAM-INDEXER-053
 
@@ -1007,7 +1009,8 @@ Resolve published indexing profile `0.3.1` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except for requested cluster count `128`.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-069
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-069
 
 ### VAL-STREAM-INDEXER-062
 
@@ -1016,7 +1019,8 @@ Resolve published indexing profile `0.3.2` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except for requested cluster count `32`.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-070
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-070
 
 ### VAL-STREAM-INDEXER-063
 
@@ -1025,7 +1029,8 @@ Resolve published indexing profile `0.3.3` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except that it selects quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-071
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-071
 
 ### VAL-STREAM-INDEXER-064
 
@@ -1034,7 +1039,8 @@ Resolve published indexing profile `0.3.4` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except that it selects fixed PC1-only splitting.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-072
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-072
 
 ### VAL-STREAM-INDEXER-065
 
@@ -1044,7 +1050,8 @@ Resolve published indexing profile `0.3.5` through the convenience surface.
 `0.3.0` directional-PCA bundle except that it selects centroid-weighted
 allocation.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-073
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-073
 
 ### VAL-STREAM-INDEXER-066
 
@@ -1053,7 +1060,8 @@ Resolve published indexing profile `0.3.6` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except that it caps retained axes at `2`.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-074
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-074
 
 ### VAL-STREAM-INDEXER-067
 
@@ -1062,7 +1070,8 @@ Resolve published indexing profile `0.3.7` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except that it caps retained axes at `3`.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-075
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-075
 
 ### VAL-STREAM-INDEXER-068
 
@@ -1072,7 +1081,8 @@ Resolve published indexing profile `0.3.8` through the convenience surface.
 `0.3.0` directional-PCA bundle except that it raises minimum cumulative
 variance to `0.5`.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-076
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-076
 
 ### VAL-STREAM-INDEXER-069
 
@@ -1082,7 +1092,8 @@ Resolve published indexing profile `0.3.9` through the convenience surface.
 `0.3.0` directional-PCA bundle except that it raises minimum effective rank to
 `2`.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-077
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-077
 
 ### VAL-STREAM-INDEXER-070
 
@@ -1091,7 +1102,8 @@ Resolve published indexing profile `0.3.10` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.3.0` directional-PCA bundle except that it restores exact cardinality mode.
 
-**Traces to:** REQ-STREAM-INDEXER-065, REQ-STREAM-INDEXER-078
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-065,
+REQ-STREAM-INDEXER-066, REQ-STREAM-INDEXER-078
 
 ### VAL-STREAM-INDEXER-071
 
@@ -1129,7 +1141,8 @@ Resolve published indexing profile `0.4.1` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.4.0` directional-PCA bundle except for requested cluster count `128`.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-081
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-081
 
 ### VAL-STREAM-INDEXER-075
 
@@ -1138,7 +1151,8 @@ Resolve published indexing profile `0.4.2` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.4.0` directional-PCA bundle except for requested cluster count `32`.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-082
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-082
 
 ### VAL-STREAM-INDEXER-076
 
@@ -1147,7 +1161,8 @@ Resolve published indexing profile `0.4.3` through the convenience surface.
 **Pass condition:** the selected profile resolves successfully and preserves the
 `0.4.0` directional-PCA bundle except that it selects fixed PC1-only splitting.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-083
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-083
 
 ### VAL-STREAM-INDEXER-077
 
@@ -1157,7 +1172,8 @@ Resolve published indexing profile `0.4.4` through the convenience surface.
 `0.4.0` directional-PCA bundle except that it selects centroid-weighted
 allocation while preserving quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-084
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-084
 
 ### VAL-STREAM-INDEXER-078
 
@@ -1167,7 +1183,8 @@ Resolve published indexing profile `0.4.5` through the convenience surface.
 `0.4.0` directional-PCA bundle except that it caps retained axes at `2` while
 preserving quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-085
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-085
 
 ### VAL-STREAM-INDEXER-079
 
@@ -1177,7 +1194,8 @@ Resolve published indexing profile `0.4.6` through the convenience surface.
 `0.4.0` directional-PCA bundle except that it caps retained axes at `3` while
 preserving quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-086
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-086
 
 ### VAL-STREAM-INDEXER-080
 
@@ -1187,7 +1205,8 @@ Resolve published indexing profile `0.4.7` through the convenience surface.
 `0.4.0` directional-PCA bundle except that it raises minimum cumulative
 variance to `0.5` while preserving quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-087
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-087
 
 ### VAL-STREAM-INDEXER-081
 
@@ -1197,7 +1216,8 @@ Resolve published indexing profile `0.4.8` through the convenience surface.
 `0.4.0` directional-PCA bundle except that it raises minimum effective rank to
 `2` while preserving quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-088
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-088
 
 ### VAL-STREAM-INDEXER-082
 
@@ -1207,7 +1227,8 @@ Resolve published indexing profile `0.4.9` through the convenience surface.
 `0.4.0` directional-PCA bundle except that it restores exact cardinality mode
 while preserving quantile binning.
 
-**Traces to:** REQ-STREAM-INDEXER-080, REQ-STREAM-INDEXER-089
+**Traces to:** REQ-STREAM-INDEXER-054, REQ-STREAM-INDEXER-080,
+REQ-STREAM-INDEXER-089
 
 ### VAL-STREAM-INDEXER-083
 
