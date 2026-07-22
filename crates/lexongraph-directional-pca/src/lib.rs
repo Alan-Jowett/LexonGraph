@@ -1186,7 +1186,13 @@ impl AxisPlanner {
             return Self::Ready(AxisPlan::SingleBin);
         }
         let targets = (1..bin_count)
-            .map(|bin| div_ceil(bin * total_count, bin_count))
+            .map(|bin| {
+                usize::try_from(div_ceil_u128(
+                    (bin as u128) * (total_count as u128),
+                    bin_count as u128,
+                ))
+                .expect("quantile target rank should fit usize")
+            })
             .collect();
         Self::Quantile(QuantileAxisPlanner {
             targets,
@@ -2053,7 +2059,7 @@ fn squared_distance(left: &[f32], right: &[f32]) -> Result<f64, StreamingCluster
     Ok(total)
 }
 
-fn div_ceil(numerator: usize, denominator: usize) -> usize {
+fn div_ceil_u128(numerator: u128, denominator: u128) -> u128 {
     numerator.div_ceil(denominator)
 }
 
@@ -2232,6 +2238,23 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.len(), 3);
         assert!(first.windows(2).all(|pair| pair[0] <= pair[1]));
+        let rank_error = values.len().div_ceil(GK_QUANTILE_RANK_ERROR_DENOMINATOR);
+        let targets = (1..4)
+            .map(|bin| usize::try_from(div_ceil_u128((bin * values.len()) as u128, 4)).unwrap())
+            .collect::<Vec<_>>();
+        let realized_ranks = first
+            .iter()
+            .map(|cut| {
+                values
+                    .iter()
+                    .position(|value| value >= cut)
+                    .map(|index| index + 1)
+                    .unwrap_or(values.len())
+            })
+            .collect::<Vec<_>>();
+        for (target_rank, realized_rank) in targets.into_iter().zip(realized_ranks) {
+            assert!(realized_rank.abs_diff(target_rank) <= rank_error);
+        }
     }
 
     #[test]

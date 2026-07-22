@@ -152,8 +152,8 @@ partition-ready output.
 
 ### VAL-DPCA-STREAM-011B
 
-Exercise a fixture with uneven retained-axis coordinates and configured
-approximation tolerance.
+Exercise a fixture with uneven retained-axis coordinates under the documented
+approximation contract for this revision.
 
 **Pass condition:** the realized cuts satisfy the documented deterministic rank
 or boundary error contract rather than exact-quantile equality.
