@@ -1335,13 +1335,21 @@ impl QuantileAxisPlanner {
             .saturating_add(rank_error)
             .min(self.observed_count.max(1));
         let mut running_min_rank = 0usize;
+        let mut best_overlap = None;
+        let mut best_overlap_distance = usize::MAX;
         let mut fallback_value = None;
         let mut fallback_distance = usize::MAX;
         for entry in &self.summary {
             running_min_rank += entry.gap;
             let running_max_rank = running_min_rank + entry.delta;
-            if running_min_rank <= maximum_rank && running_max_rank >= minimum_rank {
-                return Ok(entry.value);
+            let center_rank = running_min_rank + entry.delta / 2;
+            let distance_to_target = center_rank.abs_diff(target_rank);
+            if running_min_rank <= maximum_rank
+                && running_max_rank >= minimum_rank
+                && distance_to_target < best_overlap_distance
+            {
+                best_overlap_distance = distance_to_target;
+                best_overlap = Some(entry.value);
             }
             let distance = if running_max_rank < minimum_rank {
                 minimum_rank - running_max_rank
@@ -1352,6 +1360,9 @@ impl QuantileAxisPlanner {
                 fallback_distance = distance;
                 fallback_value = Some(entry.value);
             }
+        }
+        if let Some(value) = best_overlap {
+            return Ok(value);
         }
         fallback_value.ok_or_else(|| {
             unsatisfiable_constraint("quantile cut planning could not derive an approximate cut")
