@@ -1517,3 +1517,51 @@ class of compatibility and materializability checks as the version-selected
 published-profile path, rather than bypassing validation.
 
 **Traces to:** REQ-STREAM-INDEXER-119
+
+### VAL-STREAM-INDEXER-114
+
+Initialize a v2 / published-profile `0.7.0` run under a caller-supplied
+planner-state parent directory, then trigger one of the documented failure
+returns after the run-scoped planner-state scratch root has been created.
+
+Drop the failed run and inspect the planner-state parent directory.
+
+**Pass condition:** the failed run's planner-state scratch subtree is still
+present on disk for postmortem inspection and contains an inspectable
+structured failure summary artifact, while the default successful
+temporary-resource cleanup behavior remains available for runs that do not fail.
+
+**Traces to:** REQ-STREAM-INDEXER-126
+
+### VAL-STREAM-INDEXER-115
+
+Execute a deterministic v2 / published-profile `0.7.0` run that reaches the
+classifier replay child-support validation failure.
+
+**Pass condition:** the retained failure artifact records the failing partition
+identity, expected child count, observed per-child replay counts, empty-child
+indexes, and observed replay total used by the validation.
+
+**Traces to:** REQ-STREAM-INDEXER-127
+
+### VAL-STREAM-INDEXER-116
+
+Using the same deterministic replay-validation failure, inspect the retained
+failure artifact written into the preserved planner-state store.
+
+**Pass condition:** the retained artifact includes reconstructable
+routing/planning debug state sufficient to relate the retained replay counts to
+the classifier/plan that produced them.
+
+**Traces to:** REQ-STREAM-INDEXER-128
+
+### VAL-STREAM-INDEXER-117
+
+Execute the same deterministic replay-validation failure twice and compare the
+retained planner-state failure artifacts.
+
+**Pass condition:** the retained structured failure artifacts are byte-for-byte
+stable across runs and the failure-artifact directory remains bounded to the
+fixed summary/detail artifact set rather than growing with replay volume.
+
+**Traces to:** REQ-STREAM-INDEXER-126, REQ-STREAM-INDEXER-129

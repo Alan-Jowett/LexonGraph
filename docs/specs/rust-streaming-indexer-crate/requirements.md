@@ -1519,6 +1519,55 @@ partitions when present, and any topology or planner-visible unresolved state
 whose change or non-change is required to distinguish advancement, stalling, or
 cycling across passes.
 
+### REQ-STREAM-INDEXER-126
+
+When the v2 / published-profile `0.7.0` execution surface has initialized its
+planner-state scratch root and later returns an error from `ingest_batch`,
+`finish_pass`, `mark_planning_complete`, or `finalize`, it shall retain that
+run-scoped scratch subtree on disk instead of deleting it during teardown.
+
+This retained subtree shall preserve any planner-state artifacts already emitted
+for that failed run and shall additionally retain failure-scoped deterministic
+debugging artifacts sufficient to explain planner-state-dependent v2 failures
+without requiring access to transient in-memory state after the process
+unwinds.
+
+On successful completion, the implementation may continue cleaning up the same
+run-scoped planner-state scratch subtree according to its existing temporary
+resource lifecycle.
+
+### REQ-STREAM-INDEXER-127
+
+When a v2 planning failure is caused by replay/classifier child-support
+validation, the retained failure artifacts shall record deterministic
+per-failing-partition replay assignment evidence sufficient to identify:
+
+- the failing partition identity
+- the expected child count used by the validation
+- the observed per-child replay counts
+- which child buckets were empty
+- the total observed replay count used by the check
+
+### REQ-STREAM-INDEXER-128
+
+When a retained v2 failure depends on trainer-produced routing or planning
+state, the retained planner-state store shall preserve reconstructable
+deterministic evidence for the routing or planning state referenced by that
+failure.
+
+This evidence may be emitted as a structured failure artifact and shall be
+sufficient to relate the retained replay assignment evidence to the
+classifier/plan that produced it.
+
+### REQ-STREAM-INDEXER-129
+
+Retained v2 failure artifacts shall be structured and reconstructable rather
+than fingerprint-only.
+
+They shall remain bounded to run-scoped and failure-scoped evidence and shall
+not require unbounded retention of per-item hot-path state or full-dataset
+dumps in order to explain the failure.
+
 ## Out of Scope
 
 This crate does not define or own:

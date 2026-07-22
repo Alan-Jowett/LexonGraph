@@ -21,12 +21,13 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -55,7 +56,7 @@ use lexongraph_directional_pca::{
     DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
     DirectionalPcaClusterCardinalityMode, DirectionalPcaOutOfCorePlannerState,
     DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingClassifier,
-    DirectionalPcaStreamingTrainer, DirectionalPcaTrainerSubphase,
+    DirectionalPcaStreamingTrainer, DirectionalPcaTrainerSubphase, DirectionalPcaTrainerTelemetry,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_pca::fit;
@@ -1971,7 +1972,7 @@ const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 const V2_PLANNER_STATE_VALUE_BYTES: usize = std::mem::size_of::<f32>();
 struct StreamingV2QuantilePlannerState {
     quantile_pass: Option<StreamingV2QuantilePassFiles>,
-    dir: TempDir,
+    dir: PlannerStateScratchDir,
 }
 
 struct StreamingV2QuantilePassFiles {
@@ -2029,6 +2030,7 @@ struct StreamingV2PartitionNode {
     terminal: bool,
     pending_trainer: Option<DirectionalPcaStreamingTrainer>,
     routing: Option<StreamingV2RoutingStrategy>,
+    routing_debug_state: Option<String>,
 }
 
 #[derive(Clone)]
@@ -3276,9 +3278,121 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
     completed_pass_history: Vec<StreamingV2CompletedPassHistoryEntry>,
     partitions: Vec<StreamingV2PartitionNode>,
     next_partition_id: usize,
-    planner_state_root: TempDir,
+    planner_state_root: PlannerStateRoot,
     _item_ref: PhantomData<R>,
 }
+
+struct PlannerStateRoot {
+    dir: Option<TempDir>,
+    preserved_path: Option<PathBuf>,
+    preserve_nested_state: Arc<AtomicBool>,
+}
+
+struct PlannerStateScratchDir {
+    dir: Option<TempDir>,
+    preserved_path: Option<PathBuf>,
+    preserve_on_drop: Arc<AtomicBool>,
+}
+
+impl PlannerStateRoot {
+    fn new(parent: impl AsRef<Path>) -> Result<Self, StreamingIndexerError> {
+        let preserve_nested_state = Arc::new(AtomicBool::new(false));
+        let dir = tempfile::Builder::new()
+            .prefix("streaming-v2-")
+            .tempdir_in(parent.as_ref())
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not initialize planner state root {}: {error}",
+                    parent.as_ref().display()
+                ))
+            })?;
+        Ok(Self {
+            dir: Some(dir),
+            preserved_path: None,
+            preserve_nested_state,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.dir
+            .as_ref()
+            .map(TempDir::path)
+            .or(self.preserved_path.as_deref())
+            .expect("planner state root should always have a path")
+    }
+
+    fn preserve(&mut self) {
+        if self.preserved_path.is_some() {
+            return;
+        }
+        self.preserve_nested_state
+            .store(true, AtomicOrdering::Relaxed);
+        if let Some(dir) = self.dir.take() {
+            self.preserved_path = Some(dir.keep());
+        }
+    }
+
+    fn nested_preserve_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.preserve_nested_state)
+    }
+}
+
+impl AsRef<Path> for PlannerStateRoot {
+    fn as_ref(&self) -> &Path {
+        self.path()
+    }
+}
+
+impl PlannerStateScratchDir {
+    fn new(
+        parent: impl AsRef<Path>,
+        preserve_on_drop: Arc<AtomicBool>,
+    ) -> Result<Self, StreamingIndexerError> {
+        let dir = tempfile::Builder::new()
+            .prefix("partition-")
+            .tempdir_in(parent.as_ref())
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not create v2 planner state directory under {}: {error}",
+                    parent.as_ref().display()
+                ))
+            })?;
+        Ok(Self {
+            dir: Some(dir),
+            preserved_path: None,
+            preserve_on_drop,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.dir
+            .as_ref()
+            .map(TempDir::path)
+            .or(self.preserved_path.as_deref())
+            .expect("planner scratch dir should always have a path")
+    }
+
+    fn preserve(&mut self) {
+        if self.preserved_path.is_some() {
+            return;
+        }
+        if let Some(dir) = self.dir.take() {
+            self.preserved_path = Some(dir.keep());
+        }
+    }
+}
+
+impl Drop for PlannerStateScratchDir {
+    fn drop(&mut self) {
+        if self.preserve_on_drop.load(AtomicOrdering::Relaxed) {
+            self.preserve();
+        }
+    }
+}
+
+const V2_FAILURE_ARTIFACT_DIR_NAME: &str = "failure-artifacts";
+const V2_FAILURE_SUMMARY_FILE_NAME: &str = "run-failure-summary.txt";
+const V2_FAILURE_DETAIL_FILE_NAME: &str = "run-failure-detail.txt";
 
 struct StreamingV2PassMetricAccumulator {
     quality_sum: f64,
@@ -3293,10 +3407,171 @@ struct StreamingV2PassMetricAccumulator {
 struct StreamingV2CompletedPartition {
     partition_id: PartitionId,
     routing: StreamingV2RoutingStrategy,
+    routing_debug_state: Option<String>,
     children: Vec<StreamingV2PartitionNode>,
 }
 
 impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
+    fn handle_v2_failure(
+        &mut self,
+        operation: &str,
+        error: StreamingIndexerError,
+    ) -> StreamingIndexerError {
+        let error = match self.emit_v2_failure_summary(operation, &error) {
+            Ok(()) => error,
+            Err(write_error) => {
+                annotate_v2_failure_summary_write_error(operation, error, &write_error)
+            }
+        };
+        self.preserve_planner_state_root();
+        error
+    }
+
+    fn emit_v2_failure_summary(
+        &self,
+        operation: &str,
+        error: &StreamingIndexerError,
+    ) -> Result<(), StreamingIndexerError> {
+        let mut artifact = String::new();
+        writeln!(&mut artifact, "artifact_version=1")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "operation={operation}")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "phase={:?}", self.phase)
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "completed_passes_before_failure={}",
+            self.completed_passes
+        )
+        .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "partition_count={}", self.partitions.len())
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "error_variant={}",
+            v2_error_variant_name(error)
+        )
+        .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "error_debug={error:?}")
+            .expect("formatting into string should succeed");
+        let detail_artifact_path = self
+            .planner_state_root
+            .path()
+            .join(V2_FAILURE_ARTIFACT_DIR_NAME)
+            .join(V2_FAILURE_DETAIL_FILE_NAME);
+        if detail_artifact_path.exists() {
+            writeln!(
+                &mut artifact,
+                "detail_artifact={V2_FAILURE_DETAIL_FILE_NAME}"
+            )
+            .expect("formatting into string should succeed");
+        }
+        self.write_v2_failure_artifact(V2_FAILURE_SUMMARY_FILE_NAME, artifact.as_bytes())
+    }
+
+    fn emit_v2_classifier_empty_child_failure_artifact(
+        &self,
+        partition_id: PartitionId,
+        partition: &StreamingV2PartitionNode,
+        expected_child_count: usize,
+        child_counts: &[usize],
+    ) -> Result<(), StreamingIndexerError> {
+        let routing_mode = partition
+            .routing
+            .as_ref()
+            .map(v2_routing_mode_name)
+            .unwrap_or("unrouted");
+        let observed_child_total = child_counts.iter().sum::<usize>();
+        let empty_child_indexes = child_counts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, count)| (*count == 0).then_some(index))
+            .collect::<Vec<_>>();
+        let mut artifact = String::new();
+        writeln!(&mut artifact, "artifact_version=1")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "failure_kind=classifier-empty-child")
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "failing_pass_number={}",
+            self.completed_passes + 1
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "partition_path={}",
+            self.partition_label(partition_id)
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "partition_item_count={}",
+            partition.item_count
+        )
+        .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "routing_mode={routing_mode}")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "expected_child_count={expected_child_count}")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "observed_child_total={observed_child_total}")
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "observed_child_counts={}",
+            format_usize_list(child_counts)
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "empty_child_indexes={}",
+            format_usize_list(empty_child_indexes.as_slice())
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "topology_fingerprint_hex={}",
+            hash_streaming_v2_topology_hex(&self.current_topology())
+        )
+        .expect("formatting into string should succeed");
+        if let Some(debug_state) = partition.routing_debug_state.as_deref() {
+            writeln!(&mut artifact, "routing_debug_state_begin")
+                .expect("formatting into string should succeed");
+            artifact.push_str(debug_state);
+            if !debug_state.ends_with('\n') {
+                artifact.push('\n');
+            }
+            writeln!(&mut artifact, "routing_debug_state_end")
+                .expect("formatting into string should succeed");
+        }
+        self.write_v2_failure_artifact(V2_FAILURE_DETAIL_FILE_NAME, artifact.as_bytes())
+    }
+
+    fn write_v2_failure_artifact(
+        &self,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<(), StreamingIndexerError> {
+        let artifact_dir = self
+            .planner_state_root
+            .path()
+            .join(V2_FAILURE_ARTIFACT_DIR_NAME);
+        std::fs::create_dir_all(&artifact_dir).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not create v2 failure artifact directory {}: {error}",
+                artifact_dir.display()
+            ))
+        })?;
+        let artifact_path = artifact_dir.join(file_name);
+        std::fs::write(&artifact_path, bytes).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not write v2 failure artifact {}: {error}",
+                artifact_path.display()
+            ))
+        })
+    }
+
     pub fn with_published_profile(
         resolver: CR,
         embedding_provider: EP,
@@ -3330,15 +3605,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 "streaming v2 currently supports only the exact 0.7.0 ambient-delta-uq branch encoding contract".into(),
             ));
         }
-        let planner_state_root = tempfile::Builder::new()
-            .prefix("streaming-v2-")
-            .tempdir_in(planner_state_root.as_ref())
-            .map_err(|error| {
-                StreamingIndexerError::LocalSpill(format!(
-                    "could not initialize planner state root {}: {error}",
-                    planner_state_root.as_ref().display()
-                ))
-            })?;
+        let planner_state_root = PlannerStateRoot::new(planner_state_root)?;
         Ok(Self {
             resolver,
             embedding_provider,
@@ -3701,6 +3968,20 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         CR: ContentResolver<R>,
         EP: EmbeddingProvider,
     {
+        match self.ingest_batch_impl(batch).await {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.handle_v2_failure("ingest_batch", error)),
+        }
+    }
+
+    async fn ingest_batch_impl(
+        &mut self,
+        batch: &[IndexItem<R>],
+    ) -> Result<(), StreamingIndexerError>
+    where
+        CR: ContentResolver<R>,
+        EP: EmbeddingProvider,
+    {
         if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                 "ingest_batch requires the planning phase (currently {:?})",
@@ -3819,6 +4100,13 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub fn finish_pass(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
+        match self.finish_pass_impl() {
+            Ok(report) => Ok(report),
+            Err(error) => Err(self.handle_v2_failure("finish_pass", error)),
+        }
+    }
+
+    fn finish_pass_impl(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
         if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                 "finish_pass requires the planning phase (currently {:?})",
@@ -3987,6 +4275,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         .take()
                         .unwrap();
                     let item_count = self.partition(partition_id)?.item_count;
+                    let trainer_telemetry = trainer.telemetry();
                     let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
                     let realized_cluster_count =
                         usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
@@ -3994,7 +4283,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                 "classifier realized cluster count does not fit into usize".into(),
                             )
                         })?;
-                    let (routing, children) =
+                    let (routing, routing_debug_state, children) =
                         if realized_cluster_count <= 1 && item_count > materializability_bound {
                             let child_counts = balanced_groups(item_count, materializability_bound)
                                 .map_err(StreamingIndexerError::HierarchyValidation)?
@@ -4006,24 +4295,33 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                     "partition {label:?} produced no child routing plan"
                                 )));
                             }
-                            let routing = StreamingV2RoutingStrategy::ReplayOrder(
-                                StreamingV2ReplayOrderPlan::new(child_counts.clone()),
-                            );
+                            let routing_debug_state = Some(format!(
+                                "ReplayOrderPlan {{ child_counts: {} }}",
+                                format_usize_list(child_counts.as_slice())
+                            ));
                             let children = self.create_child_nodes(
                                 partition_id,
-                                child_counts,
+                                child_counts.clone(),
                                 materializability_bound,
                             )?;
-                            (routing, children)
+                            let routing = StreamingV2RoutingStrategy::ReplayOrder(
+                                StreamingV2ReplayOrderPlan::new(child_counts),
+                            );
+                            (routing, routing_debug_state, children)
                         } else {
                             (
                                 StreamingV2RoutingStrategy::Classifier(classifier),
+                                Some(format_v2_classifier_routing_debug_state(
+                                    trainer_telemetry,
+                                    realized_cluster_count,
+                                )),
                                 Vec::new(),
                             )
                         };
                     completed.push(StreamingV2CompletedPartition {
                         partition_id,
                         routing,
+                        routing_debug_state,
                         children,
                     });
                     current_pass.last_progress_at = Some(current_pass.started.elapsed());
@@ -4052,6 +4350,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     let node = self.partition_mut(partition.partition_id)?;
                     node.pending_trainer = None;
                     node.routing = Some(partition.routing);
+                    node.routing_debug_state = partition.routing_debug_state;
                     node.child_ids = child_ids;
                     node.terminal = false;
                 }
@@ -4102,6 +4401,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     )));
                 }
                 if child_counts.contains(&0) {
+                    self.emit_v2_classifier_empty_child_failure_artifact(
+                        partition_id,
+                        node,
+                        expected_child_count,
+                        child_counts.as_slice(),
+                    )?;
                     return Err(StreamingIndexerError::HierarchyValidation(format!(
                         "partition {label:?} classifier replay left at least one child empty"
                     )));
@@ -4172,6 +4477,13 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub fn mark_planning_complete(&mut self) -> Result<(), StreamingIndexerError> {
+        match self.mark_planning_complete_impl() {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.handle_v2_failure("mark_planning_complete", error)),
+        }
+    }
+
+    fn mark_planning_complete_impl(&mut self) -> Result<(), StreamingIndexerError> {
         if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                 "mark_planning_complete requires the planning phase (currently {:?})",
@@ -4210,6 +4522,23 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub async fn finalize<I, B>(
+        &mut self,
+        replay_batches: I,
+        store: &dyn BlockStore,
+    ) -> Result<StreamingIndexingResult, StreamingIndexerError>
+    where
+        I: IntoIterator<Item = B>,
+        B: AsRef<[IndexItem<R>]>,
+        CR: ContentResolver<R>,
+        EP: EmbeddingProvider,
+    {
+        match self.finalize_impl(replay_batches, store).await {
+            Ok(result) => Ok(result),
+            Err(error) => Err(self.handle_v2_failure("finalize", error)),
+        }
+    }
+
+    async fn finalize_impl<I, B>(
         &mut self,
         replay_batches: I,
         store: &dyn BlockStore,
@@ -4392,6 +4721,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         })
     }
 
+    fn preserve_planner_state_root(&mut self) {
+        self.planner_state_root.preserve();
+    }
+
     fn current_topology(&self) -> StreamingV2PartitionTopology {
         let partitions = self
             .partitions
@@ -4497,6 +4830,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 terminal: true,
                 pending_trainer: None,
                 routing: None,
+                routing_debug_state: None,
             });
         }
         let settings = self.profile_settings()?;
@@ -4507,7 +4841,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             settings.params.allocation_policy,
         )
         .map_err(map_clustering_configuration_error)?;
-        let planner_state = StreamingV2QuantilePlannerState::new(&self.planner_state_root)?;
+        let planner_state =
+            StreamingV2QuantilePlannerState::new_under_root(&self.planner_state_root)?;
         let trainer = DirectionalPcaStreamingTrainer::new(
             StreamingClusteringConfig {
                 cluster_count,
@@ -4526,6 +4861,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             terminal: false,
             pending_trainer: Some(trainer),
             routing: None,
+            routing_debug_state: None,
         })
     }
 
@@ -5457,6 +5793,153 @@ fn usize_delta(current: usize, previous: usize) -> Option<isize> {
     let current = i128::try_from(current).ok()?;
     let previous = i128::try_from(previous).ok()?;
     isize::try_from(current - previous).ok()
+}
+
+fn v2_routing_mode_name(routing: &StreamingV2RoutingStrategy) -> &'static str {
+    match routing {
+        StreamingV2RoutingStrategy::Classifier(_) => "classifier",
+        StreamingV2RoutingStrategy::ReplayOrder(_) => "replay-order",
+    }
+}
+
+fn v2_error_variant_name(error: &StreamingIndexerError) -> &'static str {
+    match error {
+        StreamingIndexerError::EmptyInput => "EmptyInput",
+        StreamingIndexerError::EmptyPass(_) => "EmptyPass",
+        StreamingIndexerError::ContentResolution(_) => "ContentResolution",
+        StreamingIndexerError::InvalidMetadata(_) => "InvalidMetadata",
+        StreamingIndexerError::EmbeddingFailure(_) => "EmbeddingFailure",
+        StreamingIndexerError::ClusteringFailure(_) => "ClusteringFailure",
+        StreamingIndexerError::TerminalPartitionMaterialization(_) => {
+            "TerminalPartitionMaterialization"
+        }
+        StreamingIndexerError::IntermediateNodeTooLarge { .. } => "IntermediateNodeTooLarge",
+        StreamingIndexerError::BlockConstruction(_) => "BlockConstruction",
+        StreamingIndexerError::Storage(_) => "Storage",
+        StreamingIndexerError::ReplayMismatch(_) => "ReplayMismatch",
+        StreamingIndexerError::InvalidLifecycleTransition(_) => "InvalidLifecycleTransition",
+        StreamingIndexerError::HierarchyValidation(_) => "HierarchyValidation",
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(_) => {
+            "UnsupportedPublishedProfileVersion"
+        }
+        StreamingIndexerError::InvalidAdaptivePlanningConfiguration(_) => {
+            "InvalidAdaptivePlanningConfiguration"
+        }
+        StreamingIndexerError::InvalidHybridPlanningConfiguration(_) => {
+            "InvalidHybridPlanningConfiguration"
+        }
+        StreamingIndexerError::CanonicalEmbeddingFailure(_) => "CanonicalEmbeddingFailure",
+        StreamingIndexerError::LocalSpill(_) => "LocalSpill",
+        StreamingIndexerError::UnusableContent(_) => "UnusableContent",
+    }
+}
+
+fn annotate_v2_failure_summary_write_error(
+    operation: &str,
+    error: StreamingIndexerError,
+    write_error: &StreamingIndexerError,
+) -> StreamingIndexerError {
+    let note = format!(
+        "{error}; additionally failed to emit v2 failure summary during {operation}: {write_error}"
+    );
+    match error {
+        StreamingIndexerError::EmptyPass(_) => StreamingIndexerError::EmptyPass(note),
+        StreamingIndexerError::ReplayMismatch(_) => StreamingIndexerError::ReplayMismatch(note),
+        StreamingIndexerError::InvalidMetadata(_) => StreamingIndexerError::InvalidMetadata(note),
+        StreamingIndexerError::ContentResolution(_) => {
+            StreamingIndexerError::ContentResolution(note)
+        }
+        StreamingIndexerError::UnusableContent(_) => StreamingIndexerError::UnusableContent(note),
+        StreamingIndexerError::EmbeddingFailure(_) => StreamingIndexerError::EmbeddingFailure(note),
+        StreamingIndexerError::ClusteringFailure(_) => {
+            StreamingIndexerError::ClusteringFailure(note)
+        }
+        StreamingIndexerError::InvalidHybridPlanningConfiguration(_) => {
+            StreamingIndexerError::InvalidHybridPlanningConfiguration(note)
+        }
+        StreamingIndexerError::InvalidAdaptivePlanningConfiguration(_) => {
+            StreamingIndexerError::InvalidAdaptivePlanningConfiguration(note)
+        }
+        StreamingIndexerError::HierarchyValidation(_) => {
+            StreamingIndexerError::HierarchyValidation(note)
+        }
+        StreamingIndexerError::CanonicalEmbeddingFailure(_) => {
+            StreamingIndexerError::CanonicalEmbeddingFailure(note)
+        }
+        StreamingIndexerError::LocalSpill(_) => StreamingIndexerError::LocalSpill(note),
+        StreamingIndexerError::TerminalPartitionMaterialization(_) => {
+            StreamingIndexerError::TerminalPartitionMaterialization(note)
+        }
+        StreamingIndexerError::InvalidLifecycleTransition(_) => {
+            StreamingIndexerError::InvalidLifecycleTransition(note)
+        }
+        other => other,
+    }
+}
+
+fn format_v2_classifier_routing_debug_state(
+    telemetry: DirectionalPcaTrainerTelemetry,
+    realized_cluster_count: usize,
+) -> String {
+    let mut artifact = String::new();
+    writeln!(&mut artifact, "routing_debug_state_version=1")
+        .expect("formatting into string should succeed");
+    writeln!(&mut artifact, "trainer_subphase={:?}", telemetry.subphase)
+        .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_observed_count={}",
+        format_optional_usize(telemetry.observed_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_ready_axis_plan_count={}",
+        format_optional_usize(telemetry.ready_axis_plan_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_total_axis_plan_count={}",
+        format_optional_usize(telemetry.total_axis_plan_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_populated_cell_count={}",
+        format_optional_usize(telemetry.populated_cell_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_realized_cell_count={}",
+        format_optional_usize(telemetry.realized_cell_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_state_fingerprint_hex={}",
+        encode_digest_hex(telemetry.state_fingerprint)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "classifier_realized_cluster_count={realized_cluster_count}"
+    )
+    .expect("formatting into string should succeed");
+    artifact
+}
+
+fn format_usize_list(values: &[usize]) -> String {
+    let mut formatted = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            formatted.push_str(", ");
+        }
+        formatted.push_str(&value.to_string());
+    }
+    formatted.push(']');
+    formatted
 }
 
 fn hash_streaming_v2_topology_hex(topology: &StreamingV2PartitionTopology) -> String {
@@ -9487,16 +9970,17 @@ impl PartitionRoutingReader {
 }
 
 impl StreamingV2QuantilePlannerState {
-    fn new(parent: &TempDir) -> Result<Self, StreamingIndexerError> {
-        let dir = tempfile::Builder::new()
-            .prefix("partition-")
-            .tempdir_in(parent.path())
-            .map_err(|error| {
-                StreamingIndexerError::LocalSpill(format!(
-                    "could not create v2 planner state directory under {}: {error}",
-                    parent.path().display()
-                ))
-            })?;
+    #[cfg(test)]
+    fn new(parent: impl AsRef<Path>) -> Result<Self, StreamingIndexerError> {
+        let dir = PlannerStateScratchDir::new(parent, Arc::new(AtomicBool::new(false)))?;
+        Ok(Self {
+            quantile_pass: None,
+            dir,
+        })
+    }
+
+    fn new_under_root(root: &PlannerStateRoot) -> Result<Self, StreamingIndexerError> {
+        let dir = PlannerStateScratchDir::new(root.path(), root.nested_preserve_signal())?;
         Ok(Self {
             quantile_pass: None,
             dir,
@@ -10338,12 +10822,16 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
     use super::{
         BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy,
-        DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0, RunPhase,
-        StreamingIndexingRunV2, StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot,
-        StreamingV2Partition, StreamingV2PartitionNode, StreamingV2PartitionTopology,
-        StreamingV2PassState, StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
+        DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0,
+        PUBLISHED_PROFILE_V0_7_0, PlannerStateRoot, RunPhase, StreamingIndexingRunV2,
+        StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot, StreamingV2Partition,
+        StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
+        StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
         allocate_variable_bit_widths, branch_encoding_policy_for_profile,
         effective_directional_pca_cluster_count, exact_centroid_child_summary,
         fallback_partition_groups, fit_ebcp_rotation, format_partition_label,
@@ -10663,9 +11151,106 @@ mod tests {
             completed_pass_history: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
-            planner_state_root,
+            planner_state_root: PlannerStateRoot {
+                dir: Some(planner_state_root),
+                preserved_path: None,
+                preserve_nested_state: Arc::new(AtomicBool::new(false)),
+            },
             _item_ref: PhantomData,
         }
+    }
+
+    #[test]
+    fn planner_state_root_cleans_up_by_default() {
+        let parent = tempfile::tempdir().expect("test parent root should exist");
+        let planner_state_root =
+            PlannerStateRoot::new(parent.path()).expect("planner state root should initialize");
+        let planner_state_path = planner_state_root.path().to_path_buf();
+
+        drop(planner_state_root);
+
+        assert!(!planner_state_path.exists());
+    }
+
+    #[test]
+    fn finish_pass_failure_preserves_planner_state_root() {
+        let parent = tempfile::tempdir().expect("test parent root should exist");
+        let mut run: StreamingIndexingRunV2<(), (), ()> =
+            StreamingIndexingRunV2::with_published_profile(
+                (),
+                (),
+                PUBLISHED_PROFILE_V0_7_0,
+                EmbeddingSpec {
+                    dims: 1,
+                    encoding: "f32le".into(),
+                },
+                4096,
+                parent.path(),
+            )
+            .expect("run should initialize");
+        let planner_state_path = run.planner_state_root.path().to_path_buf();
+
+        let error = run.finish_pass().expect_err("empty pass should fail");
+        assert!(matches!(error, super::StreamingIndexerError::EmptyPass(_)));
+
+        drop(run);
+
+        assert!(planner_state_path.exists());
+    }
+
+    #[test]
+    fn preserving_root_keeps_nested_quantile_planner_state_directory() {
+        let parent = tempfile::tempdir().expect("test parent root should exist");
+        let mut planner_state_root =
+            PlannerStateRoot::new(parent.path()).expect("planner state root should initialize");
+        let planner_state = StreamingV2QuantilePlannerState::new_under_root(&planner_state_root)
+            .expect("nested planner state should initialize");
+        let nested_path = planner_state.dir.path().to_path_buf();
+
+        planner_state_root.preserve();
+        drop(planner_state);
+        drop(planner_state_root);
+
+        assert!(nested_path.exists());
+    }
+
+    #[test]
+    fn annotate_v2_failure_summary_write_error_preserves_string_variant() {
+        let error = super::annotate_v2_failure_summary_write_error(
+            "finish_pass",
+            super::StreamingIndexerError::HierarchyValidation("original failure".into()),
+            &super::StreamingIndexerError::LocalSpill("disk full".into()),
+        );
+
+        match error {
+            super::StreamingIndexerError::HierarchyValidation(message) => {
+                assert!(message.contains("original failure"));
+                assert!(message.contains("failed to emit v2 failure summary"));
+                assert!(message.contains("finish_pass"));
+                assert!(message.contains("disk full"));
+            }
+            other => panic!("expected hierarchy validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn annotate_v2_failure_summary_write_error_leaves_non_string_variant_unchanged() {
+        let error = super::annotate_v2_failure_summary_write_error(
+            "finalize",
+            super::StreamingIndexerError::IntermediateNodeTooLarge {
+                min_serialized_bytes: 99,
+                size_target: 64,
+            },
+            &super::StreamingIndexerError::LocalSpill("disk full".into()),
+        );
+
+        assert_eq!(
+            error,
+            super::StreamingIndexerError::IntermediateNodeTooLarge {
+                min_serialized_bytes: 99,
+                size_target: 64,
+            }
+        );
     }
 
     #[test]
@@ -10765,6 +11350,7 @@ mod tests {
                 terminal: false,
                 pending_trainer: None,
                 routing: None,
+                routing_debug_state: None,
             },
             StreamingV2PartitionNode {
                 parent_id: None,
@@ -10773,6 +11359,7 @@ mod tests {
                 terminal: true,
                 pending_trainer: None,
                 routing: None,
+                routing_debug_state: None,
             },
         ];
 
@@ -10811,6 +11398,7 @@ mod tests {
             terminal: false,
             pending_trainer: None,
             routing: None,
+            routing_debug_state: None,
         });
         run.next_partition_id = 1;
 

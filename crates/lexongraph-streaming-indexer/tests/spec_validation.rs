@@ -436,6 +436,24 @@ impl EmbeddingProvider for FailingEmbeddingProvider {
 }
 
 #[derive(Clone, Copy)]
+struct ConstantF32EmbeddingProvider;
+
+impl EmbeddingProvider for ConstantF32EmbeddingProvider {
+    type Error = FixtureError;
+
+    async fn embed(
+        &self,
+        _: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        if spec.encoding != "f32le" || spec.dims == 0 {
+            return Err(FixtureError("unexpected embedding spec".into()));
+        }
+        Ok((0..spec.dims).flat_map(|_| 0.0f32.to_le_bytes()).collect())
+    }
+}
+
+#[derive(Clone, Copy)]
 struct FirstChildCanonicalPolicy;
 
 impl CanonicalEmbeddingPolicy for FirstChildCanonicalPolicy {
@@ -5935,4 +5953,146 @@ async fn val_stream_indexer_113_streaming_v2_completed_pass_summaries_are_determ
     let left = collect_summaries().await;
     let right = collect_summaries().await;
     assert_eq!(left, right);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_114_streaming_v2_failure_retains_planner_state_root() {
+    let planner_state_parent = tempfile::tempdir().unwrap();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+        planner_state_parent.path(),
+    )
+    .unwrap();
+    let planner_state_entries_before = std::fs::read_dir(planner_state_parent.path())
+        .unwrap()
+        .count();
+    assert_eq!(planner_state_entries_before, 1);
+
+    assert!(matches!(
+        run.finish_pass().unwrap_err(),
+        StreamingIndexerError::EmptyPass(_)
+    ));
+
+    drop(run);
+
+    let retained_entries = std::fs::read_dir(planner_state_parent.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(retained_entries.len(), 1);
+    assert!(retained_entries[0].is_dir());
+    let summary = std::fs::read_to_string(
+        retained_entries[0]
+            .join("failure-artifacts")
+            .join("run-failure-summary.txt"),
+    )
+    .unwrap();
+    assert!(summary.contains("operation=finish_pass"));
+    assert!(summary.contains("error_variant=EmptyPass"));
+    assert!(!summary.contains("detail_artifact="));
+}
+
+async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, String, String) {
+    let items = (0..128)
+        .map(|index| IndexItem {
+            metadata: vec![],
+            content_ref: index.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let planner_state_parent = tempfile::tempdir().unwrap();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        ConstantF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(1),
+        4096,
+        planner_state_parent.path(),
+    )
+    .unwrap();
+
+    for _ in 0..5 {
+        run.ingest_batch(items.as_slice()).await.unwrap();
+        run.finish_pass().unwrap();
+    }
+    run.ingest_batch(items.as_slice()).await.unwrap();
+    let error = run.finish_pass().unwrap_err();
+    assert!(matches!(
+        error,
+        StreamingIndexerError::HierarchyValidation(ref message)
+            if message.contains("left at least one child empty")
+    ));
+
+    drop(run);
+
+    let retained_entries = std::fs::read_dir(planner_state_parent.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(retained_entries.len(), 1);
+    let retained_root = retained_entries[0].clone();
+    let summary = std::fs::read_to_string(
+        retained_root
+            .join("failure-artifacts")
+            .join("run-failure-summary.txt"),
+    )
+    .unwrap();
+    let detail = std::fs::read_to_string(
+        retained_root
+            .join("failure-artifacts")
+            .join("run-failure-detail.txt"),
+    )
+    .unwrap();
+    (planner_state_parent, summary, detail)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_115_streaming_v2_empty_child_failure_retains_assignment_evidence() {
+    let (_planner_state_parent, summary, detail) =
+        run_streaming_v2_identical_embedding_failure().await;
+    assert!(summary.contains("error_variant=HierarchyValidation"));
+    assert!(summary.contains("detail_artifact=run-failure-detail.txt"));
+    assert!(detail.contains("failure_kind=classifier-empty-child"));
+    assert!(detail.contains("partition_path=p0"));
+    assert!(detail.contains("expected_child_count=64"));
+    assert!(detail.contains("observed_child_total=128"));
+    assert!(detail.contains("observed_child_counts=[128"));
+    assert!(detail.contains("empty_child_indexes=[1"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_116_streaming_v2_empty_child_failure_retains_routing_state() {
+    let (_planner_state_parent, _summary, detail) =
+        run_streaming_v2_identical_embedding_failure().await;
+    assert!(detail.contains("routing_mode=classifier"));
+    assert!(detail.contains("routing_debug_state_begin"));
+    assert!(detail.contains("trainer_subphase=RealizePartition"));
+    assert!(detail.contains("trainer_state_fingerprint_hex="));
+    assert!(detail.contains("classifier_realized_cluster_count=64"));
+    assert!(!detail.contains("model: Some"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_117_streaming_v2_failure_artifacts_are_deterministic_and_bounded() {
+    let (_left_parent, left_summary, left_detail) =
+        run_streaming_v2_identical_embedding_failure().await;
+    let (right_parent, right_summary, right_detail) =
+        run_streaming_v2_identical_embedding_failure().await;
+    assert_eq!(left_summary, right_summary);
+    assert_eq!(left_detail, right_detail);
+
+    let retained_entries = std::fs::read_dir(right_parent.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(retained_entries.len(), 1);
+    let retained_root = retained_entries[0].clone();
+    let artifact_files = std::fs::read_dir(retained_root.join("failure-artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_files.len(), 2);
 }
