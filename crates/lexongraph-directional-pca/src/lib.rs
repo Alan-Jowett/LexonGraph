@@ -18,6 +18,7 @@ pub const DIRECTIONAL_PCA_SOFTWARE_IDENTITY: &str =
     concat!("lexongraph-directional-pca-v", env!("CARGO_PKG_VERSION"));
 
 const DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP: usize = 256;
+const GK_QUANTILE_RANK_ERROR_DENOMINATOR: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectionalPcaRetainedAxisPolicy {
@@ -188,7 +189,6 @@ struct ActiveCutPlanningPass {
     tracker: PassTracker,
     plan: PartitionAnalysisPlan,
     planners: Vec<AxisPlanner>,
-    quantile_axis_indices: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -211,19 +211,7 @@ struct ActivePartitionRealizationPass {
 #[derive(Clone, Debug)]
 enum AxisPlan {
     SingleBin,
-    Quantile(QuantileAxisPlan),
     Thresholds(Vec<f32>),
-}
-
-#[derive(Clone, Debug)]
-struct QuantileAxisPlan {
-    groups: Vec<QuantileValueGroup>,
-}
-
-#[derive(Clone, Debug)]
-struct QuantileValueGroup {
-    value: f32,
-    quotas: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -237,12 +225,10 @@ enum AxisPlanner {
 #[derive(Clone, Debug)]
 struct QuantileAxisPlanner {
     targets: Vec<usize>,
-    next_target_index: usize,
-    consumed_count: usize,
-    lower_bound: Option<f32>,
-    candidate_groups: Vec<ValueCount>,
-    groups: Vec<QuantileValueGroup>,
-    candidate_capacity: usize,
+    observed_count: usize,
+    max_rank_error_denominator: usize,
+    summary: Vec<GkSummaryEntry>,
+    compress_interval: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -261,15 +247,14 @@ struct DensityValleyHistogramPlanner {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ValueCount {
+struct GkSummaryEntry {
     value: f32,
-    count: usize,
+    gap: usize,
+    delta: usize,
 }
 
-#[derive(Clone, Debug)]
-struct AxisCursorState {
-    quantile_positions: Vec<Vec<usize>>,
-}
+#[derive(Clone, Debug, Default)]
+struct AxisCursorState;
 
 #[derive(Clone, Debug)]
 struct CellStats {
@@ -495,20 +480,15 @@ fn hash_axis_planner(hasher: &mut Sha256, planner: &AxisPlanner) {
         AxisPlanner::Quantile(planner) => {
             hasher.update(b"planner-quantile");
             hash_usizes(hasher, &planner.targets);
-            hash_usize(hasher, planner.next_target_index);
-            hash_usize(hasher, planner.consumed_count);
-            hash_optional_f32(hasher, planner.lower_bound);
-            hash_usize(hasher, planner.candidate_groups.len());
-            for group in &planner.candidate_groups {
-                hash_f32(hasher, group.value);
-                hash_usize(hasher, group.count);
+            hash_usize(hasher, planner.observed_count);
+            hash_usize(hasher, planner.max_rank_error_denominator);
+            hash_usize(hasher, planner.summary.len());
+            for entry in &planner.summary {
+                hash_f32(hasher, entry.value);
+                hash_usize(hasher, entry.gap);
+                hash_usize(hasher, entry.delta);
             }
-            hash_usize(hasher, planner.groups.len());
-            for group in &planner.groups {
-                hash_f32(hasher, group.value);
-                hash_usizes(hasher, &group.quotas);
-            }
-            hash_usize(hasher, planner.candidate_capacity);
+            hash_usize(hasher, planner.compress_interval);
         }
         AxisPlanner::DensityMinMax(planner) => {
             hasher.update(b"planner-density-minmax");
@@ -535,14 +515,6 @@ fn hash_axis_plan(hasher: &mut Sha256, plan: &AxisPlan) {
         AxisPlan::SingleBin => {
             hasher.update(b"axis-plan-single-bin");
         }
-        AxisPlan::Quantile(plan) => {
-            hasher.update(b"axis-plan-quantile");
-            hash_usize(hasher, plan.groups.len());
-            for group in &plan.groups {
-                hash_f32(hasher, group.value);
-                hash_usizes(hasher, &group.quotas);
-            }
-        }
         AxisPlan::Thresholds(thresholds) => {
             hasher.update(b"axis-plan-thresholds");
             hash_usize(hasher, thresholds.len());
@@ -554,10 +526,8 @@ fn hash_axis_plan(hasher: &mut Sha256, plan: &AxisPlan) {
 }
 
 fn hash_axis_cursor_state(hasher: &mut Sha256, cursor_state: &AxisCursorState) {
-    hash_usize(hasher, cursor_state.quantile_positions.len());
-    for positions in &cursor_state.quantile_positions {
-        hash_usizes(hasher, positions);
-    }
+    let _ = cursor_state;
+    hasher.update(b"axis-cursor-state");
 }
 
 fn hash_cell_duplicate_summaries(
@@ -743,7 +713,6 @@ impl DirectionalPcaStreamingTrainer {
                 tracker: PassTracker::new(),
                 plan: replay.plan.clone(),
                 planners: replay.planners.clone(),
-                quantile_axis_indices: quantile_axis_indices(&replay.planners),
             }),
             ReplayPhase::CountCells(partition) => {
                 ActivePassState::CountCells(ActiveCellCountingPass {
@@ -773,14 +742,6 @@ impl DirectionalPcaStreamingTrainer {
                 })
             }
         };
-        if let Some(out_of_core_state) = self.out_of_core_state.as_mut()
-            && let ActivePassState::PlanCuts(pass) = &active_pass
-            && !pass.quantile_axis_indices.is_empty()
-        {
-            out_of_core_state
-                .begin_quantile_pass(pass.quantile_axis_indices.len(), pass.plan.total_count)
-                .map_err(out_of_core_state_error)?;
-        }
         self.active_pass = Some(active_pass);
         self.invalidate_cached_telemetry();
         Ok(())
@@ -895,11 +856,9 @@ impl DirectionalPcaStreamingTrainer {
             .axis_bin_counts
             .iter()
             .map(|&bin_count| match plan.binning_policy {
-                DirectionalPcaBinningPolicy::Quantile => AxisPlanner::new_quantile(
-                    bin_count,
-                    plan.total_count,
-                    self.config.cluster_count as usize,
-                ),
+                DirectionalPcaBinningPolicy::Quantile => {
+                    AxisPlanner::new_quantile(bin_count, plan.total_count)
+                }
                 DirectionalPcaBinningPolicy::DensityValley => AxisPlanner::new_density(bin_count),
             })
             .collect();
@@ -916,39 +875,12 @@ impl DirectionalPcaStreamingTrainer {
     ) -> Result<(ReplayPhase, PassReport, Option<DirectionalPcaModel>), StreamingClusteringError>
     {
         let fingerprint = pass.tracker.finish();
-        if let Err(error) = self.validate_replayed_pass(&fingerprint) {
-            if self.out_of_core_state.is_some() && !pass.quantile_axis_indices.is_empty() {
-                let clear_result = self
-                    .out_of_core_state
-                    .as_mut()
-                    .ok_or_else(|| invalid_configuration("missing out-of-core planner state"))?
-                    .clear_quantile_pass();
-                return match clear_result {
-                    Ok(()) => Err(error),
-                    Err(clear_error) => Err(unsatisfiable_constraint(format!(
-                        "{error}; additionally failed to clear planner state: {clear_error}"
-                    ))),
-                };
-            }
-            return Err(error);
-        }
-
-        let advanced_planners = if self.out_of_core_state.is_some()
-            && pass
-                .planners
-                .iter()
-                .any(|planner| matches!(planner, AxisPlanner::Quantile(_)))
-        {
-            self.finish_cut_planning_pass_from_out_of_core(
-                pass.planners,
-                pass.quantile_axis_indices,
-            )?
-        } else {
-            pass.planners
-                .into_iter()
-                .map(AxisPlanner::finish_pass)
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        self.validate_replayed_pass(&fingerprint)?;
+        let advanced_planners = pass
+            .planners
+            .into_iter()
+            .map(AxisPlanner::finish_pass)
+            .collect::<Result<Vec<_>, _>>()?;
         let ready = advanced_planners
             .iter()
             .all(|planner| matches!(planner, AxisPlanner::Ready(_)));
@@ -984,100 +916,6 @@ impl DirectionalPcaStreamingTrainer {
                 None,
             ))
         }
-    }
-
-    fn finish_cut_planning_pass_from_out_of_core(
-        &mut self,
-        planners: Vec<AxisPlanner>,
-        quantile_axis_indices: Vec<usize>,
-    ) -> Result<Vec<AxisPlanner>, StreamingClusteringError> {
-        let out_of_core_state = self
-            .out_of_core_state
-            .as_mut()
-            .ok_or_else(|| invalid_configuration("missing out-of-core planner state"))?;
-        if let Err(error) = out_of_core_state.finish_quantile_pass() {
-            let clear_result = out_of_core_state.clear_quantile_pass();
-            return match clear_result {
-                Ok(()) => Err(out_of_core_state_error(error)),
-                Err(clear_error) => Err(unsatisfiable_constraint(format!(
-                    "out-of-core planner state failed: {error}; additionally failed to clear planner state: {clear_error}"
-                ))),
-            };
-        }
-
-        let mut sparse_axis_positions = quantile_axis_indices.iter().copied().enumerate();
-        let result = planners
-            .into_iter()
-            .enumerate()
-            .map(|(axis_index, planner)| {
-                let sparse_axis_index = if matches!(planner, AxisPlanner::Quantile(_)) {
-                    let (sparse_axis_index, mapped_axis_index) = sparse_axis_positions
-                        .next()
-                        .ok_or_else(|| {
-                            invalid_configuration("missing sparse quantile axis mapping during replay")
-                        })?;
-                    if mapped_axis_index != axis_index {
-                        return Err(invalid_configuration(format!(
-                            "sparse quantile axis mapping drifted: expected axis {axis_index} but mapped axis {mapped_axis_index}"
-                        )));
-                    }
-                    Some(sparse_axis_index)
-                } else {
-                    None
-                };
-                Self::advance_axis_planner_from_out_of_core(
-                    out_of_core_state.as_ref(),
-                    axis_index,
-                    sparse_axis_index,
-                    planner,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>();
-        let clear_result = out_of_core_state.clear_quantile_pass();
-        match (result, clear_result) {
-            (Ok(planners), Ok(())) => Ok(planners),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(out_of_core_state_error(error)),
-            (Err(error), Err(clear_error)) => Err(unsatisfiable_constraint(format!(
-                "{error}; additionally failed to clear planner state: {clear_error}"
-            ))),
-        }
-    }
-
-    fn advance_axis_planner_from_out_of_core(
-        out_of_core_state: &dyn DirectionalPcaOutOfCorePlannerState,
-        axis_index: usize,
-        sparse_axis_index: Option<usize>,
-        planner: AxisPlanner,
-    ) -> Result<AxisPlanner, StreamingClusteringError> {
-        let mut planner = planner.finish_pass()?;
-        while let AxisPlanner::Quantile(current) = planner {
-            let sparse_axis_index = sparse_axis_index.ok_or_else(|| {
-                invalid_configuration(format!(
-                    "missing sparse quantile axis mapping for axis {axis_index}"
-                ))
-            })?;
-            let previous_target_index = current.next_target_index;
-            let previous_lower_bound = current.lower_bound;
-            let mut replayed = current;
-            let mut observe = |value: f32| {
-                replayed.observe(value);
-                Ok(())
-            };
-            out_of_core_state
-                .scan_quantile_axis(sparse_axis_index, &mut observe)
-                .map_err(out_of_core_state_error)?;
-            planner = replayed.finish_pass()?;
-            if let AxisPlanner::Quantile(next) = &planner
-                && next.next_target_index == previous_target_index
-                && next.lower_bound == previous_lower_bound
-            {
-                return Err(unsatisfiable_constraint(format!(
-                    "quantile cut planning did not advance while replaying planner state for axis {axis_index}"
-                )));
-            }
-        }
-        Ok(planner)
     }
 
     fn finish_cell_counting_pass(
@@ -1173,16 +1011,6 @@ impl DirectionalPcaStreamingTrainer {
     }
 }
 
-fn quantile_axis_indices(planners: &[AxisPlanner]) -> Vec<usize> {
-    planners
-        .iter()
-        .enumerate()
-        .filter_map(|(axis_index, planner)| {
-            matches!(planner, AxisPlanner::Quantile(_)).then_some(axis_index)
-        })
-        .collect()
-}
-
 impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
     type Classifier = DirectionalPcaStreamingClassifier;
 
@@ -1206,12 +1034,6 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             }
         }
         self.invalidate_cached_telemetry();
-        let capture_quantile_values = self.out_of_core_state.is_some()
-            && matches!(
-                self.active_pass.as_ref(),
-                Some(ActivePassState::PlanCuts(pass)) if !pass.quantile_axis_indices.is_empty()
-            );
-
         let active_pass = self
             .active_pass
             .as_mut()
@@ -1230,24 +1052,6 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                         .transform
                         .apply(embedding)
                         .map_err(map_pca_error)?;
-                    if capture_quantile_values
-                        && let Some(out_of_core_state) = self.out_of_core_state.as_mut()
-                    {
-                        let quantile_values = pass
-                            .quantile_axis_indices
-                            .iter()
-                            .map(|&axis_index| {
-                                coordinates.get(axis_index).copied().ok_or_else(|| {
-                                    invalid_configuration(format!(
-                                        "missing quantile axis coordinate {axis_index}"
-                                    ))
-                                })
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        out_of_core_state
-                            .append_quantile_values(quantile_values.as_slice())
-                            .map_err(out_of_core_state_error)?;
-                    }
                     for (planner, value) in pass.planners.iter_mut().zip(coordinates) {
                         planner.observe(value);
                     }
@@ -1377,7 +1181,7 @@ impl DirectionalPcaStreamingClassifier {
 }
 
 impl AxisPlanner {
-    fn new_quantile(bin_count: usize, total_count: usize, candidate_capacity: usize) -> Self {
+    fn new_quantile(bin_count: usize, total_count: usize) -> Self {
         if bin_count <= 1 {
             return Self::Ready(AxisPlan::SingleBin);
         }
@@ -1386,12 +1190,10 @@ impl AxisPlanner {
             .collect();
         Self::Quantile(QuantileAxisPlanner {
             targets,
-            next_target_index: 0,
-            consumed_count: 0,
-            lower_bound: None,
-            candidate_groups: Vec::new(),
-            groups: Vec::new(),
-            candidate_capacity: candidate_capacity.max(1),
+            observed_count: 0,
+            max_rank_error_denominator: GK_QUANTILE_RANK_ERROR_DENOMINATOR,
+            summary: Vec::new(),
+            compress_interval: GK_QUANTILE_RANK_ERROR_DENOMINATOR / 2,
         })
     }
 
@@ -1446,79 +1248,114 @@ impl From<DensityValleyHistogramPlanner> for AxisPlanner {
 
 impl QuantileAxisPlanner {
     fn observe(&mut self, value: f32) {
-        if self.next_target_index >= self.targets.len() {
-            return;
-        }
-        if let Some(lower_bound) = self.lower_bound
-            && value <= lower_bound
+        self.observed_count += 1;
+        let insert_index = match self
+            .summary
+            .binary_search_by(|entry| entry.value.total_cmp(&value))
         {
-            return;
-        }
-        if let Some(existing) = self
-            .candidate_groups
-            .iter_mut()
-            .find(|candidate| candidate.value == value)
+            Ok(mut index) => {
+                while index < self.summary.len() && self.summary[index].value == value {
+                    index += 1;
+                }
+                index
+            }
+            Err(index) => index,
+        };
+        let delta = if insert_index == 0 || insert_index == self.summary.len() {
+            0
+        } else {
+            self.compress_threshold().saturating_sub(1)
+        };
+        self.summary.insert(
+            insert_index,
+            GkSummaryEntry {
+                value,
+                gap: 1,
+                delta,
+            },
+        );
+        if self.compress_interval > 0 && self.observed_count.is_multiple_of(self.compress_interval)
         {
-            existing.count += 1;
-            return;
-        }
-
-        if self.candidate_groups.len() < self.candidate_capacity {
-            self.candidate_groups.push(ValueCount { value, count: 1 });
-            self.candidate_groups
-                .sort_by(|left, right| left.value.total_cmp(&right.value));
-            return;
-        }
-
-        if let Some(last) = self.candidate_groups.last()
-            && value < last.value
-        {
-            self.candidate_groups.pop();
-            self.candidate_groups.push(ValueCount { value, count: 1 });
-            self.candidate_groups
-                .sort_by(|left, right| left.value.total_cmp(&right.value));
+            self.compress();
         }
     }
 
     fn finish_pass(mut self) -> Result<AxisPlanner, StreamingClusteringError> {
-        if self.next_target_index >= self.targets.len() {
-            return Ok(AxisPlan::Quantile(QuantileAxisPlan {
-                groups: self.groups,
-            })
-            .into());
-        }
-        if self.candidate_groups.is_empty() {
+        if self.summary.is_empty() {
             return Err(unsatisfiable_constraint(
-                "quantile cut planning could not advance on the replayed pass",
+                "quantile cut planning observed no retained-axis coordinates",
             ));
         }
+        self.compress();
+        let cuts = self
+            .targets
+            .iter()
+            .copied()
+            .map(|target_rank| self.approximate_quantile_value(target_rank))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(AxisPlan::Thresholds(cuts).into())
+    }
 
-        for candidate in self.candidate_groups.drain(..) {
-            let group_start = self.consumed_count;
-            self.consumed_count += candidate.count;
-            let mut quotas = Vec::new();
-            while self.next_target_index < self.targets.len()
-                && self.targets[self.next_target_index] <= self.consumed_count
-            {
-                quotas.push(self.targets[self.next_target_index] - group_start);
-                self.next_target_index += 1;
+    fn compress_threshold(&self) -> usize {
+        self.observed_count
+            .saturating_mul(2)
+            .saturating_div(self.max_rank_error_denominator.max(1))
+            .max(1)
+    }
+
+    fn rank_error(&self) -> usize {
+        self.observed_count
+            .div_ceil(self.max_rank_error_denominator.max(1))
+    }
+
+    fn compress(&mut self) {
+        if self.summary.len() < 3 {
+            return;
+        }
+        let threshold = self.compress_threshold();
+        let mut index = self.summary.len() - 2;
+        while index > 0 {
+            let left = self.summary[index];
+            let right = self.summary[index + 1];
+            if left.gap + right.gap + right.delta <= threshold {
+                self.summary[index + 1].gap += left.gap;
+                self.summary.remove(index);
             }
-            if !quotas.is_empty() {
-                self.groups.push(QuantileValueGroup {
-                    value: candidate.value,
-                    quotas,
-                });
+            index -= 1;
+        }
+    }
+
+    fn approximate_quantile_value(
+        &self,
+        target_rank: usize,
+    ) -> Result<f32, StreamingClusteringError> {
+        let rank_error = self.rank_error();
+        let minimum_rank = target_rank.saturating_sub(rank_error).max(1);
+        let maximum_rank = target_rank
+            .saturating_add(rank_error)
+            .min(self.observed_count.max(1));
+        let mut running_min_rank = 0usize;
+        let mut fallback_value = None;
+        let mut fallback_distance = usize::MAX;
+        for entry in &self.summary {
+            running_min_rank += entry.gap;
+            let running_max_rank = running_min_rank + entry.delta;
+            if running_min_rank <= maximum_rank && running_max_rank >= minimum_rank {
+                return Ok(entry.value);
             }
-            self.lower_bound = Some(candidate.value);
-            if self.next_target_index >= self.targets.len() {
-                return Ok(AxisPlan::Quantile(QuantileAxisPlan {
-                    groups: self.groups,
-                })
-                .into());
+            let distance = if running_max_rank < minimum_rank {
+                minimum_rank - running_max_rank
+            } else {
+                running_min_rank.saturating_sub(maximum_rank)
+            };
+            if distance < fallback_distance {
+                fallback_distance = distance;
+                fallback_value = Some(entry.value);
             }
         }
-
-        Ok(self.into())
+        fallback_value.ok_or_else(|| {
+            unsatisfiable_constraint("quantile cut planning could not derive an approximate cut")
+        })
     }
 }
 
@@ -1562,16 +1399,8 @@ impl DensityValleyHistogramPlanner {
 
 impl AxisCursorState {
     fn for_partition(partition: &PartitionPlan) -> Self {
-        Self {
-            quantile_positions: partition
-                .axis_plans
-                .iter()
-                .map(|plan| match plan {
-                    AxisPlan::Quantile(quantile) => vec![0; quantile.groups.len()],
-                    _ => Vec::new(),
-                })
-                .collect(),
-        }
+        let _ = partition;
+        Self
     }
 }
 
@@ -1581,6 +1410,7 @@ impl PartitionPlan {
         coordinates: &[f32],
         cursor_state: &mut AxisCursorState,
     ) -> Result<Vec<usize>, StreamingClusteringError> {
+        let _ = cursor_state;
         self.axis_plans
             .iter()
             .enumerate()
@@ -1589,11 +1419,6 @@ impl PartitionPlan {
                 AxisPlan::Thresholds(cuts) => {
                     Ok(cuts.partition_point(|cut| coordinates[axis] > *cut))
                 }
-                AxisPlan::Quantile(quantile) => assign_quantile_bin(
-                    coordinates[axis],
-                    quantile,
-                    cursor_state.quantile_positions[axis].as_mut_slice(),
-                ),
             })
             .collect()
     }
@@ -2065,35 +1890,6 @@ fn allocate_axis_bins_from_eigenvalue_bits(
         .collect()
 }
 
-fn assign_quantile_bin(
-    value: f32,
-    plan: &QuantileAxisPlan,
-    positions: &mut [usize],
-) -> Result<usize, StreamingClusteringError> {
-    let mut bin = 0usize;
-    for (group_index, group) in plan.groups.iter().enumerate() {
-        if value < group.value {
-            return Ok(bin);
-        }
-        if value > group.value {
-            bin += group.quotas.len();
-            continue;
-        }
-
-        positions[group_index] += 1;
-        let seen = positions[group_index];
-        for quota in &group.quotas {
-            if seen > *quota {
-                bin += 1;
-            } else {
-                break;
-            }
-        }
-        return Ok(bin);
-    }
-    Ok(bin)
-}
-
 fn select_histogram_valley_cut_values(
     minimum: f32,
     maximum: f32,
@@ -2262,13 +2058,6 @@ fn unsatisfiable_constraint(message: impl Into<String>) -> StreamingClusteringEr
     }
 }
 
-fn out_of_core_state_error(message: impl Into<String>) -> StreamingClusteringError {
-    unsatisfiable_constraint(format!(
-        "out-of-core planner state failed: {}",
-        message.into()
-    ))
-}
-
 fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
     StreamingClusteringError::MalformedInput {
         message: message.into(),
@@ -2278,109 +2067,23 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
+    struct FailingOutOfCorePlannerState;
 
-    #[derive(Default)]
-    struct TestOutOfCorePlannerState {
-        expected_value_count: usize,
-        axis_values: Vec<Vec<f32>>,
-    }
-
-    struct FailingBeginOutOfCorePlannerState;
-
-    struct FailingFinishOutOfCorePlannerState {
-        clear_called: Arc<AtomicBool>,
-    }
-
-    struct ClearingOutOfCorePlannerState {
-        clear_called: Arc<AtomicBool>,
-    }
-
-    struct RecordingOutOfCorePlannerState {
-        begin_axis_counts: Arc<Mutex<Vec<usize>>>,
-        append_value_widths: Arc<Mutex<Vec<usize>>>,
-    }
-
-    impl DirectionalPcaOutOfCorePlannerState for TestOutOfCorePlannerState {
-        fn begin_quantile_pass(
-            &mut self,
-            axis_count: usize,
-            expected_value_count: usize,
-        ) -> Result<(), String> {
-            self.expected_value_count = expected_value_count;
-            self.axis_values = (0..axis_count)
-                .map(|_| Vec::with_capacity(expected_value_count))
-                .collect();
-            Ok(())
-        }
-
-        fn append_quantile_values(&mut self, values: &[f32]) -> Result<(), String> {
-            if values.len() != self.axis_values.len() {
-                return Err(format!(
-                    "observed {} values but expected {}",
-                    values.len(),
-                    self.axis_values.len()
-                ));
-            }
-            for (axis_values, value) in self.axis_values.iter_mut().zip(values.iter().copied()) {
-                axis_values.push(value);
-            }
-            Ok(())
-        }
-
-        fn finish_quantile_pass(&mut self) -> Result<(), String> {
-            for axis_values in &self.axis_values {
-                if axis_values.len() != self.expected_value_count {
-                    return Err(format!(
-                        "axis captured {} values but expected {}",
-                        axis_values.len(),
-                        self.expected_value_count
-                    ));
-                }
-            }
-            Ok(())
-        }
-
-        fn scan_quantile_axis(
-            &self,
-            axis_index: usize,
-            observe: &mut dyn FnMut(f32) -> Result<(), String>,
-        ) -> Result<(), String> {
-            let axis_values = self
-                .axis_values
-                .get(axis_index)
-                .ok_or_else(|| format!("missing axis {axis_index}"))?;
-            for &value in axis_values {
-                observe(value)?;
-            }
-            Ok(())
-        }
-
-        fn clear_quantile_pass(&mut self) -> Result<(), String> {
-            self.expected_value_count = 0;
-            self.axis_values.clear();
-            Ok(())
-        }
-    }
-
-    impl DirectionalPcaOutOfCorePlannerState for FailingBeginOutOfCorePlannerState {
+    impl DirectionalPcaOutOfCorePlannerState for FailingOutOfCorePlannerState {
         fn begin_quantile_pass(
             &mut self,
             _axis_count: usize,
             _expected_value_count: usize,
         ) -> Result<(), String> {
-            Err("synthetic begin_quantile_pass failure".into())
+            Err("out-of-core quantile spill should not be used by the GK planner".into())
         }
 
         fn append_quantile_values(&mut self, _values: &[f32]) -> Result<(), String> {
-            Err("append_quantile_values should not be called after begin failure".into())
+            Err("out-of-core quantile spill should not be used by the GK planner".into())
         }
 
         fn finish_quantile_pass(&mut self) -> Result<(), String> {
-            Err("finish_quantile_pass should not be called after begin failure".into())
+            Err("out-of-core quantile spill should not be used by the GK planner".into())
         }
 
         fn scan_quantile_axis(
@@ -2388,111 +2091,11 @@ mod tests {
             _axis_index: usize,
             _observe: &mut dyn FnMut(f32) -> Result<(), String>,
         ) -> Result<(), String> {
-            Err("scan_quantile_axis should not be called after begin failure".into())
+            Err("out-of-core quantile spill should not be used by the GK planner".into())
         }
 
         fn clear_quantile_pass(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    impl DirectionalPcaOutOfCorePlannerState for FailingFinishOutOfCorePlannerState {
-        fn begin_quantile_pass(
-            &mut self,
-            _axis_count: usize,
-            _expected_value_count: usize,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn append_quantile_values(&mut self, _values: &[f32]) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn finish_quantile_pass(&mut self) -> Result<(), String> {
-            Err("synthetic finish_quantile_pass failure".into())
-        }
-
-        fn scan_quantile_axis(
-            &self,
-            _axis_index: usize,
-            _observe: &mut dyn FnMut(f32) -> Result<(), String>,
-        ) -> Result<(), String> {
-            Err("scan_quantile_axis should not be called after finish failure".into())
-        }
-
-        fn clear_quantile_pass(&mut self) -> Result<(), String> {
-            self.clear_called.store(true, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    impl DirectionalPcaOutOfCorePlannerState for RecordingOutOfCorePlannerState {
-        fn begin_quantile_pass(
-            &mut self,
-            axis_count: usize,
-            _expected_value_count: usize,
-        ) -> Result<(), String> {
-            self.begin_axis_counts
-                .lock()
-                .map_err(|_| "recording begin axis counts lock was poisoned".to_string())?
-                .push(axis_count);
-            Ok(())
-        }
-
-        fn append_quantile_values(&mut self, values: &[f32]) -> Result<(), String> {
-            self.append_value_widths
-                .lock()
-                .map_err(|_| "recording append widths lock was poisoned".to_string())?
-                .push(values.len());
-            Ok(())
-        }
-
-        fn finish_quantile_pass(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn scan_quantile_axis(
-            &self,
-            _axis_index: usize,
-            _observe: &mut dyn FnMut(f32) -> Result<(), String>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn clear_quantile_pass(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
-    impl DirectionalPcaOutOfCorePlannerState for ClearingOutOfCorePlannerState {
-        fn begin_quantile_pass(
-            &mut self,
-            _axis_count: usize,
-            _expected_value_count: usize,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn append_quantile_values(&mut self, _values: &[f32]) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn finish_quantile_pass(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn scan_quantile_axis(
-            &self,
-            _axis_index: usize,
-            _observe: &mut dyn FnMut(f32) -> Result<(), String>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn clear_quantile_pass(&mut self) -> Result<(), String> {
-            self.clear_called.store(true, Ordering::Relaxed);
-            Ok(())
+            Err("out-of-core quantile spill should not be used by the GK planner".into())
         }
     }
 
@@ -2524,20 +2127,6 @@ mod tests {
         }
     }
 
-    fn sparse_quantile_params(retained_axis_count: usize) -> DirectionalPcaParams {
-        DirectionalPcaParams {
-            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(retained_axis_count),
-            allocation_policy: DirectionalPcaAllocationPolicy::EigenvalueLogBits,
-            binning_policy: DirectionalPcaBinningPolicy::Quantile,
-            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
-            variance_exponent: 1.0,
-            temperature: 1.0,
-            min_input_count: 4,
-            min_effective_rank: 1,
-            min_cumulative_variance: 0.0,
-        }
-    }
-
     #[test]
     fn axis_scoring_uses_direction_and_variance() {
         let embeddings = vec![
@@ -2554,22 +2143,6 @@ mod tests {
         let scores = compute_axis_scores(transform.mean.as_slice(), &transform, &params()).unwrap();
         assert_eq!(scores.len(), 2);
         assert!(scores[0] > scores[1]);
-    }
-
-    #[test]
-    fn quantile_assignment_splits_equal_values_by_stable_rank() {
-        let plan = QuantileAxisPlan {
-            groups: vec![QuantileValueGroup {
-                value: 1.0,
-                quotas: vec![2, 3],
-            }],
-        };
-        let mut positions = vec![0usize];
-        let bins = [1.0, 1.0, 1.0, 1.0]
-            .into_iter()
-            .map(|value| assign_quantile_bin(value, &plan, positions.as_mut_slice()).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(bins, vec![0, 0, 1, 2]);
     }
 
     #[test]
@@ -2608,7 +2181,7 @@ mod tests {
     }
 
     #[test]
-    fn out_of_core_quantile_replay_advances_without_extra_public_passes() {
+    fn gk_quantile_planning_advances_without_extra_public_passes() {
         let embeddings = (0..8).map(|value| vec![value as f32]).collect::<Vec<_>>();
         let config = StreamingClusteringConfig {
             cluster_count: 2,
@@ -2617,108 +2190,41 @@ mod tests {
             random_seed: None,
         };
 
-        let mut baseline =
-            DirectionalPcaStreamingTrainer::new(config.clone(), one_dimensional_params()).unwrap();
-        baseline.ingest_batch(&embeddings).unwrap();
-        baseline.finish_pass().unwrap();
-        baseline.ingest_batch(&embeddings).unwrap();
-        baseline.finish_pass().unwrap();
+        let mut trainer =
+            DirectionalPcaStreamingTrainer::new(config, one_dimensional_params()).unwrap();
+        trainer.ingest_batch(&embeddings).unwrap();
+        trainer.finish_pass().unwrap();
+        trainer.ingest_batch(&embeddings).unwrap();
+        trainer.finish_pass().unwrap();
         assert_eq!(
-            baseline.telemetry().subphase,
-            DirectionalPcaTrainerSubphase::PlanCuts
-        );
-
-        let mut accelerated = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
-            .unwrap()
-            .with_out_of_core_planner_state(Box::new(TestOutOfCorePlannerState::default()));
-        accelerated.ingest_batch(&embeddings).unwrap();
-        accelerated.finish_pass().unwrap();
-        accelerated.ingest_batch(&embeddings).unwrap();
-        accelerated.finish_pass().unwrap();
-        assert_eq!(
-            accelerated.telemetry().subphase,
+            trainer.telemetry().subphase,
             DirectionalPcaTrainerSubphase::CountCells
         );
     }
 
     #[test]
-    fn out_of_core_quantile_capture_spills_only_nontrivial_axes() {
-        let embeddings = (0..8)
-            .map(|row| {
-                (0..8)
-                    .map(|column| (row * (column + 1)) as f32)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let config = StreamingClusteringConfig {
-            cluster_count: 4,
-            dimensions: 8,
-            balance_constraints: None,
-            random_seed: None,
+    fn gk_quantile_planner_derives_deterministic_thresholds() {
+        let values = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let build_cuts = || {
+            let mut planner = AxisPlanner::new_quantile(4, values.len());
+            for value in values {
+                planner.observe(value);
+            }
+            match planner.finish_pass().unwrap() {
+                AxisPlanner::Ready(AxisPlan::Thresholds(cuts)) => cuts,
+                other => panic!("expected threshold plan, got {other:?}"),
+            }
         };
-        let begin_axis_counts = Arc::new(Mutex::new(Vec::new()));
-        let append_value_widths = Arc::new(Mutex::new(Vec::new()));
 
-        let mut trainer = DirectionalPcaStreamingTrainer::new(config, sparse_quantile_params(8))
-            .unwrap()
-            .with_out_of_core_planner_state(Box::new(RecordingOutOfCorePlannerState {
-                begin_axis_counts: begin_axis_counts.clone(),
-                append_value_widths: append_value_widths.clone(),
-            }));
-        trainer.ingest_batch(&embeddings).unwrap();
-        trainer.finish_pass().unwrap();
-        trainer.ingest_batch(&embeddings).unwrap();
-
-        let begin_axis_counts = begin_axis_counts.lock().unwrap().clone();
-        assert_eq!(begin_axis_counts.len(), 1);
-        assert!(
-            begin_axis_counts[0] > 0 && begin_axis_counts[0] < 8,
-            "only the non-single-bin axes should spill, not all retained axes: {begin_axis_counts:?}"
-        );
-        assert!(
-            append_value_widths
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|&width| width == begin_axis_counts[0]),
-            "captured out-of-core rows should include only quantile axes"
-        );
+        let first = build_cuts();
+        let second = build_cuts();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 3);
+        assert!(first.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]
-    fn replay_mismatch_clears_out_of_core_quantile_state() {
-        let config = StreamingClusteringConfig {
-            cluster_count: 2,
-            dimensions: 1,
-            balance_constraints: None,
-            random_seed: None,
-        };
-        let clear_called = Arc::new(AtomicBool::new(false));
-
-        let mut trainer = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
-            .unwrap()
-            .with_out_of_core_planner_state(Box::new(ClearingOutOfCorePlannerState {
-                clear_called: clear_called.clone(),
-            }));
-        trainer
-            .ingest_batch(&[vec![0.0], vec![1.0], vec![2.0], vec![3.0]])
-            .unwrap();
-        trainer.finish_pass().unwrap();
-        trainer
-            .ingest_batch(&[vec![0.0], vec![1.0], vec![2.0]])
-            .unwrap();
-
-        let error = trainer.finish_pass().unwrap_err();
-        assert_eq!(
-            error,
-            malformed_input("later passes must replay the same logical dataset in the same order")
-        );
-        assert!(clear_called.load(Ordering::Relaxed));
-        assert_eq!(trainer.state(), TrainerState::Error);
-    }
-
-    #[test]
-    fn failing_out_of_core_initialization_does_not_leave_half_open_pass_state() {
+    fn gk_quantile_planning_does_not_touch_out_of_core_spill_state() {
         let embeddings = (0..8).map(|value| vec![value as f32]).collect::<Vec<_>>();
         let config = StreamingClusteringConfig {
             cluster_count: 2,
@@ -2729,55 +2235,14 @@ mod tests {
 
         let mut trainer = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
             .unwrap()
-            .with_out_of_core_planner_state(Box::new(FailingBeginOutOfCorePlannerState));
+            .with_out_of_core_planner_state(Box::new(FailingOutOfCorePlannerState));
         trainer.ingest_batch(&embeddings).unwrap();
         trainer.finish_pass().unwrap();
-        assert_eq!(trainer.state(), TrainerState::PassComplete);
-
-        let error = trainer.ingest_batch(&embeddings).unwrap_err();
-        assert_eq!(
-            error,
-            unsatisfiable_constraint(
-                "out-of-core planner state failed: synthetic begin_quantile_pass failure"
-            )
-        );
-        assert_eq!(trainer.state(), TrainerState::PassComplete);
-        assert!(trainer.active_pass.is_none());
+        trainer.ingest_batch(&embeddings).unwrap();
+        trainer.finish_pass().unwrap();
         assert_eq!(
             trainer.telemetry().subphase,
-            DirectionalPcaTrainerSubphase::PlanCuts
+            DirectionalPcaTrainerSubphase::CountCells
         );
-        assert_eq!(trainer.telemetry().observed_count, None);
-    }
-
-    #[test]
-    fn failing_out_of_core_finish_still_clears_planner_state() {
-        let embeddings = (0..8).map(|value| vec![value as f32]).collect::<Vec<_>>();
-        let config = StreamingClusteringConfig {
-            cluster_count: 2,
-            dimensions: 1,
-            balance_constraints: None,
-            random_seed: None,
-        };
-        let clear_called = Arc::new(AtomicBool::new(false));
-
-        let mut trainer = DirectionalPcaStreamingTrainer::new(config, one_dimensional_params())
-            .unwrap()
-            .with_out_of_core_planner_state(Box::new(FailingFinishOutOfCorePlannerState {
-                clear_called: clear_called.clone(),
-            }));
-        trainer.ingest_batch(&embeddings).unwrap();
-        trainer.finish_pass().unwrap();
-        trainer.ingest_batch(&embeddings).unwrap();
-
-        let error = trainer.finish_pass().unwrap_err();
-        assert_eq!(
-            error,
-            unsatisfiable_constraint(
-                "out-of-core planner state failed: synthetic finish_quantile_pass failure"
-            )
-        );
-        assert!(clear_called.load(Ordering::Relaxed));
-        assert_eq!(trainer.state(), TrainerState::Error);
     }
 }

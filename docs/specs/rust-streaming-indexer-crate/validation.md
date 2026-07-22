@@ -126,9 +126,21 @@ item count plus deterministic planning progress or quality information for the
 caller-visible hierarchy-building work of the selected planning direction. If
 the bounded-state realization is not yet partition-ready, the report exposes
 deterministic readiness/progress semantics rather than claiming final
-partition-ready output early.
+partition-ready output early. For the deterministic Greenwald-Khanna
+directional-PCA quantile path, that progress may be derived from bounded
+summary accumulation rather than quantile spill capture or replay.
 
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-021
+
+### VAL-STREAM-INDEXER-009A
+
+Execute one v2 planning pass using the deterministic Greenwald-Khanna
+directional-PCA quantile path.
+
+**Pass condition:** planning completes without requiring per-axis quantile
+spill artifacts for that path while preserving deterministic pass reporting.
+
+**Traces to:** REQ-STREAM-INDEXER-004A
 
 ### VAL-STREAM-INDEXER-010
 

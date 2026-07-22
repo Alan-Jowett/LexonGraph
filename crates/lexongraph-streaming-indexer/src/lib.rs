@@ -1969,7 +1969,6 @@ struct PartitionSpillDirectory {
 const V2_PLANNER_STATE_WINDOW_BYTES: usize = 1024 * 1024;
 const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 const V2_PLANNER_STATE_VALUE_BYTES: usize = std::mem::size_of::<f32>();
-
 struct StreamingV2QuantilePlannerState {
     quantile_pass: Option<StreamingV2QuantilePassFiles>,
     dir: TempDir,
@@ -9694,23 +9693,7 @@ impl WindowedMmapF32Reader {
                 path.display()
             )
         })?;
-        let expected_len = u64::try_from(total_byte_len(total_values)?)
-            .map_err(|_| "planner state file length overflowed".to_string())?;
-        let actual_len = file
-            .metadata()
-            .map_err(|error| {
-                format!(
-                    "could not inspect planner state file {}: {error}",
-                    path.display()
-                )
-            })?
-            .len();
-        if actual_len < expected_len {
-            return Err(format!(
-                "planner state file {} is truncated: expected at least {expected_len} bytes but found {actual_len}",
-                path.display()
-            ));
-        }
+        validate_planner_state_file_length(path, &file, total_values)?;
         Ok(Self {
             file,
             total_values,
@@ -9805,6 +9788,31 @@ fn total_byte_len(total_values: usize) -> Result<usize, String> {
     total_values
         .checked_mul(V2_PLANNER_STATE_VALUE_BYTES)
         .ok_or_else(|| "planner state file length overflowed".to_string())
+}
+
+fn validate_planner_state_file_length(
+    path: &Path,
+    file: &File,
+    total_values: usize,
+) -> Result<(), String> {
+    let expected_len = u64::try_from(total_byte_len(total_values)?)
+        .map_err(|_| "planner state file length overflowed".to_string())?;
+    let actual_len = file
+        .metadata()
+        .map_err(|error| {
+            format!(
+                "could not inspect planner state file {}: {error}",
+                path.display()
+            )
+        })?
+        .len();
+    if actual_len < expected_len {
+        return Err(format!(
+            "planner state file {} is truncated: expected at least {expected_len} bytes but found {actual_len}",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 impl PartitionSpillDirectory {
