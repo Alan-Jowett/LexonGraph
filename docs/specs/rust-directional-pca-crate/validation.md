@@ -133,11 +133,32 @@ eligible axis to receive zero bits.
 Use fixtures whose retained PCA coordinates are unevenly distributed.
 
 **Pass condition:** when quantile binning is selected, the crate uses quantile
-binning rather than equal-width binning, and when density-valley binning is
+binning through the documented deterministic realization rather than equal-
+width binning or an undocumented heuristic, and when density-valley binning is
 selected, the crate chooses cuts through deepest density valleys rather than by
 a largest-gap proxy.
 
 **Traces to:** REQ-DPCA-STREAM-012, REQ-DPCA-STREAM-014
+
+### VAL-DPCA-STREAM-011A
+
+Run the same quantile-planning fixture twice with identical ordered input.
+
+**Pass condition:** the Greenwald-Khanna quantile realization yields identical
+cut values, deterministic tie behavior at selected cuts, and identical
+partition-ready output.
+
+**Traces to:** REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-014A
+
+### VAL-DPCA-STREAM-011B
+
+Exercise a fixture with uneven retained-axis coordinates under the documented
+approximation contract for this revision.
+
+**Pass condition:** the realized cuts satisfy the documented deterministic rank
+or boundary error contract rather than exact-quantile equality.
+
+**Traces to:** REQ-DPCA-STREAM-014B
 
 ### VAL-DPCA-STREAM-012
 
@@ -227,7 +248,8 @@ boundary.
 **Pass condition:** executable tests exist for pass ordering, cross-pass
 continuity, PCA reuse, scoring, allocation, quantile binning, exact-K failure,
 stable cluster IDs, classifier assignment, and dead-code cleanup of the retired
-block-store boundary.
+block-store boundary. Quantile-binning coverage includes deterministic
+Greenwald-Khanna cut derivation and repeated-run reproducibility.
 
 **Traces to:** REQ-DPCA-STREAM-021
 

@@ -192,6 +192,11 @@ equivalent out-of-core state beneath the caller-provided root so long as that
 state remains subordinate to the caller-visible replay lifecycle and does not
 widen the public v2 API beyond requiring that root.
 
+Planner-state use is conditional on the selected planning realization. The
+deterministic Greenwald-Khanna directional-PCA quantile path may complete from
+bounded replay-order summaries without writing per-axis quantile spill beneath
+that root.
+
 When such state is mmap-backed, the implementation actively manages residency
 for inactive regions through a cross-platform abstraction whose per-target
 backends may use native primitives such as `madvise`, so the planner's resident
@@ -235,6 +240,12 @@ Between those steps, conformant planning realization may revisit data only
 through caller-visible replay stages, bounded summaries, bounded
 per-subproblem working sets, or planner-managed out-of-core state that keeps
 resident memory bounded without substituting for caller-visible replay.
+
+For the deterministic Greenwald-Khanna directional-PCA quantile path, the
+bounded-summary option is the normative realization: pass completion derives
+approximate quantile cuts from replay-order summaries instead of forcing
+planner-state spill or retained-axis sorting merely because a planner-state
+root exists.
 
 The out-of-core state may scale with the logical dataset and may be reopened
 across passes of the same run, but it remains an implementation detail rooted

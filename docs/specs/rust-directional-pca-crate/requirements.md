@@ -150,6 +150,10 @@ Per-batch transient working state remains conformant. Planner-managed
 out-of-core state may persist across caller-visible passes when the surrounding
 v2 streaming surface explicitly provides that contract.
 
+When deterministic approximate quantile binning is selected, the crate shall
+complete that planning step from bounded streaming summaries gathered during the
+caller-visible pass rather than hidden retained-axis rescans or sort phases.
+
 ### REQ-DPCA-STREAM-010
 
 After the first completed pass establishes the logical dataset for one training
@@ -174,6 +178,9 @@ Transient implementation-owned working memory proportional to the current chunk
 is conformant; resident-memory materialization of the full completed pass is
 not. Planner-managed out-of-core state is conformant when it preserves the
 shared caller-visible replay contract.
+
+Deterministic approximate quantile planning shall prefer bounded streaming
+summaries over spill-and-replay retained-axis ordering for this revision.
 
 ### REQ-DPCA-STREAM-012
 
@@ -213,9 +220,26 @@ For the eigenvalue log-bit allocation policy, the crate shall:
 The conformant default binning policy shall remain quantile binning over the
 retained PCA coordinates.
 
+When quantile binning is selected, the crate may realize those cuts through a
+deterministic approximate quantile algorithm rather than exact retained-axis
+ordering, provided the same replay order, algorithm version, and input dataset
+produce the same cuts, partition assignments, and downstream partition result.
+
 When density-valley binning is selected, the crate shall instead place cuts by
 selecting deepest density valleys along each participating retained PCA axis
 rather than by quantiles or by a largest-gap proxy.
+
+### REQ-DPCA-STREAM-014A
+
+The deterministic approximate quantile realization for this revision shall use
+Greenwald-Khanna summaries rather than randomized compaction or unspecified
+merge order.
+
+### REQ-DPCA-STREAM-014B
+
+The crate shall document approximate quantile semantics in terms of a
+deterministic rank or boundary error contract rather than exact quantile
+equality, while preserving deterministic tie handling at selected cut values.
 
 ### REQ-DPCA-STREAM-015
 

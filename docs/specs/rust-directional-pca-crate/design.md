@@ -185,10 +185,16 @@ one-dimensional density along each participating retained PCA axis and places
 cuts at the deepest available valleys within the recursively selected segments.
 
 The partitioning realization must remain compatible with caller-visible replay
-passes and bounded implementation-owned working state. Exact quantile or
-density-valley semantics therefore may require additional caller-visible replay
-passes, but shall not require crate-owned retained-coordinate tables for the
-full dataset.
+passes and bounded implementation-owned working state. For this revision,
+quantile binning is realized through deterministic Greenwald-Khanna summaries
+updated in replay order and materialized once at pass completion; it does not
+require repeated retained-axis rescans, retained-coordinate sorting, or crate-
+owned retained-coordinate tables for the full dataset.
+
+The deterministic approximate quantile path does not depend on runtime
+randomness, scheduler order, or unspecified parallel merge topology. Equal-
+valued coordinates at selected cut values are assigned deterministically so
+repeated runs preserve the same partition output.
 
 ### DSG-DPCA-STREAM-012 `Exact-K boundary`
 

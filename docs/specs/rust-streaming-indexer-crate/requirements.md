@@ -147,6 +147,10 @@ implementation manages concrete file names, mmap layout, and lifecycle beneath
 that root rather than requiring the caller to provide individual state-file
 paths.
 
+When the selected directional-PCA quantile realization uses deterministic
+Greenwald-Khanna summaries, that path shall not require per-axis quantile spill
+capture or replay beneath the planner-state root.
+
 ### REQ-STREAM-INDEXER-005
 
 The caller-visible streaming indexing API shall accept a non-empty ordered
