@@ -1370,6 +1370,25 @@ The implementation may retain a bounded in-memory history of completed-pass
 fingerprints so a caller can detect immediate repeats or longer cycles without
 requiring unbounded retained telemetry state.
 
+### DSG-STREAM-INDEXER-120 `V2 planner-state failure retention`
+
+The v2 execution surface owns one run-scoped planner-state scratch root under
+the caller-supplied planner-state parent directory.
+
+While the run remains successful, this scratch root continues to behave like an
+ordinary temporary resource and may be cleaned up automatically when the run is
+dropped after success.
+
+If `ingest_batch`, `finish_pass`, `mark_planning_complete`, or `finalize`
+returns an error after that run-scoped root has been created, the implementation
+converts the root from auto-cleanup temporary state into retained on-disk state
+for that failed run.
+
+This failure-retention rule preserves the entire scratch subtree as-is, so any
+already-emitted partition planner directories or planner-state files remain
+available for postmortem inspection rather than being deleted by normal
+temporary-directory teardown.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1480,4 +1499,5 @@ requiring unbounded retained telemetry state.
 | DSG-STREAM-INDEXER-117 | REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125 |
 | DSG-STREAM-INDEXER-118 | REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-122, REQ-STREAM-INDEXER-124 |
 | DSG-STREAM-INDEXER-119 | REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125 |
+| DSG-STREAM-INDEXER-120 | REQ-STREAM-INDEXER-126 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

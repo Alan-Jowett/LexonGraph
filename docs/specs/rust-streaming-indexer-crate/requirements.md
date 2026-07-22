@@ -1519,6 +1519,20 @@ partitions when present, and any topology or planner-visible unresolved state
 whose change or non-change is required to distinguish advancement, stalling, or
 cycling across passes.
 
+### REQ-STREAM-INDEXER-126
+
+When the v2 / published-profile `0.7.0` execution surface has initialized its
+planner-state scratch root and later returns an error from `ingest_batch`,
+`finish_pass`, `mark_planning_complete`, or `finalize`, it shall retain that
+run-scoped scratch subtree on disk instead of deleting it during teardown.
+
+This retained subtree shall preserve any planner-state artifacts already emitted
+for that failed run so the failure can be inspected after the process unwinds.
+
+On successful completion, the implementation may continue cleaning up the same
+run-scoped planner-state scratch subtree according to its existing temporary
+resource lifecycle.
+
 ## Out of Scope
 
 This crate does not define or own:

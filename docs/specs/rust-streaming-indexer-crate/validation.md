@@ -1517,3 +1517,17 @@ class of compatibility and materializability checks as the version-selected
 published-profile path, rather than bypassing validation.
 
 **Traces to:** REQ-STREAM-INDEXER-119
+
+### VAL-STREAM-INDEXER-114
+
+Initialize a v2 / published-profile `0.7.0` run under a caller-supplied
+planner-state parent directory, then trigger one of the documented failure
+returns after the run-scoped planner-state scratch root has been created.
+
+Drop the failed run and inspect the planner-state parent directory.
+
+**Pass condition:** the failed run's planner-state scratch subtree is still
+present on disk for postmortem inspection, while the default successful
+temporary-resource cleanup behavior remains available for runs that do not fail.
+
+**Traces to:** REQ-STREAM-INDEXER-126

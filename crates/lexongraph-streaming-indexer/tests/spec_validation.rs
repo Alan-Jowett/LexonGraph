@@ -5936,3 +5936,35 @@ async fn val_stream_indexer_113_streaming_v2_completed_pass_summaries_are_determ
     let right = collect_summaries().await;
     assert_eq!(left, right);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_114_streaming_v2_failure_retains_planner_state_root() {
+    let planner_state_parent = tempfile::tempdir().unwrap();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        IndexedWideF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(384),
+        104_000,
+        planner_state_parent.path(),
+    )
+    .unwrap();
+    let planner_state_entries_before = std::fs::read_dir(planner_state_parent.path())
+        .unwrap()
+        .count();
+    assert_eq!(planner_state_entries_before, 1);
+
+    assert!(matches!(
+        run.finish_pass().unwrap_err(),
+        StreamingIndexerError::EmptyPass(_)
+    ));
+
+    drop(run);
+
+    let retained_entries = std::fs::read_dir(planner_state_parent.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(retained_entries.len(), 1);
+    assert!(retained_entries[0].is_dir());
+}

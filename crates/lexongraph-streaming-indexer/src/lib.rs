@@ -3276,8 +3276,55 @@ pub struct StreamingIndexingRunV2<R, CR, EP> {
     completed_pass_history: Vec<StreamingV2CompletedPassHistoryEntry>,
     partitions: Vec<StreamingV2PartitionNode>,
     next_partition_id: usize,
-    planner_state_root: TempDir,
+    planner_state_root: PlannerStateRoot,
     _item_ref: PhantomData<R>,
+}
+
+struct PlannerStateRoot {
+    dir: Option<TempDir>,
+    preserved_path: Option<PathBuf>,
+}
+
+impl PlannerStateRoot {
+    fn new(parent: impl AsRef<Path>) -> Result<Self, StreamingIndexerError> {
+        let dir = tempfile::Builder::new()
+            .prefix("streaming-v2-")
+            .tempdir_in(parent.as_ref())
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not initialize planner state root {}: {error}",
+                    parent.as_ref().display()
+                ))
+            })?;
+        Ok(Self {
+            dir: Some(dir),
+            preserved_path: None,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.dir
+            .as_ref()
+            .map(TempDir::path)
+            .or(self.preserved_path.as_deref())
+            .expect("planner state root should always have a path")
+    }
+
+    fn preserve(&mut self) {
+        if self.preserved_path.is_some() {
+            return;
+        }
+        if let Some(dir) = self.dir.take() {
+            self.preserved_path = Some(dir.path().to_path_buf());
+            std::mem::forget(dir);
+        }
+    }
+}
+
+impl AsRef<Path> for PlannerStateRoot {
+    fn as_ref(&self) -> &Path {
+        self.path()
+    }
 }
 
 struct StreamingV2PassMetricAccumulator {
@@ -3330,15 +3377,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 "streaming v2 currently supports only the exact 0.7.0 ambient-delta-uq branch encoding contract".into(),
             ));
         }
-        let planner_state_root = tempfile::Builder::new()
-            .prefix("streaming-v2-")
-            .tempdir_in(planner_state_root.as_ref())
-            .map_err(|error| {
-                StreamingIndexerError::LocalSpill(format!(
-                    "could not initialize planner state root {}: {error}",
-                    planner_state_root.as_ref().display()
-                ))
-            })?;
+        let planner_state_root = PlannerStateRoot::new(planner_state_root)?;
         Ok(Self {
             resolver,
             embedding_provider,
@@ -3701,6 +3740,21 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         CR: ContentResolver<R>,
         EP: EmbeddingProvider,
     {
+        let result = self.ingest_batch_impl(batch).await;
+        if result.is_err() {
+            self.preserve_planner_state_root();
+        }
+        result
+    }
+
+    async fn ingest_batch_impl(
+        &mut self,
+        batch: &[IndexItem<R>],
+    ) -> Result<(), StreamingIndexerError>
+    where
+        CR: ContentResolver<R>,
+        EP: EmbeddingProvider,
+    {
         if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                 "ingest_batch requires the planning phase (currently {:?})",
@@ -3819,6 +3873,14 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub fn finish_pass(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
+        let result = self.finish_pass_impl();
+        if result.is_err() {
+            self.preserve_planner_state_root();
+        }
+        result
+    }
+
+    fn finish_pass_impl(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
         if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                 "finish_pass requires the planning phase (currently {:?})",
@@ -4172,6 +4234,14 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub fn mark_planning_complete(&mut self) -> Result<(), StreamingIndexerError> {
+        let result = self.mark_planning_complete_impl();
+        if result.is_err() {
+            self.preserve_planner_state_root();
+        }
+        result
+    }
+
+    fn mark_planning_complete_impl(&mut self) -> Result<(), StreamingIndexerError> {
         if !matches!(self.phase, RunPhase::Planning) {
             return Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                 "mark_planning_complete requires the planning phase (currently {:?})",
@@ -4210,6 +4280,24 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub async fn finalize<I, B>(
+        &mut self,
+        replay_batches: I,
+        store: &dyn BlockStore,
+    ) -> Result<StreamingIndexingResult, StreamingIndexerError>
+    where
+        I: IntoIterator<Item = B>,
+        B: AsRef<[IndexItem<R>]>,
+        CR: ContentResolver<R>,
+        EP: EmbeddingProvider,
+    {
+        let result = self.finalize_impl(replay_batches, store).await;
+        if result.is_err() {
+            self.preserve_planner_state_root();
+        }
+        result
+    }
+
+    async fn finalize_impl<I, B>(
         &mut self,
         replay_batches: I,
         store: &dyn BlockStore,
@@ -4390,6 +4478,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             root_id: root_child.child,
             block_ids: persisted_ids,
         })
+    }
+
+    fn preserve_planner_state_root(&mut self) {
+        self.planner_state_root.preserve();
     }
 
     fn current_topology(&self) -> StreamingV2PartitionTopology {
@@ -9487,14 +9579,14 @@ impl PartitionRoutingReader {
 }
 
 impl StreamingV2QuantilePlannerState {
-    fn new(parent: &TempDir) -> Result<Self, StreamingIndexerError> {
+    fn new(parent: impl AsRef<Path>) -> Result<Self, StreamingIndexerError> {
         let dir = tempfile::Builder::new()
             .prefix("partition-")
-            .tempdir_in(parent.path())
+            .tempdir_in(parent.as_ref())
             .map_err(|error| {
                 StreamingIndexerError::LocalSpill(format!(
                     "could not create v2 planner state directory under {}: {error}",
-                    parent.path().display()
+                    parent.as_ref().display()
                 ))
             })?;
         Ok(Self {
@@ -10340,10 +10432,11 @@ pub mod conformance {
 mod tests {
     use super::{
         BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy,
-        DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0, RunPhase,
-        StreamingIndexingRunV2, StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot,
-        StreamingV2Partition, StreamingV2PartitionNode, StreamingV2PartitionTopology,
-        StreamingV2PassState, StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
+        DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0,
+        PUBLISHED_PROFILE_V0_7_0, PlannerStateRoot, RunPhase, StreamingIndexingRunV2,
+        StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot, StreamingV2Partition,
+        StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
+        StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
         allocate_variable_bit_widths, branch_encoding_policy_for_profile,
         effective_directional_pca_cluster_count, exact_centroid_child_summary,
         fallback_partition_groups, fit_ebcp_rotation, format_partition_label,
@@ -10663,9 +10756,50 @@ mod tests {
             completed_pass_history: Vec::new(),
             partitions: Vec::new(),
             next_partition_id: 0,
-            planner_state_root,
+            planner_state_root: PlannerStateRoot {
+                dir: Some(planner_state_root),
+                preserved_path: None,
+            },
             _item_ref: PhantomData,
         }
+    }
+
+    #[test]
+    fn planner_state_root_cleans_up_by_default() {
+        let parent = tempfile::tempdir().expect("test parent root should exist");
+        let planner_state_root =
+            PlannerStateRoot::new(parent.path()).expect("planner state root should initialize");
+        let planner_state_path = planner_state_root.path().to_path_buf();
+
+        drop(planner_state_root);
+
+        assert!(!planner_state_path.exists());
+    }
+
+    #[test]
+    fn finish_pass_failure_preserves_planner_state_root() {
+        let parent = tempfile::tempdir().expect("test parent root should exist");
+        let mut run: StreamingIndexingRunV2<(), (), ()> =
+            StreamingIndexingRunV2::with_published_profile(
+                (),
+                (),
+                PUBLISHED_PROFILE_V0_7_0,
+                EmbeddingSpec {
+                    dims: 1,
+                    encoding: "f32le".into(),
+                },
+                4096,
+                parent.path(),
+            )
+            .expect("run should initialize");
+        let planner_state_path = run.planner_state_root.path().to_path_buf();
+
+        let error = run.finish_pass().expect_err("empty pass should fail");
+        assert!(matches!(error, super::StreamingIndexerError::EmptyPass(_)));
+
+        drop(run);
+
+        assert!(planner_state_path.exists());
     }
 
     #[test]
