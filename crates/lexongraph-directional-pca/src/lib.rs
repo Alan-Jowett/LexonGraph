@@ -2240,13 +2240,7 @@ mod tests {
             .collect::<Vec<_>>();
         let realized_ranks = first
             .iter()
-            .map(|cut| {
-                values
-                    .iter()
-                    .position(|value| value >= cut)
-                    .map(|index| index + 1)
-                    .unwrap_or(values.len())
-            })
+            .map(|cut| values.partition_point(|value| value.total_cmp(cut).is_le()))
             .collect::<Vec<_>>();
         for (target_rank, realized_rank) in targets.into_iter().zip(realized_ranks) {
             assert!(realized_rank.abs_diff(target_rank) <= rank_error);
