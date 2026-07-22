@@ -71,7 +71,9 @@ perform hidden extra passes or require implementation-owned full-dataset
 resident-memory retention to do so. Planner-managed out-of-core state for the
 active replay phase or current planning subproblem is permitted when it does
 not change the observable pass boundary. The pass may report `AnalysisOnly`
-status when exact partitioning requires later replay passes.
+status when exact partitioning requires later replay passes. Internal parallel
+projection is conformant only when it does not add hidden passes or alter the
+caller-visible replay-order semantics of the pass.
 
 **Traces to:** REQ-DPCA-STREAM-008, REQ-DPCA-STREAM-009
 
@@ -103,9 +105,33 @@ Inspect the execution path over a representative conformant fixture.
 **Pass condition:** the directional-PCA pass is realized by the repository PCA
 crate surface through streaming or mergeable sufficient-statistics behavior
 rather than an undocumented independent PCA implementation or a full-pass
-`fit(...)` convenience path.
+`fit(...)` convenience path. When a replay-driven phase uses an already-fixed
+transform, any internal parallel projection still flows through the documented
+PCA crate projection surface.
 
 **Traces to:** REQ-DPCA-STREAM-011
+
+### VAL-DPCA-STREAM-008A
+
+Run the same replay-driven fixture through serial and parallel projection modes
+for `PlanCuts`, `CountCells`, and `RealizePartition`.
+
+**Pass condition:** pass reports, derived partition structure, and final
+classifier-visible realization are identical between serial and parallel
+execution of the same ordered replay input.
+
+**Traces to:** REQ-DPCA-STREAM-011A, REQ-DPCA-STREAM-011C
+
+### VAL-DPCA-STREAM-008B
+
+Exercise a replay-driven batch where worker completion is deliberately staggered
+away from caller replay order.
+
+**Pass condition:** planner observations, cell-summary accumulation, and
+partition-realization outputs still reflect canonical replay order rather than
+worker completion order.
+
+**Traces to:** REQ-DPCA-STREAM-010, REQ-DPCA-STREAM-011B
 
 ### VAL-DPCA-STREAM-009
 

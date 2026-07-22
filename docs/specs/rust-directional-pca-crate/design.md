@@ -104,6 +104,11 @@ resident memory with the full completed-pass dataset size. Planner-managed
 out-of-core state supplied by the surrounding v2 streaming surface may scale
 with the completed-pass dataset when needed to preserve bounded resident memory.
 
+Once a replay-driven phase has a fixed PCA transform, `ingest_batch()` may
+stage one batch worth of retained-coordinate projections through bounded
+parallel worker execution before applying downstream state updates in canonical
+replay order.
+
 ### DSG-DPCA-STREAM-007 `First-pass baseline and cross-pass continuity`
 
 The first completed pass establishes the logical dataset for one training run.
@@ -150,6 +155,25 @@ passes, earlier passes may legitimately report `AnalysisOnly` status before a
 later `PartitionReady` pass exposes stable cluster IDs and realized cluster
 count.
 
+In this revision, first-pass `AnalyzePca` accumulation remains serial at the
+observable algorithm boundary. Later replay phases with a fixed transform may
+parallelize pure retained-coordinate projection within each ingested batch, but
+they do not permit completion-order-dependent planner or realization updates.
+
+### DSG-DPCA-STREAM-008A `Ordered replay-projection staging`
+
+For replay-driven `PlanCuts`, `CountCells`, and `RealizePartition` work, the
+crate may map each embedding in the current batch to retained PCA coordinates on
+parallel workers.
+
+That staging step is bounded by the current batch, preserves one output slot per
+input embedding, and publishes projected coordinates to downstream planner,
+cell-counting, and realization consumers strictly in the original replay order.
+
+The crate does not permit worker completion order to alter planner-observation
+order, cell-key derivation order, duplicate-summary accumulation order, or
+partition-realization cluster assignment order.
+
 ### DSG-DPCA-STREAM-009 `Legacy directional scoring`
 
 For the legacy explicit/default path, the crate computes:
@@ -190,6 +214,11 @@ quantile binning is realized through deterministic Greenwald-Khanna summaries
 updated in replay order and materialized once at pass completion; it does not
 require repeated retained-axis rescans, retained-coordinate sorting, or crate-
 owned retained-coordinate tables for the full dataset.
+
+When replay-driven projection is parallelized ahead of quantile planning, cell
+counting, or partition realization, the crate reorders projected outputs back
+into canonical replay order before any axis planner, cell summary, or
+realization accumulator observes them.
 
 The deterministic approximate quantile path does not depend on runtime
 randomness, scheduler order, or unspecified parallel merge topology. Equal-
