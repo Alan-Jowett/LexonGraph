@@ -3355,7 +3355,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         operation: &str,
         error: StreamingIndexerError,
     ) -> StreamingIndexerError {
-        let _ = self.emit_v2_failure_summary(operation, &error);
+        let error = match self.emit_v2_failure_summary(operation, &error) {
+            Ok(()) => error,
+            Err(write_error) => {
+                annotate_v2_failure_summary_write_error(operation, error, &write_error)
+            }
+        };
         self.preserve_planner_state_root();
         error
     }
@@ -5763,6 +5768,49 @@ fn v2_error_variant_name(error: &StreamingIndexerError) -> &'static str {
         StreamingIndexerError::CanonicalEmbeddingFailure(_) => "CanonicalEmbeddingFailure",
         StreamingIndexerError::LocalSpill(_) => "LocalSpill",
         StreamingIndexerError::UnusableContent(_) => "UnusableContent",
+    }
+}
+
+fn annotate_v2_failure_summary_write_error(
+    operation: &str,
+    error: StreamingIndexerError,
+    write_error: &StreamingIndexerError,
+) -> StreamingIndexerError {
+    let note = format!(
+        "{error}; additionally failed to emit v2 failure summary during {operation}: {write_error}"
+    );
+    match error {
+        StreamingIndexerError::EmptyPass(_) => StreamingIndexerError::EmptyPass(note),
+        StreamingIndexerError::ReplayMismatch(_) => StreamingIndexerError::ReplayMismatch(note),
+        StreamingIndexerError::InvalidMetadata(_) => StreamingIndexerError::InvalidMetadata(note),
+        StreamingIndexerError::ContentResolution(_) => {
+            StreamingIndexerError::ContentResolution(note)
+        }
+        StreamingIndexerError::UnusableContent(_) => StreamingIndexerError::UnusableContent(note),
+        StreamingIndexerError::EmbeddingFailure(_) => StreamingIndexerError::EmbeddingFailure(note),
+        StreamingIndexerError::ClusteringFailure(_) => {
+            StreamingIndexerError::ClusteringFailure(note)
+        }
+        StreamingIndexerError::InvalidHybridPlanningConfiguration(_) => {
+            StreamingIndexerError::InvalidHybridPlanningConfiguration(note)
+        }
+        StreamingIndexerError::InvalidAdaptivePlanningConfiguration(_) => {
+            StreamingIndexerError::InvalidAdaptivePlanningConfiguration(note)
+        }
+        StreamingIndexerError::HierarchyValidation(_) => {
+            StreamingIndexerError::HierarchyValidation(note)
+        }
+        StreamingIndexerError::CanonicalEmbeddingFailure(_) => {
+            StreamingIndexerError::CanonicalEmbeddingFailure(note)
+        }
+        StreamingIndexerError::LocalSpill(_) => StreamingIndexerError::LocalSpill(note),
+        StreamingIndexerError::TerminalPartitionMaterialization(_) => {
+            StreamingIndexerError::TerminalPartitionMaterialization(note)
+        }
+        StreamingIndexerError::InvalidLifecycleTransition(_) => {
+            StreamingIndexerError::InvalidLifecycleTransition(note)
+        }
+        other => other,
     }
 }
 
@@ -11080,6 +11128,45 @@ mod tests {
         drop(run);
 
         assert!(planner_state_path.exists());
+    }
+
+    #[test]
+    fn annotate_v2_failure_summary_write_error_preserves_string_variant() {
+        let error = super::annotate_v2_failure_summary_write_error(
+            "finish_pass",
+            super::StreamingIndexerError::HierarchyValidation("original failure".into()),
+            &super::StreamingIndexerError::LocalSpill("disk full".into()),
+        );
+
+        match error {
+            super::StreamingIndexerError::HierarchyValidation(message) => {
+                assert!(message.contains("original failure"));
+                assert!(message.contains("failed to emit v2 failure summary"));
+                assert!(message.contains("finish_pass"));
+                assert!(message.contains("disk full"));
+            }
+            other => panic!("expected hierarchy validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn annotate_v2_failure_summary_write_error_leaves_non_string_variant_unchanged() {
+        let error = super::annotate_v2_failure_summary_write_error(
+            "finalize",
+            super::StreamingIndexerError::IntermediateNodeTooLarge {
+                min_serialized_bytes: 99,
+                size_target: 64,
+            },
+            &super::StreamingIndexerError::LocalSpill("disk full".into()),
+        );
+
+        assert_eq!(
+            error,
+            super::StreamingIndexerError::IntermediateNodeTooLarge {
+                min_serialized_bytes: 99,
+                size_target: 64,
+            }
+        );
     }
 
     #[test]
