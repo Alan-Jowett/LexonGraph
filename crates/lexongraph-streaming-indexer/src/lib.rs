@@ -56,7 +56,7 @@ use lexongraph_directional_pca::{
     DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
     DirectionalPcaClusterCardinalityMode, DirectionalPcaOutOfCorePlannerState,
     DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingClassifier,
-    DirectionalPcaStreamingTrainer, DirectionalPcaTrainerSubphase,
+    DirectionalPcaStreamingTrainer, DirectionalPcaTrainerSubphase, DirectionalPcaTrainerTelemetry,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_pca::fit;
@@ -3317,8 +3317,7 @@ impl PlannerStateRoot {
             return;
         }
         if let Some(dir) = self.dir.take() {
-            self.preserved_path = Some(dir.path().to_path_buf());
-            std::mem::forget(dir);
+            self.preserved_path = Some(dir.keep());
         }
     }
 }
@@ -4205,7 +4204,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         .take()
                         .unwrap();
                     let item_count = self.partition(partition_id)?.item_count;
-                    let routing_debug_state = format!("{trainer:#?}");
+                    let trainer_telemetry = trainer.telemetry();
                     let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
                     let realized_cluster_count =
                         usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
@@ -4244,7 +4243,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         } else {
                             (
                                 StreamingV2RoutingStrategy::Classifier(classifier),
-                                Some(routing_debug_state),
+                                Some(format_v2_classifier_routing_debug_state(
+                                    trainer_telemetry,
+                                    realized_cluster_count,
+                                )),
                                 Vec::new(),
                             )
                         };
@@ -5761,6 +5763,59 @@ fn v2_error_variant_name(error: &StreamingIndexerError) -> &'static str {
         StreamingIndexerError::LocalSpill(_) => "LocalSpill",
         StreamingIndexerError::UnusableContent(_) => "UnusableContent",
     }
+}
+
+fn format_v2_classifier_routing_debug_state(
+    telemetry: DirectionalPcaTrainerTelemetry,
+    realized_cluster_count: usize,
+) -> String {
+    let mut artifact = String::new();
+    writeln!(&mut artifact, "routing_debug_state_version=1")
+        .expect("formatting into string should succeed");
+    writeln!(&mut artifact, "trainer_subphase={:?}", telemetry.subphase)
+        .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_observed_count={}",
+        format_optional_usize(telemetry.observed_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_ready_axis_plan_count={}",
+        format_optional_usize(telemetry.ready_axis_plan_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_total_axis_plan_count={}",
+        format_optional_usize(telemetry.total_axis_plan_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_populated_cell_count={}",
+        format_optional_usize(telemetry.populated_cell_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_realized_cell_count={}",
+        format_optional_usize(telemetry.realized_cell_count)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "trainer_state_fingerprint_hex={}",
+        encode_digest_hex(telemetry.state_fingerprint)
+    )
+    .expect("formatting into string should succeed");
+    writeln!(
+        &mut artifact,
+        "classifier_realized_cluster_count={realized_cluster_count}"
+    )
+    .expect("formatting into string should succeed");
+    artifact
 }
 
 fn format_usize_list(values: &[usize]) -> String {

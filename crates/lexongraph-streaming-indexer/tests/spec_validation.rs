@@ -6066,9 +6066,10 @@ async fn val_stream_indexer_116_streaming_v2_empty_child_failure_retains_routing
         run_streaming_v2_identical_embedding_failure().await;
     assert!(detail.contains("routing_mode=classifier"));
     assert!(detail.contains("routing_debug_state_begin"));
-    assert!(detail.contains("DirectionalPcaStreamingTrainer"));
-    assert!(detail.contains("RealizePartition"));
-    assert!(detail.contains("model: Some"));
+    assert!(detail.contains("trainer_subphase=RealizePartition"));
+    assert!(detail.contains("trainer_state_fingerprint_hex="));
+    assert!(detail.contains("classifier_realized_cluster_count=64"));
+    assert!(!detail.contains("model: Some"));
 }
 
 #[tokio::test(flavor = "current_thread")]
