@@ -146,6 +146,11 @@ When a later caller-visible pass must revisit the logical dataset, the replay
 shall come from the caller re-streaming that dataset rather than from
 implementation-owned full-pass retention or pass snapshots.
 
+When a replay-driven phase applies an already-fixed PCA transform to a batch of
+embeddings, the crate may parallelize that pure projection work internally only
+when doing so preserves the same caller-visible pass boundary and pass-complete
+semantics as the serial baseline.
+
 Per-batch transient working state remains conformant. Planner-managed
 out-of-core state may persist across caller-visible passes when the surrounding
 v2 streaming surface explicitly provides that contract.
@@ -164,6 +169,10 @@ If a later pass differs in observed count or ordered embedding content from the
 first completed pass, the trainer shall fail explicitly rather than claim
 conformant refinement of the same run.
 
+Internal worker completion order during replay-driven projection shall not
+change the canonical replay order observed by downstream planner, cell-counting,
+or partition-realization state.
+
 ### REQ-DPCA-STREAM-011
 
 For each completed pass, the crate shall realize directional-PCA partitioning
@@ -181,6 +190,33 @@ shared caller-visible replay contract.
 
 Deterministic approximate quantile planning shall prefer bounded streaming
 summaries over spill-and-replay retained-axis ordering for this revision.
+
+When the PCA transform for a replay-driven phase is already fixed, conformant
+execution may apply that transform with bounded internal parallelism during
+`PlanCuts`, `CountCells`, or `RealizePartition` so long as no full-pass
+resident-memory materialization is introduced and downstream semantics remain
+identical to the serial baseline.
+
+### REQ-DPCA-STREAM-011A
+
+When replay-driven projection is parallelized, projected-coordinate results
+shall be reassembled and consumed in the same canonical replay order that a
+serial execution of the same pass would observe.
+
+### REQ-DPCA-STREAM-011B
+
+The crate shall not parallelize downstream state mutation when completion-order
+dependence could change deterministic outcomes, including planner observations,
+cell-summary updates, duplicate-refinement summaries, or partition-realization
+statistics.
+
+### REQ-DPCA-STREAM-011C
+
+The bounded parallel-projection allowance in this revision applies only to the
+replay-driven `PlanCuts`, `CountCells`, and `RealizePartition` phases.
+
+This revision does not extend that allowance to the first-pass `AnalyzePca`
+accumulation phase.
 
 ### REQ-DPCA-STREAM-012
 

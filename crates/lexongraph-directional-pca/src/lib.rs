@@ -12,6 +12,7 @@ use lexongraph_streaming_clustering::{
     StreamingClusterTrainer, StreamingClusteringConfig, StreamingClusteringError, TrainerState,
     validate_config, validate_embedding,
 };
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 pub const DIRECTIONAL_PCA_SOFTWARE_IDENTITY: &str =
@@ -19,6 +20,7 @@ pub const DIRECTIONAL_PCA_SOFTWARE_IDENTITY: &str =
 
 const DENSITY_VALLEY_HISTOGRAM_BUCKET_CAP: usize = 256;
 const GK_QUANTILE_RANK_ERROR_DENOMINATOR: usize = 1024;
+const MIN_PARALLEL_PROJECTION_BATCH_LEN: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectionalPcaRetainedAxisPolicy {
@@ -88,6 +90,7 @@ pub struct DirectionalPcaStreamingTrainer {
     model: Option<DirectionalPcaModel>,
     cached_telemetry: RefCell<Option<DirectionalPcaTrainerTelemetry>>,
     out_of_core_state: Option<Box<dyn DirectionalPcaOutOfCorePlannerState>>,
+    projection_execution: ProjectionExecution,
 }
 
 impl std::fmt::Debug for DirectionalPcaStreamingTrainer {
@@ -142,6 +145,15 @@ enum ReplayPhase {
     PlanCuts(CutPlanningReplayPlan),
     CountCells(PartitionPlan),
     RealizePartition(ReadyPartitionPlan),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectionExecution {
+    Auto,
+    #[cfg(test)]
+    Serial,
+    #[cfg(test)]
+    Parallel,
 }
 
 #[derive(Clone, Debug)]
@@ -635,6 +647,7 @@ impl DirectionalPcaStreamingTrainer {
             model: None,
             cached_telemetry: RefCell::new(None),
             out_of_core_state: None,
+            projection_execution: ProjectionExecution::Auto,
         })
     }
 
@@ -643,6 +656,12 @@ impl DirectionalPcaStreamingTrainer {
         out_of_core_state: Box<dyn DirectionalPcaOutOfCorePlannerState>,
     ) -> Self {
         self.out_of_core_state = Some(out_of_core_state);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_projection_execution(mut self, projection_execution: ProjectionExecution) -> Self {
+        self.projection_execution = projection_execution;
         self
     }
 
@@ -1023,6 +1042,8 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
     }
 
     fn ingest_batch(&mut self, embeddings: &[Embedding]) -> Result<(), StreamingClusteringError> {
+        let dimensions = self.config.dimensions;
+        let projection_execution = self.projection_execution;
         match self.state {
             TrainerState::Idle | TrainerState::PassComplete => {
                 self.ensure_active_pass()?;
@@ -1038,53 +1059,61 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
             .active_pass
             .as_mut()
             .ok_or_else(|| malformed_input("missing active directional-PCA pass state"))?;
-        for embedding in embeddings {
-            validate_embedding(embedding, self.config.dimensions)?;
-            match active_pass {
-                ActivePassState::AnalyzePca(pass) => {
-                    pass.tracker.update(embedding);
+        match active_pass {
+            ActivePassState::AnalyzePca(pass) => {
+                validate_batch(embeddings, dimensions)?;
+                for embedding in embeddings {
                     pass.accumulator.update(embedding).map_err(map_pca_error)?;
-                }
-                ActivePassState::PlanCuts(pass) => {
                     pass.tracker.update(embedding);
-                    let coordinates = pass
-                        .plan
-                        .transform
-                        .apply(embedding)
-                        .map_err(map_pca_error)?;
-                    for (planner, value) in pass.planners.iter_mut().zip(coordinates) {
+                }
+            }
+            ActivePassState::PlanCuts(pass) => {
+                validate_batch(embeddings, dimensions)?;
+                let coordinates = project_embeddings_in_replay_order(
+                    &pass.plan.transform,
+                    embeddings,
+                    projection_execution,
+                )?;
+                for (embedding, axis_coordinates) in embeddings.iter().zip(coordinates) {
+                    for (planner, value) in pass.planners.iter_mut().zip(axis_coordinates) {
                         planner.observe(value);
                     }
-                }
-                ActivePassState::CountCells(pass) => {
                     pass.tracker.update(embedding);
-                    let coordinates = pass
-                        .partition
-                        .transform
-                        .apply(embedding)
-                        .map_err(map_pca_error)?;
-                    let key = pass
-                        .partition
-                        .assign_point_to_cell(coordinates.as_slice(), &mut pass.cursor_state)?;
+                }
+            }
+            ActivePassState::CountCells(pass) => {
+                validate_batch(embeddings, dimensions)?;
+                let coordinates = project_embeddings_in_replay_order(
+                    &pass.partition.transform,
+                    embeddings,
+                    projection_execution,
+                )?;
+                for (embedding, axis_coordinates) in embeddings.iter().zip(coordinates) {
+                    let key = pass.partition.assign_point_to_cell(
+                        axis_coordinates.as_slice(),
+                        &mut pass.cursor_state,
+                    )?;
                     pass.cell_summaries
                         .entry(key)
                         .or_insert_with(|| {
                             CellDuplicateSummary::new(pass.partition.transform.output_dim)
                         })
-                        .observe(coordinates.as_slice());
-                }
-                ActivePassState::RealizePartition(pass) => {
+                        .observe(axis_coordinates.as_slice());
                     pass.tracker.update(embedding);
-                    let coordinates = pass
-                        .ready
-                        .partition
-                        .transform
-                        .apply(embedding)
-                        .map_err(map_pca_error)?;
-                    let key = pass
-                        .ready
-                        .partition
-                        .assign_point_to_cell(coordinates.as_slice(), &mut pass.cursor_state)?;
+                }
+            }
+            ActivePassState::RealizePartition(pass) => {
+                validate_batch(embeddings, dimensions)?;
+                let coordinates = project_embeddings_in_replay_order(
+                    &pass.ready.partition.transform,
+                    embeddings,
+                    projection_execution,
+                )?;
+                for (embedding, axis_coordinates) in embeddings.iter().zip(coordinates) {
+                    let key = pass.ready.partition.assign_point_to_cell(
+                        axis_coordinates.as_slice(),
+                        &mut pass.cursor_state,
+                    )?;
                     let cell_index = pass
                         .ready
                         .cells
@@ -1102,6 +1131,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
                         cell.cluster_offset + 1 + (seen - base_count)
                     };
                     pass.cell_stats[cluster_index].observe(embedding);
+                    pass.tracker.update(embedding);
                 }
             }
         }
@@ -2034,6 +2064,57 @@ fn quality_metric_from_transform(transform: &PcaTransform) -> f64 {
     )
 }
 
+fn validate_batch(
+    embeddings: &[Embedding],
+    dimensions: usize,
+) -> Result<(), StreamingClusteringError> {
+    for embedding in embeddings {
+        validate_embedding(embedding, dimensions)?;
+    }
+    Ok(())
+}
+
+fn project_embeddings_in_replay_order(
+    transform: &PcaTransform,
+    embeddings: &[Embedding],
+    execution: ProjectionExecution,
+) -> Result<Vec<Embedding>, StreamingClusteringError> {
+    map_embeddings_in_replay_order(embeddings, execution, |embedding| {
+        transform.apply(embedding).map_err(map_pca_error)
+    })
+}
+
+fn map_embeddings_in_replay_order<T, E, F>(
+    embeddings: &[Embedding],
+    execution: ProjectionExecution,
+    apply: F,
+) -> Result<Vec<T>, E>
+where
+    T: Send,
+    E: Send,
+    F: Fn(&Embedding) -> Result<T, E> + Send + Sync,
+{
+    if execution.uses_parallel_projection(embeddings.len()) {
+        embeddings.par_iter().map(apply).collect()
+    } else {
+        embeddings.iter().map(apply).collect()
+    }
+}
+
+impl ProjectionExecution {
+    fn uses_parallel_projection(self, batch_len: usize) -> bool {
+        match self {
+            Self::Auto => {
+                batch_len >= MIN_PARALLEL_PROJECTION_BATCH_LEN && rayon::current_num_threads() > 1
+            }
+            #[cfg(test)]
+            Self::Serial => false,
+            #[cfg(test)]
+            Self::Parallel => batch_len > 1,
+        }
+    }
+}
+
 fn squared_distance(left: &[f32], right: &[f32]) -> Result<f64, StreamingClusteringError> {
     if left.len() != right.len() {
         return Err(malformed_input(format!(
@@ -2080,6 +2161,8 @@ fn malformed_input(message: impl Into<String>) -> StreamingClusteringError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
     struct FailingOutOfCorePlannerState;
 
     impl DirectionalPcaOutOfCorePlannerState for FailingOutOfCorePlannerState {
@@ -2319,5 +2402,64 @@ mod tests {
             trainer.telemetry().subphase,
             DirectionalPcaTrainerSubphase::CountCells
         );
+    }
+
+    fn replay_embeddings() -> Vec<Embedding> {
+        (0..8).map(|value| vec![value as f32]).collect()
+    }
+
+    fn replay_config() -> StreamingClusteringConfig {
+        StreamingClusteringConfig {
+            cluster_count: 2,
+            dimensions: 1,
+            balance_constraints: None,
+            random_seed: None,
+        }
+    }
+
+    fn replay_reports_and_classifier(
+        projection_execution: ProjectionExecution,
+    ) -> (Vec<PassReport>, DirectionalPcaStreamingClassifier) {
+        let embeddings = replay_embeddings();
+        let mut trainer =
+            DirectionalPcaStreamingTrainer::new(replay_config(), one_dimensional_params())
+                .unwrap()
+                .with_projection_execution(projection_execution);
+        let mut reports = Vec::new();
+        for _ in 0..4 {
+            trainer.ingest_batch(&embeddings).unwrap();
+            reports.push(trainer.finish_pass().unwrap());
+        }
+        trainer.complete_training().unwrap();
+        let classifier = trainer.into_classifier().unwrap();
+        (reports, classifier)
+    }
+
+    #[test]
+    fn parallel_projection_preserves_replay_order_under_staggered_completion() {
+        let embeddings = (0..8).map(|value| vec![value as f32]).collect::<Vec<_>>();
+        let projected = map_embeddings_in_replay_order(
+            &embeddings,
+            ProjectionExecution::Parallel,
+            |embedding| {
+                std::thread::sleep(Duration::from_millis(
+                    2 * (embeddings.len() - embedding[0] as usize) as u64,
+                ));
+                Ok::<_, StreamingClusteringError>(embedding[0] as usize)
+            },
+        )
+        .unwrap();
+        assert_eq!(projected, (0..8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn parallel_projection_matches_serial_outputs_across_replay_phases() {
+        let (serial_reports, serial_classifier) =
+            replay_reports_and_classifier(ProjectionExecution::Serial);
+        let (parallel_reports, parallel_classifier) =
+            replay_reports_and_classifier(ProjectionExecution::Parallel);
+
+        assert_eq!(parallel_reports, serial_reports);
+        assert_eq!(parallel_classifier.centroids, serial_classifier.centroids);
     }
 }
