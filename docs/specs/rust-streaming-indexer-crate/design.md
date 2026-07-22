@@ -1384,10 +1384,39 @@ returns an error after that run-scoped root has been created, the implementation
 converts the root from auto-cleanup temporary state into retained on-disk state
 for that failed run.
 
-This failure-retention rule preserves the entire scratch subtree as-is, so any
-already-emitted partition planner directories or planner-state files remain
-available for postmortem inspection rather than being deleted by normal
-temporary-directory teardown.
+This failure-retention rule preserves the entire scratch subtree as-is and
+requires the failure path to emit deterministic structured postmortem artifacts
+into that retained store whenever the failure depends on planner or replay
+validation state.
+
+### DSG-STREAM-INDEXER-121 `V2 replay-validation failure artifact`
+
+When replay/classifier child-support validation fails, the implementation writes
+one deterministic failure artifact into the retained planner-state store.
+
+That artifact records the failing partition identity, the expected child count,
+the observed per-child replay counts, the empty-child indexes, and the observed
+replay total used by the validation.
+
+### DSG-STREAM-INDEXER-122 `V2 retained routing/planning debug state`
+
+When a retained v2 failure depends on trainer-produced routing or planning
+state, the implementation writes bounded reconstructable routing/planning debug
+state into the retained planner-state store alongside the failure-local replay
+evidence.
+
+For classifier-backed failures, this retained debug state is captured before the
+trainer-owned planning state is torn down, so the postmortem artifact can still
+be related to the classifier/plan that produced the failing replay result.
+
+### DSG-STREAM-INDEXER-123 `V2 bounded structured failure artifacts`
+
+Retained v2 failure artifacts are written as deterministic structured files in
+the retained planner-state store.
+
+They are scoped to the failed run and the specific failure being reported,
+preserve success-path cleanup behavior unchanged, and avoid unbounded retention
+of full-dataset or per-item hot-path state.
 
 ## Traceability
 
@@ -1500,4 +1529,7 @@ temporary-directory teardown.
 | DSG-STREAM-INDEXER-118 | REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-122, REQ-STREAM-INDEXER-124 |
 | DSG-STREAM-INDEXER-119 | REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125 |
 | DSG-STREAM-INDEXER-120 | REQ-STREAM-INDEXER-126 |
+| DSG-STREAM-INDEXER-121 | REQ-STREAM-INDEXER-127 |
+| DSG-STREAM-INDEXER-122 | REQ-STREAM-INDEXER-128 |
+| DSG-STREAM-INDEXER-123 | REQ-STREAM-INDEXER-126, REQ-STREAM-INDEXER-129 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

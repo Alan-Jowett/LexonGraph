@@ -21,6 +21,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
@@ -2029,6 +2030,7 @@ struct StreamingV2PartitionNode {
     terminal: bool,
     pending_trainer: Option<DirectionalPcaStreamingTrainer>,
     routing: Option<StreamingV2RoutingStrategy>,
+    routing_debug_state: Option<String>,
 }
 
 #[derive(Clone)]
@@ -3327,6 +3329,10 @@ impl AsRef<Path> for PlannerStateRoot {
     }
 }
 
+const V2_FAILURE_ARTIFACT_DIR_NAME: &str = "failure-artifacts";
+const V2_FAILURE_SUMMARY_FILE_NAME: &str = "run-failure-summary.txt";
+const V2_FAILURE_DETAIL_FILE_NAME: &str = "run-failure-detail.txt";
+
 struct StreamingV2PassMetricAccumulator {
     quality_sum: f64,
     balance_sum: f64,
@@ -3340,10 +3346,162 @@ struct StreamingV2PassMetricAccumulator {
 struct StreamingV2CompletedPartition {
     partition_id: PartitionId,
     routing: StreamingV2RoutingStrategy,
+    routing_debug_state: Option<String>,
     children: Vec<StreamingV2PartitionNode>,
 }
 
 impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
+    fn handle_v2_failure(
+        &mut self,
+        operation: &str,
+        error: StreamingIndexerError,
+    ) -> StreamingIndexerError {
+        let recorded_error = match self.emit_v2_failure_summary(operation, &error) {
+            Ok(()) => error,
+            Err(write_error) => write_error,
+        };
+        self.preserve_planner_state_root();
+        recorded_error
+    }
+
+    fn emit_v2_failure_summary(
+        &self,
+        operation: &str,
+        error: &StreamingIndexerError,
+    ) -> Result<(), StreamingIndexerError> {
+        let mut artifact = String::new();
+        writeln!(&mut artifact, "artifact_version=1")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "operation={operation}")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "phase={:?}", self.phase)
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "completed_passes_before_failure={}",
+            self.completed_passes
+        )
+        .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "partition_count={}", self.partitions.len())
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "error_variant={}",
+            v2_error_variant_name(error)
+        )
+        .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "error_debug={error:?}")
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "detail_artifact={V2_FAILURE_DETAIL_FILE_NAME}"
+        )
+        .expect("formatting into string should succeed");
+        self.write_v2_failure_artifact(V2_FAILURE_SUMMARY_FILE_NAME, artifact.as_bytes())
+    }
+
+    fn emit_v2_classifier_empty_child_failure_artifact(
+        &self,
+        partition_id: PartitionId,
+        partition: &StreamingV2PartitionNode,
+        expected_child_count: usize,
+        child_counts: &[usize],
+    ) -> Result<(), StreamingIndexerError> {
+        let routing_mode = partition
+            .routing
+            .as_ref()
+            .map(v2_routing_mode_name)
+            .unwrap_or("unrouted");
+        let observed_child_total = child_counts.iter().sum::<usize>();
+        let empty_child_indexes = child_counts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, count)| (*count == 0).then_some(index))
+            .collect::<Vec<_>>();
+        let mut artifact = String::new();
+        writeln!(&mut artifact, "artifact_version=1")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "failure_kind=classifier-empty-child")
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "failing_pass_number={}",
+            self.completed_passes + 1
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "partition_path={}",
+            self.partition_label(partition_id)
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "partition_item_count={}",
+            partition.item_count
+        )
+        .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "routing_mode={routing_mode}")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "expected_child_count={expected_child_count}")
+            .expect("formatting into string should succeed");
+        writeln!(&mut artifact, "observed_child_total={observed_child_total}")
+            .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "observed_child_counts={}",
+            format_usize_list(child_counts)
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "empty_child_indexes={}",
+            format_usize_list(empty_child_indexes.as_slice())
+        )
+        .expect("formatting into string should succeed");
+        writeln!(
+            &mut artifact,
+            "topology_fingerprint_hex={}",
+            hash_streaming_v2_topology_hex(&self.current_topology())
+        )
+        .expect("formatting into string should succeed");
+        if let Some(debug_state) = partition.routing_debug_state.as_deref() {
+            writeln!(&mut artifact, "routing_debug_state_begin")
+                .expect("formatting into string should succeed");
+            artifact.push_str(debug_state);
+            if !debug_state.ends_with('\n') {
+                artifact.push('\n');
+            }
+            writeln!(&mut artifact, "routing_debug_state_end")
+                .expect("formatting into string should succeed");
+        }
+        self.write_v2_failure_artifact(V2_FAILURE_DETAIL_FILE_NAME, artifact.as_bytes())
+    }
+
+    fn write_v2_failure_artifact(
+        &self,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<(), StreamingIndexerError> {
+        let artifact_dir = self
+            .planner_state_root
+            .path()
+            .join(V2_FAILURE_ARTIFACT_DIR_NAME);
+        std::fs::create_dir_all(&artifact_dir).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not create v2 failure artifact directory {}: {error}",
+                artifact_dir.display()
+            ))
+        })?;
+        let artifact_path = artifact_dir.join(file_name);
+        std::fs::write(&artifact_path, bytes).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not write v2 failure artifact {}: {error}",
+                artifact_path.display()
+            ))
+        })
+    }
+
     pub fn with_published_profile(
         resolver: CR,
         embedding_provider: EP,
@@ -3740,11 +3898,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         CR: ContentResolver<R>,
         EP: EmbeddingProvider,
     {
-        let result = self.ingest_batch_impl(batch).await;
-        if result.is_err() {
-            self.preserve_planner_state_root();
+        match self.ingest_batch_impl(batch).await {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.handle_v2_failure("ingest_batch", error)),
         }
-        result
     }
 
     async fn ingest_batch_impl(
@@ -3873,11 +4030,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub fn finish_pass(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
-        let result = self.finish_pass_impl();
-        if result.is_err() {
-            self.preserve_planner_state_root();
+        match self.finish_pass_impl() {
+            Ok(report) => Ok(report),
+            Err(error) => Err(self.handle_v2_failure("finish_pass", error)),
         }
-        result
     }
 
     fn finish_pass_impl(&mut self) -> Result<IndexingPassReport, StreamingIndexerError> {
@@ -4049,6 +4205,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         .take()
                         .unwrap();
                     let item_count = self.partition(partition_id)?.item_count;
+                    let routing_debug_state = format!("{trainer:#?}");
                     let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
                     let realized_cluster_count =
                         usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
@@ -4056,7 +4213,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                 "classifier realized cluster count does not fit into usize".into(),
                             )
                         })?;
-                    let (routing, children) =
+                    let (routing, routing_debug_state, children) =
                         if realized_cluster_count <= 1 && item_count > materializability_bound {
                             let child_counts = balanced_groups(item_count, materializability_bound)
                                 .map_err(StreamingIndexerError::HierarchyValidation)?
@@ -4073,19 +4230,28 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             );
                             let children = self.create_child_nodes(
                                 partition_id,
-                                child_counts,
+                                child_counts.clone(),
                                 materializability_bound,
                             )?;
-                            (routing, children)
+                            (
+                                routing,
+                                Some(format!(
+                                    "ReplayOrderPlan {{ child_counts: {} }}",
+                                    format_usize_list(child_counts.as_slice())
+                                )),
+                                children,
+                            )
                         } else {
                             (
                                 StreamingV2RoutingStrategy::Classifier(classifier),
+                                Some(routing_debug_state),
                                 Vec::new(),
                             )
                         };
                     completed.push(StreamingV2CompletedPartition {
                         partition_id,
                         routing,
+                        routing_debug_state,
                         children,
                     });
                     current_pass.last_progress_at = Some(current_pass.started.elapsed());
@@ -4114,6 +4280,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     let node = self.partition_mut(partition.partition_id)?;
                     node.pending_trainer = None;
                     node.routing = Some(partition.routing);
+                    node.routing_debug_state = partition.routing_debug_state;
                     node.child_ids = child_ids;
                     node.terminal = false;
                 }
@@ -4164,6 +4331,12 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     )));
                 }
                 if child_counts.contains(&0) {
+                    self.emit_v2_classifier_empty_child_failure_artifact(
+                        partition_id,
+                        node,
+                        expected_child_count,
+                        child_counts.as_slice(),
+                    )?;
                     return Err(StreamingIndexerError::HierarchyValidation(format!(
                         "partition {label:?} classifier replay left at least one child empty"
                     )));
@@ -4234,11 +4407,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
     }
 
     pub fn mark_planning_complete(&mut self) -> Result<(), StreamingIndexerError> {
-        let result = self.mark_planning_complete_impl();
-        if result.is_err() {
-            self.preserve_planner_state_root();
+        match self.mark_planning_complete_impl() {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.handle_v2_failure("mark_planning_complete", error)),
         }
-        result
     }
 
     fn mark_planning_complete_impl(&mut self) -> Result<(), StreamingIndexerError> {
@@ -4290,11 +4462,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         CR: ContentResolver<R>,
         EP: EmbeddingProvider,
     {
-        let result = self.finalize_impl(replay_batches, store).await;
-        if result.is_err() {
-            self.preserve_planner_state_root();
+        match self.finalize_impl(replay_batches, store).await {
+            Ok(result) => Ok(result),
+            Err(error) => Err(self.handle_v2_failure("finalize", error)),
         }
-        result
     }
 
     async fn finalize_impl<I, B>(
@@ -4589,6 +4760,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 terminal: true,
                 pending_trainer: None,
                 routing: None,
+                routing_debug_state: None,
             });
         }
         let settings = self.profile_settings()?;
@@ -4618,6 +4790,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             terminal: false,
             pending_trainer: Some(trainer),
             routing: None,
+            routing_debug_state: None,
         })
     }
 
@@ -5549,6 +5722,57 @@ fn usize_delta(current: usize, previous: usize) -> Option<isize> {
     let current = i128::try_from(current).ok()?;
     let previous = i128::try_from(previous).ok()?;
     isize::try_from(current - previous).ok()
+}
+
+fn v2_routing_mode_name(routing: &StreamingV2RoutingStrategy) -> &'static str {
+    match routing {
+        StreamingV2RoutingStrategy::Classifier(_) => "classifier",
+        StreamingV2RoutingStrategy::ReplayOrder(_) => "replay-order",
+    }
+}
+
+fn v2_error_variant_name(error: &StreamingIndexerError) -> &'static str {
+    match error {
+        StreamingIndexerError::EmptyInput => "EmptyInput",
+        StreamingIndexerError::EmptyPass(_) => "EmptyPass",
+        StreamingIndexerError::ContentResolution(_) => "ContentResolution",
+        StreamingIndexerError::InvalidMetadata(_) => "InvalidMetadata",
+        StreamingIndexerError::EmbeddingFailure(_) => "EmbeddingFailure",
+        StreamingIndexerError::ClusteringFailure(_) => "ClusteringFailure",
+        StreamingIndexerError::TerminalPartitionMaterialization(_) => {
+            "TerminalPartitionMaterialization"
+        }
+        StreamingIndexerError::IntermediateNodeTooLarge { .. } => "IntermediateNodeTooLarge",
+        StreamingIndexerError::BlockConstruction(_) => "BlockConstruction",
+        StreamingIndexerError::Storage(_) => "Storage",
+        StreamingIndexerError::ReplayMismatch(_) => "ReplayMismatch",
+        StreamingIndexerError::InvalidLifecycleTransition(_) => "InvalidLifecycleTransition",
+        StreamingIndexerError::HierarchyValidation(_) => "HierarchyValidation",
+        StreamingIndexerError::UnsupportedPublishedProfileVersion(_) => {
+            "UnsupportedPublishedProfileVersion"
+        }
+        StreamingIndexerError::InvalidAdaptivePlanningConfiguration(_) => {
+            "InvalidAdaptivePlanningConfiguration"
+        }
+        StreamingIndexerError::InvalidHybridPlanningConfiguration(_) => {
+            "InvalidHybridPlanningConfiguration"
+        }
+        StreamingIndexerError::CanonicalEmbeddingFailure(_) => "CanonicalEmbeddingFailure",
+        StreamingIndexerError::LocalSpill(_) => "LocalSpill",
+        StreamingIndexerError::UnusableContent(_) => "UnusableContent",
+    }
+}
+
+fn format_usize_list(values: &[usize]) -> String {
+    let mut formatted = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            formatted.push_str(", ");
+        }
+        formatted.push_str(&value.to_string());
+    }
+    formatted.push(']');
+    formatted
 }
 
 fn hash_streaming_v2_topology_hex(topology: &StreamingV2PartitionTopology) -> String {
@@ -10899,6 +11123,7 @@ mod tests {
                 terminal: false,
                 pending_trainer: None,
                 routing: None,
+                routing_debug_state: None,
             },
             StreamingV2PartitionNode {
                 parent_id: None,
@@ -10907,6 +11132,7 @@ mod tests {
                 terminal: true,
                 pending_trainer: None,
                 routing: None,
+                routing_debug_state: None,
             },
         ];
 
@@ -10945,6 +11171,7 @@ mod tests {
             terminal: false,
             pending_trainer: None,
             routing: None,
+            routing_debug_state: None,
         });
         run.next_partition_id = 1;
 
