@@ -3355,12 +3355,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         operation: &str,
         error: StreamingIndexerError,
     ) -> StreamingIndexerError {
-        let recorded_error = match self.emit_v2_failure_summary(operation, &error) {
-            Ok(()) => error,
-            Err(write_error) => write_error,
-        };
+        let _ = self.emit_v2_failure_summary(operation, &error);
         self.preserve_planner_state_root();
-        recorded_error
+        error
     }
 
     fn emit_v2_failure_summary(
@@ -3391,11 +3388,18 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         .expect("formatting into string should succeed");
         writeln!(&mut artifact, "error_debug={error:?}")
             .expect("formatting into string should succeed");
-        writeln!(
-            &mut artifact,
-            "detail_artifact={V2_FAILURE_DETAIL_FILE_NAME}"
-        )
-        .expect("formatting into string should succeed");
+        let detail_artifact_path = self
+            .planner_state_root
+            .path()
+            .join(V2_FAILURE_ARTIFACT_DIR_NAME)
+            .join(V2_FAILURE_DETAIL_FILE_NAME);
+        if detail_artifact_path.exists() {
+            writeln!(
+                &mut artifact,
+                "detail_artifact={V2_FAILURE_DETAIL_FILE_NAME}"
+            )
+            .expect("formatting into string should succeed");
+        }
         self.write_v2_failure_artifact(V2_FAILURE_SUMMARY_FILE_NAME, artifact.as_bytes())
     }
 
@@ -4224,22 +4228,19 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                     "partition {label:?} produced no child routing plan"
                                 )));
                             }
-                            let routing = StreamingV2RoutingStrategy::ReplayOrder(
-                                StreamingV2ReplayOrderPlan::new(child_counts.clone()),
-                            );
+                            let routing_debug_state = Some(format!(
+                                "ReplayOrderPlan {{ child_counts: {} }}",
+                                format_usize_list(child_counts.as_slice())
+                            ));
                             let children = self.create_child_nodes(
                                 partition_id,
                                 child_counts.clone(),
                                 materializability_bound,
                             )?;
-                            (
-                                routing,
-                                Some(format!(
-                                    "ReplayOrderPlan {{ child_counts: {} }}",
-                                    format_usize_list(child_counts.as_slice())
-                                )),
-                                children,
-                            )
+                            let routing = StreamingV2RoutingStrategy::ReplayOrder(
+                                StreamingV2ReplayOrderPlan::new(child_counts),
+                            );
+                            (routing, routing_debug_state, children)
                         } else {
                             (
                                 StreamingV2RoutingStrategy::Classifier(classifier),

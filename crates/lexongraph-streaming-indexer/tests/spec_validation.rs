@@ -5993,6 +5993,7 @@ async fn val_stream_indexer_114_streaming_v2_failure_retains_planner_state_root(
     .unwrap();
     assert!(summary.contains("operation=finish_pass"));
     assert!(summary.contains("error_variant=EmptyPass"));
+    assert!(!summary.contains("detail_artifact="));
 }
 
 async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, String, String) {
@@ -6027,11 +6028,12 @@ async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, S
 
     drop(run);
 
-    let retained_root = std::fs::read_dir(planner_state_parent.path())
+    let retained_entries = std::fs::read_dir(planner_state_parent.path())
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .next()
-        .unwrap();
+        .collect::<Vec<_>>();
+    assert_eq!(retained_entries.len(), 1);
+    let retained_root = retained_entries[0].clone();
     let summary = std::fs::read_to_string(
         retained_root
             .join("failure-artifacts")
@@ -6052,6 +6054,7 @@ async fn val_stream_indexer_115_streaming_v2_empty_child_failure_retains_assignm
     let (_planner_state_parent, summary, detail) =
         run_streaming_v2_identical_embedding_failure().await;
     assert!(summary.contains("error_variant=HierarchyValidation"));
+    assert!(summary.contains("detail_artifact=run-failure-detail.txt"));
     assert!(detail.contains("failure_kind=classifier-empty-child"));
     assert!(detail.contains("partition_path=p0"));
     assert!(detail.contains("expected_child_count=64"));
@@ -6081,11 +6084,12 @@ async fn val_stream_indexer_117_streaming_v2_failure_artifacts_are_deterministic
     assert_eq!(left_summary, right_summary);
     assert_eq!(left_detail, right_detail);
 
-    let retained_root = std::fs::read_dir(right_parent.path())
+    let retained_entries = std::fs::read_dir(right_parent.path())
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .next()
-        .unwrap();
+        .collect::<Vec<_>>();
+    assert_eq!(retained_entries.len(), 1);
+    let retained_root = retained_entries[0].clone();
     let artifact_files = std::fs::read_dir(retained_root.join("failure-artifacts"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
