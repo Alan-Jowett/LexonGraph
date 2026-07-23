@@ -1573,6 +1573,24 @@ replay before it can construct a node whose declared child count would
 deterministically replay with empty children or misroute non-duplicate items
 from other populated cells.
 
+### DSG-STREAM-INDEXER-126 `V3 analysis-only partition replay`
+
+The constrained v3 `split_partition(...)` flow treats a successful
+partition-local clustering pass with matching observed item count and
+`PassReadiness::AnalysisOnly` as unresolved planner progress rather than as a
+terminal failure.
+
+After such a pass, v3 leaves the partition in the same deterministic replay
+scope, advances the partition-planning invocation only through the existing
+trainer state machine, and replays the partition again until either:
+
+1. the trainer reports `PassReadiness::PartitionReady`, or
+2. the existing v3 replay-pass bound is exceeded
+
+Only the second case fails the v3 partition-planning loop for this condition.
+An immediate `"did not become partition-ready"` error on the first successful
+`AnalysisOnly` pass is non-conformant.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1688,4 +1706,5 @@ from other populated cells.
 | DSG-STREAM-INDEXER-122 | REQ-STREAM-INDEXER-128 |
 | DSG-STREAM-INDEXER-123 | REQ-STREAM-INDEXER-126, REQ-STREAM-INDEXER-129 |
 | DSG-STREAM-INDEXER-124..125 | REQ-STREAM-INDEXER-130 |
+| DSG-STREAM-INDEXER-126 | REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-131 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

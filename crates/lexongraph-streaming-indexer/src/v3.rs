@@ -417,10 +417,8 @@ impl StreamingIndexingRunV3 {
                         partition.id, pass_report.observed_count, partition.item_count
                     )));
                 }
-                if pass_report.readiness != PassReadiness::PartitionReady {
-                    return Err(StreamingIndexerError::ClusteringFailure(
-                        "v3 partition planning did not become partition-ready".into(),
-                    ));
+                if pass_report.readiness == PassReadiness::AnalysisOnly {
+                    continue;
                 }
                 match trainer.complete_training() {
                     Ok(()) => break,
