@@ -55,7 +55,7 @@ use lexongraph_streaming_indexer::{
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
     StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
     StreamingIndexingStatusState, StreamingIndexingTrainerSubphase, StreamingV2BlockerKind,
-    StreamingV2ConvergenceState, published_indexing_profile,
+    StreamingV2ConvergenceState, StreamingV2PartitionTopology, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -5996,7 +5996,8 @@ async fn val_stream_indexer_114_streaming_v2_failure_retains_planner_state_root(
     assert!(!summary.contains("detail_artifact="));
 }
 
-async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, String, String) {
+async fn run_streaming_v2_identical_embedding_success() -> (StreamingV2PartitionTopology, BlockHash)
+{
     let items = (0..128)
         .map(|index| IndexItem {
             metadata: vec![],
@@ -6004,6 +6005,7 @@ async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, S
         })
         .collect::<Vec<_>>();
     let planner_state_parent = tempfile::tempdir().unwrap();
+    let store = MemoryBlockStore::default();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         ConstantF32EmbeddingProvider,
@@ -6014,85 +6016,44 @@ async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, S
     )
     .unwrap();
 
-    for _ in 0..5 {
+    for _ in 0..10 {
         run.ingest_batch(items.as_slice()).await.unwrap();
         run.finish_pass().unwrap();
+        if run.mark_planning_complete().is_ok() {
+            let topology = run.finalized_partition_topology().unwrap();
+            let outcome = run
+                .finalize(std::iter::once(items.as_slice()), &store)
+                .await
+                .unwrap();
+            return (topology, outcome.root_id);
+        }
     }
-    run.ingest_batch(items.as_slice()).await.unwrap();
-    let error = run.finish_pass().unwrap_err();
-    assert!(matches!(
-        error,
-        StreamingIndexerError::HierarchyValidation(ref message)
-            if message.contains("left at least one child empty")
-    ));
 
-    drop(run);
-
-    let retained_entries = std::fs::read_dir(planner_state_parent.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(retained_entries.len(), 1);
-    let retained_root = retained_entries[0].clone();
-    let summary = std::fs::read_to_string(
-        retained_root
-            .join("failure-artifacts")
-            .join("run-failure-summary.txt"),
-    )
-    .unwrap();
-    let detail = std::fs::read_to_string(
-        retained_root
-            .join("failure-artifacts")
-            .join("run-failure-detail.txt"),
-    )
-    .unwrap();
-    (planner_state_parent, summary, detail)
+    panic!("identical-embedding v2 fixture should complete planning within 10 passes");
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_115_streaming_v2_empty_child_failure_retains_assignment_evidence() {
-    let (_planner_state_parent, summary, detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    assert!(summary.contains("error_variant=HierarchyValidation"));
-    assert!(summary.contains("detail_artifact=run-failure-detail.txt"));
-    assert!(detail.contains("failure_kind=classifier-empty-child"));
-    assert!(detail.contains("partition_path=p0"));
-    assert!(detail.contains("expected_child_count=64"));
-    assert!(detail.contains("observed_child_total=128"));
-    assert!(detail.contains("observed_child_counts=[128"));
-    assert!(detail.contains("empty_child_indexes=[1"));
+async fn val_stream_indexer_118_streaming_v2_duplicate_refinement_preserves_exact_child_count() {
+    let (topology, _root_id) = run_streaming_v2_identical_embedding_success().await;
+    let root = topology
+        .partitions
+        .iter()
+        .find(|partition| partition.id == "p0")
+        .expect("root partition should exist");
+    assert_eq!(root.child_ids.len(), 64);
+    assert!(root.child_ids.iter().all(|child_id| {
+        topology
+            .partitions
+            .iter()
+            .find(|partition| partition.id == *child_id)
+            .is_some_and(|partition| partition.terminal)
+    }));
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_116_streaming_v2_empty_child_failure_retains_routing_state() {
-    let (_planner_state_parent, _summary, detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    assert!(detail.contains("routing_mode=classifier"));
-    assert!(detail.contains("routing_debug_state_begin"));
-    assert!(detail.contains("trainer_subphase=RealizePartition"));
-    assert!(detail.contains("trainer_state_fingerprint_hex="));
-    assert!(detail.contains("classifier_realized_cluster_count=64"));
-    assert!(!detail.contains("model: Some"));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_117_streaming_v2_failure_artifacts_are_deterministic_and_bounded() {
-    let (_left_parent, left_summary, left_detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    let (right_parent, right_summary, right_detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    assert_eq!(left_summary, right_summary);
-    assert_eq!(left_detail, right_detail);
-
-    let retained_entries = std::fs::read_dir(right_parent.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(retained_entries.len(), 1);
-    let retained_root = retained_entries[0].clone();
-    let artifact_files = std::fs::read_dir(retained_root.join("failure-artifacts"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(artifact_files.len(), 2);
+async fn val_stream_indexer_119_streaming_v2_duplicate_refinement_finalization_is_deterministic() {
+    let (left_topology, left_root_id) = run_streaming_v2_identical_embedding_success().await;
+    let (right_topology, right_root_id) = run_streaming_v2_identical_embedding_success().await;
+    assert_eq!(left_topology, right_topology);
+    assert_eq!(left_root_id, right_root_id);
 }

@@ -319,7 +319,7 @@ The conformant duplicate-collapse detection identifies populated cells that can
 only grow additional clusters by subdividing members that remain
 indistinguishable in retained PCA coordinates.
 
-### DSG-DPCA-STREAM-020 `Stable duplicate refinement`
+### DSG-DPCA-STREAM-020 `Stable replay-faithful duplicate refinement`
 
 When duplicate-collapse detection succeeds and first-pass `Observed N >= K`, the
 crate preserves the primary PCA-plus-quantile partition and deterministically
@@ -327,6 +327,19 @@ refines only the collapsed duplicate members.
 
 The refinement tie-break is non-geometric and stable for the same pass dataset
 order.
+
+Exact-`K` success is only exposed when the exported routing surface preserves
+the same refined non-empty child support during deterministic replay.
+
+### DSG-DPCA-STREAM-020A `Duplicate-refined replay-order support export`
+
+When refinement adds `extra_clusters > 0` beyond the populated-cell geometry,
+the realized partition records deterministic per-child support counts derived
+from the refined cell plan.
+
+Those support counts are exported as explicit replay-faithful routing metadata
+so downstream callers can preserve the refined exact-`K` split without
+re-inferring it from centroid geometry alone.
 
 ### DSG-DPCA-STREAM-021 `Narrow fallback scope`
 
@@ -340,6 +353,21 @@ Stable externally visible cluster IDs, pass reports, and classifier assignments
 are derived from the final refined partition state. Replaying the same ordered
 dataset across passes therefore reproduces the same observable cluster-ID
 surface.
+
+When duplicate refinement manufactured additional exact-`K` children from a
+collapsed cell, the exported routing surface also preserves the same non-empty
+child support rather than collapsing identical centroids back onto the first
+cluster.
+
+### DSG-DPCA-STREAM-022A `No plain-centroid export for unreplayable duplicates`
+
+Duplicate-refined exact-`K` partitions are not exported as a centroid-only
+surface when that surface would replay with fewer non-empty children than the
+reported refined partition.
+
+The observable export therefore either includes the explicit replay-faithful
+routing metadata from `DSG-DPCA-STREAM-020A` or fails before exposing an
+unreplayable exact-`K` partition.
 
 ### DSG-DPCA-STREAM-023 `Adaptive retained-axis selection`
 
@@ -424,9 +452,9 @@ replay is non-conformant under this revision.
 | DSG-DPCA-STREAM-017 | REQ-DPCA-STREAM-021 |
 | DSG-DPCA-STREAM-018 | REQ-DPCA-STREAM-020 |
 | DSG-DPCA-STREAM-019 | REQ-DPCA-STREAM-022 |
-| DSG-DPCA-STREAM-020 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-023 |
+| DSG-DPCA-STREAM-020..020A | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-023, REQ-DPCA-STREAM-023A |
 | DSG-DPCA-STREAM-021 | REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-024 |
-| DSG-DPCA-STREAM-022 | REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018 |
+| DSG-DPCA-STREAM-022..022A | REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018, REQ-DPCA-STREAM-023, REQ-DPCA-STREAM-023A, REQ-DPCA-STREAM-024 |
 | DSG-DPCA-STREAM-023 | REQ-DPCA-STREAM-025 |
 | DSG-DPCA-STREAM-024 | REQ-DPCA-STREAM-026 |
 | DSG-DPCA-STREAM-025 | REQ-DPCA-STREAM-014, REQ-DPCA-STREAM-027 |

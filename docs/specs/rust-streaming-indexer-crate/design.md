@@ -1418,6 +1418,27 @@ They are scoped to the failed run and the specific failure being reported,
 preserve success-path cleanup behavior unchanged, and avoid unbounded retention
 of full-dataset or per-item hot-path state.
 
+### DSG-STREAM-INDEXER-124 `V2 duplicate-refined replay-order finalization`
+
+When directional-PCA exports explicit replay-faithful child-support semantics
+for a duplicate-refined exact-`K` partition, v2 finalization consumes those
+semantics directly and materializes the child nodes without waiting for a
+centroid-only classifier replay to rediscover the split.
+
+This keeps the hierarchy-node child count aligned with the trainer's declared
+exact-`K` partition even when the realized centroids are geometrically
+indistinguishable.
+
+### DSG-STREAM-INDEXER-125 `No plain classifier finalization for unreplayable duplicates`
+
+When duplicate-refined exact-`K` support requires explicit replay-faithful
+routing semantics, v2 does not finalize the partition as a plain
+classifier-backed routing node.
+
+The hierarchy-validation boundary therefore rejects or bypasses centroid-only
+replay for those partitions before it can construct a node whose declared child
+count would deterministically replay with empty children.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1532,4 +1553,5 @@ of full-dataset or per-item hot-path state.
 | DSG-STREAM-INDEXER-121 | REQ-STREAM-INDEXER-127 |
 | DSG-STREAM-INDEXER-122 | REQ-STREAM-INDEXER-128 |
 | DSG-STREAM-INDEXER-123 | REQ-STREAM-INDEXER-126, REQ-STREAM-INDEXER-129 |
+| DSG-STREAM-INDEXER-124..125 | REQ-STREAM-INDEXER-130 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

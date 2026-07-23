@@ -1567,6 +1567,18 @@ than fingerprint-only.
 They shall remain bounded to run-scoped and failure-scoped evidence and shall
 not require unbounded retention of per-item hot-path state or full-dataset
 dumps in order to explain the failure.
+
+### REQ-STREAM-INDEXER-130
+
+When a v2 directional-PCA partition reaches exact cardinality only because
+duplicate refinement added children beyond the populated-cell geometry, the v2
+finalization surface shall preserve that exact child cardinality through
+replay-faithful routing semantics instead of relying on centroid-only replay
+assignment.
+
+The crate shall not finalize such a partition as a plain classifier-backed
+hierarchy node if deterministic replay through that plain classifier would leave
+one or more declared children empty.
 ## Out of Scope
 
 This crate does not define or own:

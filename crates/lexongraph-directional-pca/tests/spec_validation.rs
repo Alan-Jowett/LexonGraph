@@ -231,7 +231,7 @@ fn val_dpca_stream_018_shared_conformance_helpers_pass() {
 }
 
 #[test]
-fn val_dpca_stream_020_and_022_identical_embeddings_split_deterministically_after_replay() {
+fn val_dpca_stream_020_and_022_identical_embeddings_export_replay_faithful_support() {
     let mut trainer = DirectionalPcaStreamingTrainer::new(
         underfull_success_config(),
         DirectionalPcaParams {
@@ -251,11 +251,12 @@ fn val_dpca_stream_020_and_022_identical_embeddings_split_deterministically_afte
     }
     assert_eq!(reports[2].cluster_ids, Some(vec![0, 1, 2]));
     assert_eq!(reports[3].cluster_ids, Some(vec![0, 1, 2]));
-
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
-    assert_eq!(classifier.assign([5.0, 5.0].as_slice()).unwrap(), 0);
-    assert_eq!(classifier.assign([5.0, 5.0].as_slice()).unwrap(), 0);
+    assert_eq!(
+        classifier.replay_order_child_counts(),
+        Some([2, 1, 1].as_slice())
+    );
 }
 
 #[test]
@@ -278,6 +279,41 @@ fn val_dpca_stream_021_duplicate_refinement_recovers_a_partially_collapsed_fixtu
     }
     assert_eq!(reports[2].cluster_ids, Some(vec![0, 1, 2]));
     assert_eq!(reports[3].cluster_ids, Some(vec![0, 1, 2]));
+
+    trainer.complete_training().unwrap();
+    let classifier = trainer.into_classifier().unwrap();
+    assert_eq!(classifier.realized_cluster_count(), 3);
+    assert_eq!(
+        classifier.replay_order_child_counts(),
+        Some([2, 1, 1].as_slice())
+    );
+}
+
+#[test]
+fn val_dpca_stream_022a_duplicate_refinement_exports_explicit_child_support() {
+    let mut trainer = DirectionalPcaStreamingTrainer::new(
+        underfull_success_config(),
+        DirectionalPcaParams {
+            cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
+            retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+            ..params()
+        },
+    )
+    .unwrap();
+    for pass in identical_embedding_passes() {
+        for batch in pass {
+            trainer.ingest_batch(batch.as_slice()).unwrap();
+        }
+        trainer.finish_pass().unwrap();
+    }
+
+    trainer.complete_training().unwrap();
+    let classifier = trainer.into_classifier().unwrap();
+    let child_counts = classifier
+        .replay_order_child_counts()
+        .expect("duplicate refinement should export replay-order support");
+    assert_eq!(child_counts, [2, 1, 1].as_slice());
+    assert_eq!(child_counts.iter().sum::<usize>(), 4);
 }
 
 #[test]

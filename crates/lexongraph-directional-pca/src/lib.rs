@@ -113,6 +113,7 @@ impl std::fmt::Debug for DirectionalPcaStreamingTrainer {
 pub struct DirectionalPcaStreamingClassifier {
     config: StreamingClusteringConfig,
     centroids: Vec<Embedding>,
+    replay_order_child_counts: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +138,7 @@ pub struct DirectionalPcaTrainerTelemetry {
 #[derive(Clone, Debug)]
 struct DirectionalPcaModel {
     centroids: Vec<Embedding>,
+    replay_order_child_counts: Option<Vec<usize>>,
 }
 
 #[derive(Debug)]
@@ -180,6 +182,22 @@ struct PartitionPlan {
 struct ReadyPartitionPlan {
     partition: PartitionPlan,
     cells: Vec<ReadyCellPlan>,
+}
+
+impl ReadyPartitionPlan {
+    fn replay_order_child_counts(&self) -> Option<Vec<usize>> {
+        self.cells
+            .iter()
+            .any(|cell| cell.extra_clusters > 0)
+            .then(|| {
+                let mut counts = Vec::new();
+                for cell in &self.cells {
+                    counts.push(cell.count - cell.extra_clusters);
+                    counts.extend(std::iter::repeat_n(1usize, cell.extra_clusters));
+                }
+                counts
+            })
+    }
 }
 
 #[derive(Debug)]
@@ -995,6 +1013,7 @@ impl DirectionalPcaStreamingTrainer {
             .iter()
             .map(|stats| stats.centroid())
             .collect::<Result<Vec<_>, _>>()?;
+        let replay_order_child_counts = pass.ready.replay_order_child_counts();
         let realized_cluster_count = centroids.len() as u32;
         let report = PassReport {
             observed_count: fingerprint.observed_count,
@@ -1010,7 +1029,10 @@ impl DirectionalPcaStreamingTrainer {
         Ok((
             ReplayPhase::RealizePartition(pass.ready),
             report,
-            Some(DirectionalPcaModel { centroids }),
+            Some(DirectionalPcaModel {
+                centroids,
+                replay_order_child_counts,
+            }),
         ))
     }
 
@@ -1173,6 +1195,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
         Ok(DirectionalPcaStreamingClassifier {
             config: self.config,
             centroids: model.centroids,
+            replay_order_child_counts: model.replay_order_child_counts,
         })
     }
 }
@@ -1192,6 +1215,10 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
 }
 
 impl DirectionalPcaStreamingClassifier {
+    pub fn replay_order_child_counts(&self) -> Option<&[usize]> {
+        self.replay_order_child_counts.as_deref()
+    }
+
     pub fn assigned_distance(
         &self,
         embedding: &[f32],
