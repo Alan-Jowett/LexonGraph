@@ -803,9 +803,11 @@ Run evaluator backend selection on:
 
 **Pass condition:** the evaluator reports explicit backend selection or fallback
 status in provenance or campaign artifacts through the shared acceleration
-boundary and does not silently claim acceleration.
+boundary, does not silently claim acceleration, and does not imply that
+directional-PCA or PCA eigendecomposition acceleration is required for
+conformance in this revision.
 
-**Traces to:** REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064
+**Traces to:** REQ-STREAM-EVAL-062, REQ-STREAM-EVAL-064, REQ-STREAM-EVAL-065
 
 ### VAL-STREAM-EVAL-054
 
