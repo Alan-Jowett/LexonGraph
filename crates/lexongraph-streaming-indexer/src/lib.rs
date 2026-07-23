@@ -457,6 +457,9 @@ pub enum StreamingIndexingPhase {
     PlanningPass { pass_number: usize },
     HierarchyPlanning { stage: PlanningStage },
     V3PartitionLoad { layer_index: usize },
+    V3PartitionTrainIngest { layer_index: usize },
+    V3PartitionClassify { layer_index: usize },
+    V3TerminalMaterializationLoad { layer_index: usize },
     FinalMaterializationReplay,
     BottomUpAssembly { layer_index: usize },
 }
@@ -475,6 +478,9 @@ pub enum StreamingIndexingProgressUnitKind {
     HierarchyPlanningItem,
     PartitionPlanningInvocation,
     V3LoadItem,
+    V3TrainIngestItem,
+    V3ClassifiedItem,
+    V3MaterializationLoadItem,
     ReplayItem,
     AssemblyGroup,
 }
@@ -7856,6 +7862,15 @@ fn status_with_progress(
         StreamingIndexingPhase::HierarchyPlanning { .. } => None,
         StreamingIndexingPhase::V3PartitionLoad { .. } => {
             Some(StreamingIndexingProgressUnitKind::V3LoadItem)
+        }
+        StreamingIndexingPhase::V3PartitionTrainIngest { .. } => {
+            Some(StreamingIndexingProgressUnitKind::V3TrainIngestItem)
+        }
+        StreamingIndexingPhase::V3PartitionClassify { .. } => {
+            Some(StreamingIndexingProgressUnitKind::V3ClassifiedItem)
+        }
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { .. } => {
+            Some(StreamingIndexingProgressUnitKind::V3MaterializationLoadItem)
         }
         StreamingIndexingPhase::FinalMaterializationReplay => {
             Some(StreamingIndexingProgressUnitKind::ReplayItem)

@@ -599,8 +599,9 @@ per-item instrumentation:
 - aggregate counters such as visited partitions, finalized partitions, terminal
   partitions produced, completed planner invocations, and deterministic
   fallback or regrouping events
-- for v3, enough structured phase or stage detail to distinguish leaf-block
-  loading/parsing, partition planning, next-layer assembly, and final
+- for v3, enough structured phase or stage detail to distinguish partition
+  training ingest, partition classification into child files, partition
+  planning, terminal materialization load, next-layer assembly, and final
   persistence when those activities are separately observable
 
 ### REQ-STREAM-INDEXER-023
@@ -629,10 +630,16 @@ state for a caller to distinguish advancing replay, advancing planner state,
 unchanged planner state, and change that appears only when one pass is compared
 to the previous completed pass.
 
-For the constrained v3 surface, long-running leaf-block loading/parsing,
-partition-planning, and assembly work shall likewise emit periodic in-progress
-updates carrying the latest observable progress counts rather than only elapsed
-time or terminal completion.
+For the constrained v3 surface, long-running partition-trainer ingest,
+partition-classification, terminal-materialization load, partition-planning,
+and assembly work shall likewise emit periodic in-progress updates carrying
+the latest observable progress counts rather than only elapsed time or
+terminal completion.
+
+To preserve compatibility where practical, the public observer surface may
+retain broader legacy v3 phase variants, but the constrained v3 runtime shall
+emit the more specific phase identities when those activities are separately
+observable.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -895,11 +902,13 @@ for the progress-count fields exposed to the status observer, including:
 - for v2 planning, what fields summarize completed-pass boundary deltas or
   fingerprints so a caller can compare pass `N` with earlier completed passes
   without inferring semantics from logs
-- for v3, what phases or stage detail distinguish block loading/parsing,
+- for v3, what phases or stage detail distinguish partition-trainer ingest,
+  partition classification into child files, terminal materialization load,
   partition planning, next-layer assembly, and final persistence
 - for v3, what counts and elapsed-time fields let a downstream caller derive an
-  honest throughput or progress-rate estimate without fabricating a completion
-  percentage when totals are not yet knowable
+  honest throughput or progress-rate estimate for training-ingest,
+  classification, materialization-load, or assembly work without fabricating a
+  completion percentage when totals are not yet knowable
 - for v3, how prepared-but-not-yet-committed batches are distinguished from
   batches whose processing effects have already been committed
 
