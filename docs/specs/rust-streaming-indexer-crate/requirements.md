@@ -111,16 +111,18 @@ normative conformance boundary.
 
 ### REQ-STREAM-INDEXER-003A
 
-The crate may expose both a retained v1 compatibility surface and a new v2
-streaming surface within `crates/lexongraph-streaming-indexer`.
+The crate may expose retained versioned indexing surfaces side-by-side within
+`crates/lexongraph-streaming-indexer`.
 
-When both surfaces are present:
+When multiple surfaces are present:
 
 - the v1 surface may remain available for migration compatibility
 - the v2 surface is the authoritative conformance target for the replay-driven,
-  resident-memory-bounded indexing path
-- validation and documentation shall distinguish the two surfaces explicitly
-  rather than silently treating the v1 surface as conformant v2 behavior
+  resident-memory-bounded indexing path it defines
+- a v3 surface may coexist additively for partition-working-store-based
+  execution
+- validation and documentation shall distinguish those surfaces explicitly
+  rather than silently treating one surface's behavior as another's
 
 ### REQ-STREAM-INDEXER-004
 
@@ -151,10 +153,50 @@ When the selected directional-PCA quantile realization uses deterministic
 Greenwald-Khanna summaries, that path shall not require per-axis quantile spill
 capture or replay beneath the planner-state root.
 
+### REQ-STREAM-INDEXER-004B
+
+The constrained v3 surface shall require a caller-supplied writable temporary
+working root for implementation-owned partition artifacts.
+
+That working root is separate from the production block store used to resolve
+input leaf blocks and persist the final result.
+
+### REQ-STREAM-INDEXER-004C
+
+The first v3 slice shall be single-process only and shall not provide crash
+recovery or resume semantics.
+
+An interrupted v3 run may require restart from the beginning.
+
+### REQ-STREAM-INDEXER-004D
+
+On successful completion, the constrained v3 surface shall clean up its
+temporary working subtree.
+
+Those intermediate artifacts are implementation-owned and are not part of the
+durable production result contract.
+
 ### REQ-STREAM-INDEXER-005
 
 The caller-visible streaming indexing API shall accept a non-empty ordered
 stream of indexing items partitioned into caller-chosen batches for each pass.
+
+### REQ-STREAM-INDEXER-005A
+
+The constrained v3 surface shall accept a non-empty ordered stream of existing
+production leaf block IDs as its public input boundary.
+
+That v3 boundary shall not require the caller to resend content references,
+raw content bytes, or inline leaf payloads for those inputs.
+
+### REQ-STREAM-INDEXER-005B
+
+After a v3 partition has become terminal for its current layer, later
+refinement rounds for sibling or unrelated partitions shall not require
+rereading that terminal partition's full membership.
+
+The implementation may reread terminal partition contents only when needed for
+deterministic next-layer assembly.
 
 ### REQ-STREAM-INDEXER-006
 
@@ -190,6 +232,9 @@ At minimum, the crate shall expose or depend on policy boundaries for:
 - hierarchical planning over replayed original-item embeddings or lower-layer
   planning units, with any clustering subproblems flowing through the shared
   streaming clustering contract
+- v3 partition-working-store orchestration over ordered leaf-block or
+  lower-layer child membership without widening the production block-store
+  contract with mutable scheduler semantics
 - built-in hierarchy construction direction selection governing whether the
   built-in planning path derives the finalized partition hierarchy divisively or
   agglomeratively
@@ -269,6 +314,13 @@ If the crate needs to revisit prior data, that revisit shall occur only through
 caller-visible replay or caller-visible staged progression rather than hidden
 implementation-owned retention or spill of the full logical dataset.
 
+### REQ-STREAM-INDEXER-016A
+
+For v3, partition identity, child ordinal assignment, ordered membership, and
+parent-assembly ordering shall be derived deterministically from the indexing
+context and partition state rather than from temp-path naming, completion
+timing, or execution schedule.
+
 ### REQ-STREAM-INDEXER-017
 
 The v2 streaming surface shall remain dataset-size independent by requiring
@@ -284,6 +336,19 @@ This restriction does not forbid the v2 implementation from retaining
 dataset-sized planner-managed out-of-core state beneath the caller-provided
 planner-state root, provided the caller-visible API still uses replay rather
 than full-dataset payloads as the progression contract.
+
+### REQ-STREAM-INDEXER-017A
+
+The constrained v3 surface shall keep hot memory bounded to the currently
+active partition work set plus bounded pipeline buffers, rather than retaining
+planner-hot state for all discovered partitions simultaneously.
+
+Transient pipeline buffers may support overlapped storage and CPU work, but
+they shall not grow with the total discovered partition count or become a
+hidden full-run resident materialization.
+
+Within one active v3 partition, prepared-but-not-yet-committed future batches
+may lead the oldest uncommitted processing batch by at most three batches.
 
 ### REQ-STREAM-INDEXER-018
 
@@ -347,6 +412,24 @@ append-only spill scoped to terminal partitions, provided that:
   then assemble parents bottom-up
 - the crate remains authoritative for leaf construction, block persistence,
   parent assembly, final result packaging, and spill cleanup
+
+### REQ-STREAM-INDEXER-020A
+
+The constrained v3 surface shall persist only the final result blocks required
+for the completed index into the production output store.
+
+Intermediate partition manifests, membership artifacts, split staging, and
+similar v3 working artifacts remain outside the production-store contract.
+
+### REQ-STREAM-INDEXER-020B
+
+For v3, partition terminality and parent-assembly correctness shall remain
+derived from the deterministic materializability bound implied by
+`embedding_spec` and `block_size_target`.
+
+Implementation-owned constants such as `64` may be used for batching,
+parallelism, or memory heuristics, but shall not redefine the correctness
+contract for whether a partition is terminal.
 
 ### REQ-STREAM-INDEXER-021
 
@@ -483,9 +566,10 @@ Status updates shall be emitted as structured data suitable for arbitrary
 caller-owned handling and shall not require any particular sink.
 
 The same optional observer contract shall be available on the caller-visible
-v2 / published-profile `0.7.0` execution surface. That surface may reuse the
-existing structured status payload with additive optional detail rather than
-requiring a separate log-only telemetry channel.
+v2 / published-profile `0.7.0` execution surface and on the constrained v3
+surface. Those surfaces may reuse the existing structured status payload with
+additive optional detail rather than requiring separate log-only telemetry
+channels.
 
 For each reported phase, the observer contract shall expose:
 
@@ -515,6 +599,9 @@ per-item instrumentation:
 - aggregate counters such as visited partitions, finalized partitions, terminal
   partitions produced, completed planner invocations, and deterministic
   fallback or regrouping events
+- for v3, enough structured phase or stage detail to distinguish leaf-block
+  loading/parsing, partition planning, next-layer assembly, and final
+  persistence when those activities are separately observable
 
 ### REQ-STREAM-INDEXER-023
 
@@ -541,6 +628,11 @@ updates and completed pass boundaries shall expose enough deterministic visible
 state for a caller to distinguish advancing replay, advancing planner state,
 unchanged planner state, and change that appears only when one pass is compared
 to the previous completed pass.
+
+For the constrained v3 surface, long-running leaf-block loading/parsing,
+partition-planning, and assembly work shall likewise emit periodic in-progress
+updates carrying the latest observable progress counts rather than only elapsed
+time or terminal completion.
 
 ### REQ-STREAM-INDEXER-024
 
@@ -757,6 +849,24 @@ Independent subpartitions may be processed concurrently only if partition
 identity, pass reports, root block ID, and persisted block set remain
 deterministic and schedule-independent.
 
+For the constrained v3 surface:
+
+- non-trivial independent CPU-bound work should default to rayon-backed
+  parallel execution when ordering is not needed to preserve determinism
+- production-store and temp-working-store disk I/O should be orchestrated
+  through async/await-style non-blocking progression rather than a
+  single-threaded blocking storage pipeline
+- the implementation should keep both pending storage work and ready CPU work
+  in flight when work exists, without changing deterministic externally visible
+  results
+- within one active partition, batch preparation may overlap with processing of
+  earlier batches, but the prepare-ahead window shall be bounded to at most
+  three future batches
+- within one active partition, trainer-visible state updates, order-sensitive
+  floating-point reductions, and deterministic child-partition emission shall
+  commit in deterministic batch order even when later batches have already been
+  prepared
+
 ### REQ-STREAM-INDEXER-038
 
 Terminal planning units shall be reconciled against a deterministic
@@ -785,6 +895,13 @@ for the progress-count fields exposed to the status observer, including:
 - for v2 planning, what fields summarize completed-pass boundary deltas or
   fingerprints so a caller can compare pass `N` with earlier completed passes
   without inferring semantics from logs
+- for v3, what phases or stage detail distinguish block loading/parsing,
+  partition planning, next-layer assembly, and final persistence
+- for v3, what counts and elapsed-time fields let a downstream caller derive an
+  honest throughput or progress-rate estimate without fabricating a completion
+  percentage when totals are not yet knowable
+- for v3, how prepared-but-not-yet-committed batches are distinguished from
+  batches whose processing effects have already been committed
 
 These semantics shall be phase-specific for at least:
 

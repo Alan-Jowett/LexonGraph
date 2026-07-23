@@ -63,6 +63,17 @@ reference, and the API does not require inline raw content bytes.
 
 **Traces to:** REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007
 
+### VAL-STREAM-INDEXER-004A
+
+Inspect the constrained v3 public input boundary.
+
+**Pass condition:** the surface accepts existing production leaf block IDs as
+ordered input, does not require inline content payloads, and rejects IDs that
+do not resolve to decodable leaf blocks compatible with the run's
+`embedding_spec`.
+
+**Traces to:** REQ-STREAM-INDEXER-004B, REQ-STREAM-INDEXER-005A
+
 ### VAL-STREAM-INDEXER-005
 
 Use distinct content resolver implementations for different reference classes.
@@ -71,6 +82,20 @@ Use distinct content resolver implementations for different reference classes.
 without backend-specific API changes in the indexer crate.
 
 **Traces to:** REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-010
+
+### VAL-STREAM-INDEXER-005A
+
+Construct the constrained v3 surface with a writable temp working root that is
+separate from both the source production block store and the output production
+block store.
+
+**Pass condition:** the run uses that working root for implementation-owned
+partition artifacts, does not widen the production block-store contract with
+mutable scheduler state, and cleans the working subtree on successful
+completion.
+
+**Traces to:** REQ-STREAM-INDEXER-004B, REQ-STREAM-INDEXER-004D,
+REQ-STREAM-INDEXER-020A
 
 ### VAL-STREAM-INDEXER-006
 
@@ -246,6 +271,19 @@ plus the complete persisted block set.
 **Traces to:** REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-027,
 REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035
 
+### VAL-STREAM-INDEXER-017A
+
+Run the constrained v3 surface on a deterministic fixture that requires at
+least one non-terminal split and at least one later assembly layer.
+
+**Pass condition:** once a partition becomes terminal for a layer, later
+refinement work does not reread that partition's full membership except when
+deterministic next-layer assembly requires it, and the final result remains a
+single deterministic root with the required persisted block set.
+
+**Traces to:** REQ-STREAM-INDEXER-005B, REQ-STREAM-INDEXER-017A,
+REQ-STREAM-INDEXER-020A
+
 ### VAL-STREAM-INDEXER-018
 
 Construct candidate child-entry sets that include out-of-order embeddings or
@@ -279,6 +317,18 @@ for either built-in direction still flows through the shared streaming
 clustering contract rather than an older batch-only clustering boundary.
 
 **Traces to:** REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-035
+
+### VAL-STREAM-INDEXER-020A
+
+Drive the constrained v3 surface with a fixture whose partition sizes approach
+the materializability boundary implied by `embedding_spec` and
+`block_size_target`.
+
+**Pass condition:** v3 terminality follows that materializability bound rather
+than a fixed item-count constant, and any batching or queue-size heuristic does
+not change which partitions are terminal.
+
+**Traces to:** REQ-STREAM-INDEXER-020B
 
 ### VAL-STREAM-INDEXER-021
 
@@ -327,6 +377,21 @@ repository-specific telemetry, and for each observed phase:
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-039
+
+### VAL-STREAM-INDEXER-023A
+
+Attach the same caller-owned observer to a constrained v3 run that performs
+leaf loading, partition refinement, and at least one assembly layer.
+
+**Pass condition:** the observer exposes v3 phase identity sufficient to
+distinguish block loading/parsing, partition planning, and next-layer assembly;
+long-running v3 work emits periodic in-progress heartbeats with current counts;
+and the captured payload is sufficient for a downstream caller to estimate a
+work rate without fabricating a completion percentage when totals are not yet
+known.
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
+REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-039
 
 ### VAL-STREAM-INDEXER-024
 
@@ -413,6 +478,30 @@ when that root is unavailable or unusable.
 
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-024,
 REQ-STREAM-INDEXER-021G, REQ-STREAM-INDEXER-021H
+
+### VAL-STREAM-INDEXER-025H
+
+Run the constrained v3 surface on a fixture large enough to create multiple
+active partitions while staying within the single-process slice.
+
+**Pass condition:** hot resident state remains bounded to the active partition
+work set plus bounded pipeline buffers rather than growing with the full
+discovered partition count, and the implementation does not require a hidden
+resident materialization of the full run state.
+
+**Traces to:** REQ-STREAM-INDEXER-017A
+
+### VAL-STREAM-INDEXER-025I
+
+Inspect or execute one constrained v3 partition-processing path large enough to
+exercise intra-partition batch pipelining.
+
+**Pass condition:** the implementation bounds prepared-but-not-yet-committed
+future batches to a lead window of at most three, and that prepared-batch state
+does not grow with total partition size beyond the current batch plus that
+fixed lookahead.
+
+**Traces to:** REQ-STREAM-INDEXER-017A, REQ-STREAM-INDEXER-037
 
 ### VAL-STREAM-INDEXER-025F
 
@@ -555,6 +644,18 @@ pass reports, root block IDs, and persisted block sets.
 
 **Traces to:** REQ-STREAM-INDEXER-037
 
+### VAL-STREAM-INDEXER-034A
+
+Run the constrained v3 surface twice on the same deterministic fixture while
+varying the scheduling order of independent storage completions and ready CPU
+tasks.
+
+**Pass condition:** both executions produce identical partition identities,
+child ordinals, parent-assembly order, root block ID, and persisted block set,
+demonstrating schedule-independent v3 determinism.
+
+**Traces to:** REQ-STREAM-INDEXER-016A, REQ-STREAM-INDEXER-037
+
 ### VAL-STREAM-INDEXER-035
 
 Construct terminal partitions that collapse to singleton or undersized child
@@ -588,6 +689,30 @@ fields as unavailable when they are not yet knowable.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064
+
+### VAL-STREAM-INDEXER-036A
+
+Run a deterministic constrained v3 fixture that performs enough leaf loading
+and partition computation to make overlap observable.
+
+**Pass condition:** the verification artifacts demonstrate overlapped storage
+and CPU progression, rayon-backed execution for non-trivial independent CPU
+work where determinism permits, and no dependence of the final externally
+visible result on the overlap schedule itself.
+
+**Traces to:** REQ-STREAM-INDEXER-037
+
+### VAL-STREAM-INDEXER-036B
+
+Capture the observer stream for a constrained v3 fixture whose batch
+preparation leads processing by at least one batch.
+
+**Pass condition:** status `completed_unit_count` advances only when a batch's
+processing effects have been deterministically committed, not merely when a
+future batch has been fetched, decoded, or otherwise prepared, and any v3-
+specific prepared-batch detail does not masquerade as completed work.
+
+**Traces to:** REQ-STREAM-INDEXER-039
 
 ### VAL-STREAM-INDEXER-037
 

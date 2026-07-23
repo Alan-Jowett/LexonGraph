@@ -2185,6 +2185,7 @@ dependencies = [
  "lexongraph-streaming-clustering",
  "memmap2",
  "pollster",
+ "rayon",
  "sha2",
  "tempfile",
  "tokio",

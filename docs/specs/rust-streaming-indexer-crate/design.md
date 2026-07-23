@@ -74,15 +74,37 @@ streaming indexing run with the following observable lifecycle:
 
 ### DSG-STREAM-INDEXER-003A `Versioned surface coexistence`
 
-The crate may temporarily expose both:
+The crate may temporarily expose multiple retained and additive indexing
+surfaces:
 
 - a retained v1 compatibility surface kept stable for incremental migration
-- a new v2 streaming surface that owns replay-driven,
-  resident-memory-bounded conformance
+- a v2 streaming surface that owns replay-driven, resident-memory-bounded
+  conformance
+- a constrained v3 surface that owns partition-working-store-based execution
 
-Documentation, validation, and runtime entry points distinguish the two
-surfaces explicitly. Unsupported v2 modes fail explicitly rather than silently
-delegating to v1 behavior.
+Documentation, validation, and runtime entry points distinguish those surfaces
+explicitly. Unsupported modes fail explicitly rather than silently delegating
+across version boundaries.
+
+### DSG-STREAM-INDEXER-003B `V3 public partition lifecycle`
+
+The v3 surface exposes a caller-visible run that:
+
+1. accepts an ordered stream of production leaf block IDs
+2. stages implementation-owned partition artifacts beneath a temp working root
+3. refines only non-terminal partitions
+4. assembles terminal partitions into next-layer inputs
+5. repeats layer-by-layer until exactly one root remains
+6. persists only the final result blocks into the production output store
+
+### DSG-STREAM-INDEXER-003C `V3 constrained execution boundary`
+
+The first v3 slice is single-process only and provides no crash recovery or
+resume semantics.
+
+That boundary does not imply blocking-only execution: the same process may
+overlap storage work and CPU work while preserving deterministic externally
+visible results.
 
 ### DSG-STREAM-INDEXER-004 `IndexItem`
 
@@ -94,6 +116,17 @@ value contains:
 
 The public input boundary remains reference-based rather than carrying inline
 raw content bytes.
+
+### DSG-STREAM-INDEXER-004A `V3 leaf-block input boundary`
+
+The constrained v3 surface uses existing production leaf block IDs as its
+public input boundary rather than `IndexItem`.
+
+### DSG-STREAM-INDEXER-004B `V3 input validation boundary`
+
+Before v3 planning claims success for an input item, the crate validates that
+the supplied block ID resolves to a decodable leaf block whose
+`embedding_spec` matches the v3 indexing context.
 
 ### DSG-STREAM-INDEXER-005 `Dependency and policy seams`
 
@@ -119,6 +152,15 @@ The same bounded-state rule applies to implementation-owned adapters that bridge
 v2 replay ingestion into planning: conformant planning seams do not take or
 retain one full-pass decoded embedding slice, full-pass assignment vector, or
 equivalent replay-sized materialization.
+
+For the constrained v3 surface, the crate additionally owns:
+
+- ordered leaf-block membership staging beneath the temp working root
+- lower-layer child membership staging for later v3 layers
+- deterministic partition identity derivation
+- async/non-blocking storage orchestration
+- CPU-parallel processing of independent work where schedule independence is
+  preserved
 
 ### DSG-STREAM-INDEXER-006 `Built-in planning selection`
 
@@ -210,6 +252,30 @@ Public v2 planning, hierarchy, and finalization surfaces shall not require or
 return full-dataset embedding slices, partition-membership vectors, or
 equivalent dataset-sized materializations.
 
+### DSG-STREAM-INDEXER-009A `V3 locality and bounded active state`
+
+The constrained v3 surface improves locality by promoting already-terminal
+partitions out of later refinement work.
+
+Its hot memory scales with the currently active partition work set plus bounded
+pipeline buffers rather than with the full discovered partition tree.
+
+### DSG-STREAM-INDEXER-009B `V3 async I/O pipeline`
+
+The constrained v3 surface keeps storage and CPU work overlapped through
+async/await-style orchestration for storage access together with a bounded queue
+of ready CPU work.
+
+The implementation therefore keeps pending storage work and ready CPU work in
+flight together when useful, without making output ordering depend on completion
+timing.
+
+Within one active v3 partition, the prepare stage may run ahead of the oldest
+uncommitted processing stage by at most three batches.
+
+Prepared batches hold only the data needed for later deterministic processing;
+they are not semantically equivalent to already-processed batches.
+
 ### DSG-STREAM-INDEXER-010 `Caller-visible pass realization`
 
 Each completed pass over original indexing items on the v2 streaming surface
@@ -254,6 +320,15 @@ under the caller-provided directory rather than a public dataset payload.
 The implementation may rotate or window the actively mapped subregions of that
 state, but it does not rely on passive kernel eviction alone to keep planner
 memory bounded.
+
+### DSG-STREAM-INDEXER-010A `V3 terminal refinement exclusion`
+
+Once a v3 partition has become terminal for its current layer, later
+refinement of sibling or unrelated partitions no longer rereads that terminal
+partition's full membership.
+
+The crate may reread terminal partition contents only when needed to assemble
+the next layer deterministically.
 
 ### DSG-STREAM-INDEXER-011 `Pass report surface`
 
@@ -351,8 +426,9 @@ structured progress updates for:
 - final materialization progress
 - bottom-up assembly progress
 
-The v2 / published-profile `0.7.0` execution surface reuses the same observer
-contract rather than introducing a separate logging-only telemetry API.
+The v2 / published-profile `0.7.0` execution surface and the constrained v3
+surface reuse the same observer contract rather than introducing separate
+logging-only telemetry APIs.
 
 Each status update includes:
 
@@ -378,6 +454,8 @@ for:
 - `terminal_partition_count`
 - `completed_planner_invocation_count`
 - `fallback_count`
+- v3 stage identity fields when block loading/parsing, partition planning,
+  next-layer assembly, or final persistence are separately observable
 
 The current planning-unit identifier exposed through `current_partition_path`
 or an equivalent stable partition-identity field is boundary-derived metadata.
@@ -388,6 +466,11 @@ Each detail field is optional and is represented as unavailable when it is not
 relevant or not yet knowable for the current phase. Existing consumers that
 only inspect phase, lifecycle state, and coarse progress counts therefore
 remain valid.
+
+For the constrained v3 surface, in-progress updates are periodic heartbeats
+with current counts, not merely elapsed-time pings. Those counts are chosen so
+an observer can derive an honest work rate even when the final total is not yet
+knowable.
 
 For `InProgress` updates, the observer receives the latest measured completion
 state for the phase rather than a heartbeat carrying only a fixed total. If a
@@ -431,6 +514,11 @@ deterministic within one indexing context, then identical item replays, pass
 boundaries, and final materialization replay produce the same pass reports, the
 same finalized partition hierarchy, the same root block ID, and the same
 persisted block set regardless of concurrent execution schedule.
+
+For v3 specifically, deterministic outcomes require stable partition identity,
+stable child ordinals, stable membership ordering within each partition, and
+stable parent-assembly ordering independent of temp-path naming or completion
+timing.
 
 ### DSG-STREAM-INDEXER-020 `Result packaging`
 
@@ -481,6 +569,18 @@ representation before final materialization.
 The finalized partition-hierarchy surface itself remains bounded-state and shall
 not require full-dataset item-membership vectors as a public API obligation.
 
+### DSG-STREAM-INDEXER-023A `V3 partition working store`
+
+The constrained v3 surface represents pending partition membership as
+implementation-owned artifacts beneath the temp working root.
+
+Those artifacts are authoritative only within the run and are deleted on
+successful completion; they are not part of the production block-store
+contract.
+
+Each partition artifact records either ordered leaf block IDs or ordered
+lower-layer child summaries, depending on the current v3 layer.
+
 ### DSG-STREAM-INDEXER-024 `Partition identity and ancestry`
 
 Every partition in the finalized hierarchy has a deterministic identity and
@@ -495,6 +595,10 @@ boundary.
 Independent subpartition processing therefore does not change observable
 ancestry, deterministic reporting identity, or parent-child relations.
 
+For v3, child partition identities are derived from their parent's deterministic
+identity plus deterministic child ordinals, not from temp-file names or storage
+completion order.
+
 ### DSG-STREAM-INDEXER-025 `Terminal partition normalization`
 
 Terminal partitions are not required to correspond one-to-one with final branch
@@ -508,6 +612,9 @@ The crate derives a deterministic materializability bound from
 the block size target and `embedding_spec` and uses that bound to determine
 when a partition may remain terminal, must be refined further, or must be fused
 or rejected before materialization.
+
+The constrained v3 surface reuses the same bound and does not replace that
+correctness rule with a fixed partition-size constant.
 
 ### DSG-STREAM-INDEXER-027 `Hybrid planning selection`
 
@@ -525,6 +632,20 @@ realization rather than by a caller-specified coarse/fine boundary.
 Independent subpartitions may be planned or assembled concurrently, but the
 crate normalizes work ordering and output ordering so observable results remain
 schedule-independent.
+
+For the constrained v3 surface, non-trivial independent CPU-bound work defaults
+to rayon-backed parallel execution when the required deterministic reduction
+order is preserved or explicitly normalized at the output boundary.
+
+Within one active v3 partition, the implementation separates:
+
+- batch preparation, including block fetch, decode/validation, and
+  order-independent per-item transforms
+- ordered batch commit, including trainer-visible state ingestion and any
+  order-sensitive reductions or partition-emission effects
+
+The preparation stage may overlap with ordered commit for earlier batches, but
+commit remains deterministic in batch order.
 
 ### DSG-STREAM-INDEXER-029 `Phase-specific status progress semantics`
 
@@ -560,6 +681,14 @@ The observer contract defines phase-native work-unit semantics as follows:
   bottom-up layer; the total is the number of groups scheduled for
   materialization in that layer; the completed count advances as branch blocks
   for those groups are materialized.
+- v3-specific loading phases use leaf blocks or carried child summaries as the
+  unit kind, with counts advancing as staged members are loaded and validated
+  for the active partition set.
+
+For pipelined v3 execution, phase totals and completed counts track committed
+processing progress, not merely prepared future batches. Prepared-but-not-yet-
+committed batches may appear only through additive v3-specific detail rather
+than by advancing completed counts early.
 
 When a total is known, the remaining count is derived as `total - completed`.
 Within one execution of a phase, the completed count is monotonic
