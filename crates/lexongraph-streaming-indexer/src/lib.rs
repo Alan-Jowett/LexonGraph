@@ -678,6 +678,8 @@ pub type StreamingIndexingStatusObserver =
     Arc<dyn Fn(StreamingIndexingStatus) + Send + Sync + 'static>;
 
 const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
+const V2_PENDING_PARTITION_DETAIL_THRESHOLD: usize = 64;
+const V2_PENDING_PARTITION_DETAIL_LIMIT: usize = 8;
 
 // ─────────────────────────────────────────────────────────────
 // Built-in canonical-embedding policy
@@ -2053,6 +2055,12 @@ struct StreamingV2CompletedPassSnapshot {
 struct StreamingV2CompletedPassHistoryEntry {
     pass_number: usize,
     combined_fingerprint_hex: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StreamingV2PendingPartitionDetail {
+    total_pending_partition_count: usize,
+    visible_pending_partitions: Vec<StreamingV2PendingPartitionStatus>,
 }
 
 enum StreamingV2RoutingStrategy {
@@ -3658,6 +3666,52 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         Ok(depth)
     }
 
+    fn build_v2_pending_partition_status(
+        &self,
+        partition_id: PartitionId,
+        partition: &StreamingV2PartitionNode,
+        classifier_assignment_counts: &[Option<Vec<usize>>],
+    ) -> Result<Option<StreamingV2PendingPartitionStatus>, StreamingIndexerError> {
+        if let Some(trainer) = partition.pending_trainer.as_ref() {
+            let telemetry = trainer.telemetry();
+            return Ok(Some(StreamingV2PendingPartitionStatus {
+                partition_path: self.partition_label(partition_id),
+                expected_item_count: partition.item_count,
+                observed_replay_progress: telemetry.observed_count,
+                routing_bucket_fill_counts: None,
+                trainer_subphase: Some(map_v2_trainer_subphase(telemetry.subphase)),
+                ready_axis_plan_count: telemetry.ready_axis_plan_count,
+                total_axis_plan_count: telemetry.total_axis_plan_count,
+                populated_cell_count: telemetry.populated_cell_count,
+                realized_cell_count: telemetry.realized_cell_count,
+                planner_state_fingerprint_hex: encode_digest_hex(telemetry.state_fingerprint),
+            }));
+        }
+        let Some(bucket_fill_counts) = classifier_assignment_counts
+            .get(partition_id.0)
+            .and_then(|counts| counts.as_ref())
+        else {
+            return Ok(None);
+        };
+        if !partition.child_ids.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(StreamingV2PendingPartitionStatus {
+            partition_path: self.partition_label(partition_id),
+            expected_item_count: partition.item_count,
+            observed_replay_progress: Some(bucket_fill_counts.iter().sum()),
+            routing_bucket_fill_counts: Some(bucket_fill_counts.clone()),
+            trainer_subphase: None,
+            ready_axis_plan_count: None,
+            total_axis_plan_count: None,
+            populated_cell_count: None,
+            realized_cell_count: None,
+            planner_state_fingerprint_hex: hash_streaming_v2_bucket_fill_counts_hex(
+                bucket_fill_counts,
+            ),
+        }))
+    }
+
     fn v2_pending_partition_statuses(
         &self,
         classifier_assignment_counts: &[Option<Vec<usize>>],
@@ -3665,59 +3719,75 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let mut statuses = Vec::new();
         for (index, partition) in self.partitions.iter().enumerate() {
             let partition_id = PartitionId(index);
-            let partition_path = self.partition_label(partition_id);
-            if let Some(trainer) = partition.pending_trainer.as_ref() {
-                let telemetry = trainer.telemetry();
-                statuses.push(StreamingV2PendingPartitionStatus {
-                    partition_path,
-                    expected_item_count: partition.item_count,
-                    observed_replay_progress: telemetry.observed_count,
-                    routing_bucket_fill_counts: None,
-                    trainer_subphase: Some(map_v2_trainer_subphase(telemetry.subphase)),
-                    ready_axis_plan_count: telemetry.ready_axis_plan_count,
-                    total_axis_plan_count: telemetry.total_axis_plan_count,
-                    populated_cell_count: telemetry.populated_cell_count,
-                    realized_cell_count: telemetry.realized_cell_count,
-                    planner_state_fingerprint_hex: encode_digest_hex(telemetry.state_fingerprint),
-                });
-                continue;
+            if let Some(status) = self.build_v2_pending_partition_status(
+                partition_id,
+                partition,
+                classifier_assignment_counts,
+            )? {
+                statuses.push(status);
             }
-            let Some(bucket_fill_counts) = classifier_assignment_counts
-                .get(index)
-                .and_then(|counts| counts.as_ref())
-            else {
-                continue;
-            };
-            if !partition.child_ids.is_empty() {
-                continue;
-            }
-            statuses.push(StreamingV2PendingPartitionStatus {
-                partition_path,
-                expected_item_count: partition.item_count,
-                observed_replay_progress: Some(bucket_fill_counts.iter().sum()),
-                routing_bucket_fill_counts: Some(bucket_fill_counts.clone()),
-                trainer_subphase: None,
-                ready_axis_plan_count: None,
-                total_axis_plan_count: None,
-                populated_cell_count: None,
-                realized_cell_count: None,
-                planner_state_fingerprint_hex: hash_streaming_v2_bucket_fill_counts_hex(
-                    bucket_fill_counts,
-                ),
-            });
         }
         statuses.sort_by(|left, right| left.partition_path.cmp(&right.partition_path));
         Ok(statuses)
     }
 
-    fn maybe_v2_pending_partition_statuses(
+    fn v2_pending_partition_detail(
         &self,
         classifier_assignment_counts: &[Option<Vec<usize>>],
-    ) -> Result<Option<Vec<StreamingV2PendingPartitionStatus>>, StreamingIndexerError> {
+        focus_partition_id: Option<PartitionId>,
+    ) -> Result<StreamingV2PendingPartitionDetail, StreamingIndexerError> {
+        if self.partitions.len() <= V2_PENDING_PARTITION_DETAIL_THRESHOLD {
+            let visible_pending_partitions =
+                self.v2_pending_partition_statuses(classifier_assignment_counts)?;
+            return Ok(StreamingV2PendingPartitionDetail {
+                total_pending_partition_count: visible_pending_partitions.len(),
+                visible_pending_partitions,
+            });
+        }
+
+        let focus_status = match focus_partition_id {
+            Some(partition_id) => self.build_v2_pending_partition_status(
+                partition_id,
+                self.partition(partition_id)?,
+                classifier_assignment_counts,
+            )?,
+            None => None,
+        };
+        let mut total_pending_partition_count = usize::from(focus_status.is_some());
+        let mut visible_pending_partitions = focus_status.into_iter().collect::<Vec<_>>();
+        for (index, partition) in self.partitions.iter().enumerate() {
+            let partition_id = PartitionId(index);
+            if Some(partition_id) == focus_partition_id {
+                continue;
+            }
+            let Some(status) = self.build_v2_pending_partition_status(
+                partition_id,
+                partition,
+                classifier_assignment_counts,
+            )?
+            else {
+                continue;
+            };
+            total_pending_partition_count += 1;
+            if visible_pending_partitions.len() < V2_PENDING_PARTITION_DETAIL_LIMIT {
+                visible_pending_partitions.push(status);
+            }
+        }
+        Ok(StreamingV2PendingPartitionDetail {
+            total_pending_partition_count,
+            visible_pending_partitions,
+        })
+    }
+
+    fn maybe_v2_pending_partition_detail(
+        &self,
+        classifier_assignment_counts: &[Option<Vec<usize>>],
+        focus_partition_id: Option<PartitionId>,
+    ) -> Result<Option<StreamingV2PendingPartitionDetail>, StreamingIndexerError> {
         if self.observer.is_none() {
             return Ok(None);
         }
-        self.v2_pending_partition_statuses(classifier_assignment_counts)
+        self.v2_pending_partition_detail(classifier_assignment_counts, focus_partition_id)
             .map(Some)
     }
 
@@ -3826,8 +3896,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             StreamingIndexingStatusState::Started => 0,
             _ => current_pass.fingerprint.observed_count,
         };
-        let pending =
-            self.maybe_v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+        let pending = self
+            .maybe_v2_pending_partition_detail(&current_pass.classifier_assignment_counts, None)?;
         let status = build_v2_planning_pass_status(
             self.completed_passes + 1,
             state,
@@ -3870,8 +3940,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
         let current_unit_started = *unit_started;
         let elapsed = current_pass.started.elapsed();
-        let pending =
-            self.maybe_v2_pending_partition_statuses(&current_pass.classifier_assignment_counts)?;
+        let pending = self.maybe_v2_pending_partition_detail(
+            &current_pass.classifier_assignment_counts,
+            Some(partition_id),
+        )?;
         let partition = self.partition(partition_id)?;
         let mut status = status_with_hierarchy_details(
             StreamingIndexingPhase::HierarchyPlanning {
@@ -3887,7 +3959,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 progress_unit_kind: Some(
                     StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
                 ),
-                discovered_unit_count: pending.as_ref().map(Vec::len),
+                discovered_unit_count: pending
+                    .as_ref()
+                    .map(|detail| detail.total_pending_partition_count),
                 current_unit_elapsed: match state {
                     StreamingIndexingStatusState::Started => Some(Duration::ZERO),
                     _ => current_unit_started.map(|started| started.elapsed()),
@@ -4171,8 +4245,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     current_pass.started.elapsed(),
                     current_pass.last_progress_at,
                     Some("planning replay differs from the established v2 baseline".into()),
-                    self.maybe_v2_pending_partition_statuses(
+                    self.maybe_v2_pending_partition_detail(
                         &current_pass.classifier_assignment_counts,
+                        None,
                     )?,
                 );
                 emit_status(&self.observer, status);
@@ -4486,7 +4561,10 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             current_pass.started.elapsed(),
             Some(current_pass.started.elapsed()),
             None,
-            Some(pending_partitions.clone()),
+            Some(StreamingV2PendingPartitionDetail {
+                total_pending_partition_count: pending_partitions.len(),
+                visible_pending_partitions: pending_partitions.clone(),
+            }),
         );
         completed_status.v2_completed_pass_summary = Some(completed_pass_summary.clone());
         emit_status(&self.observer, completed_status);
@@ -7983,13 +8061,13 @@ fn map_v2_trainer_subphase(
 
 fn apply_v2_pending_partition_detail(
     status: &mut StreamingIndexingStatus,
-    pending_partitions: Option<Vec<StreamingV2PendingPartitionStatus>>,
+    pending_partitions: Option<StreamingV2PendingPartitionDetail>,
 ) {
     let Some(pending_partitions) = pending_partitions else {
         return;
     };
-    status.pending_partition_count = Some(pending_partitions.len());
-    status.v2_pending_partitions = Some(pending_partitions);
+    status.pending_partition_count = Some(pending_partitions.total_pending_partition_count);
+    status.v2_pending_partitions = Some(pending_partitions.visible_pending_partitions);
     status.suspected_stall = None;
 }
 
@@ -8002,7 +8080,7 @@ fn build_v2_planning_pass_status(
     elapsed: Duration,
     last_progress_at: Option<Duration>,
     error: Option<String>,
-    pending_partitions: Option<Vec<StreamingV2PendingPartitionStatus>>,
+    pending_partitions: Option<StreamingV2PendingPartitionDetail>,
 ) -> StreamingIndexingStatus {
     let mut status = match phase_total_unit_count {
         Some(total) => status_with_known_total(
@@ -10928,6 +11006,7 @@ mod tests {
     };
     use lexongraph_streaming_clustering::StreamingClusterTrainer;
     use std::marker::PhantomData;
+    use std::time::Duration;
 
     #[test]
     fn weighted_representative_embedding_uses_item_counts() {
@@ -11643,6 +11722,66 @@ mod tests {
             realized_cell_count: None,
             planner_state_fingerprint_hex: "0".repeat(64),
         }
+    }
+
+    #[test]
+    fn v2_pending_partition_detail_bounds_visible_entries_above_threshold() {
+        let mut run = make_streaming_v2_run(PUBLISHED_PROFILE_V0_7_0);
+        run.partitions = (0..=super::V2_PENDING_PARTITION_DETAIL_THRESHOLD)
+            .map(|_| StreamingV2PartitionNode {
+                parent_id: None,
+                child_ids: Vec::new(),
+                item_count: 3,
+                terminal: false,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            })
+            .collect();
+        let classifier_assignment_counts = std::iter::repeat_with(|| Some(vec![1usize, 2usize]))
+            .take(run.partitions.len())
+            .collect::<Vec<_>>();
+
+        let focus_partition_id = PartitionId(run.partitions.len() - 1);
+        let detail = run
+            .v2_pending_partition_detail(
+                classifier_assignment_counts.as_slice(),
+                Some(focus_partition_id),
+            )
+            .expect("pending detail should succeed");
+
+        assert_eq!(detail.total_pending_partition_count, run.partitions.len());
+        assert_eq!(
+            detail.visible_pending_partitions.len(),
+            super::V2_PENDING_PARTITION_DETAIL_LIMIT
+        );
+        assert_eq!(detail.visible_pending_partitions[0].partition_path, "p64");
+        assert!(
+            detail
+                .visible_pending_partitions
+                .iter()
+                .all(|status| status.observed_replay_progress == Some(3))
+        );
+
+        let status = super::build_v2_planning_pass_status(
+            1,
+            super::StreamingIndexingStatusState::InProgress,
+            None,
+            3,
+            Duration::ZERO,
+            Some(Duration::ZERO),
+            None,
+            Some(detail),
+        );
+        assert_eq!(status.pending_partition_count, Some(run.partitions.len()));
+        assert_eq!(
+            status
+                .v2_pending_partitions
+                .as_ref()
+                .expect("visible statuses should be present")
+                .len(),
+            super::V2_PENDING_PARTITION_DETAIL_LIMIT
+        );
     }
 
     #[test]

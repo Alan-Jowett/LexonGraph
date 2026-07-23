@@ -1468,6 +1468,13 @@ telemetry shall expose:
   partition remains unresolved, when knowable without material extra per-item
   instrumentation
 
+When REQ-STREAM-INDEXER-127's high-cardinality threshold is exceeded, this
+surface may replace exhaustive per-pending-partition detail with a
+deterministic reduced-detail summary derived from retained state, provided the
+observer still exposes the current pass number, current pass observed-item
+count, total pending-partition count, and enough deterministic evidence to
+distinguish replay advancement from unresolved planning work.
+
 ### REQ-STREAM-INDEXER-122
 
 The v2 intra-pass telemetry shall additionally surface explicit
@@ -1478,6 +1485,11 @@ Those indicators may summarize unchanged pass-observed counts, unchanged
 pending-partition replay progress, unchanged child-routing bucket-fill state, or
 an unchanged trainer subphase across reported intervals, but shall not claim a
 fabricated percentage-to-convergence unsupported by the retained planning state.
+
+When REQ-STREAM-INDEXER-127's reduced-detail mode is active, those indicators
+may be derived from deterministic aggregate or bounded representative
+observer-visible state, but they shall not imply unavailable per-partition
+certainty.
 
 When the strongest reason a v2 planning run remains unresolved is knowable from
 observer-visible retained state at a completed-pass boundary, the crate shall
@@ -1497,6 +1509,10 @@ That summary shall be based on observer-visible retained state and may use
 deterministic fingerprints or structured deltas, but shall not fabricate a
 percentage-to-convergence unsupported by the retained planning state.
 
+When REQ-STREAM-INDEXER-127's reduced-detail mode is active, the completed-pass
+summary may use deterministic grouped, prioritized, bounded, or
+fingerprint-based evidence instead of exhaustive per-partition listings.
+
 ### REQ-STREAM-INDEXER-124
 
 When a completed v2 planning pass cannot yet complete planning, the crate shall
@@ -1506,6 +1522,11 @@ each such partition when that evidence is knowable from retained state.
 
 If the blocker is not knowable from the retained state, the summary shall
 represent that uncertainty explicitly rather than guessing.
+
+When REQ-STREAM-INDEXER-127's reduced-detail mode is active, the blocker summary
+may expose deterministic grouped or prioritized blocker evidence instead of an
+exhaustive per-partition listing, provided it still preserves explicit
+uncertainty when stronger attribution is unavailable.
 
 ### REQ-STREAM-INDEXER-125
 
@@ -1518,6 +1539,31 @@ explicit field deltas covering at least pending partitions, terminal or routed
 partitions when present, and any topology or planner-visible unresolved state
 whose change or non-change is required to distinguish advancement, stalling, or
 cycling across passes.
+
+When REQ-STREAM-INDEXER-127's reduced-detail mode is active, that delta
+evidence may use deterministic aggregate counts, grouped summaries, bounded
+representative evidence, or fingerprints instead of exhaustive
+partition-by-partition deltas.
+
+### REQ-STREAM-INDEXER-127
+
+When the v2 / published-profile `0.7.0` execution surface's retained partition
+hierarchy count exceeds `64`, the implementation may switch observer-visible v2
+telemetry into a deterministic reduced-detail mode.
+
+That threshold is repository-owned rather than caller-configurable in this
+revision.
+
+Reduced-detail mode:
+
+- shall be triggered from retained hierarchy state rather than from
+  host-resource sampling or wall-clock heuristics
+- shall preserve the existing structured observer API shape
+- shall not change replay validation semantics, pass-completion semantics,
+  finalized hierarchy semantics, or final indexing outputs for successful runs
+- may bound hot-path status materialization by omitting exhaustive
+  per-partition detail in favor of deterministic summaries or bounded
+  representative evidence
 
 ### REQ-STREAM-INDEXER-126
 

@@ -949,7 +949,12 @@ observed replay or child-bucket progress when those quantities are knowable,
 and each active partition's coarse directional-PCA trainer subphase. Any
 explicit suspected-stall indication is derived from unchanged observer-visible
 state across reported intervals rather than from host-resource sampling or a
-fabricated percentage-to-convergence.
+fabricated percentage-to-convergence. When the retained hierarchy partition
+count exceeds REQ-STREAM-INDEXER-127's threshold, the observer may emit a
+deterministic reduced-detail payload instead of exhaustive per-partition detail,
+provided the payload still reports the total pending-partition count and enough
+deterministic evidence to distinguish replay advancement from unresolved
+planning work.
 
 **Traces to:** REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-120,
 REQ-STREAM-INDEXER-121, REQ-STREAM-INDEXER-122
@@ -967,7 +972,9 @@ Capture the completed-pass telemetry summaries and compare pass `N` with pass
 convergence evidence sufficient for a downstream caller to classify whether the
 unresolved planning state shrank, changed shape, remained effectively
 unchanged, or repeated a prior completed-pass state, without relying on
-free-form logs or a fabricated percentage-to-convergence.
+free-form logs or a fabricated percentage-to-convergence. Above
+REQ-STREAM-INDEXER-127's threshold, that evidence may be grouped, bounded, or
+fingerprint-based instead of exhaustive per-partition listings.
 
 **Traces to:** REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039,
 REQ-STREAM-INDEXER-123, REQ-STREAM-INDEXER-125
@@ -985,6 +992,9 @@ Inspect the completed-pass blocker summary.
 strongest retained-state blocker evidence that still prevents planning
 completion when that evidence is knowable. If stronger attribution is not
 knowable, the summary marks that uncertainty explicitly rather than guessing.
+Above REQ-STREAM-INDEXER-127's threshold, the summary may use deterministic
+grouped or prioritized blocker evidence instead of an exhaustive per-partition
+listing.
 
 **Traces to:** REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-122,
 REQ-STREAM-INDEXER-124
@@ -997,7 +1007,8 @@ completed-pass delta or fingerprint summaries across the repeated executions.
 **Pass condition:** the pass-to-pass fingerprints, explicit deltas, repeated
 state detection, and any surfaced topology or unresolved-partition comparison
 artifacts are deterministic across repeated identical runs and do not require
-string-keyed hot-path retained state.
+string-keyed hot-path retained state. Above REQ-STREAM-INDEXER-127's threshold,
+reduced-detail grouped or bounded comparison artifacts remain deterministic.
 
 **Traces to:** REQ-STREAM-INDEXER-120, REQ-STREAM-INDEXER-123,
 REQ-STREAM-INDEXER-125

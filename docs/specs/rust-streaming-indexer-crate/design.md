@@ -1317,6 +1317,12 @@ progress, unchanged child-bucket fill, or an unchanged trainer subphase. This
 indicator is descriptive of observable non-advancement; it is not a fabricated
 percentage-to-convergence.
 
+When DSG-STREAM-INDEXER-119A's high-cardinality mode is inactive, the observer
+may surface exhaustive pending-partition detail. When that mode is active, the
+observer may replace exhaustive per-partition listings with deterministic
+reduced-detail summaries or bounded representative evidence while preserving the
+same structured status payload shape.
+
 When a completed pass leaves unresolved partitions, the same observer-derived
 detail surface may additionally expose explicit blocker evidence naming the
 unresolved partition and the strongest retained-state reason known at that
@@ -1337,6 +1343,10 @@ This classification is evidence-based. It is expressed through deterministic
 field deltas and/or fingerprints over unresolved planning state rather than a
 fabricated percentage-to-convergence.
 
+When DSG-STREAM-INDEXER-119A's high-cardinality mode is active, the convergence
+summary may prefer grouped, bounded, or fingerprint-based evidence over
+exhaustive per-partition listings.
+
 ### DSG-STREAM-INDEXER-118 `V2 unresolved-partition blocker attribution`
 
 When a completed v2 pass cannot mark planning complete, the implementation
@@ -1350,6 +1360,10 @@ boundary.
 
 If the retained state does not support stronger attribution, the summary
 surfaces that uncertainty explicitly instead of guessing.
+
+When DSG-STREAM-INDEXER-119A's high-cardinality mode is active, the blocker
+summary may expose deterministic grouped or prioritized blocker evidence rather
+than an exhaustive per-partition listing.
 
 ### DSG-STREAM-INDEXER-119 `V2 pass-to-pass fingerprints and deltas`
 
@@ -1369,6 +1383,21 @@ both, covering at least:
 The implementation may retain a bounded in-memory history of completed-pass
 fingerprints so a caller can detect immediate repeats or longer cycles without
 requiring unbounded retained telemetry state.
+
+### DSG-STREAM-INDEXER-119A `Thresholded high-cardinality observability`
+
+The v2 / published-profile `0.7.0` observer path uses a repository-owned
+high-cardinality threshold of `64` retained hierarchy partitions.
+
+Above that threshold, frequent observer updates may switch to a deterministic
+reduced-detail mode that bounds hot-path status materialization cost by
+avoiding exhaustive partition-label formatting, full pending-partition
+vectorization, and equivalent all-partition observer payload construction on
+every intra-pass emission.
+
+This trigger is derived from retained hierarchy state rather than host-resource
+sampling, paging signals, or wall-clock heuristics, so repeated identical runs
+choose the same detail mode.
 
 ### DSG-STREAM-INDEXER-120 `V2 planner-state failure retention`
 
