@@ -3343,7 +3343,6 @@ impl AsRef<Path> for PlannerStateRoot {
     }
 }
 
-<<<<<<< HEAD
 impl PlannerStateScratchDir {
     fn new(
         parent: impl AsRef<Path>,
@@ -5876,7 +5875,6 @@ fn annotate_v2_failure_summary_write_error(
         other => other,
     }
 }
-
 fn format_v2_classifier_routing_debug_state(
     telemetry: DirectionalPcaTrainerTelemetry,
     realized_cluster_count: usize,
