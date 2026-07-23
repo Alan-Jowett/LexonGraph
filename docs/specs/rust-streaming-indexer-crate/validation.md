@@ -491,6 +491,18 @@ resident materialization of the full run state.
 
 **Traces to:** REQ-STREAM-INDEXER-017A
 
+### VAL-STREAM-INDEXER-025I
+
+Inspect or execute one constrained v3 partition-processing path large enough to
+exercise intra-partition batch pipelining.
+
+**Pass condition:** the implementation bounds prepared-but-not-yet-committed
+future batches to a lead window of at most three, and that prepared-batch state
+does not grow with total partition size beyond the current batch plus that
+fixed lookahead.
+
+**Traces to:** REQ-STREAM-INDEXER-017A, REQ-STREAM-INDEXER-037
+
 ### VAL-STREAM-INDEXER-025F
 
 Attempt to construct a v2 run without a planner-state root, and again with a
@@ -689,6 +701,18 @@ work where determinism permits, and no dependence of the final externally
 visible result on the overlap schedule itself.
 
 **Traces to:** REQ-STREAM-INDEXER-037
+
+### VAL-STREAM-INDEXER-036B
+
+Capture the observer stream for a constrained v3 fixture whose batch
+preparation leads processing by at least one batch.
+
+**Pass condition:** status `completed_unit_count` advances only when a batch's
+processing effects have been deterministically committed, not merely when a
+future batch has been fetched, decoded, or otherwise prepared, and any v3-
+specific prepared-batch detail does not masquerade as completed work.
+
+**Traces to:** REQ-STREAM-INDEXER-039
 
 ### VAL-STREAM-INDEXER-037
 

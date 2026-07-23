@@ -270,6 +270,12 @@ The implementation therefore keeps pending storage work and ready CPU work in
 flight together when useful, without making output ordering depend on completion
 timing.
 
+Within one active v3 partition, the prepare stage may run ahead of the oldest
+uncommitted processing stage by at most three batches.
+
+Prepared batches hold only the data needed for later deterministic processing;
+they are not semantically equivalent to already-processed batches.
+
 ### DSG-STREAM-INDEXER-010 `Caller-visible pass realization`
 
 Each completed pass over original indexing items on the v2 streaming surface
@@ -631,6 +637,16 @@ For the constrained v3 surface, non-trivial independent CPU-bound work defaults
 to rayon-backed parallel execution when the required deterministic reduction
 order is preserved or explicitly normalized at the output boundary.
 
+Within one active v3 partition, the implementation separates:
+
+- batch preparation, including block fetch, decode/validation, and
+  order-independent per-item transforms
+- ordered batch commit, including trainer-visible state ingestion and any
+  order-sensitive reductions or partition-emission effects
+
+The preparation stage may overlap with ordered commit for earlier batches, but
+commit remains deterministic in batch order.
+
 ### DSG-STREAM-INDEXER-029 `Phase-specific status progress semantics`
 
 The observer contract defines phase-native work-unit semantics as follows:
@@ -668,6 +684,11 @@ The observer contract defines phase-native work-unit semantics as follows:
 - v3-specific loading phases use leaf blocks or carried child summaries as the
   unit kind, with counts advancing as staged members are loaded and validated
   for the active partition set.
+
+For pipelined v3 execution, phase totals and completed counts track committed
+processing progress, not merely prepared future batches. Prepared-but-not-yet-
+committed batches may appear only through additive v3-specific detail rather
+than by advancing completed counts early.
 
 When a total is known, the remaining count is derived as `total - completed`.
 Within one execution of a phase, the completed count is monotonic

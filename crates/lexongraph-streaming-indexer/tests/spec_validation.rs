@@ -6212,6 +6212,14 @@ fn val_stream_indexer_025h_v3_hot_state_is_bounded_to_active_partitions_and_buff
 }
 
 #[test]
+fn val_stream_indexer_025i_v3_prepare_pipeline_uses_fixed_lookahead_three() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("const V3_PREPARED_BATCH_LOOKAHEAD: usize = 3;"));
+    assert!(src.contains("run_prepared_batch_pipeline("));
+    assert!(src.contains("v3_prepare_pipeline_caps_future_batch_lead_at_three"));
+}
+
+#[test]
 fn val_stream_indexer_034a_v3_partition_identity_is_schedule_independent() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("format!(\"l{layer_index}.p0\")"));
@@ -6224,4 +6232,13 @@ fn val_stream_indexer_036a_v3_overlaps_storage_and_cpu_work() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains(".buffered(V3_IO_QUEUE_DEPTH)"));
     assert!(src.contains(".into_par_iter()") || src.contains(".par_iter()"));
+}
+
+#[test]
+fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("run_v3_partition_load_phase("));
+    assert!(src.contains("StreamingIndexingStatusState::Completed"));
+    assert!(src.contains("progress.load(AtomicOrdering::Relaxed)"));
+    assert!(src.contains("total_items,\n                        total_items,"));
 }

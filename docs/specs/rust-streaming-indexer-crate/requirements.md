@@ -347,6 +347,9 @@ Transient pipeline buffers may support overlapped storage and CPU work, but
 they shall not grow with the total discovered partition count or become a
 hidden full-run resident materialization.
 
+Within one active v3 partition, prepared-but-not-yet-committed future batches
+may lead the oldest uncommitted processing batch by at most three batches.
+
 ### REQ-STREAM-INDEXER-018
 
 The core streaming indexer shall own the protocol-required orchestration, leaf
@@ -856,6 +859,13 @@ For the constrained v3 surface:
 - the implementation should keep both pending storage work and ready CPU work
   in flight when work exists, without changing deterministic externally visible
   results
+- within one active partition, batch preparation may overlap with processing of
+  earlier batches, but the prepare-ahead window shall be bounded to at most
+  three future batches
+- within one active partition, trainer-visible state updates, order-sensitive
+  floating-point reductions, and deterministic child-partition emission shall
+  commit in deterministic batch order even when later batches have already been
+  prepared
 
 ### REQ-STREAM-INDEXER-038
 
@@ -890,6 +900,8 @@ for the progress-count fields exposed to the status observer, including:
 - for v3, what counts and elapsed-time fields let a downstream caller derive an
   honest throughput or progress-rate estimate without fabricating a completion
   percentage when totals are not yet knowable
+- for v3, how prepared-but-not-yet-committed batches are distinguished from
+  batches whose processing effects have already been committed
 
 These semantics shall be phase-specific for at least:
 
