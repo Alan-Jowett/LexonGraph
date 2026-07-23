@@ -509,6 +509,7 @@ impl StreamingIndexingRunV3 {
             .collect::<Vec<_>>();
         let used_fallback = non_empty.len() <= 1;
         if used_fallback {
+            remove_partition_files(child_paths.as_slice())?;
             let fallback_groups =
                 fallback_partition_groups(partition.item_count, materializability_bound, None)
                     .map_err(|error| {
@@ -1465,11 +1466,17 @@ impl BlockHashPartitionReader {
         let mut batch = Vec::with_capacity(batch_size);
         for _ in 0..batch_size {
             let mut bytes = [0u8; BlockHash::LEN];
-            match self.reader.read_exact(&mut bytes) {
-                Ok(()) => batch.push(BlockHash::from_bytes(bytes)),
+            match self.reader.read_exact(&mut bytes[..1]) {
+                Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(error) => return Err(StreamingIndexerError::LocalSpill(error.to_string())),
             }
+            if let Err(error) = self.reader.read_exact(&mut bytes[1..]) {
+                return Err(StreamingIndexerError::LocalSpill(format!(
+                    "truncated v3 block-id partition ended mid-hash: {error}"
+                )));
+            }
+            batch.push(BlockHash::from_bytes(bytes));
         }
         if batch.is_empty() {
             Ok(None)
@@ -1610,6 +1617,22 @@ fn write_indexed_child_partition(
         .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))
 }
 
+fn remove_partition_files(paths: &[PathBuf]) -> Result<(), StreamingIndexerError> {
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(StreamingIndexerError::LocalSpill(format!(
+                    "could not remove stale v3 partition file {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn read_all_block_hashes(path: &Path) -> Result<Vec<BlockHash>, StreamingIndexerError> {
     let mut reader = BlockHashPartitionReader::open(path)?;
     let mut all = Vec::new();
@@ -1722,6 +1745,7 @@ fn rewrite_indexed_child_partition_with_assignments(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::io::Write;
     use std::sync::Mutex;
     use std::sync::atomic::Ordering;
 
@@ -1804,7 +1828,7 @@ mod tests {
         store.put(&block).await.unwrap()
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn v3_rejects_empty_input() {
         let working_root = tempfile::tempdir().unwrap();
         let mut run = StreamingIndexingRunV3::with_published_profile(
@@ -1819,7 +1843,7 @@ mod tests {
         assert!(matches!(error, StreamingIndexerError::EmptyInput));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn v3_rejects_non_leaf_input() {
         let working_root = tempfile::tempdir().unwrap();
         let source = MemoryBlockStore::default();
@@ -1862,7 +1886,7 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn v3_is_deterministic_and_cleans_up_successfully() {
         let parent = tempfile::tempdir().unwrap();
         let source = MemoryBlockStore::default();
@@ -1900,7 +1924,7 @@ mod tests {
         assert!(std::fs::read_dir(parent.path()).unwrap().next().is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn v3_observer_reports_partition_load_phase() {
         let parent = tempfile::tempdir().unwrap();
         let source = MemoryBlockStore::default();
@@ -1936,7 +1960,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn v3_load_failure_emits_failed_status() {
         let parent = tempfile::tempdir().unwrap();
         let source = MemoryBlockStore::default();
@@ -1965,6 +1989,23 @@ mod tests {
             matches!(status.phase, StreamingIndexingPhase::V3PartitionLoad { .. })
                 && status.state == StreamingIndexingStatusState::Failed
         }));
+    }
+
+    #[test]
+    fn v3_block_hash_partition_reader_rejects_truncated_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("truncated.leafids");
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(&[0u8; BlockHash::LEN / 2]).unwrap();
+        file.flush().unwrap();
+
+        let mut reader = BlockHashPartitionReader::open(&path).unwrap();
+        let error = reader.next_batch(1).unwrap_err();
+        assert!(matches!(
+            error,
+            StreamingIndexerError::LocalSpill(message)
+                if message.contains("truncated v3 block-id partition ended mid-hash")
+        ));
     }
 
     #[test]

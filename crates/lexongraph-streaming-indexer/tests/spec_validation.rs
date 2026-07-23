@@ -6197,6 +6197,10 @@ fn val_stream_indexer_023a_v3_observer_surface_reports_partition_load_progress()
     let src = include_str!("../src/v3.rs");
     let lib = include_str!("../src/lib.rs");
     assert!(src.contains("StreamingIndexingPhase::V3PartitionLoad"));
+    assert!(src.contains(
+        "StreamingIndexingPhase::HierarchyPlanning {\n            stage: PlanningStage::Custom,"
+    ));
+    assert!(src.contains("StreamingIndexingPhase::BottomUpAssembly { layer_index }"));
     assert!(src.contains("start_status_heartbeat("));
     assert!(lib.contains("V3PartitionLoad { layer_index: usize }"));
     assert!(lib.contains("V3LoadItem"));
