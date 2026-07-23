@@ -197,6 +197,11 @@ deterministic Greenwald-Khanna directional-PCA quantile path may complete from
 bounded replay-order summaries without writing per-axis quantile spill beneath
 that root.
 
+The same planner-state root may also host compact replay-acceleration spill for
+already-fixed routing decisions or equivalent derived state when later
+replay-driven phases would otherwise re-apply the same PCA transform or repeat
+equivalent partition-routing work.
+
 When such state is mmap-backed, the implementation actively manages residency
 for inactive regions through a cross-platform abstraction whose per-target
 backends may use native primitives such as `madvise`, so the planner's resident
@@ -305,6 +310,11 @@ The final materialization flow does not depend on whether the retained
 partition hierarchy was derived through built-in `Divisive` or
 `Agglomerative` planning.
 
+Compact replay-acceleration spill under the planner-state root is distinct from
+the terminal-partition materialization spill: the former stores only compact
+derived routing aids in replay order, while the latter stages full leaf inputs
+for bottom-up block assembly after planning completion.
+
 ### DSG-STREAM-INDEXER-014 `Higher-layer realization`
 
 Once leaves have been materialized and bound to terminal partitions, the crate
@@ -313,6 +323,10 @@ partition hierarchy rather than by further caller replay of the original items.
 
 The temporary spill is an implementation detail; block construction and
 higher-layer assembly remain crate-owned.
+
+Any replay-acceleration spill used before or during this higher-layer
+realization remains replay-subordinate, deterministic for identical input, and
+bounded by a compact per-item footprint rather than item payload size.
 
 Any clustering used to derive or refine that hierarchy before planning
 completion in either built-in direction still flows through the shared
@@ -1451,7 +1465,7 @@ from other populated cells.
 | DSG-STREAM-INDEXER-001 | REQ-STREAM-INDEXER-002 |
 | DSG-STREAM-INDEXER-002 | REQ-STREAM-INDEXER-003 |
 | DSG-STREAM-INDEXER-003..004 | REQ-STREAM-INDEXER-001, REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-004A, REQ-STREAM-INDEXER-005, REQ-STREAM-INDEXER-006, REQ-STREAM-INDEXER-007 |
-| DSG-STREAM-INDEXER-003A | REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021F |
+| DSG-STREAM-INDEXER-003A | REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021I |
 | DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043, REQ-STREAM-INDEXER-044 |
 | DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021G, REQ-STREAM-INDEXER-021H |

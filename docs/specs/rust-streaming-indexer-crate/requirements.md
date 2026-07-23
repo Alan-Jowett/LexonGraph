@@ -151,6 +151,12 @@ When the selected directional-PCA quantile realization uses deterministic
 Greenwald-Khanna summaries, that path shall not require per-axis quantile spill
 capture or replay beneath the planner-state root.
 
+The same planner-state root may additionally hold deterministic compact replay-
+acceleration spill that avoids repeated PCA application or equivalent repeated
+partition-routing recomputation during replay-driven planning, hierarchy
+realization, or final materialization, provided that spill remains subordinate
+to the caller-visible replay lifecycle.
+
 ### REQ-STREAM-INDEXER-005
 
 The caller-visible streaming indexing API shall accept a non-empty ordered
@@ -426,6 +432,10 @@ revision. During planning, planner-managed mmap-backed or equivalent out-of-core
 state is conformant only when it is part of the documented v2 contract,
 subordinate to caller-visible replay, and not a hidden replacement for it.
 
+Compact replay-acceleration spill is conformant only when it stores derived
+routing/projection state rather than full items, raw content, or full
+embeddings.
+
 ### REQ-STREAM-INDEXER-021E
 
 The v2 conformant planning boundary shall realize hierarchy derivation through
@@ -438,6 +448,17 @@ hierarchy under those constraints, it shall surface deterministic readiness or
 progress state rather than silently retaining a full-pass decoded embedding
 table, full-pass assignment vector, or equivalent implementation-owned replay
 materialization.
+
+### REQ-STREAM-INDEXER-021F
+
+Any compact replay-acceleration spill used to avoid repeated PCA application or
+equivalent routing recomputation shall scale as a compact function of replayed
+item count rather than item payload size.
+
+For this revision, the intended budget is on the order of a few bytes per item
+(for example roughly 2-4 bytes per item), and item-scale spill such as storing
+full content bodies, kilobyte-scale item records, or full embedding payloads is
+non-conformant.
 
 ### REQ-STREAM-INDEXER-021G
 
@@ -460,7 +481,7 @@ caller-provided planner-state root, that state shall be:
 Construction of a v2 run shall fail explicitly when the caller omits the
 planner-state root or when the supplied root is unusable for the planner's
 required out-of-core state model.
-### REQ-STREAM-INDEXER-021F
+### REQ-STREAM-INDEXER-021I
 
 The crate shall support incremental migration from the v1 compatibility surface
 to the v2 streaming surface.

@@ -1971,6 +1971,7 @@ struct PartitionSpillDirectory {
 const V2_PLANNER_STATE_WINDOW_BYTES: usize = 1024 * 1024;
 const V2_MMAP_ALLOCATION_GRANULARITY: u64 = 64 * 1024;
 const V2_PLANNER_STATE_VALUE_BYTES: usize = std::mem::size_of::<f32>();
+const V2_ROUTING_CACHE_VALUE_BYTES: usize = std::mem::size_of::<u32>();
 struct StreamingV2QuantilePlannerState {
     quantile_pass: Option<StreamingV2QuantilePassFiles>,
     dir: PlannerStateScratchDir,
@@ -1997,6 +1998,36 @@ struct WindowedMmapF32Reader {
     map_len: usize,
 }
 
+struct BufferedU32Writer {
+    writer: BufWriter<File>,
+    total_values: usize,
+    written_values: usize,
+}
+
+struct WindowedMmapU32Reader {
+    file: File,
+    total_values: usize,
+    read_values: usize,
+    map: Option<Mmap>,
+    map_start: u64,
+    map_len: usize,
+}
+
+struct StreamingV2ClassifierRoutingCacheWriter {
+    final_path: PathBuf,
+    temp_path: PathBuf,
+    writer: BufferedU32Writer,
+}
+
+enum StreamingV2ClassifierRoutingCacheMode {
+    Reader(WindowedMmapU32Reader),
+    Writer(StreamingV2ClassifierRoutingCacheWriter),
+}
+
+struct StreamingV2ClassifierRoutingCacheState {
+    mode: StreamingV2ClassifierRoutingCacheMode,
+}
+
 #[derive(Clone)]
 struct StreamingV2ReplayFingerprint {
     observed_count: usize,
@@ -2012,6 +2043,7 @@ struct StreamingV2PassState {
     fingerprint: StreamingV2ReplayFingerprintTracker,
     replay_order_offsets: Vec<usize>,
     directional_pca_replay_states: Vec<Option<DirectionalPcaReplayState>>,
+    classifier_routing_caches: Vec<Option<StreamingV2ClassifierRoutingCacheState>>,
     classifier_assignment_counts: Vec<Option<Vec<usize>>>,
     started: Instant,
     last_progress_at: Option<Duration>,
@@ -4038,9 +4070,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                         current_pass.ensure_partition_capacity(self.partitions.len());
                         Self::route_planning_target_in_partitions(
                             &self.partitions,
+                            &self.planner_state_root,
                             decoded.as_slice(),
                             current_pass.replay_order_offsets.as_mut_slice(),
                             current_pass.directional_pca_replay_states.as_mut_slice(),
+                            current_pass.classifier_routing_caches.as_mut_slice(),
                             current_pass.classifier_assignment_counts.as_mut_slice(),
                         )?
                     };
@@ -4463,6 +4497,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             }
         }
 
+        self.finish_classifier_routing_cache_states(
+            current_pass.classifier_routing_caches.as_mut_slice(),
+        )?;
         planning_heartbeat.stop();
         self.completed_passes += 1;
         let topology = self.current_topology();
@@ -4612,6 +4649,8 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         let mut fingerprint = StreamingV2ReplayFingerprintTracker::new();
         let mut replay_order_offsets = vec![0; self.partitions.len()];
         let mut directional_pca_replay_states = vec![None; self.partitions.len()];
+        let mut classifier_routing_caches = Vec::with_capacity(self.partitions.len());
+        classifier_routing_caches.resize_with(self.partitions.len(), || None);
         let mut replay_count = 0usize;
         let mut persisted_ids = Vec::new();
         let mut spill = PartitionSpillDirectory::new(terminal_partition_ids.len())?;
@@ -4642,6 +4681,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     decoded.as_slice(),
                     replay_order_offsets.as_mut_slice(),
                     directional_pca_replay_states.as_mut_slice(),
+                    classifier_routing_caches.as_mut_slice(),
                 )?;
                 let partition_ordinal = terminal_ordinals
                     .get(terminal_id.0)
@@ -4699,6 +4739,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 "finalization replay differs from the established v2 baseline".into(),
             ));
         }
+        self.finish_classifier_routing_cache_states(classifier_routing_caches.as_mut_slice())?;
 
         let spill = spill.finish()?;
         let mut materialized_terminal_children = vec![None; self.partitions.len()];
@@ -4925,9 +4966,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
 
     fn route_planning_target_in_partitions(
         partitions: &[StreamingV2PartitionNode],
+        planner_state_root: &PlannerStateRoot,
         embedding: &[f32],
         replay_order_offsets: &mut [usize],
         directional_pca_replay_states: &mut [Option<DirectionalPcaReplayState>],
+        classifier_routing_caches: &mut [Option<StreamingV2ClassifierRoutingCacheState>],
         classifier_assignment_counts: &mut [Option<Vec<usize>>],
     ) -> Result<Option<PartitionId>, StreamingIndexerError> {
         if partitions.is_empty() {
@@ -4963,25 +5006,27 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                 format_partition_label(partitions, current)
                             ))
                         })?;
-                    let cluster_id = if let Some(replay_state) = replay_state.as_mut() {
-                        classifier
-                            .replay_assign(embedding, replay_state)
-                            .map_err(map_clustering_error)?
-                    } else if let Some(state) = classifier.new_replay_state() {
-                        *replay_state = Some(state);
-                        classifier
-                            .replay_assign(
-                                embedding,
-                                replay_state.as_mut().expect("state inserted"),
-                            )
-                            .map_err(map_clustering_error)?
+                    let cache_state =
+                        classifier_routing_caches
+                            .get_mut(current.0)
+                            .ok_or_else(|| {
+                                StreamingIndexerError::HierarchyValidation(format!(
+                                    "partition {:?} is missing classifier routing cache state",
+                                    format_partition_label(partitions, current)
+                                ))
+                            })?;
+                    let cache_state = if let Some(cache_state) = cache_state.as_mut() {
+                        cache_state
                     } else {
-                        classifier.assign(embedding).map_err(map_clustering_error)?
+                        *cache_state = Some(StreamingV2ClassifierRoutingCacheState::open(
+                            planner_state_root,
+                            current,
+                            partition.item_count,
+                        )?);
+                        cache_state.as_mut().expect("routing cache state inserted")
                     };
-                    usize::try_from(cluster_id).map_err(|_| {
-                        StreamingIndexerError::HierarchyValidation(
-                            "classifier cluster id does not fit into usize".into(),
-                        )
+                    cache_state.next_child_index(|| {
+                        Self::route_classifier_child_index(classifier, embedding, replay_state)
                     })?
                 }
                 StreamingV2RoutingStrategy::ReplayOrder(plan) => {
@@ -5049,6 +5094,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         embedding: &[f32],
         replay_order_offsets: &mut [usize],
         directional_pca_replay_states: &mut [Option<DirectionalPcaReplayState>],
+        classifier_routing_caches: &mut [Option<StreamingV2ClassifierRoutingCacheState>],
     ) -> Result<PartitionId, StreamingIndexerError> {
         let mut current = ROOT_PARTITION_ID;
         loop {
@@ -5078,25 +5124,27 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                                 self.partition_label(current)
                             ))
                         })?;
-                    let cluster_id = if let Some(replay_state) = replay_state.as_mut() {
-                        classifier
-                            .replay_assign(embedding, replay_state)
-                            .map_err(map_clustering_error)?
-                    } else if let Some(state) = classifier.new_replay_state() {
-                        *replay_state = Some(state);
-                        classifier
-                            .replay_assign(
-                                embedding,
-                                replay_state.as_mut().expect("state inserted"),
-                            )
-                            .map_err(map_clustering_error)?
+                    let cache_state =
+                        classifier_routing_caches
+                            .get_mut(current.0)
+                            .ok_or_else(|| {
+                                StreamingIndexerError::HierarchyValidation(format!(
+                                    "partition {:?} is missing classifier routing cache state",
+                                    self.partition_label(current)
+                                ))
+                            })?;
+                    let cache_state = if let Some(cache_state) = cache_state.as_mut() {
+                        cache_state
                     } else {
-                        classifier.assign(embedding).map_err(map_clustering_error)?
+                        *cache_state = Some(StreamingV2ClassifierRoutingCacheState::open(
+                            &self.planner_state_root,
+                            current,
+                            partition.item_count,
+                        )?);
+                        cache_state.as_mut().expect("routing cache state inserted")
                     };
-                    usize::try_from(cluster_id).map_err(|_| {
-                        StreamingIndexerError::HierarchyValidation(
-                            "classifier cluster id does not fit into usize".into(),
-                        )
+                    cache_state.next_child_index(|| {
+                        Self::route_classifier_child_index(classifier, embedding, replay_state)
                     })?
                 }
                 StreamingV2RoutingStrategy::ReplayOrder(plan) => {
@@ -5125,6 +5173,40 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     ))
                 })?;
         }
+    }
+
+    fn route_classifier_child_index(
+        classifier: &DirectionalPcaStreamingClassifier,
+        embedding: &[f32],
+        replay_state: &mut Option<DirectionalPcaReplayState>,
+    ) -> Result<usize, StreamingIndexerError> {
+        let cluster_id = if let Some(replay_state) = replay_state.as_mut() {
+            classifier
+                .replay_assign(embedding, replay_state)
+                .map_err(map_clustering_error)?
+        } else if let Some(state) = classifier.new_replay_state() {
+            *replay_state = Some(state);
+            classifier
+                .replay_assign(embedding, replay_state.as_mut().expect("state inserted"))
+                .map_err(map_clustering_error)?
+        } else {
+            classifier.assign(embedding).map_err(map_clustering_error)?
+        };
+        usize::try_from(cluster_id).map_err(|_| {
+            StreamingIndexerError::HierarchyValidation(
+                "classifier cluster id does not fit into usize".into(),
+            )
+        })
+    }
+
+    fn finish_classifier_routing_cache_states(
+        &self,
+        classifier_routing_caches: &mut [Option<StreamingV2ClassifierRoutingCacheState>],
+    ) -> Result<(), StreamingIndexerError> {
+        for cache_state in classifier_routing_caches.iter_mut().flatten() {
+            cache_state.finish()?;
+        }
+        Ok(())
     }
 
     #[async_recursion(?Send)]
@@ -5387,6 +5469,7 @@ impl StreamingV2PassState {
             fingerprint: StreamingV2ReplayFingerprintTracker::new(),
             replay_order_offsets: Vec::new(),
             directional_pca_replay_states: Vec::new(),
+            classifier_routing_caches: Vec::new(),
             classifier_assignment_counts: Vec::new(),
             started: Instant::now(),
             last_progress_at: None,
@@ -5402,6 +5485,10 @@ impl StreamingV2PassState {
         }
         if self.directional_pca_replay_states.len() < partition_count {
             self.directional_pca_replay_states
+                .resize_with(partition_count, || None);
+        }
+        if self.classifier_routing_caches.len() < partition_count {
+            self.classifier_routing_caches
                 .resize_with(partition_count, || None);
         }
         if self.classifier_assignment_counts.len() < partition_count {
@@ -10345,6 +10432,244 @@ impl WindowedMmapF32Reader {
     }
 }
 
+impl BufferedU32Writer {
+    fn create(path: &Path, total_values: usize, window_bytes: usize) -> Result<Self, String> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|error| {
+                format!(
+                    "could not create routing cache file {}: {error}",
+                    path.display()
+                )
+            })?;
+        let total_bytes = u64::try_from(total_routing_cache_byte_len(total_values)?)
+            .map_err(|_| "routing cache file length overflowed".to_string())?;
+        file.set_len(total_bytes).map_err(|error| {
+            format!(
+                "could not size routing cache file {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            writer: BufWriter::with_capacity(window_bytes.max(V2_ROUTING_CACHE_VALUE_BYTES), file),
+            total_values,
+            written_values: 0,
+        })
+    }
+
+    fn write_u32(&mut self, value: u32) -> Result<(), String> {
+        if self.written_values >= self.total_values {
+            return Err("routing cache received more values than expected".into());
+        }
+        self.writer
+            .write_all(&value.to_le_bytes())
+            .map_err(|error| format!("could not write routing cache value: {error}"))?;
+        self.written_values += 1;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if self.written_values != self.total_values {
+            return Err(format!(
+                "routing cache captured {} values but expected {}",
+                self.written_values, self.total_values
+            ));
+        }
+        self.writer
+            .flush()
+            .map_err(|error| format!("could not flush routing cache writer: {error}"))
+    }
+}
+
+impl WindowedMmapU32Reader {
+    fn open(path: &Path, total_values: usize) -> Result<Self, String> {
+        let file = File::open(path).map_err(|error| {
+            format!(
+                "could not open routing cache file {}: {error}",
+                path.display()
+            )
+        })?;
+        validate_routing_cache_file_length(path, &file, total_values)?;
+        Ok(Self {
+            file,
+            total_values,
+            read_values: 0,
+            map: None,
+            map_start: 0,
+            map_len: 0,
+        })
+    }
+
+    fn read_u32(&mut self) -> Result<u32, String> {
+        if self.read_values >= self.total_values {
+            return Err("routing cache contained fewer values than the replay consumed".into());
+        }
+        let byte_offset = self
+            .read_values
+            .checked_mul(V2_ROUTING_CACHE_VALUE_BYTES)
+            .ok_or_else(|| "routing cache read offset overflowed".to_string())?;
+        self.ensure_window(byte_offset)?;
+        let local_offset = byte_offset
+            .checked_sub(
+                usize::try_from(self.map_start)
+                    .map_err(|_| "routing cache map start overflowed".to_string())?,
+            )
+            .ok_or_else(|| "routing cache local offset underflowed".to_string())?;
+        let map = self
+            .map
+            .as_ref()
+            .ok_or_else(|| "routing cache read window is not mapped".to_string())?;
+        let value_end = local_offset
+            .checked_add(V2_ROUTING_CACHE_VALUE_BYTES)
+            .ok_or_else(|| "routing cache local value range overflowed".to_string())?;
+        let value = u32::from_le_bytes(
+            map[local_offset..value_end]
+                .try_into()
+                .map_err(|_| "routing cache window returned an invalid value size".to_string())?,
+        );
+        self.read_values += 1;
+        Ok(value)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if self.read_values != self.total_values {
+            return Err(format!(
+                "routing cache consumed {} values but expected {}",
+                self.read_values, self.total_values
+            ));
+        }
+        self.map = None;
+        self.map_len = 0;
+        Ok(())
+    }
+
+    fn ensure_window(&mut self, byte_offset: usize) -> Result<(), String> {
+        if self.map.is_some() && self.window_contains(byte_offset) {
+            return Ok(());
+        }
+        self.map = None;
+        let aligned_start = align_down(
+            u64::try_from(byte_offset)
+                .map_err(|_| "routing cache byte offset overflowed".to_string())?,
+            V2_MMAP_ALLOCATION_GRANULARITY,
+        );
+        let total_bytes = total_routing_cache_byte_len(self.total_values)?;
+        let remaining = total_bytes
+            .checked_sub(
+                usize::try_from(aligned_start)
+                    .map_err(|_| "routing cache map start overflowed".to_string())?,
+            )
+            .ok_or_else(|| "routing cache remaining window underflowed".to_string())?;
+        let requested_len = remaining.min(V2_PLANNER_STATE_WINDOW_BYTES);
+        let requested_len_u64 = u64::try_from(requested_len)
+            .map_err(|_| "routing cache window length overflowed".to_string())?;
+        let map = unsafe {
+            MmapOptions::new()
+                .offset(aligned_start)
+                .len(requested_len)
+                .map(&self.file)
+        }
+        .map_err(|error| format!("could not map routing cache window: {error}"))?;
+        let actual_len = usize::try_from(requested_len_u64)
+            .map_err(|_| "routing cache mapped window length overflowed".to_string())?;
+        if map.len() < actual_len {
+            return Err("routing cache mapped window was shorter than requested".into());
+        }
+        self.map = Some(map);
+        self.map_start = aligned_start;
+        self.map_len = actual_len;
+        Ok(())
+    }
+
+    fn window_contains(&self, byte_offset: usize) -> bool {
+        let start = usize::try_from(self.map_start).unwrap_or(usize::MAX);
+        let Some(end) = byte_offset.checked_add(V2_ROUTING_CACHE_VALUE_BYTES) else {
+            return false;
+        };
+        byte_offset >= start && end <= start.saturating_add(self.map_len)
+    }
+}
+
+impl StreamingV2ClassifierRoutingCacheState {
+    fn open(
+        root: &PlannerStateRoot,
+        partition_id: PartitionId,
+        expected_count: usize,
+    ) -> Result<Self, StreamingIndexerError> {
+        let final_path = classifier_routing_cache_path(root, partition_id)?;
+        if final_path.is_file() {
+            return Ok(Self {
+                mode: StreamingV2ClassifierRoutingCacheMode::Reader(
+                    WindowedMmapU32Reader::open(&final_path, expected_count)
+                        .map_err(StreamingIndexerError::LocalSpill)?,
+                ),
+            });
+        }
+        let temp_path = classifier_routing_cache_temp_path(root, partition_id)?;
+        let writer =
+            BufferedU32Writer::create(&temp_path, expected_count, V2_PLANNER_STATE_WINDOW_BYTES)
+                .map_err(StreamingIndexerError::LocalSpill)?;
+        Ok(Self {
+            mode: StreamingV2ClassifierRoutingCacheMode::Writer(
+                StreamingV2ClassifierRoutingCacheWriter {
+                    final_path,
+                    temp_path,
+                    writer,
+                },
+            ),
+        })
+    }
+
+    fn next_child_index<F>(&mut self, compute: F) -> Result<usize, StreamingIndexerError>
+    where
+        F: FnOnce() -> Result<usize, StreamingIndexerError>,
+    {
+        match &mut self.mode {
+            StreamingV2ClassifierRoutingCacheMode::Reader(reader) => reader
+                .read_u32()
+                .map(|value| value as usize)
+                .map_err(StreamingIndexerError::LocalSpill),
+            StreamingV2ClassifierRoutingCacheMode::Writer(writer) => {
+                let child_index = compute()?;
+                writer
+                    .writer
+                    .write_u32(u32::try_from(child_index).map_err(|_| {
+                        StreamingIndexerError::HierarchyValidation(
+                            "classifier routing cache child index does not fit into u32".into(),
+                        )
+                    })?)
+                    .map_err(StreamingIndexerError::LocalSpill)?;
+                Ok(child_index)
+            }
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), StreamingIndexerError> {
+        match &mut self.mode {
+            StreamingV2ClassifierRoutingCacheMode::Reader(reader) => {
+                reader.finish().map_err(StreamingIndexerError::LocalSpill)
+            }
+            StreamingV2ClassifierRoutingCacheMode::Writer(writer) => {
+                writer
+                    .writer
+                    .finish()
+                    .map_err(StreamingIndexerError::LocalSpill)?;
+                std::fs::rename(&writer.temp_path, &writer.final_path).map_err(|error| {
+                    StreamingIndexerError::LocalSpill(format!(
+                        "could not seal routing cache {} from {}: {error}",
+                        writer.final_path.display(),
+                        writer.temp_path.display()
+                    ))
+                })
+            }
+        }
+    }
+}
+
 fn align_down(value: u64, alignment: u64) -> u64 {
     value / alignment * alignment
 }
@@ -10353,6 +10678,12 @@ fn total_byte_len(total_values: usize) -> Result<usize, String> {
     total_values
         .checked_mul(V2_PLANNER_STATE_VALUE_BYTES)
         .ok_or_else(|| "planner state file length overflowed".to_string())
+}
+
+fn total_routing_cache_byte_len(total_values: usize) -> Result<usize, String> {
+    total_values
+        .checked_mul(V2_ROUTING_CACHE_VALUE_BYTES)
+        .ok_or_else(|| "routing cache file length overflowed".to_string())
 }
 
 fn validate_planner_state_file_length(
@@ -10378,6 +10709,56 @@ fn validate_planner_state_file_length(
         ));
     }
     Ok(())
+}
+
+fn validate_routing_cache_file_length(
+    path: &Path,
+    file: &File,
+    total_values: usize,
+) -> Result<(), String> {
+    let expected_len = u64::try_from(total_routing_cache_byte_len(total_values)?)
+        .map_err(|_| "routing cache file length overflowed".to_string())?;
+    let actual_len = file
+        .metadata()
+        .map_err(|error| {
+            format!(
+                "could not inspect routing cache file {}: {error}",
+                path.display()
+            )
+        })?
+        .len();
+    if actual_len < expected_len {
+        return Err(format!(
+            "routing cache file {} is truncated: expected at least {expected_len} bytes but found {actual_len}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn classifier_routing_cache_dir(root: &PlannerStateRoot) -> Result<PathBuf, StreamingIndexerError> {
+    let dir = root.path().join("classifier-routing-cache");
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        StreamingIndexerError::LocalSpill(format!(
+            "could not create classifier routing cache directory {}: {error}",
+            dir.display()
+        ))
+    })?;
+    Ok(dir)
+}
+
+fn classifier_routing_cache_path(
+    root: &PlannerStateRoot,
+    partition_id: PartitionId,
+) -> Result<PathBuf, StreamingIndexerError> {
+    Ok(classifier_routing_cache_dir(root)?.join(format!("partition-{:08}.bin", partition_id.0)))
+}
+
+fn classifier_routing_cache_temp_path(
+    root: &PlannerStateRoot,
+    partition_id: PartitionId,
+) -> Result<PathBuf, StreamingIndexerError> {
+    Ok(classifier_routing_cache_dir(root)?.join(format!("partition-{:08}.tmp", partition_id.0)))
 }
 
 impl PartitionSpillDirectory {
@@ -11214,6 +11595,19 @@ mod tests {
         assert!(error.contains("is truncated"), "unexpected error: {error}");
     }
 
+    #[test]
+    fn windowed_routing_cache_reader_rejects_truncated_files() {
+        let root = tempfile::tempdir().expect("test planner state root should exist");
+        let path = root.path().join("truncated-route.bin");
+        std::fs::write(&path, [0u8; 4]).expect("test should create truncated routing cache file");
+
+        let error = match super::WindowedMmapU32Reader::open(&path, 2) {
+            Ok(_) => panic!("truncated routing cache file should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("is truncated"), "unexpected error: {error}");
+    }
+
     fn make_streaming_v2_run(
         profile_version: super::PublishedProfileVersion,
     ) -> StreamingIndexingRunV2<(), (), ()> {
@@ -11486,6 +11880,8 @@ mod tests {
         ];
         let mut replay_order_offsets = vec![0; run.partitions.len()];
         let mut directional_pca_replay_states = vec![None; run.partitions.len()];
+        let mut classifier_routing_caches = Vec::with_capacity(run.partitions.len());
+        classifier_routing_caches.resize_with(run.partitions.len(), || None);
         let routed = [
             vec![0.0, 0.0],
             vec![10.0, 0.0],
@@ -11498,12 +11894,145 @@ mod tests {
                 embedding.as_slice(),
                 replay_order_offsets.as_mut_slice(),
                 directional_pca_replay_states.as_mut_slice(),
+                classifier_routing_caches.as_mut_slice(),
             )
             .expect("routing should succeed")
             .0
         })
         .collect::<Vec<_>>();
         assert_eq!(routed, vec![1, 3, 1, 2]);
+    }
+
+    #[test]
+    fn classifier_routing_cache_seals_at_four_bytes_per_item() {
+        let run = make_streaming_v2_run(PUBLISHED_PROFILE_V0_7_0);
+        let mut cache_state = super::StreamingV2ClassifierRoutingCacheState::open(
+            &run.planner_state_root,
+            ROOT_PARTITION_ID,
+            3,
+        )
+        .expect("routing cache should initialize");
+        for index in 0..3 {
+            assert_eq!(
+                cache_state
+                    .next_child_index(|| Ok(index))
+                    .expect("routing cache write should succeed"),
+                index
+            );
+        }
+        cache_state.finish().expect("routing cache should seal");
+        let path = super::classifier_routing_cache_path(&run.planner_state_root, ROOT_PARTITION_ID)
+            .expect("routing cache path should resolve");
+        assert_eq!(
+            std::fs::metadata(path)
+                .expect("sealed routing cache should exist")
+                .len(),
+            3_u64 * super::V2_ROUTING_CACHE_VALUE_BYTES as u64
+        );
+    }
+
+    #[test]
+    fn route_terminal_partition_reuses_classifier_routing_cache_across_replays() {
+        let mut run = make_streaming_v2_run(PUBLISHED_PROFILE_V0_7_0);
+        run.embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        run.partitions = vec![
+            StreamingV2PartitionNode {
+                parent_id: None,
+                child_ids: vec![PartitionId(1), PartitionId(2), PartitionId(3)],
+                item_count: 4,
+                terminal: false,
+                pending_trainer: None,
+                routing: Some(StreamingV2RoutingStrategy::Classifier(Box::new(
+                    synthetic_partially_collapsed_duplicate_classifier(),
+                ))),
+                routing_debug_state: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: Some(ROOT_PARTITION_ID),
+                child_ids: Vec::new(),
+                item_count: 2,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: Some(ROOT_PARTITION_ID),
+                child_ids: Vec::new(),
+                item_count: 1,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: Some(ROOT_PARTITION_ID),
+                child_ids: Vec::new(),
+                item_count: 1,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            },
+        ];
+
+        let embeddings = [
+            vec![0.0, 0.0],
+            vec![10.0, 0.0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+        ];
+        let mut replay_order_offsets = vec![0; run.partitions.len()];
+        let mut directional_pca_replay_states = vec![None; run.partitions.len()];
+        let mut classifier_routing_caches = Vec::with_capacity(run.partitions.len());
+        classifier_routing_caches.resize_with(run.partitions.len(), || None);
+        let first = embeddings
+            .iter()
+            .map(|embedding| {
+                run.route_terminal_partition(
+                    embedding.as_slice(),
+                    replay_order_offsets.as_mut_slice(),
+                    directional_pca_replay_states.as_mut_slice(),
+                    classifier_routing_caches.as_mut_slice(),
+                )
+                .expect("initial routing should succeed")
+                .0
+            })
+            .collect::<Vec<_>>();
+        run.finish_classifier_routing_cache_states(classifier_routing_caches.as_mut_slice())
+            .expect("initial routing cache should seal");
+
+        let mut replay_order_offsets = vec![0; run.partitions.len()];
+        let mut directional_pca_replay_states = vec![None; run.partitions.len()];
+        let mut classifier_routing_caches = Vec::with_capacity(run.partitions.len());
+        classifier_routing_caches.resize_with(run.partitions.len(), || None);
+        let mut second = Vec::new();
+        for (index, embedding) in embeddings.iter().enumerate() {
+            second.push(
+                run.route_terminal_partition(
+                    embedding.as_slice(),
+                    replay_order_offsets.as_mut_slice(),
+                    directional_pca_replay_states.as_mut_slice(),
+                    classifier_routing_caches.as_mut_slice(),
+                )
+                .expect("cached routing should succeed")
+                .0,
+            );
+            if index == 0 {
+                assert!(matches!(
+                    classifier_routing_caches[0],
+                    Some(super::StreamingV2ClassifierRoutingCacheState {
+                        mode: super::StreamingV2ClassifierRoutingCacheMode::Reader(_),
+                    })
+                ));
+            }
+        }
+
+        assert_eq!(first, vec![1, 3, 1, 2]);
+        assert_eq!(second, first);
     }
 
     #[test]

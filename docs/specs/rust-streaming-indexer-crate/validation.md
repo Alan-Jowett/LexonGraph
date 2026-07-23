@@ -182,6 +182,29 @@ result is deterministic for a fixed planning state and replay order.
 **Traces to:** REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-016,
 REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035
 
+### VAL-STREAM-INDEXER-013A
+
+Run two replay-driven passes or one planning replay plus final materialization
+over the same logical item sequence after a classifier-backed partition has
+already exported stable routing.
+
+**Pass condition:** any compact replay-acceleration spill reused from the first
+replay preserves the same child routing and downstream partition semantics that
+fresh PCA re-application would have produced.
+
+**Traces to:** REQ-STREAM-INDEXER-004A, REQ-STREAM-INDEXER-021D,
+REQ-STREAM-INDEXER-021E
+
+### VAL-STREAM-INDEXER-013B
+
+Inspect the planner-state-root spill produced for replay acceleration.
+
+**Pass condition:** the spill contains compact derived routing/projection state
+only, remains deterministic in replay order, and scales with item count at a
+few bytes per item rather than item payload size.
+
+**Traces to:** REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021F
+
 ### VAL-STREAM-INDEXER-014
 
 After planning completion, allow the implementation to read back each
@@ -446,7 +469,7 @@ surface that has not yet been implemented on v2.
 **Pass condition:** the request fails explicitly and does not silently
 delegate to the retained v1 compatibility surface or any hidden buffering path.
 
-**Traces to:** REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021F
+**Traces to:** REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021I
 
 ### VAL-STREAM-INDEXER-026
 

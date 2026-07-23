@@ -220,6 +220,12 @@ counting, or partition realization, the crate reorders projected outputs back
 into canonical replay order before any axis planner, cell summary, or
 realization accumulator observes them.
 
+An enclosing replay-driven implementation may persist compact replay-order
+derived routing aids produced from those projected outputs and later reuse them
+instead of re-invoking `PcaTransform::apply`, provided the reused sequence is
+behaviorally equivalent to fresh replay-order projection and does not require
+full-pass retained-coordinate or full-embedding spill.
+
 The deterministic approximate quantile path does not depend on runtime
 randomness, scheduler order, or unspecified parallel merge topology. Equal-
 valued coordinates at selected cut values are assigned deterministically so

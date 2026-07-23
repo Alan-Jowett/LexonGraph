@@ -433,3 +433,25 @@ normal execution retains or spills the full pass.
 this revision.
 
 **Traces to:** REQ-DPCA-STREAM-030
+
+### VAL-DPCA-STREAM-033
+
+Exercise replay-driven `PlanCuts`, `CountCells`, or `RealizePartition` through
+an enclosing implementation that reuses compact persisted routing/projection
+aids instead of re-applying the fixed PCA transform on a later identical
+replay.
+
+**Pass condition:** downstream partition and replay-order semantics match the
+fresh `PcaTransform::apply` baseline exactly.
+
+**Traces to:** REQ-DPCA-STREAM-011, REQ-DPCA-STREAM-011D
+
+### VAL-DPCA-STREAM-034
+
+Inspect the persisted replay-acceleration artifact used with a fixed PCA
+transform.
+
+**Pass condition:** it contains compact derived routing/projection state rather
+than full-pass retained coordinates or full embeddings.
+
+**Traces to:** REQ-DPCA-STREAM-011D

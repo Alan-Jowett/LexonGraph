@@ -218,6 +218,17 @@ replay-driven `PlanCuts`, `CountCells`, and `RealizePartition` phases.
 This revision does not extend that allowance to the first-pass `AnalyzePca`
 accumulation phase.
 
+### REQ-DPCA-STREAM-011D
+
+When a surrounding replay-driven system persists compact derived routing or
+projection aids to avoid repeated PCA application across later replays, the
+directional-PCA behavior observed by downstream planning and realization logic
+shall remain identical to replay-order consumption of `PcaTransform::apply`
+over the same embeddings.
+
+Such aids shall not require the directional-PCA crate to materialize or export
+full-pass embedding payloads as the optimization mechanism.
+
 ### REQ-DPCA-STREAM-012
 
 The crate shall expose explicit directional-PCA policy selection rather than
