@@ -174,24 +174,20 @@ impl StreamingIndexingRunV3 {
         if block_ids.is_empty() {
             return Ok(());
         }
-        let mut writer = OpenOptions::new()
-            .append(true)
-            .open(&self.root_partition_path)
-            .map(BufWriter::new)
-            .map_err(|error| {
-                StreamingIndexerError::LocalSpill(format!(
-                    "could not open v3 root partition file {} for append: {error}",
-                    self.root_partition_path.display()
-                ))
-            })?;
+        let root_partition_path = self.root_partition_path.clone();
+        let mut bytes = Vec::with_capacity(block_ids.len() * BlockHash::LEN);
         for block_id in block_ids {
-            writer
-                .write_all(block_id.as_bytes())
-                .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+            bytes.extend_from_slice(block_id.as_bytes());
         }
-        writer
-            .flush()
-            .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            append_block_ids_to_partition(&root_partition_path, &bytes)
+        })
+        .await
+        .map_err(|error| {
+            StreamingIndexerError::ClusteringFailure(format!(
+                "v3 block-id ingestion task failed: {error}"
+            ))
+        })??;
         self.ingested_count += block_ids.len();
         Ok(())
     }
@@ -237,15 +233,15 @@ impl StreamingIndexingRunV3 {
                 let root_id = next_layer_inputs[0].child;
                 self.phase = V3Phase::Finalized;
                 if let Some(temp_root) = self.temp_root.take() {
-                    temp_root.close().map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not remove v3 working root {}: {error}",
-                            self.root_partition_path
-                                .parent()
-                                .unwrap_or_else(|| Path::new("."))
-                                .display()
-                        ))
-                    })?;
+                    let cleanup_root = self
+                        .root_partition_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .display()
+                        .to_string();
+                    if let Err(error) = temp_root.close() {
+                        eprintln!("could not remove v3 working root {}: {error}", cleanup_root);
+                    }
                 }
                 return Ok(StreamingIndexingResult {
                     root_id,
@@ -1308,6 +1304,25 @@ fn validate_v3_cluster_assignment(
         )));
     }
     Ok(cluster)
+}
+
+fn append_block_ids_to_partition(path: &Path, bytes: &[u8]) -> Result<(), StreamingIndexerError> {
+    let mut writer = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map(BufWriter::new)
+        .map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not open v3 root partition file {} for append: {error}",
+                path.display()
+            ))
+        })?;
+    writer
+        .write_all(bytes)
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))?;
+    writer
+        .flush()
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))
 }
 
 fn build_v3_prepare_runtime() -> Result<tokio::runtime::Runtime, StreamingIndexerError> {
