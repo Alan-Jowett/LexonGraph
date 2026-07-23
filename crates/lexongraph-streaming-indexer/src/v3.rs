@@ -393,213 +393,258 @@ impl StreamingIndexingRunV3 {
             ),
         );
 
-        let mut replay_passes = 0usize;
-        let max_passes = v3_replay_pass_limit(partition.item_count);
-        loop {
-            replay_passes += 1;
-            if replay_passes > max_passes {
-                return Err(StreamingIndexerError::ClusteringFailure(format!(
-                    "v3 planner exceeded the maximum replay pass count of {max_passes}"
-                )));
+        let result = (|| -> Result<(Vec<WorkingPartition>, bool), StreamingIndexerError> {
+            let mut replay_passes = 0usize;
+            let max_passes = v3_replay_pass_limit(partition.item_count);
+            loop {
+                replay_passes += 1;
+                if replay_passes > max_passes {
+                    return Err(StreamingIndexerError::ClusteringFailure(format!(
+                        "v3 planner exceeded the maximum replay pass count of {max_passes}"
+                    )));
+                }
+                match partition.kind {
+                    WorkingItemKind::LeafBlockIds => {
+                        self.ingest_leaf_training_partition_batches(
+                            partition,
+                            source_store,
+                            &mut trainer,
+                        )?;
+                    }
+                    WorkingItemKind::IndexedChildren => {
+                        self.ingest_summary_training_partition_batches(partition, &mut trainer)?;
+                    }
+                }
+                let pass_report = trainer.finish_pass().map_err(map_clustering_error)?;
+                if pass_report.observed_count != partition.item_count {
+                    return Err(StreamingIndexerError::HierarchyValidation(format!(
+                        "v3 partition {:?} observed {} items but expected {}",
+                        partition.id, pass_report.observed_count, partition.item_count
+                    )));
+                }
+                if pass_report.readiness != PassReadiness::PartitionReady {
+                    return Err(StreamingIndexerError::ClusteringFailure(
+                        "v3 partition planning did not become partition-ready".into(),
+                    ));
+                }
+                match trainer.complete_training() {
+                    Ok(()) => break,
+                    Err(StreamingClusteringError::InvalidTransition { state, operation })
+                        if state == TrainerState::PassComplete
+                            && operation == "complete_training" =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(map_clustering_error(error)),
+                }
             }
+            let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
+
+            let child_count =
+                usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
+                    StreamingIndexerError::HierarchyValidation(
+                        "v3 realized cluster count does not fit usize".into(),
+                    )
+                })?;
+            let mut child_ids = (0..child_count)
+                .map(|child_index| format!("{}.{}", partition.id, child_index))
+                .collect::<Vec<_>>();
+            let mut child_paths = child_ids
+                .iter()
+                .map(|child_id| {
+                    self.partition_file_path(
+                        partition.layer_index,
+                        child_id,
+                        match partition.kind {
+                            WorkingItemKind::LeafBlockIds => "leafids",
+                            WorkingItemKind::IndexedChildren => "summary",
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut child_item_counts = vec![0usize; child_count];
+            if child_count <= 1 {
+                child_ids = (0..2)
+                    .map(|child_index| format!("{}.{}", partition.id, child_index))
+                    .collect();
+                child_paths = child_ids
+                    .iter()
+                    .map(|child_id| {
+                        self.partition_file_path(
+                            partition.layer_index,
+                            child_id,
+                            match partition.kind {
+                                WorkingItemKind::LeafBlockIds => "leafids",
+                                WorkingItemKind::IndexedChildren => "summary",
+                            },
+                        )
+                    })
+                    .collect();
+                child_item_counts = vec![0usize; 2];
+            }
+
             match partition.kind {
                 WorkingItemKind::LeafBlockIds => {
-                    self.ingest_leaf_training_partition_batches(
+                    let mut writers = BlockHashPartitionWriters::create(child_paths.as_slice())?;
+                    self.classify_leaf_partition_batches(
                         partition,
                         source_store,
-                        &mut trainer,
+                        &classifier,
+                        &mut writers,
+                        child_item_counts.as_mut_slice(),
                     )?;
+                    writers.finish()?;
                 }
                 WorkingItemKind::IndexedChildren => {
-                    self.ingest_summary_training_partition_batches(partition, &mut trainer)?;
-                }
-            }
-            let pass_report = trainer.finish_pass().map_err(map_clustering_error)?;
-            if pass_report.observed_count != partition.item_count {
-                return Err(StreamingIndexerError::HierarchyValidation(format!(
-                    "v3 partition {:?} observed {} items but expected {}",
-                    partition.id, pass_report.observed_count, partition.item_count
-                )));
-            }
-            if pass_report.readiness != PassReadiness::PartitionReady {
-                return Err(StreamingIndexerError::ClusteringFailure(
-                    "v3 partition planning did not become partition-ready".into(),
-                ));
-            }
-            match trainer.complete_training() {
-                Ok(()) => break,
-                Err(StreamingClusteringError::InvalidTransition { state, operation })
-                    if state == TrainerState::PassComplete && operation == "complete_training" =>
-                {
-                    continue;
-                }
-                Err(error) => return Err(map_clustering_error(error)),
-            }
-        }
-        let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
-
-        let child_count = usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
-            StreamingIndexerError::HierarchyValidation(
-                "v3 realized cluster count does not fit usize".into(),
-            )
-        })?;
-        let mut child_ids = (0..child_count)
-            .map(|child_index| format!("{}.{}", partition.id, child_index))
-            .collect::<Vec<_>>();
-        let mut child_paths = child_ids
-            .iter()
-            .map(|child_id| {
-                self.partition_file_path(
-                    partition.layer_index,
-                    child_id,
-                    match partition.kind {
-                        WorkingItemKind::LeafBlockIds => "leafids",
-                        WorkingItemKind::IndexedChildren => "summary",
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut child_item_counts = vec![0usize; child_count];
-        if child_count <= 1 {
-            child_ids = (0..2)
-                .map(|child_index| format!("{}.{}", partition.id, child_index))
-                .collect();
-            child_paths = child_ids
-                .iter()
-                .map(|child_id| {
-                    self.partition_file_path(
-                        partition.layer_index,
-                        child_id,
-                        match partition.kind {
-                            WorkingItemKind::LeafBlockIds => "leafids",
-                            WorkingItemKind::IndexedChildren => "summary",
-                        },
-                    )
-                })
-                .collect();
-            child_item_counts = vec![0usize; 2];
-        }
-
-        match partition.kind {
-            WorkingItemKind::LeafBlockIds => {
-                let mut writers = BlockHashPartitionWriters::create(child_paths.as_slice())?;
-                self.classify_leaf_partition_batches(
-                    partition,
-                    source_store,
-                    &classifier,
-                    &mut writers,
-                    child_item_counts.as_mut_slice(),
-                )?;
-                writers.finish()?;
-            }
-            WorkingItemKind::IndexedChildren => {
-                let mut writers = IndexedChildPartitionWriters::create(child_paths.as_slice())?;
-                self.classify_summary_partition_batches(
-                    partition,
-                    &classifier,
-                    &mut writers,
-                    child_item_counts.as_mut_slice(),
-                )?;
-                writers.finish()?;
-            }
-        }
-
-        let mut non_empty = child_item_counts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, count)| (*count > 0).then_some(index))
-            .collect::<Vec<_>>();
-        let used_fallback = non_empty.len() <= 1;
-        if used_fallback {
-            remove_partition_files(child_paths.as_slice())?;
-            let fallback_groups =
-                fallback_partition_groups(partition.item_count, materializability_bound, None)
-                    .map_err(|error| {
-                        StreamingIndexerError::HierarchyValidation(error.to_string())
-                    })?;
-            let fallback_assignment =
-                fallback_assignment_map(partition.item_count, fallback_groups.as_slice())?;
-            child_ids = (0..fallback_groups.len())
-                .map(|child_index| format!("{}.{}", partition.id, child_index))
-                .collect::<Vec<_>>();
-            child_paths = child_ids
-                .iter()
-                .map(|child_id| {
-                    self.partition_file_path(
-                        partition.layer_index,
-                        child_id,
-                        match partition.kind {
-                            WorkingItemKind::LeafBlockIds => "leafids",
-                            WorkingItemKind::IndexedChildren => "summary",
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            child_item_counts = fallback_groups.iter().map(Vec::len).collect::<Vec<_>>();
-            match partition.kind {
-                WorkingItemKind::LeafBlockIds => {
-                    rewrite_block_hash_partition_with_assignments(
-                        &partition.path,
-                        child_paths.as_slice(),
-                        fallback_assignment.as_slice(),
+                    let mut writers = IndexedChildPartitionWriters::create(child_paths.as_slice())?;
+                    self.classify_summary_partition_batches(
+                        partition,
+                        &classifier,
+                        &mut writers,
+                        child_item_counts.as_mut_slice(),
                     )?;
-                }
-                WorkingItemKind::IndexedChildren => {
-                    rewrite_indexed_child_partition_with_assignments(
-                        &partition.path,
-                        child_paths.as_slice(),
-                        fallback_assignment.as_slice(),
-                    )?;
+                    writers.finish()?;
                 }
             }
-            non_empty = child_item_counts
+
+            let mut non_empty = child_item_counts
                 .iter()
                 .enumerate()
                 .filter_map(|(index, count)| (*count > 0).then_some(index))
                 .collect::<Vec<_>>();
-        }
+            let used_fallback = non_empty.len() <= 1;
+            if used_fallback {
+                remove_partition_files(child_paths.as_slice())?;
+                let fallback_groups =
+                    fallback_partition_groups(partition.item_count, materializability_bound, None)
+                        .map_err(|error| {
+                            StreamingIndexerError::HierarchyValidation(error.to_string())
+                        })?;
+                let fallback_assignment =
+                    fallback_assignment_map(partition.item_count, fallback_groups.as_slice())?;
+                child_ids = (0..fallback_groups.len())
+                    .map(|child_index| format!("{}.{}", partition.id, child_index))
+                    .collect::<Vec<_>>();
+                child_paths = child_ids
+                    .iter()
+                    .map(|child_id| {
+                        self.partition_file_path(
+                            partition.layer_index,
+                            child_id,
+                            match partition.kind {
+                                WorkingItemKind::LeafBlockIds => "leafids",
+                                WorkingItemKind::IndexedChildren => "summary",
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                child_item_counts = fallback_groups.iter().map(Vec::len).collect::<Vec<_>>();
+                match partition.kind {
+                    WorkingItemKind::LeafBlockIds => {
+                        rewrite_block_hash_partition_with_assignments(
+                            &partition.path,
+                            child_paths.as_slice(),
+                            fallback_assignment.as_slice(),
+                        )?;
+                    }
+                    WorkingItemKind::IndexedChildren => {
+                        rewrite_indexed_child_partition_with_assignments(
+                            &partition.path,
+                            child_paths.as_slice(),
+                            fallback_assignment.as_slice(),
+                        )?;
+                    }
+                }
+                non_empty = child_item_counts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, count)| (*count > 0).then_some(index))
+                    .collect::<Vec<_>>();
+            }
 
-        emit_status(
-            &self.observer,
-            status_with_hierarchy_details(
-                planning_phase,
-                StreamingIndexingStatusState::Completed,
-                Some(1),
-                1,
-                planning_started.elapsed(),
-                None,
-                HierarchyPlanningDetailFields {
-                    legacy_item_count: Some(partition.item_count),
-                    progress_unit_kind: Some(
-                        StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+            Ok((
+                non_empty
+                    .into_iter()
+                    .map(|index| WorkingPartition {
+                        id: child_ids[index].clone(),
+                        layer_index: partition.layer_index,
+                        item_count: child_item_counts[index],
+                        kind: partition.kind,
+                        path: child_paths[index].clone(),
+                    })
+                    .collect(),
+                used_fallback,
+            ))
+        })();
+
+        match result {
+            Ok((children, used_fallback)) => {
+                emit_status(
+                    &self.observer,
+                    status_with_hierarchy_details(
+                        planning_phase,
+                        StreamingIndexingStatusState::Completed,
+                        Some(1),
+                        1,
+                        planning_started.elapsed(),
+                        None,
+                        HierarchyPlanningDetailFields {
+                            legacy_item_count: Some(partition.item_count),
+                            progress_unit_kind: Some(
+                                StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+                            ),
+                            discovered_unit_count: Some(1),
+                            current_unit_elapsed: Some(planning_started.elapsed()),
+                            current_partition_path: Some(partition.id.clone()),
+                            current_partition_size: Some(partition.item_count),
+                            current_recursion_depth: Some(partition_depth(&partition.id)),
+                            started_subproblem_count: Some(1),
+                            completed_subproblem_count: Some(1),
+                            visited_partition_count: Some(1),
+                            finalized_partition_count: Some(1),
+                            terminal_partition_count: Some(0),
+                            completed_planner_invocation_count: Some(1),
+                            fallback_count: Some(used_fallback as usize),
+                            last_progress_at: Some(planning_started.elapsed()),
+                        },
                     ),
-                    discovered_unit_count: Some(1),
-                    current_unit_elapsed: Some(planning_started.elapsed()),
-                    current_partition_path: Some(partition.id.clone()),
-                    current_partition_size: Some(partition.item_count),
-                    current_recursion_depth: Some(partition_depth(&partition.id)),
-                    started_subproblem_count: Some(1),
-                    completed_subproblem_count: Some(1),
-                    visited_partition_count: Some(1),
-                    finalized_partition_count: Some(1),
-                    terminal_partition_count: Some(0),
-                    completed_planner_invocation_count: Some(1),
-                    fallback_count: Some(used_fallback as usize),
-                    last_progress_at: Some(planning_started.elapsed()),
-                },
-            ),
-        );
-
-        Ok(non_empty
-            .into_iter()
-            .map(|index| WorkingPartition {
-                id: child_ids[index].clone(),
-                layer_index: partition.layer_index,
-                item_count: child_item_counts[index],
-                kind: partition.kind,
-                path: child_paths[index].clone(),
-            })
-            .collect())
+                );
+                Ok(children)
+            }
+            Err(error) => {
+                emit_status(
+                    &self.observer,
+                    status_with_hierarchy_details(
+                        planning_phase,
+                        StreamingIndexingStatusState::Failed,
+                        Some(1),
+                        1,
+                        planning_started.elapsed(),
+                        Some(error.to_string()),
+                        HierarchyPlanningDetailFields {
+                            legacy_item_count: Some(partition.item_count),
+                            progress_unit_kind: Some(
+                                StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+                            ),
+                            discovered_unit_count: Some(1),
+                            current_unit_elapsed: Some(planning_started.elapsed()),
+                            current_partition_path: Some(partition.id.clone()),
+                            current_partition_size: Some(partition.item_count),
+                            current_recursion_depth: Some(partition_depth(&partition.id)),
+                            started_subproblem_count: Some(1),
+                            completed_subproblem_count: Some(1),
+                            visited_partition_count: Some(1),
+                            finalized_partition_count: Some(0),
+                            terminal_partition_count: Some(0),
+                            completed_planner_invocation_count: Some(1),
+                            fallback_count: Some(0),
+                            last_progress_at: Some(planning_started.elapsed()),
+                        },
+                    ),
+                );
+                Err(error)
+            }
+        }
     }
 
     async fn materialize_terminal_partition(
@@ -1161,13 +1206,14 @@ impl StreamingIndexingRunV3 {
         heartbeat.stop();
         match result {
             Ok(value) => {
+                let completed = progress.load(AtomicOrdering::Relaxed);
                 emit_status(
                     &self.observer,
                     status_with_known_total(
                         phase,
                         StreamingIndexingStatusState::Completed,
                         total_items,
-                        total_items,
+                        completed,
                         started.elapsed(),
                         None,
                     ),
@@ -2002,6 +2048,57 @@ mod tests {
         assert!(statuses.lock().unwrap().iter().any(|status| {
             matches!(status.phase, StreamingIndexingPhase::V3PartitionLoad { .. })
                 && status.state == StreamingIndexingStatusState::Failed
+        }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn v3_split_partition_emits_failed_planning_status() {
+        let parent = tempfile::tempdir().unwrap();
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let observer = {
+            let statuses = Arc::clone(&statuses);
+            Arc::new(move |status: crate::StreamingIndexingStatus| {
+                statuses.lock().unwrap().push(status);
+            }) as StreamingIndexingStatusObserver
+        };
+        let run = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_7_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap()
+        .with_observer(observer);
+
+        let missing_a = BlockHash::from_bytes([11u8; BlockHash::LEN]);
+        let missing_b = BlockHash::from_bytes([12u8; BlockHash::LEN]);
+        {
+            let mut writer = BufWriter::new(File::create(&run.root_partition_path).unwrap());
+            writer.write_all(missing_a.as_bytes()).unwrap();
+            writer.write_all(missing_b.as_bytes()).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let partition = WorkingPartition {
+            id: "l0.p0".into(),
+            layer_index: 0,
+            item_count: 2,
+            kind: WorkingItemKind::LeafBlockIds,
+            path: run.root_partition_path.clone(),
+        };
+        let source = MemoryBlockStore::default();
+        let error = run
+            .split_partition(&partition, 1, &source)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StreamingIndexerError::Storage(_)));
+        assert!(statuses.lock().unwrap().iter().any(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom
+                }
+            ) && status.state == StreamingIndexingStatusState::Failed
         }));
     }
 
