@@ -41,6 +41,7 @@ use lexongraph_streaming_clustering::{
 const V3_IO_QUEUE_DEPTH: usize = 32;
 const V3_BATCH_SIZE: usize = 256;
 const V3_PREPARED_BATCH_LOOKAHEAD: usize = 3;
+const V3_MAX_REPLAY_PASSES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorkingItemKind {
@@ -60,6 +61,7 @@ struct WorkingPartition {
 #[derive(Clone, Debug)]
 struct LoadedLeaf {
     id: BlockHash,
+    block: Block,
     embedding: Vec<u8>,
     embedding_f32: Vec<f32>,
 }
@@ -392,7 +394,7 @@ impl StreamingIndexingRunV3 {
         );
 
         let mut replay_passes = 0usize;
-        let max_passes = partition.item_count.saturating_add(4).max(1);
+        let max_passes = v3_replay_pass_limit(partition.item_count);
         loop {
             replay_passes += 1;
             if replay_passes > max_passes {
@@ -615,20 +617,8 @@ impl StreamingIndexingRunV3 {
                     .await?;
                 let mut children = Vec::with_capacity(loaded.len());
                 for leaf in loaded {
-                    let validated = source_store
-                        .get(&leaf.id)
-                        .await
-                        .map_err(StreamingIndexerError::Storage)?
-                        .ok_or_else(|| {
-                            StreamingIndexerError::Storage(
-                                lexongraph_block_store::BlockStoreError::BackendFailure(format!(
-                                    "leaf block {} disappeared during v3 materialization",
-                                    leaf.id
-                                )),
-                            )
-                        })?;
                     let output_id = output_store
-                        .put(&validated.block)
+                        .put(&leaf.block)
                         .await
                         .map_err(StreamingIndexerError::Storage)?;
                     verify_persisted_block_id(output_id, leaf.id)?;
@@ -1232,22 +1222,30 @@ fn decode_loaded_leaf(
     block: ValidatedBlock,
     embedding_spec: &EmbeddingSpec,
 ) -> Result<LoadedLeaf, StreamingIndexerError> {
-    let Block::Leaf(leaf) = block.block else {
+    let block = block.block;
+    let Block::Leaf(ref leaf) = block else {
         return Err(StreamingIndexerError::HierarchyValidation(format!(
             "v3 input block {} is not a leaf block",
             block_id
         )));
     };
-    validate_v3_leaf(block_id, &leaf, embedding_spec)?;
+    validate_v3_leaf(block_id, leaf, embedding_spec)?;
     let entry = leaf
         .entries
         .first()
         .expect("validated leaf must contain an entry");
+    let embedding = entry.embedding.clone();
+    let embedding_f32 = decode_embedding_as_f32(entry.embedding.as_slice(), embedding_spec)?;
     Ok(LoadedLeaf {
         id: block_id,
-        embedding: entry.embedding.clone(),
-        embedding_f32: decode_embedding_as_f32(entry.embedding.as_slice(), embedding_spec)?,
+        block,
+        embedding,
+        embedding_f32,
     })
+}
+
+fn v3_replay_pass_limit(item_count: usize) -> usize {
+    item_count.saturating_add(4).clamp(1, V3_MAX_REPLAY_PASSES)
 }
 
 fn build_v3_prepare_runtime() -> Result<tokio::runtime::Runtime, StreamingIndexerError> {
@@ -2006,6 +2004,13 @@ mod tests {
             StreamingIndexerError::LocalSpill(message)
                 if message.contains("truncated v3 block-id partition ended mid-hash")
         ));
+    }
+
+    #[test]
+    fn v3_replay_pass_limit_is_capped_for_large_partitions() {
+        assert_eq!(v3_replay_pass_limit(0), 4);
+        assert_eq!(v3_replay_pass_limit(32), 36);
+        assert_eq!(v3_replay_pass_limit(usize::MAX), V3_MAX_REPLAY_PASSES);
     }
 
     #[test]
