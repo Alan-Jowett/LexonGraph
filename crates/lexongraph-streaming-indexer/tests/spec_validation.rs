@@ -6243,6 +6243,7 @@ fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     assert!(src.contains("run_v3_partition_load_phase("));
     assert!(src.contains("StreamingIndexingStatusState::Completed"));
     assert!(src.contains("progress.load(AtomicOrdering::Relaxed)"));
-    assert!(src.contains("block_ids.len(),"));
-    assert!(src.contains("status_with_known_total("));
+    assert!(src.contains("progress.fetch_add(batch_len, AtomicOrdering::Relaxed);"));
+    assert!(src.contains("validate_v3_cluster_assignment("));
+    assert!(src.contains("load_leaf_batch_raw("));
 }

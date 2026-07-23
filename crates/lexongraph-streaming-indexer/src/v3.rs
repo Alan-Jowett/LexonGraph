@@ -972,7 +972,7 @@ impl StreamingIndexingRunV3 {
                             batch,
                             source_store,
                             &embedding_spec,
-                            Some(&progress),
+                            None,
                         ))?;
                         if sender.send(Ok(prepared)).is_err() {
                             return Ok(());
@@ -981,9 +981,12 @@ impl StreamingIndexingRunV3 {
                     Ok(())
                 },
                 |prepared| {
+                    let batch_len = prepared.len();
                     trainer
                         .ingest_batch(prepared.as_slice())
-                        .map_err(map_clustering_error)
+                        .map_err(map_clustering_error)?;
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
+                    Ok(())
                 },
             )
         })
@@ -1001,11 +1004,8 @@ impl StreamingIndexingRunV3 {
                 V3_PREPARED_BATCH_LOOKAHEAD,
                 move |sender| {
                     while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                        let prepared = prepare_summary_training_batch(
-                            batch,
-                            &embedding_spec,
-                            Some(&progress),
-                        )?;
+                        let prepared =
+                            prepare_summary_training_batch(batch, &embedding_spec, None)?;
                         if sender.send(Ok(prepared)).is_err() {
                             return Ok(());
                         }
@@ -1013,9 +1013,12 @@ impl StreamingIndexingRunV3 {
                     Ok(())
                 },
                 |prepared| {
+                    let batch_len = prepared.len();
                     trainer
                         .ingest_batch(prepared.as_slice())
-                        .map_err(map_clustering_error)
+                        .map_err(map_clustering_error)?;
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
+                    Ok(())
                 },
             )
         })
@@ -1041,7 +1044,7 @@ impl StreamingIndexingRunV3 {
                             batch,
                             source_store,
                             &embedding_spec,
-                            Some(&progress),
+                            None,
                         ))?;
                         if sender.send(Ok(prepared)).is_err() {
                             return Ok(());
@@ -1053,16 +1056,18 @@ impl StreamingIndexingRunV3 {
                     let assignments = classifier
                         .assign_batch(prepared.embeddings.as_slice())
                         .map_err(map_clustering_error)?;
+                    let batch_len = prepared.block_ids.len();
                     for (block_id, assignment) in prepared.block_ids.iter().zip(assignments) {
                         let cluster = usize::try_from(assignment).map_err(|_| {
                             StreamingIndexerError::HierarchyValidation(
                                 "v3 cluster id does not fit usize".into(),
                             )
                         })?;
-                        let target = cluster.min(writers.len().saturating_sub(1));
+                        let target = validate_v3_cluster_assignment(cluster, writers.len())?;
                         writers.write(target, block_id)?;
                         child_item_counts[target] += 1;
                     }
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
                     Ok(())
                 },
             )
@@ -1083,11 +1088,8 @@ impl StreamingIndexingRunV3 {
                 V3_PREPARED_BATCH_LOOKAHEAD,
                 move |sender| {
                     while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                        let prepared = prepare_summary_assignment_batch(
-                            batch,
-                            &embedding_spec,
-                            Some(&progress),
-                        )?;
+                        let prepared =
+                            prepare_summary_assignment_batch(batch, &embedding_spec, None)?;
                         if sender.send(Ok(prepared)).is_err() {
                             return Ok(());
                         }
@@ -1098,16 +1100,18 @@ impl StreamingIndexingRunV3 {
                     let assignments = classifier
                         .assign_batch(prepared.embeddings.as_slice())
                         .map_err(map_clustering_error)?;
+                    let batch_len = prepared.children.len();
                     for (child, assignment) in prepared.children.iter().zip(assignments) {
                         let cluster = usize::try_from(assignment).map_err(|_| {
                             StreamingIndexerError::HierarchyValidation(
                                 "v3 cluster id does not fit usize".into(),
                             )
                         })?;
-                        let target = cluster.min(writers.len().saturating_sub(1));
+                        let target = validate_v3_cluster_assignment(cluster, writers.len())?;
                         writers.write(target, child)?;
                         child_item_counts[target] += 1;
                     }
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
                     Ok(())
                 },
             )
@@ -1246,6 +1250,18 @@ fn decode_loaded_leaf(
 
 fn v3_replay_pass_limit(item_count: usize) -> usize {
     item_count.saturating_add(4).clamp(1, V3_MAX_REPLAY_PASSES)
+}
+
+fn validate_v3_cluster_assignment(
+    cluster: usize,
+    writer_count: usize,
+) -> Result<usize, StreamingIndexerError> {
+    if cluster >= writer_count {
+        return Err(StreamingIndexerError::HierarchyValidation(format!(
+            "v3 cluster id {cluster} exceeds available child partitions {writer_count}"
+        )));
+    }
+    Ok(cluster)
 }
 
 fn build_v3_prepare_runtime() -> Result<tokio::runtime::Runtime, StreamingIndexerError> {
@@ -2011,6 +2027,16 @@ mod tests {
         assert_eq!(v3_replay_pass_limit(0), 4);
         assert_eq!(v3_replay_pass_limit(32), 36);
         assert_eq!(v3_replay_pass_limit(usize::MAX), V3_MAX_REPLAY_PASSES);
+    }
+
+    #[test]
+    fn v3_cluster_assignment_rejects_out_of_range_clusters() {
+        let error = validate_v3_cluster_assignment(3, 3).unwrap_err();
+        assert!(matches!(
+            error,
+            StreamingIndexerError::HierarchyValidation(message)
+                if message.contains("exceeds available child partitions")
+        ));
     }
 
     #[test]
