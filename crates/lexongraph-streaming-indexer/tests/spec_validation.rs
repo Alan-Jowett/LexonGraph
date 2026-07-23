@@ -55,7 +55,7 @@ use lexongraph_streaming_indexer::{
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
     StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
     StreamingIndexingStatusState, StreamingIndexingTrainerSubphase, StreamingV2BlockerKind,
-    StreamingV2ConvergenceState, published_indexing_profile,
+    StreamingV2ConvergenceState, StreamingV2PartitionTopology, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -450,6 +450,37 @@ impl EmbeddingProvider for ConstantF32EmbeddingProvider {
             return Err(FixtureError("unexpected embedding spec".into()));
         }
         Ok((0..spec.dims).flat_map(|_| 0.0f32.to_le_bytes()).collect())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DuplicatePlusIndexedF32EmbeddingProvider;
+
+impl EmbeddingProvider for DuplicatePlusIndexedF32EmbeddingProvider {
+    type Error = FixtureError;
+
+    async fn embed(
+        &self,
+        input: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        if spec.encoding != "f32le" || spec.dims != 1 {
+            return Err(FixtureError("unexpected embedding spec".into()));
+        }
+        let text = std::str::from_utf8(input.body.as_slice())
+            .map_err(|error| FixtureError(format!("invalid utf-8 content: {error}")))?;
+        let value = if text.starts_with("dup-") {
+            0.0f32
+        } else if let Some(index) = text.strip_prefix("other-") {
+            index
+                .parse::<u32>()
+                .map_err(|error| FixtureError(format!("invalid indexed content token: {error}")))?
+                as f32
+                + 10.0
+        } else {
+            return Err(FixtureError(format!("unexpected content token: {text}")));
+        };
+        Ok(value.to_le_bytes().to_vec())
     }
 }
 
@@ -5996,7 +6027,8 @@ async fn val_stream_indexer_114_streaming_v2_failure_retains_planner_state_root(
     assert!(!summary.contains("detail_artifact="));
 }
 
-async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, String, String) {
+async fn run_streaming_v2_identical_embedding_success() -> (StreamingV2PartitionTopology, BlockHash)
+{
     let items = (0..128)
         .map(|index| IndexItem {
             metadata: vec![],
@@ -6004,6 +6036,7 @@ async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, S
         })
         .collect::<Vec<_>>();
     let planner_state_parent = tempfile::tempdir().unwrap();
+    let store = MemoryBlockStore::default();
     let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
         MapResolver,
         ConstantF32EmbeddingProvider,
@@ -6014,85 +6047,114 @@ async fn run_streaming_v2_identical_embedding_failure() -> (tempfile::TempDir, S
     )
     .unwrap();
 
-    for _ in 0..5 {
+    for _ in 0..10 {
         run.ingest_batch(items.as_slice()).await.unwrap();
         run.finish_pass().unwrap();
+        if run.mark_planning_complete().is_ok() {
+            let topology = run.finalized_partition_topology().unwrap();
+            let outcome = run
+                .finalize(std::iter::once(items.as_slice()), &store)
+                .await
+                .unwrap();
+            return (topology, outcome.root_id);
+        }
     }
-    run.ingest_batch(items.as_slice()).await.unwrap();
-    let error = run.finish_pass().unwrap_err();
-    assert!(matches!(
-        error,
-        StreamingIndexerError::HierarchyValidation(ref message)
-            if message.contains("left at least one child empty")
-    ));
 
-    drop(run);
+    panic!("identical-embedding v2 fixture should complete planning within 10 passes");
+}
 
-    let retained_entries = std::fs::read_dir(planner_state_parent.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
+fn collect_leaf_contents(store: &MemoryBlockStore, block_id: &BlockHash) -> Vec<String> {
+    let block = store.get(block_id).unwrap().unwrap();
+    match into_entries(block) {
+        TypedEntries::Leaf(_, entries) => entries
+            .into_iter()
+            .map(|leaf| String::from_utf8(leaf.content.body).unwrap())
+            .collect(),
+        TypedEntries::Branch(_, entries) => entries
+            .into_iter()
+            .flat_map(|entry| collect_leaf_contents(store, &entry.child))
+            .collect(),
+    }
+}
+
+async fn run_streaming_v2_partially_collapsed_duplicate_success()
+-> (StreamingV2PartitionTopology, BlockHash, Vec<Vec<String>>) {
+    let items = std::iter::once("dup-000".to_string())
+        .chain((0..31).map(|index| format!("other-{index:02}")))
+        .chain((1..65).map(|index| format!("dup-{index:03}")))
+        .chain((31..62).map(|index| format!("other-{index:02}")))
+        .chain(std::iter::once("dup-065".to_string()))
+        .map(|content_ref| IndexItem {
+            metadata: vec![],
+            content_ref,
+        })
         .collect::<Vec<_>>();
-    assert_eq!(retained_entries.len(), 1);
-    let retained_root = retained_entries[0].clone();
-    let summary = std::fs::read_to_string(
-        retained_root
-            .join("failure-artifacts")
-            .join("run-failure-summary.txt"),
+    let store = MemoryBlockStore::default();
+    let planner_state_parent = tempfile::tempdir().unwrap();
+    let mut run = StreamingIndexingRunV2::<String, _, _>::with_published_profile(
+        MapResolver,
+        DuplicatePlusIndexedF32EmbeddingProvider,
+        PUBLISHED_PROFILE_V0_7_0,
+        embedding_spec_f32_dims(1),
+        4096,
+        planner_state_parent.path(),
     )
     .unwrap();
-    let detail = std::fs::read_to_string(
-        retained_root
-            .join("failure-artifacts")
-            .join("run-failure-detail.txt"),
-    )
-    .unwrap();
-    (planner_state_parent, summary, detail)
+
+    for _ in 0..10 {
+        run.ingest_batch(items.as_slice()).await.unwrap();
+        run.finish_pass().unwrap();
+        if run.mark_planning_complete().is_ok() {
+            let topology = run.finalized_partition_topology().unwrap();
+            let result = run
+                .finalize(std::iter::once(items.as_slice()), &store)
+                .await
+                .unwrap();
+            let root = store.get(&result.root_id).unwrap().unwrap();
+            let TypedEntries::Branch(_, entries) = into_entries(root) else {
+                panic!("duplicate-refined multi-cell replay should materialize a branch root");
+            };
+            let mut groups = entries
+                .iter()
+                .map(|entry| {
+                    let mut contents = collect_leaf_contents(&store, &entry.child);
+                    contents.sort();
+                    contents
+                })
+                .collect::<Vec<_>>();
+            groups.sort();
+            return (topology, result.root_id, groups);
+        }
+    }
+
+    panic!("partially-collapsed duplicate v2 fixture should complete planning within 10 passes");
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_115_streaming_v2_empty_child_failure_retains_assignment_evidence() {
-    let (_planner_state_parent, summary, detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    assert!(summary.contains("error_variant=HierarchyValidation"));
-    assert!(summary.contains("detail_artifact=run-failure-detail.txt"));
-    assert!(detail.contains("failure_kind=classifier-empty-child"));
-    assert!(detail.contains("partition_path=p0"));
-    assert!(detail.contains("expected_child_count=64"));
-    assert!(detail.contains("observed_child_total=128"));
-    assert!(detail.contains("observed_child_counts=[128"));
-    assert!(detail.contains("empty_child_indexes=[1"));
+async fn val_stream_indexer_118_streaming_v2_duplicate_refinement_preserves_exact_child_count() {
+    let (topology, _root_id) = run_streaming_v2_identical_embedding_success().await;
+    let root = topology
+        .partitions
+        .iter()
+        .find(|partition| partition.id == "p0")
+        .expect("root partition should exist");
+    assert_eq!(root.child_ids.len(), 64);
+    assert!(root.child_ids.iter().all(|child_id| {
+        topology
+            .partitions
+            .iter()
+            .find(|partition| partition.id == *child_id)
+            .is_some_and(|partition| partition.terminal)
+    }));
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_116_streaming_v2_empty_child_failure_retains_routing_state() {
-    let (_planner_state_parent, _summary, detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    assert!(detail.contains("routing_mode=classifier"));
-    assert!(detail.contains("routing_debug_state_begin"));
-    assert!(detail.contains("trainer_subphase=RealizePartition"));
-    assert!(detail.contains("trainer_state_fingerprint_hex="));
-    assert!(detail.contains("classifier_realized_cluster_count=64"));
-    assert!(!detail.contains("model: Some"));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn val_stream_indexer_117_streaming_v2_failure_artifacts_are_deterministic_and_bounded() {
-    let (_left_parent, left_summary, left_detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    let (right_parent, right_summary, right_detail) =
-        run_streaming_v2_identical_embedding_failure().await;
-    assert_eq!(left_summary, right_summary);
-    assert_eq!(left_detail, right_detail);
-
-    let retained_entries = std::fs::read_dir(right_parent.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(retained_entries.len(), 1);
-    let retained_root = retained_entries[0].clone();
-    let artifact_files = std::fs::read_dir(retained_root.join("failure-artifacts"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(artifact_files.len(), 2);
+async fn val_stream_indexer_119_streaming_v2_duplicate_refinement_finalization_is_deterministic() {
+    let (left_topology, left_root_id, left_groups) =
+        run_streaming_v2_partially_collapsed_duplicate_success().await;
+    let (right_topology, right_root_id, right_groups) =
+        run_streaming_v2_partially_collapsed_duplicate_success().await;
+    assert_eq!(left_topology, right_topology);
+    assert_eq!(left_root_id, right_root_id);
+    assert_eq!(left_groups, right_groups);
 }

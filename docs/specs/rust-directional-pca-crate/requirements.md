@@ -373,6 +373,21 @@ crate shall refine only the collapsed duplicate members with a deterministic
 non-geometric tie-break that is stable for the same pass dataset order, thereby
 realizing exactly `K` stable non-empty clusters without randomness.
 
+This exact-`K` duplicate-refinement success shall only be reported when the
+crate's exported final routing surface preserves the same `K` non-empty
+clusters during deterministic replay.
+
+### REQ-DPCA-STREAM-023A
+
+When duplicate refinement adds clusters beyond the populated-cell geometry, the
+crate shall export explicit replay-faithful child-support semantics for those
+refined clusters rather than requiring downstream callers to reconstruct the
+split from centroid geometry alone.
+
+Those semantics may be expressed as deterministic replay-order child counts or
+an equivalent explicit routing contract, but they shall preserve the declared
+exact-`K` non-empty support at the observable export boundary.
+
 ### REQ-DPCA-STREAM-024
 
 The duplicate-refinement fallback shall not be used for:
@@ -381,6 +396,9 @@ The duplicate-refinement fallback shall not be used for:
 - first-pass `Observed N < K`
 - malformed input
 - exact-K failures not attributable to duplicate-collapse
+- duplicate-refined exact-`K` states whose final exported boundary would
+  collapse one or more refined clusters without the explicit replay-faithful
+  routing semantics required by `REQ-DPCA-STREAM-023A`
 
 Those cases shall continue to fail explicitly through the existing shared error
 categories.

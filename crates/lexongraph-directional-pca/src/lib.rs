@@ -113,6 +113,13 @@ impl std::fmt::Debug for DirectionalPcaStreamingTrainer {
 pub struct DirectionalPcaStreamingClassifier {
     config: StreamingClusteringConfig,
     centroids: Vec<Embedding>,
+    replay_plan: Option<ReadyPartitionPlan>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectionalPcaReplayState {
+    cursor_state: AxisCursorState,
+    cell_seen_counts: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +144,7 @@ pub struct DirectionalPcaTrainerTelemetry {
 #[derive(Clone, Debug)]
 struct DirectionalPcaModel {
     centroids: Vec<Embedding>,
+    replay_plan: Option<ReadyPartitionPlan>,
 }
 
 #[derive(Debug)]
@@ -995,6 +1003,12 @@ impl DirectionalPcaStreamingTrainer {
             .iter()
             .map(|stats| stats.centroid())
             .collect::<Result<Vec<_>, _>>()?;
+        let replay_plan = pass
+            .ready
+            .cells
+            .iter()
+            .any(|cell| cell.extra_clusters > 0)
+            .then(|| pass.ready.clone());
         let realized_cluster_count = centroids.len() as u32;
         let report = PassReport {
             observed_count: fingerprint.observed_count,
@@ -1010,7 +1024,10 @@ impl DirectionalPcaStreamingTrainer {
         Ok((
             ReplayPhase::RealizePartition(pass.ready),
             report,
-            Some(DirectionalPcaModel { centroids }),
+            Some(DirectionalPcaModel {
+                centroids,
+                replay_plan,
+            }),
         ))
     }
 
@@ -1173,6 +1190,7 @@ impl StreamingClusterTrainer for DirectionalPcaStreamingTrainer {
         Ok(DirectionalPcaStreamingClassifier {
             config: self.config,
             centroids: model.centroids,
+            replay_plan: model.replay_plan,
         })
     }
 }
@@ -1192,6 +1210,73 @@ impl StreamingClusterClassifier for DirectionalPcaStreamingClassifier {
 }
 
 impl DirectionalPcaStreamingClassifier {
+    pub fn replay_order_child_counts(&self) -> Option<Vec<usize>> {
+        self.replay_plan.as_ref().map(|plan| {
+            let mut counts = Vec::new();
+            for cell in &plan.cells {
+                counts.push(cell.count - cell.extra_clusters);
+                counts.extend(std::iter::repeat_n(1usize, cell.extra_clusters));
+            }
+            counts
+        })
+    }
+
+    pub fn new_replay_state(&self) -> Option<DirectionalPcaReplayState> {
+        self.replay_plan
+            .as_ref()
+            .map(DirectionalPcaReplayState::for_ready_partition)
+    }
+
+    pub fn replay_assign(
+        &self,
+        embedding: &[f32],
+        replay_state: &mut DirectionalPcaReplayState,
+    ) -> Result<ClusterId, StreamingClusteringError> {
+        validate_embedding(embedding, self.config.dimensions)?;
+        let Some(plan) = self.replay_plan.as_ref() else {
+            return self.assign(embedding);
+        };
+        if replay_state.cell_seen_counts.len() != plan.cells.len() {
+            return Err(malformed_input(format!(
+                "directional-PCA replay state tracks {} cells but replay plan requires {}",
+                replay_state.cell_seen_counts.len(),
+                plan.cells.len()
+            )));
+        }
+        let coordinates = plan
+            .partition
+            .transform
+            .apply(embedding)
+            .map_err(map_pca_error)?;
+        let key = plan
+            .partition
+            .assign_point_to_cell(coordinates.as_slice(), &mut replay_state.cursor_state)?;
+        let cell_index = plan
+            .cells
+            .binary_search_by(|cell| cell.key.cmp(&key))
+            .map_err(|_| {
+                unsatisfiable_constraint(
+                    "replay assignment reached a cell that was not present in the realized partition",
+                )
+            })?;
+        let cell = &plan.cells[cell_index];
+        let seen = replay_state.cell_seen_counts[cell_index];
+        if seen >= cell.count {
+            return Err(unsatisfiable_constraint(format!(
+                "replay assignment consumed {seen} items for a cell with only {} planned items",
+                cell.count
+            )));
+        }
+        replay_state.cell_seen_counts[cell_index] += 1;
+        let base_count = cell.count - cell.extra_clusters;
+        let cluster_index = if seen < base_count {
+            cell.cluster_offset
+        } else {
+            cell.cluster_offset + 1 + (seen - base_count)
+        };
+        Ok(cluster_index as ClusterId)
+    }
+
     pub fn assigned_distance(
         &self,
         embedding: &[f32],
@@ -1207,6 +1292,15 @@ impl DirectionalPcaStreamingClassifier {
             }
         }
         Ok((best_cluster as ClusterId, best_distance.sqrt()))
+    }
+}
+
+impl DirectionalPcaReplayState {
+    fn for_ready_partition(plan: &ReadyPartitionPlan) -> Self {
+        Self {
+            cursor_state: AxisCursorState::for_partition(&plan.partition),
+            cell_seen_counts: vec![0; plan.cells.len()],
+        }
     }
 }
 

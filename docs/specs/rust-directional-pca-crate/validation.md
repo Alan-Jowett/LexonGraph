@@ -286,7 +286,8 @@ Use a fixture where all embeddings in the completed pass are identical and
 
 **Pass condition:** the crate does not fail exact-K solely because geometric
 partitioning collapsed the pass; instead it deterministically realizes exactly
-`K` non-empty clusters through duplicate refinement.
+`K` non-empty clusters through duplicate refinement, and the exported boundary
+retains replay-faithful support for those non-empty clusters.
 
 **Traces to:** REQ-DPCA-STREAM-015, REQ-DPCA-STREAM-022, REQ-DPCA-STREAM-023
 
@@ -296,21 +297,35 @@ Use a fixture where one populated cell contains duplicate members and the pass
 under-realizes `K` only because of that collapsed duplicate cell.
 
 **Pass condition:** the crate refines only the collapsed duplicate members,
-preserves the rest of the primary partition, and realizes exactly `K`
-non-empty clusters.
+preserves the rest of the primary partition, realizes exactly `K` non-empty
+clusters, and exports explicit replay-faithful child-support semantics for the
+refined result.
 
-**Traces to:** REQ-DPCA-STREAM-023, REQ-DPCA-STREAM-024
+**Traces to:** REQ-DPCA-STREAM-023, REQ-DPCA-STREAM-023A, REQ-DPCA-STREAM-024
 
 ### VAL-DPCA-STREAM-022
 
 Repeat duplicate-collapse fixtures across at least two passes with identical
 ordered input.
 
-**Pass condition:** partition-ready pass reports and classifier assignments
-preserve stable cluster IDs and deterministic assignments across
-partition-ready passes that exercise duplicate refinement.
+**Pass condition:** partition-ready pass reports preserve stable cluster IDs
+across partition-ready passes that exercise duplicate refinement, and the
+exported routing surface preserves replay-faithful support for the refined
+clusters across repeated runs.
 
-**Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018
+**Traces to:** REQ-DPCA-STREAM-016, REQ-DPCA-STREAM-017, REQ-DPCA-STREAM-018, REQ-DPCA-STREAM-023, REQ-DPCA-STREAM-023A
+
+### VAL-DPCA-STREAM-022A
+
+Use an all-identical-embedding exact-`K` fixture where populated-cell geometry
+collapses to a single cell and duplicate refinement must manufacture the
+remaining children.
+
+**Pass condition:** the exported boundary includes explicit replay-faithful
+child-support semantics for all declared children, or else the crate fails
+before exposing an unreplayable exact-`K` result.
+
+**Traces to:** REQ-DPCA-STREAM-023A, REQ-DPCA-STREAM-024
 
 ### VAL-DPCA-STREAM-023
 

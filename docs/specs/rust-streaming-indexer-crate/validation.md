@@ -1565,3 +1565,26 @@ stable across runs and the failure-artifact directory remains bounded to the
 fixed summary/detail artifact set rather than growing with replay volume.
 
 **Traces to:** REQ-STREAM-INDEXER-126, REQ-STREAM-INDEXER-129
+
+### VAL-STREAM-INDEXER-118
+
+Execute the deterministic identical-embedding v2 fixture that previously failed
+with an empty-child replay-validation error after duplicate refinement.
+
+**Pass condition:** planning completes without emitting the empty-child replay
+failure, and the finalized topology preserves the trainer-declared exact child
+count for the duplicate-refined partition.
+
+**Traces to:** REQ-STREAM-INDEXER-130
+
+### VAL-STREAM-INDEXER-119
+
+Repeat a duplicate-refined v2 run through finalization at least twice using a
+fixture that includes more than one populated cell and interleaves the
+duplicate-refined cell with another populated cell in replay order.
+
+**Pass condition:** the finalized hierarchy remains deterministic across runs
+while preserving the same exact child cardinality without empty replay
+children.
+
+**Traces to:** REQ-STREAM-INDEXER-130
