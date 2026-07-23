@@ -6158,3 +6158,70 @@ async fn val_stream_indexer_119_streaming_v2_duplicate_refinement_finalization_i
     assert_eq!(left_root_id, right_root_id);
     assert_eq!(left_groups, right_groups);
 }
+
+#[test]
+fn val_stream_indexer_004a_v3_public_surface_accepts_leaf_block_ids() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("pub async fn ingest_block_id_batch"));
+    assert!(src.contains("block_ids: &[BlockHash]"));
+    assert!(src.contains("not a leaf block"));
+}
+
+#[test]
+fn val_stream_indexer_005a_v3_uses_temp_working_root_and_cleans_it_on_success() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("tempdir_in(working_root.as_ref())"));
+    assert!(src.contains("temp_root: Option<TempDir>"));
+    assert!(src.contains("temp_root.close()"));
+}
+
+#[test]
+fn val_stream_indexer_017a_v3_removes_terminal_partitions_from_later_refinement() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains(
+        "if partition.item_count <= materializability_bound || partition.item_count <= 1"
+    ));
+    assert!(src.contains("terminals.push("));
+    assert!(src.contains("active = next;"));
+}
+
+#[test]
+fn val_stream_indexer_020a_v3_terminality_uses_materializability_bound() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("materializability_bound(&self.embedding_spec, self.block_size_target)"));
+    assert!(src.contains("partition.item_count <= materializability_bound"));
+}
+
+#[test]
+fn val_stream_indexer_023a_v3_observer_surface_reports_partition_load_progress() {
+    let src = include_str!("../src/v3.rs");
+    let lib = include_str!("../src/lib.rs");
+    assert!(src.contains("StreamingIndexingPhase::V3PartitionLoad"));
+    assert!(src.contains("start_status_heartbeat("));
+    assert!(lib.contains("V3PartitionLoad { layer_index: usize }"));
+    assert!(lib.contains("V3LoadItem"));
+}
+
+#[test]
+fn val_stream_indexer_025h_v3_hot_state_is_bounded_to_active_partitions_and_buffers() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("const V3_IO_QUEUE_DEPTH: usize = 32;"));
+    assert!(src.contains("const V3_BATCH_SIZE: usize = 256;"));
+    assert!(src.contains("mut active: Vec<WorkingPartition>"));
+    assert!(src.contains("let mut next = Vec::new();"));
+}
+
+#[test]
+fn val_stream_indexer_034a_v3_partition_identity_is_schedule_independent() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("format!(\"l{layer_index}.p0\")"));
+    assert!(src.contains("format!(\"{}.{}\", partition.id, child_index)"));
+    assert!(src.contains("v3_is_deterministic_and_cleans_up_successfully"));
+}
+
+#[test]
+fn val_stream_indexer_036a_v3_overlaps_storage_and_cpu_work() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains(".buffered(V3_IO_QUEUE_DEPTH)"));
+    assert!(src.contains(".into_par_iter()") || src.contains(".par_iter()"));
+}

@@ -71,6 +71,9 @@ use memmap2::{Mmap, MmapOptions};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+mod v3;
+pub use v3::StreamingIndexingRunV3;
+
 // ─────────────────────────────────────────────────────────────
 // Public input / output types
 // ─────────────────────────────────────────────────────────────
@@ -453,6 +456,7 @@ impl From<StreamingClusteringError> for StreamingIndexerError {
 pub enum StreamingIndexingPhase {
     PlanningPass { pass_number: usize },
     HierarchyPlanning { stage: PlanningStage },
+    V3PartitionLoad { layer_index: usize },
     FinalMaterializationReplay,
     BottomUpAssembly { layer_index: usize },
 }
@@ -470,6 +474,7 @@ pub enum StreamingIndexingProgressUnitKind {
     PassItem,
     HierarchyPlanningItem,
     PartitionPlanningInvocation,
+    V3LoadItem,
     ReplayItem,
     AssemblyGroup,
 }
@@ -7849,6 +7854,9 @@ fn status_with_progress(
             Some(StreamingIndexingProgressUnitKind::PassItem)
         }
         StreamingIndexingPhase::HierarchyPlanning { .. } => None,
+        StreamingIndexingPhase::V3PartitionLoad { .. } => {
+            Some(StreamingIndexingProgressUnitKind::V3LoadItem)
+        }
         StreamingIndexingPhase::FinalMaterializationReplay => {
             Some(StreamingIndexingProgressUnitKind::ReplayItem)
         }

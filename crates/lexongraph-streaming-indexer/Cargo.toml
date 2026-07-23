@@ -27,6 +27,7 @@ lexongraph-spherical-kmeans = { path = "../lexongraph-spherical-kmeans" }
 lexongraph-streaming-clustering = { path = "../lexongraph-streaming-clustering" }
 memmap2 = "0.9"
 pollster = { version = "1.0.1", optional = true }
+rayon = "1.11"
 sha2 = "0.11.0"
 tempfile = "3"
 
