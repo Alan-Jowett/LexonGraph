@@ -316,6 +316,8 @@ hierarchy, and any clustering used while deriving or refining that hierarchy
 for either built-in direction still flows through the shared streaming
 clustering contract rather than an older batch-only clustering boundary.
 
+**Traces to:** REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-035
+
 ### VAL-STREAM-INDEXER-020A
 
 Drive the constrained v3 surface with a fixture whose partition sizes approach
@@ -327,8 +329,6 @@ than a fixed item-count constant, and any batching or queue-size heuristic does
 not change which partitions are terminal.
 
 **Traces to:** REQ-STREAM-INDEXER-020B
-
-**Traces to:** REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-035
 
 ### VAL-STREAM-INDEXER-021
 

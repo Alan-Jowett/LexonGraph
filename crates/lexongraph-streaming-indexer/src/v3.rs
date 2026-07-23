@@ -567,6 +567,8 @@ impl StreamingIndexingRunV3 {
                     .map_err(|error| {
                         StreamingIndexerError::HierarchyValidation(error.to_string())
                     })?;
+            let fallback_assignment =
+                fallback_assignment_map(partition.item_count, fallback_groups.as_slice())?;
             child_ids = (0..fallback_groups.len())
                 .map(|child_index| format!("{}.{}", partition.id, child_index))
                 .collect::<Vec<_>>();
@@ -586,24 +588,18 @@ impl StreamingIndexingRunV3 {
             child_item_counts = fallback_groups.iter().map(Vec::len).collect::<Vec<_>>();
             match partition.kind {
                 WorkingItemKind::LeafBlockIds => {
-                    let all_ids = read_all_block_hashes(&partition.path)?;
-                    let mut writers = BlockHashPartitionWriters::create(child_paths.as_slice())?;
-                    for (group_index, group) in fallback_groups.into_iter().enumerate() {
-                        for local_index in group {
-                            writers.write(group_index, &all_ids[local_index])?;
-                        }
-                    }
-                    writers.finish()?;
+                    rewrite_block_hash_partition_with_assignments(
+                        &partition.path,
+                        child_paths.as_slice(),
+                        fallback_assignment.as_slice(),
+                    )?;
                 }
                 WorkingItemKind::IndexedChildren => {
-                    let all_children = read_all_indexed_children(&partition.path)?;
-                    let mut writers = IndexedChildPartitionWriters::create(child_paths.as_slice())?;
-                    for (group_index, group) in fallback_groups.into_iter().enumerate() {
-                        for local_index in group {
-                            writers.write(group_index, &all_children[local_index])?;
-                        }
-                    }
-                    writers.finish()?;
+                    rewrite_indexed_child_partition_with_assignments(
+                        &partition.path,
+                        child_paths.as_slice(),
+                        fallback_assignment.as_slice(),
+                    )?;
                 }
             }
             non_empty = child_item_counts
@@ -938,20 +934,6 @@ impl StreamingIndexingRunV3 {
             });
             status.progress.fetch_add(1, AtomicOrdering::Relaxed);
         }
-        emit_status(
-            &self.observer,
-            with_legacy_item_count(
-                status_with_known_total(
-                    status.phase,
-                    StreamingIndexingStatusState::InProgress,
-                    status.progress.load(AtomicOrdering::Relaxed),
-                    status.progress.load(AtomicOrdering::Relaxed),
-                    status.started.elapsed(),
-                    None,
-                ),
-                status.legacy_item_count,
-            ),
-        );
         Ok(next_layer)
     }
 
@@ -994,54 +976,75 @@ impl StreamingIndexingRunV3 {
             Some(block_ids.len()),
             started,
         ));
-        let blocks = futures::stream::iter(block_ids.iter().copied())
-            .map(|block_id| {
-                let progress = Arc::clone(&progress);
-                async move {
-                    let block = source_store
-                        .get(&block_id)
-                        .await
-                        .map_err(StreamingIndexerError::Storage)?
-                        .ok_or_else(|| {
-                            StreamingIndexerError::Storage(
-                                lexongraph_block_store::BlockStoreError::BackendFailure(format!(
-                                    "v3 input block {} is missing",
-                                    block_id
-                                )),
-                            )
-                        })?;
-                    progress.fetch_add(1, AtomicOrdering::Relaxed);
-                    Ok::<(BlockHash, ValidatedBlock), StreamingIndexerError>((block_id, block))
-                }
-            })
-            .buffered(V3_IO_QUEUE_DEPTH)
-            .collect::<Vec<_>>()
-            .await;
-        let mut ordered = Vec::with_capacity(blocks.len());
-        for result in blocks {
-            ordered.push(result?);
+        let result = async {
+            let blocks = futures::stream::iter(block_ids.iter().copied())
+                .map(|block_id| {
+                    let progress = Arc::clone(&progress);
+                    async move {
+                        let block = source_store
+                            .get(&block_id)
+                            .await
+                            .map_err(StreamingIndexerError::Storage)?
+                            .ok_or_else(|| {
+                                StreamingIndexerError::Storage(
+                                    lexongraph_block_store::BlockStoreError::BackendFailure(
+                                        format!("v3 input block {} is missing", block_id),
+                                    ),
+                                )
+                            })?;
+                        progress.fetch_add(1, AtomicOrdering::Relaxed);
+                        Ok::<(BlockHash, ValidatedBlock), StreamingIndexerError>((block_id, block))
+                    }
+                })
+                .buffered(V3_IO_QUEUE_DEPTH)
+                .collect::<Vec<_>>()
+                .await;
+            let mut ordered = Vec::with_capacity(blocks.len());
+            for result in blocks {
+                ordered.push(result?);
+            }
+            let decoded = ordered
+                .into_par_iter()
+                .map(|(block_id, block)| decode_loaded_leaf(block_id, block, &self.embedding_spec))
+                .collect::<Vec<_>>();
+            let mut loaded = Vec::with_capacity(decoded.len());
+            for leaf in decoded {
+                loaded.push(leaf?);
+            }
+            Ok::<Vec<LoadedLeaf>, StreamingIndexerError>(loaded)
         }
-        let decoded = ordered
-            .into_par_iter()
-            .map(|(block_id, block)| decode_loaded_leaf(block_id, block, &self.embedding_spec))
-            .collect::<Vec<_>>();
-        let mut loaded = Vec::with_capacity(decoded.len());
-        for leaf in decoded {
-            loaded.push(leaf?);
-        }
+        .await;
         heartbeat.stop();
-        emit_status(
-            &self.observer,
-            status_with_known_total(
-                phase,
-                StreamingIndexingStatusState::Completed,
-                block_ids.len(),
-                block_ids.len(),
-                started.elapsed(),
-                None,
-            ),
-        );
-        Ok(loaded)
+        match result {
+            Ok(loaded) => {
+                emit_status(
+                    &self.observer,
+                    status_with_known_total(
+                        phase,
+                        StreamingIndexingStatusState::Completed,
+                        block_ids.len(),
+                        block_ids.len(),
+                        started.elapsed(),
+                        None,
+                    ),
+                );
+                Ok(loaded)
+            }
+            Err(error) => {
+                emit_status(
+                    &self.observer,
+                    status_with_known_total(
+                        phase,
+                        StreamingIndexingStatusState::Failed,
+                        block_ids.len(),
+                        progress.load(AtomicOrdering::Relaxed),
+                        started.elapsed(),
+                        Some(error.to_string()),
+                    ),
+                );
+                Err(error)
+            }
+        }
     }
 
     fn dimensions(&self) -> Result<usize, StreamingIndexerError> {
@@ -1278,6 +1281,25 @@ impl IndexedChildPartitionWriters {
     }
 }
 
+fn write_indexed_child_partition(
+    path: &Path,
+    children: &[IndexedChild],
+) -> Result<(), StreamingIndexerError> {
+    let file = File::create(path).map_err(|error| {
+        StreamingIndexerError::LocalSpill(format!(
+            "could not create v3 summary root partition {}: {error}",
+            path.display()
+        ))
+    })?;
+    let mut writer = BufWriter::new(file);
+    for child in children {
+        crate::write_spilled_indexed_child(&mut writer, child)?;
+    }
+    writer
+        .flush()
+        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))
+}
+
 fn read_all_block_hashes(path: &Path) -> Result<Vec<BlockHash>, StreamingIndexerError> {
     let mut reader = BlockHashPartitionReader::open(path)?;
     let mut all = Vec::new();
@@ -1296,23 +1318,94 @@ fn read_all_indexed_children(path: &Path) -> Result<Vec<IndexedChild>, Streaming
     Ok(all)
 }
 
-fn write_indexed_child_partition(
-    path: &Path,
-    children: &[IndexedChild],
-) -> Result<(), StreamingIndexerError> {
-    let file = File::create(path).map_err(|error| {
-        StreamingIndexerError::LocalSpill(format!(
-            "could not create v3 summary root partition {}: {error}",
-            path.display()
-        ))
-    })?;
-    let mut writer = BufWriter::new(file);
-    for child in children {
-        crate::write_spilled_indexed_child(&mut writer, child)?;
+fn fallback_assignment_map(
+    item_count: usize,
+    groups: &[Vec<usize>],
+) -> Result<Vec<usize>, StreamingIndexerError> {
+    let mut assignment = vec![usize::MAX; item_count];
+    for (group_index, group) in groups.iter().enumerate() {
+        for &item_index in group {
+            let slot = assignment.get_mut(item_index).ok_or_else(|| {
+                StreamingIndexerError::HierarchyValidation(format!(
+                    "fallback split referenced out-of-range item index {item_index} for partition size {item_count}"
+                ))
+            })?;
+            if *slot != usize::MAX {
+                return Err(StreamingIndexerError::HierarchyValidation(format!(
+                    "fallback split assigned item index {item_index} more than once"
+                )));
+            }
+            *slot = group_index;
+        }
     }
-    writer
-        .flush()
-        .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))
+    if let Some((item_index, _)) = assignment
+        .iter()
+        .enumerate()
+        .find(|(_, group_index)| **group_index == usize::MAX)
+    {
+        return Err(StreamingIndexerError::HierarchyValidation(format!(
+            "fallback split left item index {item_index} unassigned"
+        )));
+    }
+    Ok(assignment)
+}
+
+fn rewrite_block_hash_partition_with_assignments(
+    source_path: &Path,
+    destination_paths: &[PathBuf],
+    assignment: &[usize],
+) -> Result<(), StreamingIndexerError> {
+    let mut reader = BlockHashPartitionReader::open(source_path)?;
+    let mut writers = BlockHashPartitionWriters::create(destination_paths)?;
+    let mut item_index = 0usize;
+    while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+        for block_id in batch {
+            let group_index = *assignment.get(item_index).ok_or_else(|| {
+                StreamingIndexerError::HierarchyValidation(format!(
+                    "fallback block-id rewrite observed more than {} items",
+                    assignment.len()
+                ))
+            })?;
+            writers.write(group_index, &block_id)?;
+            item_index += 1;
+        }
+    }
+    if item_index != assignment.len() {
+        return Err(StreamingIndexerError::HierarchyValidation(format!(
+            "fallback block-id rewrite observed {item_index} items but expected {}",
+            assignment.len()
+        )));
+    }
+    writers.finish()
+}
+
+fn rewrite_indexed_child_partition_with_assignments(
+    source_path: &Path,
+    destination_paths: &[PathBuf],
+    assignment: &[usize],
+) -> Result<(), StreamingIndexerError> {
+    let mut reader = IndexedChildPartitionReader::open(source_path)?;
+    let mut writers = IndexedChildPartitionWriters::create(destination_paths)?;
+    let mut item_index = 0usize;
+    while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+        for child in batch {
+            let group_index = *assignment.get(item_index).ok_or_else(|| {
+                StreamingIndexerError::HierarchyValidation(format!(
+                    "fallback summary rewrite observed more than {} items",
+                    assignment.len()
+                ))
+            })?;
+            writers.write(group_index, &child)?;
+            item_index += 1;
+        }
+    }
+    if item_index != assignment.len() {
+        return Err(StreamingIndexerError::HierarchyValidation(format!(
+            "fallback summary rewrite observed {item_index} items but expected {}",
+            assignment.len()
+        )));
+    }
+    writers.finish()
 }
 
 #[cfg(test)]
@@ -1530,5 +1623,36 @@ mod tests {
                 .iter()
                 .any(|phase| matches!(phase, StreamingIndexingPhase::V3PartitionLoad { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn v3_load_failure_emits_failed_status() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = MemoryBlockStore::default();
+        let output = MemoryBlockStore::default();
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let observer = {
+            let statuses = Arc::clone(&statuses);
+            Arc::new(move |status: crate::StreamingIndexingStatus| {
+                statuses.lock().unwrap().push(status);
+            }) as StreamingIndexingStatusObserver
+        };
+        let mut run = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_7_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap()
+        .with_observer(observer);
+        run.ingest_block_id_batch(&[BlockHash::from_bytes([7u8; BlockHash::LEN])])
+            .await
+            .unwrap();
+        let error = run.finalize(&source, &output).await.unwrap_err();
+        assert!(matches!(error, StreamingIndexerError::Storage(_)));
+        assert!(statuses.lock().unwrap().iter().any(|status| {
+            matches!(status.phase, StreamingIndexingPhase::V3PartitionLoad { .. })
+                && status.state == StreamingIndexingStatusState::Failed
+        }));
     }
 }
