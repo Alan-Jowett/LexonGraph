@@ -1567,7 +1567,6 @@ than fingerprint-only.
 They shall remain bounded to run-scoped and failure-scoped evidence and shall
 not require unbounded retention of per-item hot-path state or full-dataset
 dumps in order to explain the failure.
-
 ## Out of Scope
 
 This crate does not define or own:

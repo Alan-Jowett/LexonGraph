@@ -3393,7 +3393,6 @@ impl Drop for PlannerStateScratchDir {
 const V2_FAILURE_ARTIFACT_DIR_NAME: &str = "failure-artifacts";
 const V2_FAILURE_SUMMARY_FILE_NAME: &str = "run-failure-summary.txt";
 const V2_FAILURE_DETAIL_FILE_NAME: &str = "run-failure-detail.txt";
-
 struct StreamingV2PassMetricAccumulator {
     quality_sum: f64,
     balance_sum: f64,
@@ -11252,8 +11251,6 @@ mod tests {
             }
         );
     }
-
-    #[test]
     fn unresolved_work_shrank_requires_pending_reduction_or_equal_pending_with_more_resolution() {
         let previous = StreamingV2CompletedPassSnapshot {
             pass_number: 1,
