@@ -63,7 +63,6 @@ struct LoadedLeaf {
     id: BlockHash,
     block: Block,
     embedding: Vec<u8>,
-    embedding_f32: Vec<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -955,12 +954,19 @@ impl StreamingIndexingRunV3 {
             Some(block_ids.len()),
             started,
         ));
-        let result = load_leaf_batch_raw(
-            block_ids,
-            source_store,
-            &self.embedding_spec,
-            Some(&progress),
-        )
+        let result = async {
+            let ordered = load_leaf_blocks_raw(block_ids, source_store).await?;
+            let decoded = ordered
+                .into_par_iter()
+                .map(|(block_id, block)| decode_loaded_leaf(block_id, block, &self.embedding_spec))
+                .collect::<Vec<_>>();
+            let mut loaded = Vec::with_capacity(decoded.len());
+            for leaf in decoded {
+                loaded.push(leaf?);
+                progress.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+            Ok::<Vec<LoadedLeaf>, StreamingIndexerError>(loaded)
+        }
         .await;
         heartbeat.stop();
         match result {
@@ -1281,13 +1287,31 @@ fn decode_loaded_leaf(
         .first()
         .expect("validated leaf must contain an entry");
     let embedding = entry.embedding.clone();
-    let embedding_f32 = decode_embedding_as_f32(entry.embedding.as_slice(), embedding_spec)?;
     Ok(LoadedLeaf {
         id: block_id,
         block,
         embedding,
-        embedding_f32,
     })
+}
+
+fn decode_leaf_embedding_f32(
+    block_id: BlockHash,
+    block: ValidatedBlock,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<Vec<f32>, StreamingIndexerError> {
+    let block = block.block;
+    let Block::Leaf(ref leaf) = block else {
+        return Err(StreamingIndexerError::HierarchyValidation(format!(
+            "v3 input block {} is not a leaf block",
+            block_id
+        )));
+    };
+    validate_v3_leaf(block_id, leaf, embedding_spec)?;
+    let entry = leaf
+        .entries
+        .first()
+        .expect("validated leaf must contain an entry");
+    decode_embedding_as_f32(entry.embedding.as_slice(), embedding_spec)
 }
 
 fn v3_replay_pass_limit(item_count: usize) -> usize {
@@ -1372,12 +1396,10 @@ where
     })
 }
 
-async fn load_leaf_batch_raw(
+async fn load_leaf_blocks_raw(
     block_ids: &[BlockHash],
     source_store: &dyn BlockStore,
-    embedding_spec: &EmbeddingSpec,
-    progress: Option<&Arc<AtomicUsize>>,
-) -> Result<Vec<LoadedLeaf>, StreamingIndexerError> {
+) -> Result<Vec<(BlockHash, ValidatedBlock)>, StreamingIndexerError> {
     let blocks = futures::stream::iter(block_ids.iter().copied())
         .map(|block_id| async move {
             let block = source_store
@@ -1401,13 +1423,23 @@ async fn load_leaf_batch_raw(
     for result in blocks {
         ordered.push(result?);
     }
+    Ok(ordered)
+}
+
+async fn load_leaf_batch_raw(
+    block_ids: &[BlockHash],
+    source_store: &dyn BlockStore,
+    embedding_spec: &EmbeddingSpec,
+    progress: Option<&Arc<AtomicUsize>>,
+) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
+    let ordered = load_leaf_blocks_raw(block_ids, source_store).await?;
     let decoded = ordered
         .into_par_iter()
-        .map(|(block_id, block)| decode_loaded_leaf(block_id, block, embedding_spec))
+        .map(|(block_id, block)| decode_leaf_embedding_f32(block_id, block, embedding_spec))
         .collect::<Vec<_>>();
     let mut loaded = Vec::with_capacity(decoded.len());
-    for leaf in decoded {
-        loaded.push(leaf?);
+    for embedding in decoded {
+        loaded.push(embedding?);
         if let Some(progress) = progress {
             progress.fetch_add(1, AtomicOrdering::Relaxed);
         }
@@ -1421,12 +1453,7 @@ async fn prepare_leaf_training_batch(
     embedding_spec: &EmbeddingSpec,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-    let loaded =
-        load_leaf_batch_raw(block_ids.as_slice(), source_store, embedding_spec, progress).await?;
-    Ok(loaded
-        .into_par_iter()
-        .map(|leaf| leaf.embedding_f32)
-        .collect())
+    load_leaf_batch_raw(block_ids.as_slice(), source_store, embedding_spec, progress).await
 }
 
 async fn prepare_leaf_assignment_batch(
@@ -1435,12 +1462,8 @@ async fn prepare_leaf_assignment_batch(
     embedding_spec: &EmbeddingSpec,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<PreparedLeafAssignmentBatch, StreamingIndexerError> {
-    let loaded =
+    let embeddings =
         load_leaf_batch_raw(block_ids.as_slice(), source_store, embedding_spec, progress).await?;
-    let embeddings = loaded
-        .into_par_iter()
-        .map(|leaf| leaf.embedding_f32)
-        .collect::<Vec<_>>();
     Ok(PreparedLeafAssignmentBatch {
         block_ids,
         embeddings,
