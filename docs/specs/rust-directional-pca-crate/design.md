@@ -331,15 +331,17 @@ order.
 Exact-`K` success is only exposed when the exported routing surface preserves
 the same refined non-empty child support during deterministic replay.
 
-### DSG-DPCA-STREAM-020A `Duplicate-refined replay-order support export`
+### DSG-DPCA-STREAM-020A `Duplicate-refined replay support export`
 
 When refinement adds `extra_clusters > 0` beyond the populated-cell geometry,
-the realized partition records deterministic per-child support counts derived
-from the refined cell plan.
+the realized partition records deterministic per-child support counts together
+with enough retained partition-routing state to replay the refined split within
+the affected populated cell.
 
-Those support counts are exported as explicit replay-faithful routing metadata
-so downstream callers can preserve the refined exact-`K` split without
-re-inferring it from centroid geometry alone.
+That replay metadata is exported explicitly so downstream callers can preserve
+the refined exact-`K` split without re-inferring it from centroid geometry
+alone or degrading unrelated populated cells to partition-global replay-order
+routing.
 
 ### DSG-DPCA-STREAM-021 `Narrow fallback scope`
 

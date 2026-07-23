@@ -1418,26 +1418,31 @@ They are scoped to the failed run and the specific failure being reported,
 preserve success-path cleanup behavior unchanged, and avoid unbounded retention
 of full-dataset or per-item hot-path state.
 
-### DSG-STREAM-INDEXER-124 `V2 duplicate-refined replay-order finalization`
+### DSG-STREAM-INDEXER-124 `V2 duplicate-refined replay-faithful finalization`
 
 When directional-PCA exports explicit replay-faithful child-support semantics
 for a duplicate-refined exact-`K` partition, v2 finalization consumes those
-semantics directly and materializes the child nodes without waiting for a
+semantics directly and materializes the child nodes without requiring a
 centroid-only classifier replay to rediscover the split.
 
 This keeps the hierarchy-node child count aligned with the trainer's declared
 exact-`K` partition even when the realized centroids are geometrically
 indistinguishable.
 
-### DSG-STREAM-INDEXER-125 `No plain classifier finalization for unreplayable duplicates`
+### DSG-STREAM-INDEXER-125 `No centroid-only finalization for unreplayable duplicates`
 
 When duplicate-refined exact-`K` support requires explicit replay-faithful
-routing semantics, v2 does not finalize the partition as a plain
+routing semantics, v2 does not finalize the partition as a centroid-only
 classifier-backed routing node.
 
+If v2 retains a classifier-backed routing node for such a partition, that node
+must carry the duplicate-refined replay semantics needed to preserve the
+original cell routing plus the deterministic in-cell duplicate split.
+
 The hierarchy-validation boundary therefore rejects or bypasses centroid-only
-replay for those partitions before it can construct a node whose declared child
-count would deterministically replay with empty children.
+replay before it can construct a node whose declared child count would
+deterministically replay with empty children or misroute non-duplicate items
+from other populated cells.
 
 ## Traceability
 

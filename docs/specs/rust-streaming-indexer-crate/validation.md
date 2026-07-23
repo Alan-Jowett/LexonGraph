@@ -1579,8 +1579,9 @@ count for the duplicate-refined partition.
 
 ### VAL-STREAM-INDEXER-119
 
-Repeat the same duplicate-refined identical-embedding v2 run through
-finalization at least twice.
+Repeat a duplicate-refined v2 run through finalization at least twice using a
+fixture that includes more than one populated cell and interleaves the
+duplicate-refined cell with another populated cell in replay order.
 
 **Pass condition:** the finalized hierarchy remains deterministic across runs
 while preserving the same exact child cardinality without empty replay

@@ -253,10 +253,17 @@ fn val_dpca_stream_020_and_022_identical_embeddings_export_replay_faithful_suppo
     assert_eq!(reports[3].cluster_ids, Some(vec![0, 1, 2]));
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
-    assert_eq!(
-        classifier.replay_order_child_counts(),
-        Some([2, 1, 1].as_slice())
-    );
+    let mut replay_state = classifier
+        .new_replay_state()
+        .expect("duplicate refinement should export replay state");
+    let replayed = std::iter::repeat_n([5.0, 5.0], 4)
+        .map(|embedding| {
+            classifier
+                .replay_assign(embedding.as_slice(), &mut replay_state)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed, vec![0, 0, 1, 2]);
 }
 
 #[test]
@@ -283,10 +290,23 @@ fn val_dpca_stream_021_duplicate_refinement_recovers_a_partially_collapsed_fixtu
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
     assert_eq!(classifier.realized_cluster_count(), 3);
-    assert_eq!(
-        classifier.replay_order_child_counts(),
-        Some([2, 1, 1].as_slice())
-    );
+    let mut replay_state = classifier
+        .new_replay_state()
+        .expect("duplicate refinement should export replay state");
+    let replayed = [
+        vec![0.0, 0.0],
+        vec![0.0, 0.0],
+        vec![0.0, 0.0],
+        vec![10.0, 0.0],
+    ]
+    .into_iter()
+    .map(|embedding| {
+        classifier
+            .replay_assign(embedding.as_slice(), &mut replay_state)
+            .unwrap()
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(replayed, vec![0, 0, 1, 2]);
 }
 
 #[test]
@@ -309,11 +329,17 @@ fn val_dpca_stream_022a_duplicate_refinement_exports_explicit_child_support() {
 
     trainer.complete_training().unwrap();
     let classifier = trainer.into_classifier().unwrap();
-    let child_counts = classifier
-        .replay_order_child_counts()
+    let mut replay_state = classifier
+        .new_replay_state()
         .expect("duplicate refinement should export replay-order support");
-    assert_eq!(child_counts, [2, 1, 1].as_slice());
-    assert_eq!(child_counts.iter().sum::<usize>(), 4);
+    let replayed = std::iter::repeat_n([5.0, 5.0], 4)
+        .map(|embedding| {
+            classifier
+                .replay_assign(embedding.as_slice(), &mut replay_state)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed, vec![0, 0, 1, 2]);
 }
 
 #[test]

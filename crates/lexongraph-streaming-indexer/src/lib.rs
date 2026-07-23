@@ -55,8 +55,9 @@ use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
 use lexongraph_directional_pca::{
     DirectionalPcaAllocationPolicy, DirectionalPcaBinningPolicy,
     DirectionalPcaClusterCardinalityMode, DirectionalPcaOutOfCorePlannerState,
-    DirectionalPcaParams, DirectionalPcaRetainedAxisPolicy, DirectionalPcaStreamingClassifier,
-    DirectionalPcaStreamingTrainer, DirectionalPcaTrainerSubphase, DirectionalPcaTrainerTelemetry,
+    DirectionalPcaParams, DirectionalPcaReplayState, DirectionalPcaRetainedAxisPolicy,
+    DirectionalPcaStreamingClassifier, DirectionalPcaStreamingTrainer,
+    DirectionalPcaTrainerSubphase, DirectionalPcaTrainerTelemetry,
 };
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_pca::fit;
@@ -2010,6 +2011,7 @@ struct StreamingV2ReplayFingerprintTracker {
 struct StreamingV2PassState {
     fingerprint: StreamingV2ReplayFingerprintTracker,
     replay_order_offsets: Vec<usize>,
+    directional_pca_replay_states: Vec<Option<DirectionalPcaReplayState>>,
     classifier_assignment_counts: Vec<Option<Vec<usize>>>,
     started: Instant,
     last_progress_at: Option<Duration>,
@@ -2054,7 +2056,7 @@ struct StreamingV2CompletedPassHistoryEntry {
 }
 
 enum StreamingV2RoutingStrategy {
-    Classifier(DirectionalPcaStreamingClassifier),
+    Classifier(Box<DirectionalPcaStreamingClassifier>),
     ReplayOrder(StreamingV2ReplayOrderPlan),
 }
 
@@ -4038,6 +4040,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             &self.partitions,
                             decoded.as_slice(),
                             current_pass.replay_order_offsets.as_mut_slice(),
+                            current_pass.directional_pca_replay_states.as_mut_slice(),
                             current_pass.classifier_assignment_counts.as_mut_slice(),
                         )?
                     };
@@ -4276,9 +4279,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                     let item_count = self.partition(partition_id)?.item_count;
                     let trainer_telemetry = trainer.telemetry();
                     let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
-                    let replay_order_child_counts = classifier
-                        .replay_order_child_counts()
-                        .map(|counts| counts.to_vec());
+                    let replay_order_child_counts = classifier.replay_order_child_counts();
                     let realized_cluster_count =
                         usize::try_from(classifier.realized_cluster_count()).map_err(|_| {
                             StreamingIndexerError::HierarchyValidation(
@@ -4327,7 +4328,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             )));
                         }
                         let routing_debug_state = Some(format!(
-                            "ReplayOrderPlan {{ source: duplicate-refined-exact-k, child_counts: {} }}",
+                            "DirectionalPcaReplayPlan {{ child_counts: {} }}",
                             format_usize_list(child_counts.as_slice())
                         ));
                         let children = self.create_child_nodes(
@@ -4335,13 +4336,11 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             child_counts.clone(),
                             materializability_bound,
                         )?;
-                        let routing = StreamingV2RoutingStrategy::ReplayOrder(
-                            StreamingV2ReplayOrderPlan::new(child_counts),
-                        );
+                        let routing = StreamingV2RoutingStrategy::Classifier(Box::new(classifier));
                         (routing, routing_debug_state, children)
                     } else {
                         (
-                            StreamingV2RoutingStrategy::Classifier(classifier),
+                            StreamingV2RoutingStrategy::Classifier(Box::new(classifier)),
                             Some(format_v2_classifier_routing_debug_state(
                                 trainer_telemetry,
                                 realized_cluster_count,
@@ -4612,6 +4611,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
 
         let mut fingerprint = StreamingV2ReplayFingerprintTracker::new();
         let mut replay_order_offsets = vec![0; self.partitions.len()];
+        let mut directional_pca_replay_states = vec![None; self.partitions.len()];
         let mut replay_count = 0usize;
         let mut persisted_ids = Vec::new();
         let mut spill = PartitionSpillDirectory::new(terminal_partition_ids.len())?;
@@ -4641,6 +4641,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 let terminal_id = self.route_terminal_partition(
                     decoded.as_slice(),
                     replay_order_offsets.as_mut_slice(),
+                    directional_pca_replay_states.as_mut_slice(),
                 )?;
                 let partition_ordinal = terminal_ordinals
                     .get(terminal_id.0)
@@ -4926,6 +4927,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         partitions: &[StreamingV2PartitionNode],
         embedding: &[f32],
         replay_order_offsets: &mut [usize],
+        directional_pca_replay_states: &mut [Option<DirectionalPcaReplayState>],
         classifier_assignment_counts: &mut [Option<Vec<usize>>],
     ) -> Result<Option<PartitionId>, StreamingIndexerError> {
         if partitions.is_empty() {
@@ -4953,12 +4955,34 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             })?;
             let child_index = match routing {
                 StreamingV2RoutingStrategy::Classifier(classifier) => {
-                    usize::try_from(classifier.assign(embedding).map_err(map_clustering_error)?)
-                        .map_err(|_| {
-                            StreamingIndexerError::HierarchyValidation(
-                                "classifier cluster id does not fit into usize".into(),
+                    let replay_state = directional_pca_replay_states
+                        .get_mut(current.0)
+                        .ok_or_else(|| {
+                            StreamingIndexerError::HierarchyValidation(format!(
+                                "partition {:?} is missing directional-PCA replay state",
+                                format_partition_label(partitions, current)
+                            ))
+                        })?;
+                    let cluster_id = if let Some(replay_state) = replay_state.as_mut() {
+                        classifier
+                            .replay_assign(embedding, replay_state)
+                            .map_err(map_clustering_error)?
+                    } else if let Some(state) = classifier.new_replay_state() {
+                        *replay_state = Some(state);
+                        classifier
+                            .replay_assign(
+                                embedding,
+                                replay_state.as_mut().expect("state inserted"),
                             )
-                        })?
+                            .map_err(map_clustering_error)?
+                    } else {
+                        classifier.assign(embedding).map_err(map_clustering_error)?
+                    };
+                    usize::try_from(cluster_id).map_err(|_| {
+                        StreamingIndexerError::HierarchyValidation(
+                            "classifier cluster id does not fit into usize".into(),
+                        )
+                    })?
                 }
                 StreamingV2RoutingStrategy::ReplayOrder(plan) => {
                     let seen = replay_order_offsets.get_mut(current.0).ok_or_else(|| {
@@ -5024,6 +5048,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         &self,
         embedding: &[f32],
         replay_order_offsets: &mut [usize],
+        directional_pca_replay_states: &mut [Option<DirectionalPcaReplayState>],
     ) -> Result<PartitionId, StreamingIndexerError> {
         let mut current = ROOT_PARTITION_ID;
         loop {
@@ -5045,12 +5070,34 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             })?;
             let child_index = match routing {
                 StreamingV2RoutingStrategy::Classifier(classifier) => {
-                    usize::try_from(classifier.assign(embedding).map_err(map_clustering_error)?)
-                        .map_err(|_| {
-                            StreamingIndexerError::HierarchyValidation(
-                                "classifier cluster id does not fit into usize".into(),
+                    let replay_state = directional_pca_replay_states
+                        .get_mut(current.0)
+                        .ok_or_else(|| {
+                            StreamingIndexerError::HierarchyValidation(format!(
+                                "partition {:?} is missing directional-PCA replay state",
+                                self.partition_label(current)
+                            ))
+                        })?;
+                    let cluster_id = if let Some(replay_state) = replay_state.as_mut() {
+                        classifier
+                            .replay_assign(embedding, replay_state)
+                            .map_err(map_clustering_error)?
+                    } else if let Some(state) = classifier.new_replay_state() {
+                        *replay_state = Some(state);
+                        classifier
+                            .replay_assign(
+                                embedding,
+                                replay_state.as_mut().expect("state inserted"),
                             )
-                        })?
+                            .map_err(map_clustering_error)?
+                    } else {
+                        classifier.assign(embedding).map_err(map_clustering_error)?
+                    };
+                    usize::try_from(cluster_id).map_err(|_| {
+                        StreamingIndexerError::HierarchyValidation(
+                            "classifier cluster id does not fit into usize".into(),
+                        )
+                    })?
                 }
                 StreamingV2RoutingStrategy::ReplayOrder(plan) => {
                     let seen = replay_order_offsets.get_mut(current.0).ok_or_else(|| {
@@ -5339,6 +5386,7 @@ impl StreamingV2PassState {
         Self {
             fingerprint: StreamingV2ReplayFingerprintTracker::new(),
             replay_order_offsets: Vec::new(),
+            directional_pca_replay_states: Vec::new(),
             classifier_assignment_counts: Vec::new(),
             started: Instant::now(),
             last_progress_at: None,
@@ -5351,6 +5399,10 @@ impl StreamingV2PassState {
     fn ensure_partition_capacity(&mut self, partition_count: usize) {
         if self.replay_order_offsets.len() < partition_count {
             self.replay_order_offsets.resize(partition_count, 0);
+        }
+        if self.directional_pca_replay_states.len() < partition_count {
+            self.directional_pca_replay_states
+                .resize_with(partition_count, || None);
         }
         if self.classifier_assignment_counts.len() < partition_count {
             self.classifier_assignment_counts
@@ -10857,7 +10909,7 @@ mod tests {
     use super::{
         BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy,
         DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0,
-        PUBLISHED_PROFILE_V0_7_0, PlannerStateRoot, ROOT_PARTITION_ID, RunPhase,
+        PUBLISHED_PROFILE_V0_7_0, PartitionId, PlannerStateRoot, ROOT_PARTITION_ID, RunPhase,
         StreamingClusteringConfig, StreamingIndexerError, StreamingIndexingRunV2,
         StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot, StreamingV2Partition,
         StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
@@ -11259,9 +11311,9 @@ mod tests {
             item_count: 128,
             terminal: false,
             pending_trainer: None,
-            routing: Some(StreamingV2RoutingStrategy::Classifier(
+            routing: Some(StreamingV2RoutingStrategy::Classifier(Box::new(
                 synthetic_duplicate_refined_classifier(),
-            )),
+            ))),
             routing_debug_state: Some(
                 "routing_debug_state_version=1\ntrainer_subphase=RealizePartition\ntrainer_state_fingerprint_hex=00\nclassifier_realized_cluster_count=64\n"
                     .into(),
@@ -11339,6 +11391,119 @@ mod tests {
         trainer
             .into_classifier()
             .expect("synthetic classifier should be created")
+    }
+
+    fn synthetic_partially_collapsed_duplicate_classifier()
+    -> lexongraph_directional_pca::DirectionalPcaStreamingClassifier {
+        let mut trainer = DirectionalPcaStreamingTrainer::new(
+            StreamingClusteringConfig {
+                cluster_count: 3,
+                dimensions: 2,
+                balance_constraints: None,
+                random_seed: None,
+            },
+            DirectionalPcaParams {
+                retained_axis_policy: DirectionalPcaRetainedAxisPolicy::FixedCount(1),
+                allocation_policy: DirectionalPcaAllocationPolicy::CentroidWeightedBins,
+                binning_policy: DirectionalPcaBinningPolicy::Quantile,
+                cluster_cardinality_mode: DirectionalPcaClusterCardinalityMode::Exact,
+                variance_exponent: 1.0,
+                temperature: 1.0,
+                min_input_count: 2,
+                min_effective_rank: 1,
+                min_cumulative_variance: 0.0,
+            },
+        )
+        .expect("synthetic trainer should initialize");
+        let batch = vec![
+            vec![0.0, 0.0],
+            vec![10.0, 0.0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+        ];
+        for _ in 0..4 {
+            trainer
+                .ingest_batch(batch.as_slice())
+                .expect("synthetic batch should ingest");
+            trainer
+                .finish_pass()
+                .expect("synthetic trainer should finish pass");
+        }
+        trainer
+            .complete_training()
+            .expect("synthetic trainer should complete training");
+        trainer
+            .into_classifier()
+            .expect("synthetic classifier should be created")
+    }
+
+    #[test]
+    fn route_terminal_partition_preserves_duplicate_refined_multi_cell_routing() {
+        let mut run = make_streaming_v2_run(PUBLISHED_PROFILE_V0_7_0);
+        run.embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        run.partitions = vec![
+            StreamingV2PartitionNode {
+                parent_id: None,
+                child_ids: vec![PartitionId(1), PartitionId(2), PartitionId(3)],
+                item_count: 4,
+                terminal: false,
+                pending_trainer: None,
+                routing: Some(StreamingV2RoutingStrategy::Classifier(Box::new(
+                    synthetic_partially_collapsed_duplicate_classifier(),
+                ))),
+                routing_debug_state: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: Some(ROOT_PARTITION_ID),
+                child_ids: Vec::new(),
+                item_count: 2,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: Some(ROOT_PARTITION_ID),
+                child_ids: Vec::new(),
+                item_count: 1,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            },
+            StreamingV2PartitionNode {
+                parent_id: Some(ROOT_PARTITION_ID),
+                child_ids: Vec::new(),
+                item_count: 1,
+                terminal: true,
+                pending_trainer: None,
+                routing: None,
+                routing_debug_state: None,
+            },
+        ];
+        let mut replay_order_offsets = vec![0; run.partitions.len()];
+        let mut directional_pca_replay_states = vec![None; run.partitions.len()];
+        let routed = [
+            vec![0.0, 0.0],
+            vec![10.0, 0.0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+        ]
+        .into_iter()
+        .map(|embedding| {
+            run.route_terminal_partition(
+                embedding.as_slice(),
+                replay_order_offsets.as_mut_slice(),
+                directional_pca_replay_states.as_mut_slice(),
+            )
+            .expect("routing should succeed")
+            .0
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(routed, vec![1, 3, 1, 2]);
     }
 
     #[test]
