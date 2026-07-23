@@ -11577,6 +11577,8 @@ mod tests {
             }
         );
     }
+
+    #[test]
     fn unresolved_work_shrank_requires_pending_reduction_or_equal_pending_with_more_resolution() {
         let previous = StreamingV2CompletedPassSnapshot {
             pass_number: 1,
