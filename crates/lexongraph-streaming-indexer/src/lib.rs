@@ -3343,6 +3343,7 @@ impl AsRef<Path> for PlannerStateRoot {
     }
 }
 
+<<<<<<< HEAD
 impl PlannerStateScratchDir {
     fn new(
         parent: impl AsRef<Path>,
@@ -5928,7 +5929,6 @@ fn format_v2_classifier_routing_debug_state(
     .expect("formatting into string should succeed");
     artifact
 }
-
 fn format_usize_list(values: &[usize]) -> String {
     let mut formatted = String::from("[");
     for (index, value) in values.iter().enumerate() {
