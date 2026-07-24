@@ -170,7 +170,10 @@ fn val_redb_store_010_enumeration_reports_malformed_persisted_keys_explicitly() 
         .unwrap();
 
     match store.iter_block_ids() {
-        Ok(_) => panic!("expected malformed persisted key enumeration to fail explicitly"),
+        Ok(stream) => {
+            let error = pollster::block_on(stream.try_collect::<Vec<_>>()).unwrap_err();
+            expect_backend_failure_contains(error, "failed to decode an enumerated redb block key")
+        }
         Err(error) => {
             expect_backend_failure_contains(error, "failed to decode an enumerated redb block key")
         }

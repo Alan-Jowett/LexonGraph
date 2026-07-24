@@ -124,7 +124,7 @@ impl BlockStore for RedbBlockStore {
                 block_id
             ))
         })?;
-        {
+        let should_commit = {
             let mut table = write_txn.open_table(BLOCKS_TABLE).map_err(|error| {
                 backend_failure(format!(
                     "failed to open the redb block table for block {}: {error}",
@@ -154,7 +154,7 @@ impl BlockStore for RedbBlockStore {
             };
 
             match existing_state {
-                ExistingEntryState::MatchingBytes => {}
+                ExistingEntryState::MatchingBytes => false,
                 ExistingEntryState::ConflictingBytes => {
                     return Err(backend_failure(format!(
                         "integrity conflict for block {} in the redb block table",
@@ -170,8 +170,12 @@ impl BlockStore for RedbBlockStore {
                                 block_id
                             ))
                         })?;
+                    true
                 }
             }
+        };
+        if !should_commit {
+            return Ok(());
         }
         write_txn.commit().map_err(|error| {
             backend_failure(format!(
