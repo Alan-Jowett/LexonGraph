@@ -389,9 +389,7 @@ distinguish partition trainer ingest, partition classification, terminal
 materialization load, partition planning, and next-layer assembly; long-running
 v3 work emits periodic in-progress heartbeats with current counts; and the
 captured payload is sufficient for a downstream caller to estimate a work rate
-without fabricating a completion percentage when totals are not yet known. The
-public type surface may retain compatibility variants, but the observed
-constrained-v3 execution shall use the more specific emitted phases.
+without fabricating a completion percentage when totals are not yet known.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-039

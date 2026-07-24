@@ -636,10 +636,8 @@ and assembly work shall likewise emit periodic in-progress updates carrying
 the latest observable progress counts rather than only elapsed time or
 terminal completion.
 
-To preserve compatibility where practical, the public observer surface may
-retain broader legacy v3 phase variants, but the constrained v3 runtime shall
-emit the more specific phase identities when those activities are separately
-observable.
+The constrained v3 runtime shall emit the more specific phase identities when
+those activities are separately observable.
 
 ### REQ-STREAM-INDEXER-024
 

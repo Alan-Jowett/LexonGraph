@@ -697,11 +697,9 @@ The observer contract defines phase-native work-unit semantics as follows:
   materialization in that layer; the completed count advances as branch blocks
   for those groups are materialized.
 
-The broader legacy `V3PartitionLoad { layer_index }` phase remains in the
-public type surface for additive compatibility, but this revision's constrained
-v3 runtime emits the more specific phase identities above instead of collapsing
-training, classification, and terminal materialization into one generic load
-label.
+This revision's constrained v3 runtime emits the more specific phase
+identities above instead of collapsing training, classification, and terminal
+materialization into one generic load label.
 
 For pipelined v3 execution, phase totals and completed counts track committed
 processing progress, not merely prepared future batches. Prepared-but-not-yet-
