@@ -207,3 +207,48 @@ and version-2 blocks through one raw-byte backend.
 handling without re-implementing codec selection in the backend crate.
 
 **Traces to:** REQ-BLOCK-STORE-021
+
+### VAL-STORE-019
+
+Invoke the shared batch-write operation against a backend that does not opt in
+to batch support.
+
+**Pass condition:** the call fails explicitly through the existing error
+taxonomy, reports that batch writes are unsupported by that backend, and does
+not silently report success or persist any subset of the requested entries.
+
+**Traces to:** REQ-BLOCK-STORE-024
+
+### VAL-STORE-020
+
+Invoke the shared batch-write operation against an opting backend using
+multiple valid `(block_id, canonical_bytes)` entries.
+
+**Pass condition:** the operation succeeds, all requested entries become
+retrievable through ordinary `get` or raw-byte retrieval paths, and the caller
+does not need backend-specific batch addressing details.
+
+**Traces to:** REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-023, REQ-BLOCK-STORE-026
+
+### VAL-STORE-021
+
+Invoke the shared batch-write operation against an opting backend with a batch
+containing at least one entry that conflicts with already-persisted divergent
+bytes.
+
+**Pass condition:** the operation fails explicitly and none of the entries that
+were unique to that batch become committed by that operation.
+
+**Traces to:** REQ-BLOCK-STORE-025, REQ-BLOCK-STORE-026
+
+### VAL-STORE-022
+
+Use the trait crate's shared helper layer to batch-persist typed version-1
+and/or version-2 blocks through one raw-byte backend that opts in to batch
+writes.
+
+**Pass condition:** callers can use shared helper logic to derive canonical
+bytes and block IDs for a typed batch without re-implementing codec selection
+inside the backend crate.
+
+**Traces to:** REQ-BLOCK-STORE-021, REQ-BLOCK-STORE-023

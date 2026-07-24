@@ -194,6 +194,44 @@ explicitly through the existing error taxonomy and shall not expose Redb
 database handles, table definitions, or other backend-private storage details
 to callers.
 
+### REQ-REDB-STORE-018
+
+The Redb-backed implementation shall opt in to the shared batch-write
+capability for caller-supplied block identifiers and canonical block bytes.
+
+### REQ-REDB-STORE-019
+
+The Redb-backed batch-write operation shall commit atomically.
+
+If any requested batch entry encounters a backend failure, a conflicting
+already-persisted value, or another explicit inherited block-store failure,
+none of the entries in that batch operation shall become committed by that
+operation.
+
+### REQ-REDB-STORE-020
+
+Within a successful Redb-backed batch-write operation, entries already present
+with identical bytes shall remain idempotent, and entries absent at batch start
+shall become persisted under their supplied block identifiers.
+
+The implementation shall not silently overwrite divergent already-persisted
+bytes.
+
+### REQ-REDB-STORE-021
+
+Successful Redb-backed batch writes shall inherit the existing durability-mode
+rules.
+
+In the default durability mode, successful committed batches shall remain
+durably observable through later store instances opened on the same store root
+without depending on a deferred graceful-shutdown flush beyond the successful
+batch operation itself.
+
+In fast mode, successful batch writes shall preserve the same correctness and
+integrity behavior as the default mode, but later store instances opened on the
+same store root are required to observe those writes only after the fast-mode
+graceful-shutdown flush has completed.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -206,7 +244,8 @@ This crate does not define or own:
 - cache-mode byte-budget semantics in this revision
 - consumer-facing integration with evaluator, CLI, or benchmark-profile store
   selection in this revision
-- changes to the parent `BlockStore` trait
+- repository-wide requirement that every `BlockStore` backend implement the
+  optional shared batch-write capability
 
 ## Relationship to Other Specifications
 

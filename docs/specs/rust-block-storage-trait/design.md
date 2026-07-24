@@ -99,6 +99,19 @@ The yielded values are identifiers only; callers that need to distinguish leaf
 blocks, branch blocks, roots, or other structural roles do so by combining the
 enumerated IDs with existing `get` calls and caller-owned analysis.
 
+### DSG-STORE-006A `put_block_bytes_batch(entries) -> Result<(), BlockStoreError>`
+
+`put_block_bytes_batch` accepts a caller-supplied batch of block identifiers
+paired with canonical block bytes.
+
+The method remains on the raw-byte production boundary and does not require
+concrete backends to parse block protocol versions or typed block variants.
+
+The trait provides this operation as an optional capability: the shared trait
+surface includes the method, but a backend may explicitly decline support
+through the existing error taxonomy instead of widening the required
+lowest-common-denominator contract for all backends.
+
 ## Behavioral Rules
 
 ### DSG-STORE-007 Immutability and idempotence
@@ -106,6 +119,8 @@ enumerated IDs with existing `get` calls and caller-owned analysis.
 Because LexonGraph blocks are immutable and content-addressed, repeated `put`
 operations for logically identical blocks return the same block ID and must not
 create divergent observable content under that identifier.
+
+The same invariant applies to each entry of an accepted batch write.
 
 ### DSG-STORE-008 Integrity boundary
 
@@ -116,10 +131,15 @@ the block crate.
 Corruption, malformed bytes, or a mismatched block ID are explicit failures and
 must not be downgraded to absence.
 
+For an opted-in batch-write implementation, any explicit failure at the batch
+boundary aborts the full batch operation rather than committing a partial
+prefix.
+
 ### DSG-STORE-009 Backend neutrality
 
-The public contract is limited to `put`, `get`, and identifier enumeration over
-typed block values and block IDs.
+The public contract is limited to `put`, `get`, optional raw-byte batch write,
+and identifier enumeration over typed block values, canonical block bytes, and
+block IDs.
 
 The trait does not require or expose:
 
@@ -132,6 +152,16 @@ The trait does not require or expose:
 
 This preserves portability across filesystem, sqlite, Azure Blob, S3, and
 similar backends.
+
+### DSG-STORE-009A `Optional batch capability`
+
+Because not every backend is required to realize atomic batch writes in this
+revision, the shared trait may provide a default batch method that fails
+explicitly when a backend does not override it.
+
+This keeps the API shape uniform for callers while making support observable and
+avoiding any false guarantee that a non-opting backend performed a batch write
+atomically.
 
 ### DSG-STORE-010 `Enumeration semantics`
 
@@ -196,6 +226,9 @@ expected set.
 The production `BlockStore` trait stores and retrieves canonical block bytes
 under caller-supplied block identifiers.
 
+The same raw-byte production boundary also governs the optional batch-write
+operation.
+
 The trait does not require concrete backends to parse block protocol versions or
 reserved/custom block types.
 
@@ -206,6 +239,10 @@ boundary for common version-1 and version-aware decode/encode flows.
 
 Those helpers centralize codec dispatch so concrete backends remain
 protocol-agnostic while higher-level callers retain a convenient typed surface.
+
+When the raw-byte batch boundary is available, the helper layer may also expose
+typed batch-persistence helpers that derive canonical bytes and block IDs before
+delegating to the raw-byte batch method.
 
 When helpers decode stored bytes, they determine the block version from the
 top-level canonical CBOR envelope and then apply the corresponding versioned
@@ -236,6 +273,14 @@ Analysis-oriented callers use:
 
 Both consumers use the same backend-neutral contract.
 
+### Batched persistence
+
+Callers that already hold canonical block bytes and block identifiers may use
+`put_block_bytes_batch` when the selected backend supports it.
+
+Callers that work from typed blocks may use helper-layer batch methods above the
+raw-byte boundary when those helpers are exposed.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -245,8 +290,10 @@ Both consumers use the same backend-neutral contract.
 | DSG-STORE-004 | REQ-BLOCK-STORE-002, REQ-BLOCK-STORE-003, REQ-BLOCK-STORE-006 |
 | DSG-STORE-005 | REQ-BLOCK-STORE-002, REQ-BLOCK-STORE-004, REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008 |
 | DSG-STORE-006 | REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-014, REQ-BLOCK-STORE-015, REQ-BLOCK-STORE-017 |
+| DSG-STORE-006A | REQ-BLOCK-STORE-019, REQ-BLOCK-STORE-023, REQ-BLOCK-STORE-024 |
 | DSG-STORE-007 | REQ-BLOCK-STORE-003, REQ-BLOCK-STORE-006 |
 | DSG-STORE-008 | REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008 |
+| DSG-STORE-009A | REQ-BLOCK-STORE-024, REQ-BLOCK-STORE-025, REQ-BLOCK-STORE-026 |
 | DSG-STORE-009 | REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-007, REQ-BLOCK-STORE-016 |
 | DSG-STORE-010 | REQ-BLOCK-STORE-015, REQ-BLOCK-STORE-017, REQ-BLOCK-STORE-018 |
 | DSG-STORE-011 | REQ-BLOCK-STORE-009 |
@@ -254,4 +301,4 @@ Both consumers use the same backend-neutral contract.
 | DSG-STORE-013 | REQ-BLOCK-STORE-013 |
 | DSG-STORE-014 | REQ-BLOCK-STORE-012, REQ-BLOCK-STORE-013, REQ-BLOCK-STORE-014, REQ-BLOCK-STORE-017 |
 | DSG-STORE-015 | REQ-BLOCK-STORE-019, REQ-BLOCK-STORE-020, REQ-BLOCK-STORE-022 |
-| DSG-STORE-016 | REQ-BLOCK-STORE-021 |
+| DSG-STORE-016 | REQ-BLOCK-STORE-021, REQ-BLOCK-STORE-023 |

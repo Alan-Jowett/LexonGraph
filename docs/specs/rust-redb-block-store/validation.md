@@ -209,3 +209,39 @@ the exclusivity precondition is not satisfied, and it does not silently report
 success or behave as a no-op.
 
 **Traces to:** REQ-REDB-STORE-016, REQ-REDB-STORE-017
+
+### VAL-REDB-STORE-016
+
+Invoke the shared batch-write operation against the Redb-backed store using
+multiple valid `(block_id, canonical_bytes)` entries in the default durability
+mode.
+
+**Pass condition:** the operation succeeds atomically, each requested block
+becomes retrievable, and a reopened store instance on the same root observes the
+full committed batch.
+
+**Traces to:** REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021
+
+### VAL-REDB-STORE-017
+
+Invoke the shared batch-write operation against the Redb-backed store with one
+or more valid new entries plus at least one entry whose block ID already maps to
+divergent bytes.
+
+**Pass condition:** the batch call fails explicitly and none of the entries that
+were unique to that batch become committed by that operation.
+
+**Traces to:** REQ-REDB-STORE-019, REQ-REDB-STORE-020
+
+### VAL-REDB-STORE-018
+
+Invoke the shared batch-write operation against the Redb-backed store in fast
+mode, keep a live handle for same-process reads, then complete the required
+graceful-shutdown flush and reopen the same store root.
+
+**Pass condition:** the live store observes the full successful batch before the
+flush, the store records the pending fast-mode flush obligation after the batch
+commit, and the reopened store observes the full batch after the graceful
+shutdown flush completes.
+
+**Traces to:** REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-021
