@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonGraph contributors
+[package]
+name = "lexongraph-block-store-redb"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Intended for use from this crate's integration tests only.
+# Enabling this in `[dependencies]` broadens the crate's public test surface.
+inject = []
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+lexongraph-block = { path = "../lexongraph-block" }
+lexongraph-block-store = { path = "../lexongraph-block-store" }
+redb = "2.1.0"
+
+[dev-dependencies]
+lexongraph-block-store = { path = "../lexongraph-block-store", features = ["conformance"] }
+pollster = "1.0.1"
+tempfile = "3"

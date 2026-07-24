@@ -102,6 +102,7 @@ The top-level Cargo workspace currently contains:
 | `lexongraph-block-store-fs` | Local filesystem `BlockStore` implementation |
 | `lexongraph-block-store-memory` | Volatile in-memory `BlockStore` implementation |
 | `lexongraph-block-store-overlay` | Layered overlay `BlockStore` with cache, writable, and read-only tiers |
+| `lexongraph-block-store-redb` | Durable local Redb-backed `BlockStore` implementation |
 | `lexongraph-block-store-zip` | Read-only `BlockStore` backed by a zip archive with filesystem-style sharding |
 | `lexongraph-dcbc-streaming` | Streaming deterministic capacity-constrained balanced clustering implementation |
 | `lexongraph-directional-pca` | Streaming directional-PCA clustering implementation |
