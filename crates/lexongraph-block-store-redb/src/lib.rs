@@ -131,24 +131,37 @@ impl BlockStore for RedbBlockStore {
                     block_id
                 ))
             })?;
-            let existing = table
-                .get(&block_id.as_bytes()[..])
-                .map_err(|error| {
+            enum ExistingEntryState {
+                MatchingBytes,
+                ConflictingBytes,
+                Missing,
+            }
+
+            let existing_state = {
+                let existing = table.get(&block_id.as_bytes()[..]).map_err(|error| {
                     backend_failure(format!(
                         "failed to inspect persisted redb bytes for block {}: {error}",
                         block_id
                     ))
-                })?
-                .map(|value| value.value().to_vec());
-            match existing {
-                Some(existing_bytes) if existing_bytes == block_bytes => {}
-                Some(_) => {
+                })?;
+                match existing {
+                    Some(existing) if existing.value() == block_bytes => {
+                        ExistingEntryState::MatchingBytes
+                    }
+                    Some(_) => ExistingEntryState::ConflictingBytes,
+                    None => ExistingEntryState::Missing,
+                }
+            };
+
+            match existing_state {
+                ExistingEntryState::MatchingBytes => {}
+                ExistingEntryState::ConflictingBytes => {
                     return Err(backend_failure(format!(
                         "integrity conflict for block {} in the redb block table",
                         block_id
                     )));
                 }
-                None => {
+                ExistingEntryState::Missing => {
                     table
                         .insert(&block_id.as_bytes()[..], block_bytes)
                         .map_err(|error| {
