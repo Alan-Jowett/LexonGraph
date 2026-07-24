@@ -1715,11 +1715,13 @@ unresolved planning progress rather than as an immediate clustering failure.
 
 The v3 partition-planning loop shall deterministically replay that same
 partition again through the existing trainer state machine until the pass
-becomes `PartitionReady` or the existing bounded replay-pass limit is exceeded.
+becomes `PartitionReady` and training completion succeeds, or until the
+existing bounded replay-pass limit is exceeded.
 
-If the bounded replay-pass limit is exceeded before `PartitionReady` is
-reached, the v3 surface shall fail explicitly. It shall not fail solely because
-the first successful pass remained `AnalysisOnly`.
+If the bounded replay-pass limit is exceeded before training completion
+succeeds, the v3 surface shall fail explicitly. It shall not fail solely
+because the first successful pass remained `AnalysisOnly` or because an earlier
+successful pass reached `PartitionReady` before the trainer could complete.
 ## Out of Scope
 
 This crate does not define or own:

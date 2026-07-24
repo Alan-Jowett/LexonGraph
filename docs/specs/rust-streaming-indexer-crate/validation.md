@@ -1745,8 +1745,9 @@ bound is exhausted.
 
 **Pass condition:** the first fixture does not fail merely because the earliest
 successful pass remained `AnalysisOnly`; instead, v3 replays the same partition
-deterministically and later completes planning once `PartitionReady` is
-reached. The second fixture fails explicitly only when the existing bounded
+deterministically and later completes planning only after the trainer reaches
+`PartitionReady` and training completion succeeds. The second fixture fails
+explicitly only when the existing bounded
 replay-pass limit is exceeded, not earlier on the first successful
 `AnalysisOnly` pass.
 

@@ -1584,12 +1584,15 @@ After such a pass, v3 leaves the partition in the same deterministic replay
 scope, advances the partition-planning invocation only through the existing
 trainer state machine, and replays the partition again until either:
 
-1. the trainer reports `PassReadiness::PartitionReady`, or
+1. the trainer has reported `PassReadiness::PartitionReady` and
+   `complete_training()` succeeds, or
 2. the existing v3 replay-pass bound is exceeded
 
 Only the second case fails the v3 partition-planning loop for this condition.
 An immediate `"did not become partition-ready"` error on the first successful
-`AnalysisOnly` pass is non-conformant.
+`AnalysisOnly` pass is non-conformant, and so is failing merely because an
+earlier successful pass reached `PartitionReady` before training completion was
+possible.
 
 ## Traceability
 
