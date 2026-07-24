@@ -107,7 +107,7 @@ impl RedbBlockStore {
                 self.store_root.display()
             ))
         })?;
-        state.flush_pending_writes_on_shutdown()?;
+        state.flush_pending_writes_before_compaction()?;
         state.database.compact().map_err(|error| {
             backend_failure(format!(
                 "failed to compact redb database under {}: {error}",
@@ -307,23 +307,38 @@ impl BlockStore for RedbBlockStore {
 
 impl SharedState {
     fn flush_pending_writes_on_shutdown(&self) -> Result<(), BlockStoreError> {
+        self.flush_pending_writes(
+            "failed to start a fast-mode graceful-shutdown redb write transaction",
+            "failed to flush pending fast-mode redb writes during graceful shutdown",
+        )
+    }
+
+    fn flush_pending_writes_before_compaction(&self) -> Result<(), BlockStoreError> {
+        self.flush_pending_writes(
+            "failed to start a pre-compaction redb write transaction",
+            "failed to flush pending fast-mode redb writes before compaction",
+        )
+    }
+
+    fn flush_pending_writes(
+        &self,
+        begin_context: &str,
+        commit_context: &str,
+    ) -> Result<(), BlockStoreError> {
         if self.durability_mode != RedbBlockStoreDurabilityMode::Fast
             || !self.pending_flush.load(Ordering::Acquire)
         {
             return Ok(());
         }
 
-        let mut write_txn = self.database.begin_write().map_err(|error| {
-            backend_failure(format!(
-                "failed to start a fast-mode graceful-shutdown redb write transaction: {error}"
-            ))
-        })?;
+        let mut write_txn = self
+            .database
+            .begin_write()
+            .map_err(|error| backend_failure(format!("{begin_context}: {error}")))?;
         write_txn.set_durability(Durability::Immediate);
-        write_txn.commit().map_err(|error| {
-            backend_failure(format!(
-                "failed to flush pending fast-mode redb writes during graceful shutdown: {error}"
-            ))
-        })?;
+        write_txn
+            .commit()
+            .map_err(|error| backend_failure(format!("{commit_context}: {error}")))?;
         self.pending_flush.store(false, Ordering::Release);
         Ok(())
     }
