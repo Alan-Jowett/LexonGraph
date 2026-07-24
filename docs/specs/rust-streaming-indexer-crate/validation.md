@@ -381,14 +381,15 @@ REQ-STREAM-INDEXER-039
 ### VAL-STREAM-INDEXER-023A
 
 Attach the same caller-owned observer to a constrained v3 run that performs
-leaf loading, partition refinement, and at least one assembly layer.
+partition trainer ingest, partition classification, terminal materialization
+load, partition refinement, and at least one assembly layer.
 
 **Pass condition:** the observer exposes v3 phase identity sufficient to
-distinguish block loading/parsing, partition planning, and next-layer assembly;
-long-running v3 work emits periodic in-progress heartbeats with current counts;
-and the captured payload is sufficient for a downstream caller to estimate a
-work rate without fabricating a completion percentage when totals are not yet
-known.
+distinguish partition trainer ingest, partition classification, terminal
+materialization load, partition planning, and next-layer assembly; long-running
+v3 work emits periodic in-progress heartbeats with current counts; and the
+captured payload is sufficient for a downstream caller to estimate a work rate
+without fabricating a completion percentage when totals are not yet known.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-039

@@ -6222,16 +6222,29 @@ fn val_stream_indexer_020a_v3_terminality_uses_materializability_bound() {
 }
 
 #[test]
-fn val_stream_indexer_023a_v3_observer_surface_reports_partition_load_progress() {
+fn val_stream_indexer_023a_v3_observer_surface_reports_phase_specific_progress() {
     let src = include_str!("../src/v3.rs");
     let lib = include_str!("../src/lib.rs");
-    assert!(src.contains("StreamingIndexingPhase::V3PartitionLoad"));
+    assert!(src.contains("StreamingIndexingPhase::V3PartitionTrainIngest"));
+    assert!(src.contains("StreamingIndexingPhase::V3PartitionClassify"));
+    assert!(src.contains("StreamingIndexingPhase::V3TerminalMaterializationLoad"));
+    assert!(src.contains("let phases = phases.lock().unwrap().clone();"));
+    assert!(
+        src.contains(
+            ".any(|phase| matches!(phase, StreamingIndexingPhase::V3PartitionLoad { .. }))"
+        )
+    );
+    assert!(src.contains("StreamingIndexingPhase::V3PartitionLoad { .. }"));
     assert!(src.contains("StreamingIndexingPhase::HierarchyPlanning {"));
-    assert!(src.contains("stage: PlanningStage::Custom"));
     assert!(src.contains("StreamingIndexingPhase::BottomUpAssembly { layer_index }"));
     assert!(src.contains("start_status_heartbeat("));
     assert!(lib.contains("V3PartitionLoad { layer_index: usize }"));
-    assert!(lib.contains("V3LoadItem"));
+    assert!(lib.contains("V3PartitionTrainIngest { layer_index: usize }"));
+    assert!(lib.contains("V3PartitionClassify { layer_index: usize }"));
+    assert!(lib.contains("V3TerminalMaterializationLoad { layer_index: usize }"));
+    assert!(lib.contains("V3TrainIngestItem"));
+    assert!(lib.contains("V3ClassifiedItem"));
+    assert!(lib.contains("V3MaterializationLoadItem"));
 }
 
 #[test]
@@ -6269,10 +6282,12 @@ fn val_stream_indexer_036a_v3_overlaps_storage_and_cpu_work() {
 #[test]
 fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     let src = include_str!("../src/v3.rs");
-    assert!(src.contains("run_v3_partition_load_phase("));
+    assert!(src.contains("run_v3_partition_phase("));
     assert!(src.contains("StreamingIndexingStatusState::Completed"));
     assert!(src.contains("progress.load(AtomicOrdering::Relaxed)"));
     assert!(src.contains("progress.fetch_add(batch_len, AtomicOrdering::Relaxed);"));
+    assert!(src.contains("read_all_indexed_children(&partition.path, Some(progress.as_ref()))"));
+    assert!(src.contains("progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);"));
     assert!(src.contains("validate_v3_cluster_assignment("));
     assert!(src.contains("load_leaf_batch_raw("));
 }

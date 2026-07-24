@@ -677,13 +677,29 @@ The observer contract defines phase-native work-unit semantics as follows:
 - `FinalMaterializationReplay`: units are replayed logical items materialized
   into leaf blocks; the total is the baseline logical item count; the completed
   count advances as replay-verified items are persisted as leaf blocks.
+- `V3PartitionTrainIngest { layer_index }`: units are terminal leaf blocks or
+  carried child summaries consumed by the active partition trainer for the
+  named semantic layer; the total is the partition member count; the completed
+  count advances only when one batch has been ingested into the trainer in
+  deterministic batch order.
+- `V3PartitionClassify { layer_index }`: units are terminal leaf blocks or
+  carried child summaries assigned into child partition files for the named
+  semantic layer; the total is the partition member count; the completed count
+  advances only when one batch's assignments have been validated and emitted
+  into child partition files.
+- `V3TerminalMaterializationLoad { layer_index }`: units are terminal leaf
+  blocks or carried child summaries loaded for final materialization at the
+  named semantic layer; the total is the terminal partition member count; the
+  completed count advances only when one loaded member has been decoded and
+  validated or otherwise staged for bottom-up assembly.
 - `BottomUpAssembly { layer_index }`: units are planned parent groups for that
   bottom-up layer; the total is the number of groups scheduled for
   materialization in that layer; the completed count advances as branch blocks
   for those groups are materialized.
-- v3-specific loading phases use leaf blocks or carried child summaries as the
-  unit kind, with counts advancing as staged members are loaded and validated
-  for the active partition set.
+
+This revision's constrained v3 runtime emits the more specific phase
+identities above instead of collapsing training, classification, and terminal
+materialization into one generic load label.
 
 For pipelined v3 execution, phase totals and completed counts track committed
 processing progress, not merely prepared future batches. Prepared-but-not-yet-
