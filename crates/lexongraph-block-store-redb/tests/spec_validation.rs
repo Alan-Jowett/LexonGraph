@@ -10,7 +10,7 @@ use lexongraph_block::{BlockError, compute_block_hash, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
-use lexongraph_block_store_redb::RedbBlockStore;
+use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 
 mod support;
 
@@ -72,6 +72,35 @@ fn val_redb_store_003_put_and_get_round_trip_through_the_parent_contract() {
     let block_id = store.put(&expected.block).unwrap();
 
     assert_eq!(block_id, expected.hash);
+    assert_eq!(store.get(&block_id).unwrap(), Some(expected));
+}
+
+#[test]
+fn val_redb_store_003a_default_mode_retains_immediate_reopen_visibility() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+    let expected = validated_block("default-durable");
+
+    let block_id = store.put(&expected.block).unwrap();
+    let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
+
+    assert_eq!(block_id, expected.hash);
+    assert_eq!(reopened.get(&block_id).unwrap(), Some(expected));
+}
+
+#[test]
+#[cfg(feature = "inject")]
+fn val_redb_store_003b_fast_mode_put_skips_immediate_flush_but_remains_readable_in_process() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store =
+        RedbBlockStore::new_with_durability(temp_dir.path(), RedbBlockStoreDurabilityMode::Fast)
+            .unwrap();
+    let expected = validated_block("fast-mode");
+
+    let block_id = store.put(&expected.block).unwrap();
+
+    assert_eq!(block_id, expected.hash);
+    assert!(store.pending_fast_mode_flush());
     assert_eq!(store.get(&block_id).unwrap(), Some(expected));
 }
 
@@ -145,6 +174,44 @@ fn val_redb_store_008_successful_commits_are_visible_after_reopening_the_same_ro
 
     let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
     assert_eq!(reopened.get(&expected.hash).unwrap(), Some(expected));
+}
+
+#[test]
+#[cfg(feature = "inject")]
+fn val_redb_store_008a_fast_mode_flushes_on_final_handle_drop() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let expected = validated_block("fast-persisted");
+
+    {
+        let store = RedbBlockStore::new_with_durability(
+            temp_dir.path(),
+            RedbBlockStoreDurabilityMode::Fast,
+        )
+        .unwrap();
+        let clone = store.clone();
+
+        assert_eq!(store.put(&expected.block).unwrap(), expected.hash);
+        assert!(store.pending_fast_mode_flush());
+
+        drop(clone);
+        assert!(store.pending_fast_mode_flush());
+    }
+
+    let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
+    assert_eq!(reopened.get(&expected.hash).unwrap(), Some(expected));
+}
+
+#[test]
+#[cfg(feature = "inject")]
+fn val_redb_store_008b_fast_mode_crash_durability_boundary_remains_pending_until_shutdown() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store =
+        RedbBlockStore::new_with_durability(temp_dir.path(), RedbBlockStoreDurabilityMode::Fast)
+            .unwrap();
+
+    store.put(&sample_leaf_block("crash-boundary")).unwrap();
+
+    assert!(store.pending_fast_mode_flush());
 }
 
 #[test]
