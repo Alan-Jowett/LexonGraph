@@ -10,7 +10,9 @@ use lexongraph_block::{BlockError, compute_block_hash, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
-use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
+use lexongraph_block_store_redb::RedbBlockStore;
+#[cfg(feature = "inject")]
+use lexongraph_block_store_redb::RedbBlockStoreDurabilityMode;
 
 mod support;
 
