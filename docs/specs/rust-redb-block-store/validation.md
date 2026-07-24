@@ -45,6 +45,29 @@ block content.
 
 **Traces to:** REQ-REDB-STORE-005, REQ-REDB-STORE-006
 
+### VAL-REDB-STORE-003A
+
+Construct the store without selecting fast mode and exercise the constructor
+surface together with the existing durable reopen behavior.
+
+**Pass condition:** when fast mode is not selected, the store uses the default
+durable mode, and the existing durability behavior verified by
+`VAL-REDB-STORE-008` remains unchanged.
+
+**Traces to:** REQ-REDB-STORE-003, REQ-REDB-STORE-005
+
+### VAL-REDB-STORE-003B
+
+Construct the store in fast mode and perform one or more successful `put`
+operations while keeping at least one handle alive.
+
+**Pass condition:** backend-specific verification instrumentation shows that the
+operations succeed without invoking the default per-write flush path, while
+same-process reads through the live store still observe the written blocks
+correctly.
+
+**Traces to:** REQ-REDB-STORE-003, REQ-REDB-STORE-005, REQ-REDB-STORE-012
+
 ### VAL-REDB-STORE-004
 
 Request a block ID that is not present in the Redb-backed store.
@@ -87,6 +110,29 @@ instance on the same store root and retrieve the block.
 **Pass condition:** the committed block remains observable after reopening.
 
 **Traces to:** REQ-REDB-STORE-005
+
+### VAL-REDB-STORE-008A
+
+Construct the store in fast mode, store a valid block, clone the store handle,
+drop one non-final clone, observe through backend-specific verification
+instrumentation that the pending flush obligation remains outstanding, then
+drop the final remaining handle and reopen the same store root.
+
+**Pass condition:** the non-final drop does not satisfy the graceful-shutdown
+flush requirement by itself, and the reopened store observes the block after
+the final-handle drop completes the required fast-mode flush.
+
+**Traces to:** REQ-REDB-STORE-005, REQ-REDB-STORE-013
+
+### VAL-REDB-STORE-008B
+
+Inspect the fast-mode durability contract around abnormal termination.
+
+**Pass condition:** the validation plan and implementation-facing verification
+surface explicitly treat crash survival before graceful shutdown as a
+non-guarantee rather than asserting persistence across abnormal termination.
+
+**Traces to:** REQ-REDB-STORE-014
 
 ### VAL-REDB-STORE-009
 

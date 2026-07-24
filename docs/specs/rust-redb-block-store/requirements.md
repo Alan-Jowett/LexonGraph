@@ -32,6 +32,13 @@ state.
 `Committed block entry` means one Redb key/value entry whose key is the block ID
 and whose value is the canonical block bytes retained for that block.
 
+`Durability mode` means the constructor-selected persistence policy that controls
+when Redb-backed writes must be flushed to stable storage.
+
+`Fast mode` means the opt-in durability mode in which ordinary `put` operations
+may complete without forcing the usual per-write flush, with pending writes
+instead flushed during graceful shutdown when the final store handle drops.
+
 ## Requirements
 
 ### REQ-REDB-STORE-001
@@ -49,13 +56,16 @@ backend-neutral `BlockStore` contract.
 
 ### REQ-REDB-STORE-003
 
-Construction shall accept a caller-supplied store-root directory outside the
-`BlockStore` trait boundary.
+Construction shall accept a caller-supplied store-root directory and a
+caller-selectable durability mode outside the `BlockStore` trait boundary.
 
 Construction shall either return an initialized store rooted at a canonical
 directory path or fail explicitly as a backend failure when the requested root
 cannot be created, canonicalized, stat'ed, resolved to a non-directory, or
 used to initialize or open the backend-owned Redb database state.
+
+When the caller does not explicitly select fast mode, construction shall retain
+the crate's default durable write behavior.
 
 ### REQ-REDB-STORE-004
 
@@ -67,11 +77,17 @@ details.
 ### REQ-REDB-STORE-005
 
 `put` shall derive the canonical block bytes and block ID through the block
-crate and persist those bytes keyed by block ID in Redb-backed durable local
-storage.
+crate and persist those bytes keyed by block ID in Redb-backed local storage.
 
-Successful committed writes shall remain observable through later store
-instances opened on the same store root.
+In the default durability mode, successful committed writes shall remain
+durably observable through later store instances opened on the same store root
+without depending on any deferred graceful-shutdown flush beyond the successful
+`put` itself.
+
+In fast mode, successful `put` operations shall preserve the same block-store
+correctness and integrity behavior as the default mode, but later store
+instances opened on the same store root are required to observe those writes
+only after the fast-mode graceful-shutdown flush has completed.
 
 ### REQ-REDB-STORE-006
 
@@ -115,6 +131,29 @@ operation succeeded.
 The repository shall include automated verification artifacts that realize the
 validation surface defined in `docs/specs/rust-redb-block-store/`, including
 reuse of the parent trait crate's conformance helpers where applicable.
+
+The verification surface shall cover both default durable mode and fast mode,
+including mode selection, ordinary-write behavior, graceful-shutdown flush
+behavior, and the crash-durability boundary for fast mode.
+
+### REQ-REDB-STORE-012
+
+When constructed in fast mode, ordinary successful `put` operations shall not
+force the default per-write flush path before returning success.
+
+### REQ-REDB-STORE-013
+
+When constructed in fast mode, any pending successfully written block entries
+shall be flushed during graceful shutdown when the final `RedbBlockStore`
+handle for that store instance is dropped.
+
+### REQ-REDB-STORE-014
+
+Fast mode shall weaken durability only until the graceful-shutdown flush
+required by `REQ-REDB-STORE-013`.
+
+Fast mode shall not guarantee that writes survive abnormal termination, process
+crash, abort, or power loss before that graceful-shutdown flush occurs.
 
 ## Out of Scope
 

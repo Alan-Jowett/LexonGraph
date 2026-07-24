@@ -4,12 +4,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use futures::stream;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, Durability, ReadableTable, TableDefinition};
 
 const BLOCKS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 const DATABASE_FILE_NAME: &str = "blocks.redb";
@@ -17,19 +18,40 @@ const DATABASE_FILE_NAME: &str = "blocks.redb";
 #[derive(Clone)]
 pub struct RedbBlockStore {
     store_root: PathBuf,
-    database: Arc<Database>,
+    state: Arc<SharedState>,
+}
+
+struct SharedState {
+    database: Database,
+    durability_mode: RedbBlockStoreDurabilityMode,
+    pending_flush: AtomicBool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RedbBlockStoreDurabilityMode {
+    #[default]
+    Durable,
+    Fast,
 }
 
 impl std::fmt::Debug for RedbBlockStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedbBlockStore")
             .field("store_root", &self.store_root)
+            .field("durability_mode", &self.state.durability_mode)
             .finish()
     }
 }
 
 impl RedbBlockStore {
     pub fn new(store_root: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
+        Self::new_with_durability(store_root, RedbBlockStoreDurabilityMode::Durable)
+    }
+
+    pub fn new_with_durability(
+        store_root: impl AsRef<Path>,
+        durability_mode: RedbBlockStoreDurabilityMode,
+    ) -> Result<Self, BlockStoreError> {
         let requested_root = store_root.as_ref();
         std::fs::create_dir_all(requested_root).map_err(|error| {
             backend_failure(format!(
@@ -66,10 +88,15 @@ impl RedbBlockStore {
             ))
         })?;
         initialize_blocks_table(&database, &database_path)?;
+        let state = Arc::new(SharedState {
+            database,
+            durability_mode,
+            pending_flush: AtomicBool::new(false),
+        });
 
         Ok(Self {
             store_root: canonical_root,
-            database: Arc::new(database),
+            state,
         })
     }
 
@@ -84,7 +111,7 @@ impl RedbBlockStore {
         key: Vec<u8>,
         bytes: Vec<u8>,
     ) -> Result<(), BlockStoreError> {
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let write_txn = self.state.database.begin_write().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb write transaction for test injection: {error}"
             ))
@@ -109,6 +136,11 @@ impl RedbBlockStore {
             ))
         })
     }
+
+    #[cfg(feature = "inject")]
+    pub fn pending_fast_mode_flush(&self) -> bool {
+        self.state.pending_flush.load(Ordering::Acquire)
+    }
 }
 
 #[async_trait]
@@ -118,12 +150,15 @@ impl BlockStore for RedbBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let mut write_txn = self.state.database.begin_write().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb write transaction for block {}: {error}",
                 block_id
             ))
         })?;
+        if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {
+            write_txn.set_durability(Durability::None);
+        }
         let should_commit = {
             let mut table = write_txn.open_table(BLOCKS_TABLE).map_err(|error| {
                 backend_failure(format!(
@@ -182,14 +217,18 @@ impl BlockStore for RedbBlockStore {
                 "failed to commit persisted redb bytes for block {}: {error}",
                 block_id
             ))
-        })
+        })?;
+        if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {
+            self.state.pending_flush.store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
     async fn get_block_bytes(
         &self,
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-        let read_txn = self.database.begin_read().map_err(|error| {
+        let read_txn = self.state.database.begin_read().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb read transaction for block {}: {error}",
                 block_id
@@ -213,7 +252,7 @@ impl BlockStore for RedbBlockStore {
     }
 
     fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
-        let read_txn = self.database.begin_read().map_err(|error| {
+        let read_txn = self.state.database.begin_read().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb read transaction for block enumeration: {error}"
             ))
@@ -247,6 +286,38 @@ impl BlockStore for RedbBlockStore {
         }
 
         Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
+    }
+}
+
+impl SharedState {
+    fn flush_pending_writes_on_shutdown(&self) -> Result<(), BlockStoreError> {
+        if self.durability_mode != RedbBlockStoreDurabilityMode::Fast
+            || !self.pending_flush.load(Ordering::Acquire)
+        {
+            return Ok(());
+        }
+
+        let mut write_txn = self.database.begin_write().map_err(|error| {
+            backend_failure(format!(
+                "failed to start a fast-mode graceful-shutdown redb write transaction: {error}"
+            ))
+        })?;
+        write_txn.set_durability(Durability::Immediate);
+        write_txn.commit().map_err(|error| {
+            backend_failure(format!(
+                "failed to flush pending fast-mode redb writes during graceful shutdown: {error}"
+            ))
+        })?;
+        self.pending_flush.store(false, Ordering::Release);
+        Ok(())
+    }
+}
+
+impl Drop for SharedState {
+    fn drop(&mut self) {
+        if let Err(error) = self.flush_pending_writes_on_shutdown() {
+            eprintln!("fast-mode graceful shutdown flush failed: {error}");
+        }
     }
 }
 
