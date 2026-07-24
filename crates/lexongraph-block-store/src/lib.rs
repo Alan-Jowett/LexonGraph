@@ -519,6 +519,12 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct BatchDelegationStore {
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+        batch_calls: Mutex<usize>,
+    }
+
     #[async_trait]
     impl BlockStore for MemoryBlockStore {
         async fn put_block_bytes(
@@ -585,6 +591,50 @@ mod tests {
                 blocks
                     .entry(*entry.block_id)
                     .or_insert_with(|| entry.block_bytes.to_vec());
+            }
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
+            let block_ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BatchDelegationStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            _block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            Err(BlockStoreError::BackendFailure(format!(
+                "single-entry writes must not be used for block {} in the delegation test store",
+                block_id
+            )))
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            *self.batch_calls.lock().unwrap() += 1;
+            let mut blocks = self.blocks.lock().unwrap();
+            for entry in entries {
+                blocks.insert(*entry.block_id, entry.block_bytes.to_vec());
             }
             Ok(())
         }
@@ -1033,11 +1083,12 @@ mod tests {
 
     #[test]
     fn val_store_022_typed_batch_helpers_use_the_raw_byte_batch_boundary() {
-        let store = BatchMemoryBlockStore::default();
+        let store = BatchDelegationStore::default();
         let blocks = [sample_leaf_block("first"), sample_leaf_block("second")];
 
         let block_ids = block_on(store.put_blocks(&blocks)).unwrap();
 
+        assert_eq!(*store.batch_calls.lock().unwrap(), 1);
         assert_eq!(block_ids.len(), 2);
         for block_id in block_ids {
             assert!(block_on(store.get(&block_id)).unwrap().is_some());
