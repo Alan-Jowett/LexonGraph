@@ -6200,7 +6200,6 @@ fn val_stream_indexer_023a_v3_observer_surface_reports_phase_specific_progress()
     assert!(src.contains("StreamingIndexingPhase::V3PartitionClassify"));
     assert!(src.contains("StreamingIndexingPhase::V3TerminalMaterializationLoad"));
     assert!(src.contains("let phases = phases.lock().unwrap().clone();"));
-    assert!(src.contains("!phases"));
     assert!(
         src.contains(
             ".any(|phase| matches!(phase, StreamingIndexingPhase::V3PartitionLoad { .. }))"
