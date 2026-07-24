@@ -1734,3 +1734,22 @@ while preserving the same exact child cardinality without empty replay
 children.
 
 **Traces to:** REQ-STREAM-INDEXER-130
+
+### VAL-STREAM-INDEXER-120
+
+Run the constrained v3 surface on one deterministic fixture whose
+partition-local clustering trainer returns `PassReadiness::AnalysisOnly` for at
+least one successful replay pass before later returning `PartitionReady`, and
+on a second fixture whose trainer remains `AnalysisOnly` until the replay-pass
+bound is exhausted.
+
+**Pass condition:** the first fixture does not fail merely because the earliest
+successful pass remained `AnalysisOnly`; instead, v3 replays the same partition
+deterministically and later completes planning only after the trainer reaches
+`PartitionReady` and training completion succeeds. The second fixture fails
+explicitly only when the existing bounded
+replay-pass limit is exceeded, not earlier on the first successful
+`AnalysisOnly` pass.
+
+**Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-026,
+REQ-STREAM-INDEXER-131

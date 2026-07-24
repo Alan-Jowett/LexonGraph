@@ -450,6 +450,15 @@ bounded-state rules of this revision, the report shall expose deterministic
 readiness or progress semantics rather than claiming final partition readiness
 early.
 
+When the reported planning work consumes the shared streaming clustering
+contract, a successful completed clustering pass that remains
+`PassReadiness::AnalysisOnly` is a conformant unresolved outcome rather than a
+failure by itself.
+
+The consuming surface may continue deterministic replay or planning from that
+state and shall not convert it into a terminal error unless a separate bounded
+termination rule or other explicit failure condition is reached.
+
 ### REQ-STREAM-INDEXER-021A
 
 The v2 streaming surface shall be a replay-driven, resident-memory-bounded
@@ -1696,6 +1705,23 @@ assignment.
 The crate shall not finalize such a partition as a plain classifier-backed
 hierarchy node if deterministic replay through that plain classifier would leave
 one or more declared children empty.
+
+### REQ-STREAM-INDEXER-131
+
+When the constrained v3 surface completes a partition-local clustering replay
+pass successfully, observes exactly the partition's expected item count, and
+receives `PassReadiness::AnalysisOnly`, it shall treat that result as valid
+unresolved planning progress rather than as an immediate clustering failure.
+
+The v3 partition-planning loop shall deterministically replay that same
+partition again through the existing trainer state machine until the pass
+becomes `PartitionReady` and training completion succeeds, or until the
+existing bounded replay-pass limit is exceeded.
+
+If the bounded replay-pass limit is exceeded before training completion
+succeeds, the v3 surface shall fail explicitly. It shall not fail solely
+because the first successful pass remained `AnalysisOnly` or because an earlier
+successful pass reached `PartitionReady` before the trainer could complete.
 ## Out of Scope
 
 This crate does not define or own:

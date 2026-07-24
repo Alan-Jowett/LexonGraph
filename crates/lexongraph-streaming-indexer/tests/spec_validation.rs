@@ -524,6 +524,7 @@ enum RecursivePlannerBehavior {
     FinishPassFailure,
     ShortAssignmentBatch,
     UnderfullSuccess,
+    AnalysisOnlyThenReady,
     EndlessAnalysisOnly,
 }
 
@@ -554,6 +555,12 @@ impl SlowRecursiveClusteringFactory {
     fn underfull_success() -> Self {
         Self {
             behavior: RecursivePlannerBehavior::UnderfullSuccess,
+        }
+    }
+
+    fn analysis_only_then_ready() -> Self {
+        Self {
+            behavior: RecursivePlannerBehavior::AnalysisOnlyThenReady,
         }
     }
 
@@ -618,6 +625,7 @@ struct SlowRecursiveTrainer {
     config: StreamingClusteringConfig,
     state: TrainerState,
     embeddings: Vec<Vec<f32>>,
+    completed_passes: usize,
     threshold: Option<f32>,
     behavior: RecursivePlannerBehavior,
 }
@@ -646,6 +654,7 @@ impl StreamingClusteringFactory for SlowRecursiveClusteringFactory {
             },
             state: TrainerState::Idle,
             embeddings: Vec::new(),
+            completed_passes: 0,
             threshold: None,
             behavior: self.behavior,
         })
@@ -678,13 +687,17 @@ impl lexongraph_streaming_clustering::StreamingClusterTrainer for SlowRecursiveT
             });
         }
         thread::sleep(Duration::from_millis(250));
+        self.completed_passes += 1;
         if self.behavior == RecursivePlannerBehavior::FinishPassFailure {
             self.state = TrainerState::Error;
             return Err(StreamingClusteringError::MalformedInput {
                 message: "synthetic recursive planning failure".into(),
             });
         }
-        if self.behavior == RecursivePlannerBehavior::EndlessAnalysisOnly {
+        if self.behavior == RecursivePlannerBehavior::EndlessAnalysisOnly
+            || (self.behavior == RecursivePlannerBehavior::AnalysisOnlyThenReady
+                && self.completed_passes == 1)
+        {
             self.state = TrainerState::PassComplete;
             return Ok(lexongraph_streaming_clustering::PassReport {
                 observed_count: self.embeddings.len(),
@@ -5467,6 +5480,22 @@ async fn regression_recursive_failed_units_advance_completion_counters() {
         assert_eq!(failed_unit.discovered_unit_count, Some(1));
         assert_eq!(failed_unit.current_recursion_depth, Some(0));
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn regression_recursive_analysis_only_passes_replay_until_partition_ready() {
+    let items = switch_trigger_items();
+    let mut run = StreamingIndexingRun::with_streaming_clustering_factory(
+        MapResolver,
+        AsciiEmbeddingProvider,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        SlowRecursiveClusteringFactory::analysis_only_then_ready(),
+        embedding_spec(),
+        128,
+    );
+
+    run.ingest_batch(&items).await.unwrap();
+    run.finish_pass().unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
