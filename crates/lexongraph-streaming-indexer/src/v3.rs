@@ -693,11 +693,7 @@ impl StreamingIndexingRunV3 {
                         layer_index: partition.layer_index,
                     },
                     partition.item_count,
-                    |progress| {
-                        let children = read_all_indexed_children(&partition.path)?;
-                        progress.fetch_add(children.len(), AtomicOrdering::Relaxed);
-                        Ok(children)
-                    },
+                    |progress| read_all_indexed_children(&partition.path, Some(progress.as_ref())),
                 )?;
                 if children.len() == 1 {
                     return Ok(children.remove(0));
@@ -1778,10 +1774,16 @@ fn read_all_block_hashes(path: &Path) -> Result<Vec<BlockHash>, StreamingIndexer
     Ok(all)
 }
 
-fn read_all_indexed_children(path: &Path) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
+fn read_all_indexed_children(
+    path: &Path,
+    progress: Option<&AtomicUsize>,
+) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
     let mut reader = IndexedChildPartitionReader::open(path)?;
     let mut all = Vec::new();
     while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+        if let Some(progress) = progress {
+            progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);
+        }
         all.extend(batch);
     }
     Ok(all)
@@ -2087,10 +2089,16 @@ mod tests {
         .with_observer(observer);
         run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
         run.finalize(&source, &output).await.unwrap();
-        assert!(phases.lock().unwrap().iter().any(|phase| matches!(
+        let phases = phases.lock().unwrap().clone();
+        assert!(phases.iter().any(|phase| matches!(
             phase,
             StreamingIndexingPhase::V3TerminalMaterializationLoad { .. }
         )));
+        assert!(
+            !phases
+                .iter()
+                .any(|phase| matches!(phase, StreamingIndexingPhase::V3PartitionLoad { .. }))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

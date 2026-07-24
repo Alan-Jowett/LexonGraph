@@ -6199,6 +6199,14 @@ fn val_stream_indexer_023a_v3_observer_surface_reports_phase_specific_progress()
     assert!(src.contains("StreamingIndexingPhase::V3PartitionTrainIngest"));
     assert!(src.contains("StreamingIndexingPhase::V3PartitionClassify"));
     assert!(src.contains("StreamingIndexingPhase::V3TerminalMaterializationLoad"));
+    assert!(src.contains("let phases = phases.lock().unwrap().clone();"));
+    assert!(src.contains("!phases"));
+    assert!(
+        src.contains(
+            ".any(|phase| matches!(phase, StreamingIndexingPhase::V3PartitionLoad { .. }))"
+        )
+    );
+    assert!(src.contains("StreamingIndexingPhase::V3PartitionLoad { .. }"));
     assert!(src.contains("StreamingIndexingPhase::HierarchyPlanning {"));
     assert!(src.contains("StreamingIndexingPhase::BottomUpAssembly { layer_index }"));
     assert!(src.contains("start_status_heartbeat("));
@@ -6250,6 +6258,8 @@ fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     assert!(src.contains("StreamingIndexingStatusState::Completed"));
     assert!(src.contains("progress.load(AtomicOrdering::Relaxed)"));
     assert!(src.contains("progress.fetch_add(batch_len, AtomicOrdering::Relaxed);"));
+    assert!(src.contains("read_all_indexed_children(&partition.path, Some(progress.as_ref()))"));
+    assert!(src.contains("progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);"));
     assert!(src.contains("validate_v3_cluster_assignment("));
     assert!(src.contains("load_leaf_batch_raw("));
 }
