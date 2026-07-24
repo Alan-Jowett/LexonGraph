@@ -698,10 +698,12 @@ and partition computation to make overlap observable.
 
 **Pass condition:** the verification artifacts demonstrate overlapped storage
 and CPU progression, rayon-backed execution for non-trivial independent CPU
-work where determinism permits, and no dependence of the final externally
+work where determinism permits, multiple storage loads effectively in flight on
+the portable conforming path even when the exercised backend realizes reads
+through blocking filesystem calls, and no dependence of the final externally
 visible result on the overlap schedule itself.
 
-**Traces to:** REQ-STREAM-INDEXER-037
+**Traces to:** REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-037A
 
 ### VAL-STREAM-INDEXER-036B
 
@@ -714,6 +716,19 @@ future batch has been fetched, decoded, or otherwise prepared, and any v3-
 specific prepared-batch detail does not masquerade as completed work.
 
 **Traces to:** REQ-STREAM-INDEXER-039
+
+### VAL-STREAM-INDEXER-036C
+
+Run the constrained v3 surface on a deterministic fixture backed by a source
+store whose per-request load path blocks long enough to reveal issuance
+parallelism.
+
+**Pass condition:** the portable conforming path maintains a bounded number of
+independent block-load operations in flight without requiring a widened public
+`BlockStore` contract, and one blocked load does not prevent later independent
+loads from being issued until the configured in-flight bound is reached.
+
+**Traces to:** REQ-STREAM-INDEXER-037A
 
 ### VAL-STREAM-INDEXER-037
 

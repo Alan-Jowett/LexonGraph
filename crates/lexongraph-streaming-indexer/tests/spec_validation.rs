@@ -6275,7 +6275,8 @@ fn val_stream_indexer_034a_v3_partition_identity_is_schedule_independent() {
 #[test]
 fn val_stream_indexer_036a_v3_overlaps_storage_and_cpu_work() {
     let src = include_str!("../src/v3.rs");
-    assert!(src.contains(".buffered(V3_IO_QUEUE_DEPTH)"));
+    assert!(src.contains("load_leaf_blocks_raw_parallel("));
+    assert!(src.contains("let worker_count = block_ids.len().min(V3_IO_QUEUE_DEPTH);"));
     assert!(src.contains(".into_par_iter()") || src.contains(".par_iter()"));
 }
 
@@ -6290,4 +6291,13 @@ fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     assert!(src.contains("progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);"));
     assert!(src.contains("validate_v3_cluster_assignment("));
     assert!(src.contains("load_leaf_batch_raw("));
+}
+
+#[test]
+fn val_stream_indexer_036c_v3_portable_load_path_keeps_bounded_inflight_loads() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("v3_load_leaf_blocks_keeps_multiple_loads_in_flight"));
+    assert!(src.contains("store_leaf_in(&source"));
+    assert!(src.contains("source.max_in_flight.load(Ordering::SeqCst) >= 2"));
+    assert!(src.contains("load_leaf_blocks_raw(ids.as_slice(), &source).await.unwrap()"));
 }

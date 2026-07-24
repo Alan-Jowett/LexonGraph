@@ -260,15 +260,24 @@ partitions out of later refinement work.
 Its hot memory scales with the currently active partition work set plus bounded
 pipeline buffers rather than with the full discovered partition tree.
 
-### DSG-STREAM-INDEXER-009B `V3 async I/O pipeline`
+### DSG-STREAM-INDEXER-009B `V3 overlapped storage pipeline`
 
-The constrained v3 surface keeps storage and CPU work overlapped through
-async/await-style orchestration for storage access together with a bounded queue
-of ready CPU work.
+The constrained v3 surface keeps storage and CPU work overlapped through a
+bounded cross-platform storage-preparation pipeline together with a bounded
+queue of ready CPU work.
 
-The implementation therefore keeps pending storage work and ready CPU work in
-flight together when useful, without making output ordering depend on completion
-timing.
+That pipeline may use async/await orchestration, dedicated blocking I/O
+workers, runtime-managed blocking workers, or an equivalent internal mechanism.
+The conformance boundary is effective overlap, not the presence of async syntax
+alone.
+
+An async-looking producer that ultimately issues blocking filesystem reads from
+one effectively single-threaded preparation lane is therefore non-conformant
+when it leaves ready CPU work or additional storage capacity materially idle.
+
+The implementation keeps multiple storage loads and ready CPU work in flight
+together when useful, without making output ordering depend on completion
+timing and without widening the public `BlockStore` contract.
 
 Within one active v3 partition, the prepare stage may run ahead of the oldest
 uncommitted processing stage by at most three batches.
@@ -1620,7 +1629,7 @@ possible.
 | DSG-STREAM-INDEXER-003A | REQ-STREAM-INDEXER-003A, REQ-STREAM-INDEXER-021F |
 | DSG-STREAM-INDEXER-005 | REQ-STREAM-INDEXER-008, REQ-STREAM-INDEXER-009, REQ-STREAM-INDEXER-010, REQ-STREAM-INDEXER-012, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-041 |
 | DSG-STREAM-INDEXER-006 | REQ-STREAM-INDEXER-011, REQ-STREAM-INDEXER-013, REQ-STREAM-INDEXER-014, REQ-STREAM-INDEXER-015, REQ-STREAM-INDEXER-031, REQ-STREAM-INDEXER-032, REQ-STREAM-INDEXER-036, REQ-STREAM-INDEXER-041, REQ-STREAM-INDEXER-042, REQ-STREAM-INDEXER-043, REQ-STREAM-INDEXER-044 |
-| DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021G, REQ-STREAM-INDEXER-021H |
+| DSG-STREAM-INDEXER-007..009 | REQ-STREAM-INDEXER-016, REQ-STREAM-INDEXER-017, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-021G, REQ-STREAM-INDEXER-021H, REQ-STREAM-INDEXER-037A |
 | DSG-STREAM-INDEXER-010..012 | REQ-STREAM-INDEXER-004, REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-044, REQ-STREAM-INDEXER-045, REQ-STREAM-INDEXER-046, REQ-STREAM-INDEXER-047 |
 | DSG-STREAM-INDEXER-013..015 | REQ-STREAM-INDEXER-018, REQ-STREAM-INDEXER-020, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021C, REQ-STREAM-INDEXER-021D, REQ-STREAM-INDEXER-024, REQ-STREAM-INDEXER-025, REQ-STREAM-INDEXER-027, REQ-STREAM-INDEXER-028, REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-016 | REQ-STREAM-INDEXER-013 |

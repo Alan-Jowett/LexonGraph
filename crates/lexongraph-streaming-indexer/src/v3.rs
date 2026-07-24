@@ -4,12 +4,11 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::StreamExt;
 use rayon::prelude::*;
 use tempfile::TempDir;
 
@@ -1432,30 +1431,7 @@ async fn load_leaf_blocks_raw(
     block_ids: &[BlockHash],
     source_store: &dyn BlockStore,
 ) -> Result<Vec<(BlockHash, ValidatedBlock)>, StreamingIndexerError> {
-    let blocks = futures::stream::iter(block_ids.iter().copied())
-        .map(|block_id| async move {
-            let block = source_store
-                .get(&block_id)
-                .await
-                .map_err(StreamingIndexerError::Storage)?
-                .ok_or_else(|| {
-                    StreamingIndexerError::Storage(
-                        lexongraph_block_store::BlockStoreError::BackendFailure(format!(
-                            "v3 input block {} is missing",
-                            block_id
-                        )),
-                    )
-                })?;
-            Ok::<(BlockHash, ValidatedBlock), StreamingIndexerError>((block_id, block))
-        })
-        .buffered(V3_IO_QUEUE_DEPTH)
-        .collect::<Vec<_>>()
-        .await;
-    let mut ordered = Vec::with_capacity(blocks.len());
-    for result in blocks {
-        ordered.push(result?);
-    }
-    Ok(ordered)
+    load_leaf_blocks_raw_parallel(block_ids, source_store)
 }
 
 async fn load_leaf_batch_raw(
@@ -1477,6 +1453,115 @@ async fn load_leaf_batch_raw(
         }
     }
     Ok(loaded)
+}
+
+async fn load_one_leaf_block(
+    block_id: BlockHash,
+    source_store: &dyn BlockStore,
+) -> Result<(BlockHash, ValidatedBlock), StreamingIndexerError> {
+    let block = source_store
+        .get(&block_id)
+        .await
+        .map_err(StreamingIndexerError::Storage)?
+        .ok_or_else(|| {
+            StreamingIndexerError::Storage(
+                lexongraph_block_store::BlockStoreError::BackendFailure(format!(
+                    "v3 input block {} is missing",
+                    block_id
+                )),
+            )
+        })?;
+    Ok((block_id, block))
+}
+
+fn load_leaf_blocks_raw_parallel(
+    block_ids: &[BlockHash],
+    source_store: &dyn BlockStore,
+) -> Result<Vec<(BlockHash, ValidatedBlock)>, StreamingIndexerError> {
+    if block_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let worker_count = block_ids.len().min(V3_IO_QUEUE_DEPTH);
+    let next_index = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+
+    thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel::<(
+            usize,
+            Result<(BlockHash, ValidatedBlock), StreamingIndexerError>,
+        )>();
+        let mut workers = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let sender = sender.clone();
+            let next_index = &next_index;
+            let stop = &stop;
+            workers.push(scope.spawn(move || -> Result<(), StreamingIndexerError> {
+                let runtime = build_v3_prepare_runtime()?;
+                loop {
+                    if stop.load(AtomicOrdering::Relaxed) {
+                        break;
+                    }
+                    let index = next_index.fetch_add(1, AtomicOrdering::Relaxed);
+                    if index >= block_ids.len() {
+                        break;
+                    }
+                    let result = runtime.block_on(load_one_leaf_block(block_ids[index], source_store));
+                    if result.is_err() {
+                        stop.store(true, AtomicOrdering::Relaxed);
+                    }
+                    if sender.send((index, result)).is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            }));
+        }
+        drop(sender);
+
+        let mut first_error = None;
+        let mut ordered = std::iter::repeat_with(|| None)
+            .take(block_ids.len())
+            .collect::<Vec<Option<(BlockHash, ValidatedBlock)>>>();
+        for (index, result) in receiver {
+            match result {
+                Ok(block) => {
+                    ordered[index] = Some(block);
+                }
+                Err(error) if first_error.is_none() => {
+                    first_error = Some(error);
+                }
+                Err(_) => {}
+            }
+        }
+
+        for worker in workers {
+            let worker_result = worker.join().map_err(|panic| {
+                StreamingIndexerError::ClusteringFailure(format!(
+                    "v3 leaf-block load worker panicked: {panic:?}"
+                ))
+            })?;
+            if first_error.is_none() {
+                if let Err(error) = worker_result {
+                    first_error = Some(error);
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        let mut loaded = Vec::with_capacity(block_ids.len());
+        for (index, block) in ordered.into_iter().enumerate() {
+            loaded.push(block.ok_or_else(|| {
+                StreamingIndexerError::ClusteringFailure(format!(
+                    "v3 leaf-block load dropped result for input index {index}"
+                ))
+            })?);
+        }
+        Ok(loaded)
+    })
 }
 
 async fn prepare_leaf_training_batch(
@@ -1882,7 +1967,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io::Write;
-    use std::sync::Mutex;
+    use std::sync::{Condvar, Mutex};
     use std::sync::atomic::Ordering;
 
     use async_trait::async_trait;
@@ -1895,6 +1980,21 @@ mod tests {
     #[derive(Default)]
     struct MemoryBlockStore {
         blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+    }
+
+    #[derive(Default)]
+    struct BlockingLeafStore {
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+        gate: Mutex<BlockingGate>,
+        gate_changed: Condvar,
+        in_flight: AtomicUsize,
+        max_in_flight: AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct BlockingGate {
+        started: usize,
+        released: bool,
     }
 
     #[async_trait]
@@ -1930,6 +2030,73 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl BlockStore for BlockingLeafStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .insert(*block_id, block_bytes.to_vec());
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            update_max(&self.max_in_flight, in_flight);
+
+            let mut gate = self.gate.lock().unwrap();
+            gate.started += 1;
+            if gate.started >= 2 {
+                gate.released = true;
+                self.gate_changed.notify_all();
+            }
+            while !gate.released {
+                let (next_gate, _) = self
+                    .gate_changed
+                    .wait_timeout(gate, Duration::from_millis(50))
+                    .unwrap();
+                gate = next_gate;
+                if !gate.released {
+                    gate.released = true;
+                    self.gate_changed.notify_all();
+                }
+            }
+            drop(gate);
+
+            let bytes = self.blocks.lock().unwrap().get(block_id).cloned();
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(bytes)
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            let ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
+        }
+    }
+
+    fn update_max(target: &AtomicUsize, value: usize) {
+        let mut current = target.load(Ordering::SeqCst);
+        while value > current {
+            match target.compare_exchange(current, value, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
     fn spec() -> EmbeddingSpec {
         EmbeddingSpec {
             dims: 2,
@@ -1945,6 +2112,30 @@ mod tests {
     }
 
     async fn store_leaf(store: &MemoryBlockStore, values: [f32; 2], body: &str) -> BlockHash {
+        let block = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                spec(),
+                vec![LeafEntry {
+                    embedding: embedding_bytes(values),
+                    metadata: vec![],
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: body.as_bytes().to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        store.put(&block).await.unwrap()
+    }
+
+    async fn store_leaf_in(
+        store: &impl BlockStore,
+        values: [f32; 2],
+        body: &str,
+    ) -> BlockHash {
         let block = Block::Leaf(
             build_leaf_block(
                 VERSION_1,
@@ -2331,16 +2522,6 @@ mod tests {
 
     #[test]
     fn v3_prepare_pipeline_caps_future_batch_lead_at_three() {
-        fn update_max(target: &AtomicUsize, value: usize) {
-            let mut current = target.load(Ordering::SeqCst);
-            while value > current {
-                match target.compare_exchange(current, value, Ordering::SeqCst, Ordering::SeqCst) {
-                    Ok(_) => break,
-                    Err(observed) => current = observed,
-                }
-            }
-        }
-
         let produced = Arc::new(AtomicUsize::new(0));
         let committed = Arc::new(AtomicUsize::new(0));
         let max_lead = Arc::new(AtomicUsize::new(0));
@@ -2378,5 +2559,23 @@ mod tests {
 
         assert!(max_lead.load(Ordering::SeqCst) <= V3_PREPARED_BATCH_LOOKAHEAD);
         assert_eq!(max_lead.load(Ordering::SeqCst), V3_PREPARED_BATCH_LOOKAHEAD);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn v3_load_leaf_blocks_keeps_multiple_loads_in_flight() {
+        let source = BlockingLeafStore::default();
+        let ids = vec![
+            store_leaf_in(&source, [0.0, 0.0], "a").await,
+            store_leaf_in(&source, [0.1, 0.0], "b").await,
+            store_leaf_in(&source, [10.0, 10.0], "c").await,
+            store_leaf_in(&source, [10.1, 10.0], "d").await,
+        ];
+
+        let loaded = load_leaf_blocks_raw(ids.as_slice(), &source).await.unwrap();
+        assert_eq!(
+            loaded.into_iter().map(|(block_id, _)| block_id).collect::<Vec<_>>(),
+            ids
+        );
+        assert!(source.max_in_flight.load(Ordering::SeqCst) >= 2);
     }
 }

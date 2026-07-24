@@ -865,12 +865,17 @@ deterministic and schedule-independent.
 
 For the constrained v3 surface:
 
-- non-trivial independent CPU-bound work should default to rayon-backed
+- non-trivial independent CPU-bound work shall default to rayon-backed
   parallel execution when ordering is not needed to preserve determinism
-- production-store and temp-working-store disk I/O should be orchestrated
-  through async/await-style non-blocking progression rather than a
-  single-threaded blocking storage pipeline
-- the implementation should keep both pending storage work and ready CPU work
+- production-store and temp-working-store disk I/O shall use a bounded
+  cross-platform concurrency realization that keeps multiple storage loads
+  effectively in flight when work exists, including when an underlying backend
+  realizes reads through blocking filesystem calls
+- an async-looking orchestration layer by itself is not sufficient for
+  conformance when it funnels blocking filesystem reads through an effectively
+  single-threaded producer that leaves ready CPU work or additional storage
+  capacity materially idle
+- the implementation shall keep both pending storage work and ready CPU work
   in flight when work exists, without changing deterministic externally visible
   results
 - within one active partition, batch preparation may overlap with processing of
@@ -880,6 +885,18 @@ For the constrained v3 surface:
   floating-point reductions, and deterministic child-partition emission shall
   commit in deterministic batch order even when later batches have already been
   prepared
+
+### REQ-STREAM-INDEXER-037A
+
+The constrained v3 surface shall provide at least one portable load-path
+realization that preserves the existing public `BlockStore` contract while
+maintaining effective concurrency for bounded numbers of independent block-load
+operations.
+
+That realization may use dedicated blocking I/O workers, runtime-managed
+blocking workers, or an equivalent bounded internal mechanism, but it shall not
+require callers or downstream block-store implementations to adopt a new
+platform-specific API solely to obtain conforming load concurrency.
 
 ### REQ-STREAM-INDEXER-038
 
@@ -918,6 +935,9 @@ for the progress-count fields exposed to the status observer, including:
   completion percentage when totals are not yet knowable
 - for v3, how prepared-but-not-yet-committed batches are distinguished from
   batches whose processing effects have already been committed
+- for v3, when storage preparation is separately observable, what additive
+  detail distinguishes in-flight or prepared load backlog from committed
+  processing progress
 
 These semantics shall be phase-specific for at least:
 
