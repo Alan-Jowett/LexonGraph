@@ -600,7 +600,7 @@ per-item instrumentation:
   partitions produced, completed planner invocations, and deterministic
   fallback or regrouping events
 - for v3, enough structured phase or stage detail to distinguish partition
-  training ingest, partition classification into child files, partition
+  trainer ingest, partition classification into child files, partition
   planning, terminal materialization load, next-layer assembly, and final
   persistence when those activities are separately observable
 
