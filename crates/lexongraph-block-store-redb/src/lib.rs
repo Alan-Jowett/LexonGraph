@@ -100,7 +100,7 @@ impl RedbBlockStore {
         })
     }
 
-    pub fn compact_now(&mut self) -> Result<bool, BlockStoreError> {
+    pub fn compact_now(&mut self) -> Result<(), BlockStoreError> {
         let state = Arc::get_mut(&mut self.state).ok_or_else(|| {
             backend_failure(format!(
                 "failed to compact redb database under {} because exclusive store ownership is required",
@@ -108,12 +108,16 @@ impl RedbBlockStore {
             ))
         })?;
         state.flush_pending_writes_before_compaction()?;
-        state.database.compact().map_err(|error| {
-            backend_failure(format!(
-                "failed to compact redb database under {}: {error}",
-                self.store_root.display()
-            ))
-        })
+        state
+            .database
+            .compact()
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to compact redb database under {}: {error}",
+                    self.store_root.display()
+                ))
+            })
+            .map(|_| ())
     }
 
     #[cfg(feature = "inject")]

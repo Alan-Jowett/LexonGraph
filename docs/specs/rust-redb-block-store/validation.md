@@ -173,7 +173,7 @@ their owned concerns, and exposes the backend to callers through store
 construction plus the ordinary `BlockStore` contract except for the approved
 Redb-specific `compact_now` runtime surface on `RedbBlockStore`.
 
-**Traces to:** REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-011
+**Traces to:** REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-011, REQ-REDB-STORE-015
 
 ### VAL-REDB-STORE-013
 

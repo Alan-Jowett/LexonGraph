@@ -173,6 +173,10 @@ operation.
 7. preserves block readability, identity, and persisted-store reopen behavior
    across successful compaction
 
+The public `compact_now` result communicates success or failure only and does
+not expose Redb-native compaction-status detail as part of this crate's stable
+caller contract.
+
 When fast mode previously left pending successfully written entries awaiting the
 graceful-shutdown flush, a successful `compact_now` satisfies the persistence
 work needed for compaction so later store instances observe those writes after
