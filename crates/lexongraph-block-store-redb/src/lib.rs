@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use futures::stream;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError};
 use redb::{Database, Durability, ReadableTable, TableDefinition};
 
 const BLOCKS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
@@ -236,6 +236,91 @@ impl BlockStore for RedbBlockStore {
             backend_failure(format!(
                 "failed to commit persisted redb bytes for block {}: {error}",
                 block_id
+            ))
+        })?;
+        if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {
+            self.state.pending_flush.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    async fn put_block_bytes_batch(
+        &self,
+        entries: &[BlockBytesBatchEntry<'_>],
+    ) -> Result<(), BlockStoreError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut write_txn = self.state.database.begin_write().map_err(|error| {
+            backend_failure(format!(
+                "failed to start a redb write transaction for a block batch: {error}"
+            ))
+        })?;
+        if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {
+            write_txn.set_durability(Durability::None);
+        }
+        let should_commit = {
+            let mut table = write_txn.open_table(BLOCKS_TABLE).map_err(|error| {
+                backend_failure(format!(
+                    "failed to open the redb block table for a block batch: {error}"
+                ))
+            })?;
+            let mut inserted_any = false;
+
+            for entry in entries {
+                enum ExistingEntryState {
+                    MatchingBytes,
+                    ConflictingBytes,
+                    Missing,
+                }
+
+                let existing_state = {
+                    let existing = table.get(&entry.block_id.as_bytes()[..]).map_err(|error| {
+                        backend_failure(format!(
+                            "failed to inspect persisted redb bytes for block {} during batch write: {error}",
+                            entry.block_id
+                        ))
+                    })?;
+                    match existing {
+                        Some(existing) if existing.value() == entry.block_bytes => {
+                            ExistingEntryState::MatchingBytes
+                        }
+                        Some(_) => ExistingEntryState::ConflictingBytes,
+                        None => ExistingEntryState::Missing,
+                    }
+                };
+
+                match existing_state {
+                    ExistingEntryState::MatchingBytes => {}
+                    ExistingEntryState::ConflictingBytes => {
+                        return Err(backend_failure(format!(
+                            "integrity conflict for block {} in the redb block table during batch write",
+                            entry.block_id
+                        )));
+                    }
+                    ExistingEntryState::Missing => {
+                        table
+                            .insert(&entry.block_id.as_bytes()[..], entry.block_bytes)
+                            .map_err(|error| {
+                                backend_failure(format!(
+                                    "failed to persist block {} into the redb block table during batch write: {error}",
+                                    entry.block_id
+                                ))
+                            })?;
+                        inserted_any = true;
+                    }
+                }
+            }
+
+            inserted_any
+        };
+        if !should_commit {
+            return Ok(());
+        }
+        write_txn.commit().map_err(|error| {
+            backend_failure(format!(
+                "failed to commit persisted redb bytes for a block batch: {error}"
             ))
         })?;
         if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {

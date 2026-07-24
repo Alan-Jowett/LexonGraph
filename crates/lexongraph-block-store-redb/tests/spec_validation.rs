@@ -4,12 +4,12 @@ use std::collections::HashSet;
 use std::future::Future;
 
 use futures::TryStreamExt;
-use lexongraph_block::BlockHash;
 #[cfg(feature = "inject")]
-use lexongraph_block::{BlockError, compute_block_hash, serialize_block};
+use lexongraph_block::{BlockError, compute_block_hash};
+use lexongraph_block::{BlockHash, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
-use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
+use lexongraph_block_store::{BlockBytesBatchEntry, BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 
 mod support;
@@ -310,6 +310,105 @@ fn val_redb_store_015_compact_now_fails_without_exclusive_ownership() {
 
     expect_backend_failure_contains(error, "exclusive store ownership is required");
     drop(clone);
+}
+
+#[test]
+fn val_redb_store_016_batch_writes_commit_atomically_in_durable_mode() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let first = serialize_block(&sample_leaf_block("first")).unwrap();
+    let second = serialize_block(&sample_leaf_block("second")).unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        let entries = [
+            BlockBytesBatchEntry {
+                block_id: &first.hash,
+                block_bytes: &first.bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &second.hash,
+                block_bytes: &second.bytes,
+            },
+        ];
+
+        store.put_block_bytes_batch(&entries).unwrap();
+    }
+
+    let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
+    assert_eq!(reopened.get(&first.hash).unwrap().unwrap().hash, first.hash);
+    assert_eq!(
+        reopened.get(&second.hash).unwrap().unwrap().hash,
+        second.hash
+    );
+}
+
+#[test]
+#[cfg(feature = "inject")]
+fn val_redb_store_017_batch_conflicts_abort_the_full_operation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+    let first = serialize_block(&sample_leaf_block("first")).unwrap();
+    let second = serialize_block(&sample_leaf_block("second")).unwrap();
+    store
+        .raw_insert(second.hash, b"conflicting bytes".to_vec())
+        .unwrap();
+    let entries = [
+        BlockBytesBatchEntry {
+            block_id: &first.hash,
+            block_bytes: &first.bytes,
+        },
+        BlockBytesBatchEntry {
+            block_id: &second.hash,
+            block_bytes: &second.bytes,
+        },
+    ];
+
+    let error = pollster::block_on(store.put_block_bytes_batch(&entries)).unwrap_err();
+
+    expect_backend_failure_contains(error, "integrity conflict");
+    assert_eq!(store.get_block_bytes(&first.hash).unwrap(), None);
+    assert_eq!(
+        store.get_block_bytes(&second.hash).unwrap().unwrap(),
+        b"conflicting bytes".to_vec()
+    );
+}
+
+#[test]
+#[cfg(feature = "inject")]
+fn val_redb_store_018_fast_mode_batch_writes_flush_after_graceful_shutdown() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let first = serialize_block(&sample_leaf_block("first")).unwrap();
+    let second = serialize_block(&sample_leaf_block("second")).unwrap();
+
+    {
+        let store = RedbBlockStore::new_with_durability(
+            temp_dir.path(),
+            RedbBlockStoreDurabilityMode::Fast,
+        )
+        .unwrap();
+        let entries = [
+            BlockBytesBatchEntry {
+                block_id: &first.hash,
+                block_bytes: &first.bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &second.hash,
+                block_bytes: &second.bytes,
+            },
+        ];
+
+        store.put_block_bytes_batch(&entries).unwrap();
+
+        assert!(store.pending_fast_mode_flush());
+        assert_eq!(store.get(&first.hash).unwrap().unwrap().hash, first.hash);
+        assert_eq!(store.get(&second.hash).unwrap().unwrap().hash, second.hash);
+    }
+
+    let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
+    assert_eq!(reopened.get(&first.hash).unwrap().unwrap().hash, first.hash);
+    assert_eq!(
+        reopened.get(&second.hash).unwrap().unwrap().hash,
+        second.hash
+    );
 }
 
 fn persisted_ids(store: &RedbBlockStore) -> HashSet<BlockHash> {

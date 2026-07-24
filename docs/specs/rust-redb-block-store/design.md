@@ -140,6 +140,33 @@ shutdown flush beyond the successful `put`.
 Writes performed in fast mode become durably observable through later store
 instances after the shared graceful-shutdown flush completes.
 
+### DSG-REDB-STORE-005A `put_block_bytes_batch`
+
+`put_block_bytes_batch` realizes the shared raw-byte batch-write capability for
+Redb-backed storage.
+
+The operation:
+
+1. accepts a caller-supplied batch of block identifiers and canonical block
+   bytes
+2. opens one Redb write transaction for the full batch
+3. applies the selected durability mode to that transaction in the same way as
+   single-entry writes
+4. inspects each requested block ID against the currently persisted value in the
+   backend-private table
+5. treats identical already-persisted bytes as idempotent acceptance for that
+   entry
+6. stages inserts for entries that are absent
+7. fails explicitly if any entry encounters conflicting already-persisted bytes
+   or another Redb/write-path failure
+8. commits once, after all entries have been accepted for the batch
+9. in fast mode, records one pending graceful-shutdown flush obligation after a
+   successful commit
+
+Because all staged mutations live inside one Redb write transaction until the
+single commit point, a failed batch operation does not publish a partial prefix
+of the batch to persisted store state.
+
 ### DSG-REDB-STORE-006 `Fast-mode graceful shutdown`
 
 When fast mode is selected, the shared store state tracks whether successful
@@ -246,6 +273,13 @@ The crate adds backend-specific tests for:
 - explicit malformed-content and integrity-mismatch failures via injected raw
   bytes
 - explicit integrity-conflict failure for conflicting existing bytes
+- successful atomic batch persistence through the shared batch-write method
+- explicit failure for unsupported batch behavior remaining outside this backend
+  only through the parent trait's optional-capability contract
+- explicit atomic rollback when one batch entry conflicts with divergent
+  persisted bytes
+- durable-mode reopen visibility after successful batch commit
+- fast-mode batch visibility in-process and durability after the required flush
 - visibility of committed writes after reopening the same store root
 - enumeration of persisted block IDs only
 - explicit failure for malformed persisted block-ID keys
@@ -259,9 +293,10 @@ The crate adds backend-specific tests for:
 | DSG-REDB-STORE-002..004 | REQ-REDB-STORE-001, REQ-REDB-STORE-003, REQ-REDB-STORE-004 |
 | DSG-REDB-STORE-003A | REQ-REDB-STORE-002, REQ-REDB-STORE-003, REQ-REDB-STORE-015 |
 | DSG-REDB-STORE-005 | REQ-REDB-STORE-005, REQ-REDB-STORE-008, REQ-REDB-STORE-012 |
+| DSG-REDB-STORE-005A | REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021 |
 | DSG-REDB-STORE-006 | REQ-REDB-STORE-013, REQ-REDB-STORE-014 |
 | DSG-REDB-STORE-006A | REQ-REDB-STORE-005, REQ-REDB-STORE-013, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017 |
 | DSG-REDB-STORE-007 | REQ-REDB-STORE-006, REQ-REDB-STORE-007 |
 | DSG-REDB-STORE-008 | REQ-REDB-STORE-009, REQ-REDB-STORE-010 |
-| DSG-REDB-STORE-009 | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017 |
-| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017 |
+| DSG-REDB-STORE-009 | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017, REQ-REDB-STORE-018 |
+| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021 |

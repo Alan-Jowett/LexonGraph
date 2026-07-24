@@ -33,6 +33,12 @@ use lexongraph_block::{
 pub type BlockIdStream<'a> =
     std::pin::Pin<Box<dyn Stream<Item = Result<BlockHash, BlockStoreError>> + Send + 'a>>;
 
+#[derive(Clone, Copy, Debug)]
+pub struct BlockBytesBatchEntry<'a> {
+    pub block_id: &'a BlockHash,
+    pub block_bytes: &'a [u8],
+}
+
 #[async_trait]
 pub trait BlockStore: Sync {
     async fn put_block_bytes(
@@ -40,6 +46,16 @@ pub trait BlockStore: Sync {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError>;
+
+    async fn put_block_bytes_batch(
+        &self,
+        entries: &[BlockBytesBatchEntry<'_>],
+    ) -> Result<(), BlockStoreError> {
+        let _ = entries;
+        Err(BlockStoreError::BackendFailure(
+            "batch writes are not supported by this block store backend".into(),
+        ))
+    }
 
     async fn get_block_bytes(
         &self,
@@ -67,12 +83,55 @@ pub trait BlockStore: Sync {
 
 #[async_trait]
 pub trait BlockStoreExt: BlockStore {
+    async fn put_blocks(&self, blocks: &[Block]) -> Result<Vec<BlockHash>, BlockStoreError> {
+        let serialized = blocks
+            .iter()
+            .map(|block| serialize_block(block).map_err(BlockStoreError::ContractViolation))
+            .collect::<Result<Vec<_>, _>>()?;
+        let entries = serialized
+            .iter()
+            .map(|serialized| BlockBytesBatchEntry {
+                block_id: &serialized.hash,
+                block_bytes: &serialized.bytes,
+            })
+            .collect::<Vec<_>>();
+        self.put_block_bytes_batch(&entries).await?;
+        Ok(serialized
+            .into_iter()
+            .map(|serialized| serialized.hash)
+            .collect())
+    }
+
     async fn put_versioned(&self, block: &VersionedBlock) -> Result<BlockHash, BlockStoreError> {
         let serialized =
             serialize_versioned_block(block).map_err(BlockStoreError::ContractViolation)?;
         self.put_block_bytes(&serialized.hash, &serialized.bytes)
             .await?;
         Ok(serialized.hash)
+    }
+
+    async fn put_versioned_blocks(
+        &self,
+        blocks: &[VersionedBlock],
+    ) -> Result<Vec<BlockHash>, BlockStoreError> {
+        let serialized = blocks
+            .iter()
+            .map(|block| {
+                serialize_versioned_block(block).map_err(BlockStoreError::ContractViolation)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let entries = serialized
+            .iter()
+            .map(|serialized| BlockBytesBatchEntry {
+                block_id: &serialized.hash,
+                block_bytes: &serialized.bytes,
+            })
+            .collect::<Vec<_>>();
+        self.put_block_bytes_batch(&entries).await?;
+        Ok(serialized
+            .into_iter()
+            .map(|serialized| serialized.hash)
+            .collect())
     }
 
     async fn get_decoded(
@@ -436,7 +495,7 @@ mod tests {
         resolve_blocks_for_search, run_enumeration_case, run_full_suite, run_idempotence_case,
         run_missing_block_case, run_round_trip_case, sample_branch_block, sample_leaf_block,
     };
-    use super::{BlockStore, BlockStoreError};
+    use super::{BlockBytesBatchEntry, BlockStore, BlockStoreError, BlockStoreExt};
 
     #[derive(Default)]
     struct MemoryBlockStore {
@@ -447,6 +506,23 @@ mod tests {
         fn len(&self) -> usize {
             self.blocks.lock().unwrap().len()
         }
+    }
+
+    #[derive(Default)]
+    struct BatchMemoryBlockStore {
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+    }
+
+    impl BatchMemoryBlockStore {
+        fn raw_insert(&self, block_id: BlockHash, block_bytes: Vec<u8>) {
+            self.blocks.lock().unwrap().insert(block_id, block_bytes);
+        }
+    }
+
+    #[derive(Default)]
+    struct BatchDelegationStore {
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+        batch_calls: Mutex<usize>,
     }
 
     #[async_trait]
@@ -460,6 +536,106 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(*block_id, block_bytes.to_vec());
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
+            let block_ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BatchMemoryBlockStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .insert(*block_id, block_bytes.to_vec());
+            Ok(())
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            let mut blocks = self.blocks.lock().unwrap();
+            for entry in entries {
+                if let Some(existing) = blocks.get(entry.block_id)
+                    && existing != entry.block_bytes
+                {
+                    return Err(BlockStoreError::BackendFailure(format!(
+                        "integrity conflict for block {} in batch memory store",
+                        entry.block_id
+                    )));
+                }
+            }
+            for entry in entries {
+                blocks
+                    .entry(*entry.block_id)
+                    .or_insert_with(|| entry.block_bytes.to_vec());
+            }
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
+            let block_ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BatchDelegationStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            _block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            Err(BlockStoreError::BackendFailure(format!(
+                "single-entry writes must not be used for block {} in the delegation test store",
+                block_id
+            )))
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            *self.batch_calls.lock().unwrap() += 1;
+            let mut blocks = self.blocks.lock().unwrap();
+            for entry in entries {
+                blocks.insert(*entry.block_id, entry.block_bytes.to_vec());
+            }
             Ok(())
         }
 
@@ -694,6 +870,11 @@ mod tests {
             store
                 .put_block_bytes(&serialized.hash, &serialized.bytes)
                 .await?;
+            let batch_entries = [BlockBytesBatchEntry {
+                block_id: &serialized.hash,
+                block_bytes: &serialized.bytes,
+            }];
+            let _ = store.put_block_bytes_batch(&batch_entries).await;
             let _ = store.get_block_bytes(block_id).await?;
             let _ = store.iter_block_ids()?.try_collect::<Vec<_>>().await?;
             Ok(())
@@ -791,6 +972,127 @@ mod tests {
         let error = block_on(store.put(&invalid)).unwrap_err();
 
         assert!(matches!(error, BlockStoreError::ContractViolation(_)));
+    }
+
+    #[test]
+    fn val_store_019_unsupported_batch_writes_fail_explicitly() {
+        let store = MemoryBlockStore::default();
+        let first = serialize_block(&sample_leaf_block("first")).unwrap();
+        let second = serialize_block(&sample_leaf_block("second")).unwrap();
+        let entries = [
+            BlockBytesBatchEntry {
+                block_id: &first.hash,
+                block_bytes: &first.bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &second.hash,
+                block_bytes: &second.bytes,
+            },
+        ];
+
+        let error = block_on(store.put_block_bytes_batch(&entries)).unwrap_err();
+
+        assert_eq!(
+            error,
+            BlockStoreError::BackendFailure(
+                "batch writes are not supported by this block store backend".into()
+            )
+        );
+        assert!(
+            block_on(store.get_block_bytes(&first.hash))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            block_on(store.get_block_bytes(&second.hash))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn val_store_020_opted_in_batch_writes_store_all_entries() {
+        let store = BatchMemoryBlockStore::default();
+        let first = serialize_block(&sample_leaf_block("first")).unwrap();
+        let second = serialize_block(&sample_leaf_block("second")).unwrap();
+        let entries = [
+            BlockBytesBatchEntry {
+                block_id: &first.hash,
+                block_bytes: &first.bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &second.hash,
+                block_bytes: &second.bytes,
+            },
+        ];
+
+        block_on(store.put_block_bytes_batch(&entries)).unwrap();
+
+        assert_eq!(
+            block_on(store.get_block_bytes(&first.hash))
+                .unwrap()
+                .unwrap(),
+            first.bytes
+        );
+        assert_eq!(
+            block_on(store.get_block_bytes(&second.hash))
+                .unwrap()
+                .unwrap(),
+            second.bytes
+        );
+    }
+
+    #[test]
+    fn val_store_021_batch_conflicts_abort_the_full_operation() {
+        let store = BatchMemoryBlockStore::default();
+        let first = serialize_block(&sample_leaf_block("first")).unwrap();
+        let second = serialize_block(&sample_leaf_block("second")).unwrap();
+        store.raw_insert(second.hash, b"conflicting bytes".to_vec());
+        let entries = [
+            BlockBytesBatchEntry {
+                block_id: &first.hash,
+                block_bytes: &first.bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &second.hash,
+                block_bytes: &second.bytes,
+            },
+        ];
+
+        let error = block_on(store.put_block_bytes_batch(&entries)).unwrap_err();
+
+        assert_eq!(
+            error,
+            BlockStoreError::BackendFailure(format!(
+                "integrity conflict for block {} in batch memory store",
+                second.hash
+            ))
+        );
+        assert!(
+            block_on(store.get_block_bytes(&first.hash))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            block_on(store.get_block_bytes(&second.hash))
+                .unwrap()
+                .unwrap(),
+            b"conflicting bytes".to_vec()
+        );
+    }
+
+    #[test]
+    fn val_store_022_typed_batch_helpers_use_the_raw_byte_batch_boundary() {
+        let store = BatchDelegationStore::default();
+        let blocks = [sample_leaf_block("first"), sample_leaf_block("second")];
+
+        let block_ids = block_on(store.put_blocks(&blocks)).unwrap();
+
+        assert_eq!(*store.batch_calls.lock().unwrap(), 1);
+        assert_eq!(block_ids.len(), 2);
+        for block_id in block_ids {
+            assert!(block_on(store.get(&block_id)).unwrap().is_some());
+        }
     }
 
     async fn store_and_reload(

@@ -36,7 +36,8 @@ S3, or similar systems.
 
 The crate shall define the backend-agnostic contract between LexonGraph
 consumers and block-storage backends, including immutable block persistence,
-retrieval, and streaming enumeration of stored block identifiers.
+optional batch persistence, retrieval, and streaming enumeration of stored
+block identifiers.
 
 ### REQ-BLOCK-STORE-002
 
@@ -146,14 +147,44 @@ protocol version.
 ### REQ-BLOCK-STORE-021
 
 Shared typed and version-aware block helpers may be layered above the raw-byte
-storage trait so callers can store and load version-1 or version-2 blocks
-without duplicating codec-selection logic in each backend implementation.
+storage trait so callers can store, batch-store, and load version-1 or
+version-2 blocks without duplicating codec-selection logic in each backend
+implementation.
 
 ### REQ-BLOCK-STORE-022
 
 Concrete block-store backends should remain unaware of whether stored bytes
 encode a version-1 branch block, a version-2 reserved block, or a version-2
 custom block.
+
+### REQ-BLOCK-STORE-023
+
+The production storage trait shall expose an additional batch-write operation
+over caller-supplied block identifiers and canonical block bytes.
+
+### REQ-BLOCK-STORE-024
+
+The batch-write operation shall remain optional for concrete backends.
+
+Backends that do not opt in shall fail explicitly when the operation is
+invoked, and shall not silently report success or partially emulate the batch
+contract through implicit best-effort fallback behavior.
+
+### REQ-BLOCK-STORE-025
+
+Backends that opt in to the batch-write operation shall provide atomic
+all-or-nothing semantics.
+
+If any batch entry cannot be accepted because of backend failure, conflicting
+already-persisted bytes, malformed batch input relative to the shared contract,
+or other explicit contract failure, none of the entries in that batch operation
+shall become committed by that operation.
+
+### REQ-BLOCK-STORE-026
+
+For backends that opt in, the batch-write operation shall preserve the same
+backend-neutrality, immutability, idempotence, and explicit-failure rules that
+apply to single-entry writes.
 
 ## Out of Scope
 
