@@ -275,7 +275,7 @@ fn val_redb_store_013_concrete_store_exposes_compact_now() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut store = RedbBlockStore::new(temp_dir.path()).unwrap();
 
-    assert!(store.compact_now().is_ok());
+    store.compact_now().unwrap();
 }
 
 #[test]
