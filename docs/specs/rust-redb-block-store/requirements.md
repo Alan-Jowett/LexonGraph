@@ -21,7 +21,8 @@ This document is layered on top of:
 
 This document does not redefine the parent `BlockStore` contract. It adds only
 Redb-backend-specific requirements needed to realize a durable local backend in
-this repository.
+this repository, including narrowly scoped concrete-type administrative
+surfaces that remain outside the shared trait boundary.
 
 ## Terminology
 
@@ -54,10 +55,17 @@ The Redb block-store crate shall remain subordinate to
 `docs/specs/rust-block-storage-trait/` for block identity, validation, and the
 backend-neutral `BlockStore` contract.
 
+When this crate exposes Redb-specific administrative functionality, it shall do
+so without widening, replacing, or redefining the shared `BlockStore`
+contract.
+
 ### REQ-REDB-STORE-003
 
 Construction shall accept a caller-supplied store-root directory and a
 caller-selectable durability mode outside the `BlockStore` trait boundary.
+
+The crate may also expose backend-specific administrative methods on the
+concrete `RedbBlockStore` type outside the `BlockStore` trait boundary.
 
 Construction shall either return an initialized store rooted at a canonical
 directory path or fail explicitly as a backend failure when the requested root
@@ -155,13 +163,46 @@ required by `REQ-REDB-STORE-013`.
 Fast mode shall not guarantee that writes survive abnormal termination, process
 crash, abort, or power loss before that graceful-shutdown flush occurs.
 
+### REQ-REDB-STORE-015
+
+The Redb block-store crate shall expose a caller-invocable `compact_now`
+operation on the concrete `RedbBlockStore` type for requesting immediate Redb
+file compaction.
+
+This operation shall remain Redb-specific and shall not be surfaced through
+`BlockStore` or any repository-wide backend-neutral storage trait in this
+revision.
+
+### REQ-REDB-STORE-016
+
+The `compact_now` operation shall require exclusive ownership of the targeted
+store instance.
+
+If the store has shared or cloned ownership, or otherwise cannot satisfy the
+exclusive-ownership precondition required by the Redb-backed implementation, the
+operation shall fail explicitly as a backend failure and shall not silently
+return success or no-op.
+
+### REQ-REDB-STORE-017
+
+When `compact_now` is invoked under valid preconditions, the implementation
+shall preserve the inherited block-store correctness and integrity contract
+while compacting backend-private Redb storage.
+
+The operation shall surface compaction and pre-compaction Redb failures
+explicitly through the existing error taxonomy and shall not expose Redb
+database handles, table definitions, or other backend-private storage details
+to callers.
+
 ## Out of Scope
 
 This crate does not define or own:
 
 - block canonicalization, block validity, or block-ID derivation rules
-- consumer-facing query, delete, compaction, or maintenance APIs beyond the
+- backend-neutral query, delete, compaction, or maintenance APIs beyond the
   parent trait
+- Redb-specific maintenance surfaces other than the concrete-type
+  `compact_now` operation defined by this revision
 - cache-mode byte-budget semantics in this revision
 - consumer-facing integration with evaluator, CLI, or benchmark-profile store
   selection in this revision

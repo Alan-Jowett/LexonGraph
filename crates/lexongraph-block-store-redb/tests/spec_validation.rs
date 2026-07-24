@@ -270,6 +270,48 @@ fn val_redb_store_012_public_surface_remains_backend_neutral() {
     assert_eq!(store.get(&block_id).unwrap().unwrap().hash, block_id);
 }
 
+#[test]
+fn val_redb_store_013_concrete_store_exposes_compact_now() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut store = RedbBlockStore::new(temp_dir.path()).unwrap();
+
+    store.compact_now().unwrap();
+}
+
+#[test]
+#[cfg(feature = "inject")]
+fn val_redb_store_014_compact_now_preserves_visibility_and_flushes_fast_mode_writes() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let expected = validated_block("compact-now");
+    let mut store =
+        RedbBlockStore::new_with_durability(temp_dir.path(), RedbBlockStoreDurabilityMode::Fast)
+            .unwrap();
+
+    let block_id = store.put(&expected.block).unwrap();
+    assert!(store.pending_fast_mode_flush());
+
+    store.compact_now().unwrap();
+    assert!(!store.pending_fast_mode_flush());
+
+    drop(store);
+
+    let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
+    assert_eq!(block_id, expected.hash);
+    assert_eq!(reopened.get(&block_id).unwrap(), Some(expected));
+}
+
+#[test]
+fn val_redb_store_015_compact_now_fails_without_exclusive_ownership() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut store = RedbBlockStore::new(temp_dir.path()).unwrap();
+    let clone = store.clone();
+
+    let error = store.compact_now().unwrap_err();
+
+    expect_backend_failure_contains(error, "exclusive store ownership is required");
+    drop(clone);
+}
+
 fn persisted_ids(store: &RedbBlockStore) -> HashSet<BlockHash> {
     pollster::block_on(store.iter_block_ids().unwrap().try_collect()).unwrap()
 }
