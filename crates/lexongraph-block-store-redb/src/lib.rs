@@ -206,14 +206,14 @@ impl BlockStore for RedbBlockStore {
                 "failed to open the redb block table for block enumeration: {error}"
             ))
         })?;
-        let mut iter = table.iter().map_err(|error| {
+        let iter = table.iter().map_err(|error| {
             backend_failure(format!(
                 "failed to iterate the redb block table for block enumeration: {error}"
             ))
         })?;
 
         let mut block_ids = Vec::new();
-        while let Some(entry) = iter.next() {
+        for entry in iter {
             let (key, _) = entry.map_err(|error| {
                 backend_failure(format!(
                     "failed while iterating the redb block table for block enumeration: {error}"

@@ -4,7 +4,9 @@ use std::collections::HashSet;
 use std::future::Future;
 
 use futures::TryStreamExt;
-use lexongraph_block::{BlockError, BlockHash, compute_block_hash, serialize_block};
+use lexongraph_block::BlockHash;
+#[cfg(feature = "inject")]
+use lexongraph_block::{BlockError, compute_block_hash, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
@@ -24,14 +26,6 @@ trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
         E: std::fmt::Debug,
     {
         pollster::block_on(self).unwrap()
-    }
-
-    fn unwrap_err(self) -> E
-    where
-        T: std::fmt::Debug,
-        E: std::fmt::Debug,
-    {
-        pollster::block_on(self).unwrap_err()
     }
 }
 
@@ -100,7 +94,7 @@ fn val_redb_store_005_and_006_get_reports_malformed_content_and_integrity_mismat
     store.raw_insert(second.hash, first.bytes.clone()).unwrap();
 
     assert_eq!(
-        store.get(&second.hash).unwrap_err(),
+        pollster::block_on(store.get(&second.hash)).unwrap_err(),
         BlockStoreError::DecodeFailure(BlockError::HashMismatch {
             expected: second.hash,
             actual: first.hash,
@@ -112,7 +106,7 @@ fn val_redb_store_005_and_006_get_reports_malformed_content_and_integrity_mismat
     store.raw_insert(malformed_hash, malformed_bytes).unwrap();
 
     assert!(matches!(
-        store.get(&malformed_hash).unwrap_err(),
+        pollster::block_on(store.get(&malformed_hash)).unwrap_err(),
         BlockStoreError::DecodeFailure(BlockError::MalformedCbor(_))
     ));
 }
@@ -129,7 +123,7 @@ fn val_redb_store_007_conflicting_existing_bytes_fail_without_overwrite() {
         .raw_insert(serialized.hash, conflicting_bytes.clone())
         .unwrap();
 
-    let error = store.put(&block).unwrap_err();
+    let error = pollster::block_on(store.put(&block)).unwrap_err();
 
     expect_backend_failure_contains(error, "integrity conflict");
     assert_eq!(
