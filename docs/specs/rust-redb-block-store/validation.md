@@ -170,7 +170,42 @@ Inspect the Redb-backed implementation's public and verification surface.
 the approved backend behavior, remains subordinate to `docs/protocol/blocks.md`,
 `docs/specs/rust-block-crate/`, and `docs/specs/rust-block-storage-trait/` for
 their owned concerns, and exposes the backend to callers through store
-construction plus the ordinary `BlockStore` contract rather than Redb-native
-runtime surfaces.
+construction plus the ordinary `BlockStore` contract except for the approved
+Redb-specific `compact_now` runtime surface on `RedbBlockStore`.
 
 **Traces to:** REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-011
+
+### VAL-REDB-STORE-013
+
+Inspect the Redb-backed implementation's public API surface for compaction.
+
+**Pass condition:** `RedbBlockStore` exposes a caller-invocable `compact_now`
+operation, while the shared `BlockStore` trait remains free of backend-neutral
+compaction or maintenance requirements in this revision.
+
+**Traces to:** REQ-REDB-STORE-003, REQ-REDB-STORE-015
+
+### VAL-REDB-STORE-014
+
+Store one or more valid blocks, invoke `compact_now` through an exclusively
+owned `RedbBlockStore`, then reopen the same store root and retrieve or
+enumerate the previously stored blocks.
+
+**Pass condition:** compaction succeeds explicitly without violating inherited
+block-store correctness, and the reopened store still observes the expected
+blocks. When the store was operating in fast mode before compaction, the
+compaction operation also leaves those successful writes durably observable
+after reopening.
+
+**Traces to:** REQ-REDB-STORE-005, REQ-REDB-STORE-013, REQ-REDB-STORE-015, REQ-REDB-STORE-017
+
+### VAL-REDB-STORE-015
+
+Attempt to invoke `compact_now` while another clone or shared owner of the same
+`RedbBlockStore` state still exists.
+
+**Pass condition:** the operation fails explicitly as a backend failure because
+the exclusivity precondition is not satisfied, and it does not silently report
+success or behave as a no-op.
+
+**Traces to:** REQ-REDB-STORE-016, REQ-REDB-STORE-017

@@ -100,6 +100,22 @@ impl RedbBlockStore {
         })
     }
 
+    pub fn compact_now(&mut self) -> Result<bool, BlockStoreError> {
+        let state = Arc::get_mut(&mut self.state).ok_or_else(|| {
+            backend_failure(format!(
+                "failed to compact redb database under {} because exclusive store ownership is required",
+                self.store_root.display()
+            ))
+        })?;
+        state.flush_pending_writes_on_shutdown()?;
+        state.database.compact().map_err(|error| {
+            backend_failure(format!(
+                "failed to compact redb database under {}: {error}",
+                self.store_root.display()
+            ))
+        })
+    }
+
     #[cfg(feature = "inject")]
     pub fn raw_insert(&self, block_id: BlockHash, bytes: Vec<u8>) -> Result<(), BlockStoreError> {
         self.raw_insert_key_value(block_id.as_bytes().to_vec(), bytes)
