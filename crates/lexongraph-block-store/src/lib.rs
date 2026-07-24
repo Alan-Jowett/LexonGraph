@@ -572,13 +572,13 @@ mod tests {
         ) -> Result<(), BlockStoreError> {
             let mut blocks = self.blocks.lock().unwrap();
             for entry in entries {
-                if let Some(existing) = blocks.get(entry.block_id) {
-                    if existing != entry.block_bytes {
-                        return Err(BlockStoreError::BackendFailure(format!(
-                            "integrity conflict for block {} in batch memory store",
-                            entry.block_id
-                        )));
-                    }
+                if let Some(existing) = blocks.get(entry.block_id)
+                    && existing != entry.block_bytes
+                {
+                    return Err(BlockStoreError::BackendFailure(format!(
+                        "integrity conflict for block {} in batch memory store",
+                        entry.block_id
+                    )));
                 }
             }
             for entry in entries {
