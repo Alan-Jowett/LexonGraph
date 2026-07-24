@@ -10,9 +10,7 @@ use lexongraph_block::{BlockError, compute_block_hash, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
-use lexongraph_block_store_redb::RedbBlockStore;
-#[cfg(feature = "inject")]
-use lexongraph_block_store_redb::RedbBlockStoreDurabilityMode;
+use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 
 mod support;
 
@@ -80,10 +78,16 @@ fn val_redb_store_003_put_and_get_round_trip_through_the_parent_contract() {
 #[test]
 fn val_redb_store_003a_default_mode_retains_immediate_reopen_visibility() {
     let temp_dir = tempfile::tempdir().unwrap();
-    let store = RedbBlockStore::new(temp_dir.path()).unwrap();
     let expected = validated_block("default-durable");
 
-    let block_id = store.put(&expected.block).unwrap();
+    let block_id = {
+        let store = RedbBlockStore::new_with_durability(
+            temp_dir.path(),
+            RedbBlockStoreDurabilityMode::Durable,
+        )
+        .unwrap();
+        store.put(&expected.block).unwrap()
+    };
     let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
 
     assert_eq!(block_id, expected.hash);

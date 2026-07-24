@@ -80,8 +80,9 @@ details.
 crate and persist those bytes keyed by block ID in Redb-backed local storage.
 
 In the default durability mode, successful committed writes shall remain
-observable through later store instances opened on the same store root without
-requiring graceful shutdown of the original store instance.
+durably observable through later store instances opened on the same store root
+without depending on any deferred graceful-shutdown flush beyond the successful
+`put` itself.
 
 In fast mode, successful `put` operations shall preserve the same block-store
 correctness and integrity behavior as the default mode, but later store

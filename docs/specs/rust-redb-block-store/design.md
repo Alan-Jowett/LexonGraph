@@ -124,7 +124,8 @@ Successful writes in both modes remain immediately observable through the live
 store handle and its clones.
 
 Writes performed in default mode remain durably observable through later store
-instances opened on the same store root after `put` returns.
+instances opened on the same store root without depending on any deferred
+shutdown flush beyond the successful `put`.
 
 Writes performed in fast mode become durably observable through later store
 instances after the shared graceful-shutdown flush completes.
@@ -179,8 +180,8 @@ Database-open, transaction, read, write, commit, and iteration failures map to
 explicit backend failures through the parent error taxonomy.
 
 If the fast-mode graceful-shutdown flush fails while the final handle is
-dropping, the implementation treats graceful shutdown as failed and does not
-claim that the fast-mode durability guarantee was satisfied.
+dropping, the implementation emits an explicit shutdown-visible error and does
+not claim that the fast-mode durability guarantee was satisfied.
 
 ## Verification Strategy
 

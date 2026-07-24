@@ -2,10 +2,9 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Redb-backed durable local `BlockStore` implementation for LexonGraph blocks.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream;
@@ -23,7 +22,6 @@ pub struct RedbBlockStore {
 }
 
 struct SharedState {
-    store_root: PathBuf,
     database: Database,
     durability_mode: RedbBlockStoreDurabilityMode,
     pending_flush: AtomicBool,
@@ -83,13 +81,6 @@ impl RedbBlockStore {
         }
 
         let database_path = canonical_root.join(DATABASE_FILE_NAME);
-        if let Some(state) = find_open_store_state(&canonical_root, durability_mode)? {
-            return Ok(Self {
-                store_root: canonical_root,
-                state,
-            });
-        }
-
         let database = Database::create(&database_path).map_err(|error| {
             backend_failure(format!(
                 "failed to open redb database {}: {error}",
@@ -98,12 +89,10 @@ impl RedbBlockStore {
         })?;
         initialize_blocks_table(&database, &database_path)?;
         let state = Arc::new(SharedState {
-            store_root: canonical_root.clone(),
             database,
             durability_mode,
             pending_flush: AtomicBool::new(false),
         });
-        register_open_store_state(canonical_root.clone(), &state);
 
         Ok(Self {
             store_root: canonical_root,
@@ -327,39 +316,9 @@ impl SharedState {
 impl Drop for SharedState {
     fn drop(&mut self) {
         if let Err(error) = self.flush_pending_writes_on_shutdown() {
-            panic!("fast-mode graceful shutdown flush failed: {error}");
+            eprintln!("fast-mode graceful shutdown flush failed: {error}");
         }
-        let mut registry = open_store_registry().lock().unwrap();
-        registry.remove(&self.store_root);
     }
-}
-
-fn open_store_registry() -> &'static Mutex<HashMap<PathBuf, Weak<SharedState>>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Weak<SharedState>>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn find_open_store_state(
-    store_root: &Path,
-    durability_mode: RedbBlockStoreDurabilityMode,
-) -> Result<Option<Arc<SharedState>>, BlockStoreError> {
-    let registry = open_store_registry().lock().unwrap();
-    let Some(existing) = registry.get(store_root).and_then(Weak::upgrade) else {
-        return Ok(None);
-    };
-    if existing.durability_mode != durability_mode {
-        return Err(backend_failure(format!(
-            "store root {} is already open with {:?} durability mode",
-            store_root.display(),
-            existing.durability_mode
-        )));
-    }
-    Ok(Some(existing))
-}
-
-fn register_open_store_state(store_root: PathBuf, state: &Arc<SharedState>) {
-    let mut registry = open_store_registry().lock().unwrap();
-    registry.insert(store_root, Arc::downgrade(state));
 }
 
 fn initialize_blocks_table(
