@@ -614,15 +614,24 @@ not require full-dataset item-membership vectors as a public API obligation.
 
 ### DSG-STREAM-INDEXER-023A `V3 partition working store`
 
-The constrained v3 surface represents pending partition membership as
-implementation-owned artifacts beneath the temp working root.
+The constrained v3 surface represents pending partition membership through a
+run-scoped backend-private temporary Redb database beneath the caller-provided
+temp working root.
 
-Those artifacts are authoritative only within the run and are deleted on
-successful completion; they are not part of the production block-store
-contract.
+That Redb state is authoritative only within the run and is deleted on
+successful completion; it is not part of the production block-store contract.
 
-Each partition artifact records either ordered leaf block IDs or ordered
+### DSG-STREAM-INDEXER-023B `V3 partition membership Redb schema`
+
+Within the temporary Redb database, the constrained v3 surface records ordered
+partition membership as backend-private entries keyed by deterministic partition
+identity and deterministic record order.
+
+Each partition's staged values encode either ordered leaf block IDs or ordered
 lower-layer child summaries, depending on the current v3 layer.
+
+The database filename, table names, keys, and on-disk encoding remain
+implementation details and do not cross the public API boundary.
 
 ### DSG-STREAM-INDEXER-024 `Partition identity and ancestry`
 
@@ -639,8 +648,8 @@ Independent subpartition processing therefore does not change observable
 ancestry, deterministic reporting identity, or parent-child relations.
 
 For v3, child partition identities are derived from their parent's deterministic
-identity plus deterministic child ordinals, not from temp-file names or storage
-completion order.
+identity plus deterministic child ordinals, not from temp-file names, database
+insertion order, database file layout, or storage completion order.
 
 ### DSG-STREAM-INDEXER-025 `Terminal partition normalization`
 
@@ -1674,7 +1683,8 @@ possible.
 | DSG-STREAM-INDEXER-021 | REQ-STREAM-INDEXER-029, REQ-STREAM-INDEXER-030 |
 | DSG-STREAM-INDEXER-022 | REQ-STREAM-INDEXER-033 |
 | DSG-STREAM-INDEXER-023 | REQ-STREAM-INDEXER-019, REQ-STREAM-INDEXER-021A, REQ-STREAM-INDEXER-021B, REQ-STREAM-INDEXER-021E, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-120 |
-| DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-120 |
+| DSG-STREAM-INDEXER-023A..023B | REQ-STREAM-INDEXER-004B, REQ-STREAM-INDEXER-020A, REQ-STREAM-INDEXER-132 |
+| DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-016A, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-120 |
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |

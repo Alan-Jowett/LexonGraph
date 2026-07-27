@@ -6201,11 +6201,22 @@ fn val_stream_indexer_005a_v3_uses_temp_working_root_and_cleans_it_on_success() 
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("tempdir_in(working_root.as_ref())"));
     assert!(src.contains("temp_root: Option<TempDir>"));
+    assert!(src.contains("V3_PARTITION_STORE_FILE_NAME"));
+    assert!(src.contains("V3PartitionStore::new(temp_root.path())"));
     assert!(src.contains("temp_root.close()"));
 }
 
 #[test]
-fn val_stream_indexer_005b_v3_public_surface_accepts_run_scoped_cancellation_handle() {
+fn val_stream_indexer_005b_v3_uses_temp_redb_instead_of_per_partition_files() {
+    let src = include_str!("../src/v3.rs");
+    assert!(src.contains("TableDefinition::new(\"v3_block_hash_partitions\")"));
+    assert!(src.contains("TableDefinition::new(\"v3_indexed_child_partitions\")"));
+    assert!(src.contains("partition_entry_key(partition_id, start_index + offset)?"));
+    assert!(!src.contains("partition_file_path("));
+}
+
+#[test]
+fn val_stream_indexer_005c_v3_public_surface_accepts_run_scoped_cancellation_handle() {
     let src = include_str!("../src/v3.rs");
     let lib = include_str!("../src/lib.rs");
     assert!(lib.contains("pub struct StreamingIndexingCancellationHandle"));
@@ -6291,6 +6302,7 @@ fn val_stream_indexer_034a_v3_partition_identity_is_schedule_independent() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("format!(\"l{layer_index}.p0\")"));
     assert!(src.contains("format!(\"{}.{}\", partition.id, child_index)"));
+    assert!(src.contains("partition_entry_key(partition_id, start_index + offset)?"));
     assert!(src.contains("v3_is_deterministic_and_cleans_up_successfully"));
 }
 
@@ -6308,7 +6320,8 @@ fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     assert!(src.contains("StreamingIndexingStatusState::Completed"));
     assert!(src.contains("progress.load(AtomicOrdering::Relaxed)"));
     assert!(src.contains("progress.fetch_add(batch_len, AtomicOrdering::Relaxed);"));
-    assert!(src.contains("let mut reader = IndexedChildPartitionReader::open(&partition.path)?;"));
+    assert!(src.contains("read_all_indexed_children("));
+    assert!(src.contains("Some(progress.as_ref())"));
     assert!(src.contains("progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);"));
     assert!(src.contains("children.extend(batch);"));
     assert!(src.contains("validate_v3_cluster_assignment("));
