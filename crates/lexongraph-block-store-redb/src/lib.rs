@@ -528,8 +528,8 @@ fn emit_repair_telemetry(
 ) {
     let callback = telemetry_callback
         .lock()
-        .ok()
-        .and_then(|callback| callback.clone());
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
     if let Some(callback) = callback {
         callback(
             BlockStoreTelemetryEvent::new("repair_status")

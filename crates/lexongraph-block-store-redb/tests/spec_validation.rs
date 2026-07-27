@@ -549,6 +549,8 @@ fn mark_database_as_repair_required(database_path: &Path) {
     buffer[0] |= RECOVERY_REQUIRED;
     buffer[0] &= !TWO_PHASE_COMMIT;
     file.write_all(&buffer).unwrap();
+    file.flush().unwrap();
+    file.sync_all().unwrap();
 }
 
 fn telemetry_collector(
