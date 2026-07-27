@@ -2447,7 +2447,7 @@ fn partition_entry_key_buffer(partition_id: &str) -> Vec<u8> {
 }
 
 fn set_partition_entry_key_index(
-    key: &mut Vec<u8>,
+    key: &mut [u8],
     partition_id: &str,
     index: usize,
 ) -> Result<(), StreamingIndexerError> {
