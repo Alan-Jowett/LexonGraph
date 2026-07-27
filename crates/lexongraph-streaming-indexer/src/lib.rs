@@ -10534,8 +10534,8 @@ impl Drop for PartitionSpillDirectory {
     }
 }
 
-fn write_spilled_indexed_child(
-    writer: &mut BufWriter<File>,
+fn write_spilled_indexed_child<W: Write>(
+    writer: &mut W,
     child: &IndexedChild,
 ) -> Result<(), StreamingIndexerError> {
     let embedding_len = u32::try_from(child.embedding.len()).map_err(|_| {
@@ -10557,8 +10557,8 @@ fn write_spilled_indexed_child(
         .map_err(|error| StreamingIndexerError::LocalSpill(error.to_string()))
 }
 
-fn read_spilled_indexed_child(
-    reader: &mut BufReader<File>,
+fn read_spilled_indexed_child<R: Read>(
+    reader: &mut R,
 ) -> Result<Option<IndexedChild>, StreamingIndexerError> {
     let mut embedding_len_bytes = [0u8; 4];
     match reader.read_exact(&mut embedding_len_bytes) {
