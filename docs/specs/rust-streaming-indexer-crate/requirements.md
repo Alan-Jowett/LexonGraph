@@ -161,6 +161,10 @@ working root for implementation-owned partition artifacts.
 That working root is separate from the production block store used to resolve
 input leaf blocks and persist the final result.
 
+The implementation shall place its backend-private temporary partition-working
+database beneath that caller-provided directory rather than requiring caller-
+managed partition artifact file paths.
+
 ### REQ-STREAM-INDEXER-004C
 
 The first v3 slice shall be single-process only and shall not provide crash
@@ -435,6 +439,10 @@ for the completed index into the production output store.
 
 Intermediate partition manifests, membership artifacts, split staging, and
 similar v3 working artifacts remain outside the production-store contract.
+
+When v3 uses backend-private temporary Redb state to realize those artifacts,
+that database remains part of the working-store contract rather than the
+production-store contract.
 
 ### REQ-STREAM-INDEXER-020B
 
@@ -1758,6 +1766,20 @@ If the bounded replay-pass limit is exceeded before training completion
 succeeds, the v3 surface shall fail explicitly. It shall not fail solely
 because the first successful pass remained `AnalysisOnly` or because an earlier
 successful pass reached `PartitionReady` before the trainer could complete.
+
+### REQ-STREAM-INDEXER-132
+
+The constrained v3 surface shall maintain deterministic partition-working
+membership and cluster-to-partition staging through a run-scoped temporary
+Redb database located beneath the caller-provided working directory.
+
+That Redb state shall support ordered append, deterministic readback, and
+deterministic rewrite of partition membership without requiring one filesystem
+file per partition.
+
+The database filename, schema, tables, key encoding, and physical layout remain
+implementation-owned and are not part of the public API or production block-
+store contract.
 ## Out of Scope
 
 This crate does not define or own:

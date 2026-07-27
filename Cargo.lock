@@ -2199,6 +2199,7 @@ dependencies = [
  "memmap2",
  "pollster",
  "rayon",
+ "redb",
  "sha2",
  "tempfile",
  "tokio",

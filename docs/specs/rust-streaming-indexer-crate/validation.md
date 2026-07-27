@@ -90,7 +90,8 @@ separate from both the source production block store and the output production
 block store.
 
 **Pass condition:** the run uses that working root for implementation-owned
-partition artifacts, does not widen the production block-store contract with
+partition artifacts through a backend-private temporary Redb working store
+beneath that directory, does not widen the production block-store contract with
 mutable scheduler state, and cleans the working subtree on successful
 completion.
 
@@ -98,6 +99,19 @@ completion.
 REQ-STREAM-INDEXER-020A
 
 ### VAL-STREAM-INDEXER-005B
+
+Drive the constrained v3 surface through a fixture that creates multiple
+partitions during refinement.
+
+**Pass condition:** ordered partition-working membership and cluster-to-
+partition staging are realized through the temporary Redb store beneath the
+caller-provided working directory, and the conformant path does not require one
+filesystem file per partition.
+
+**Traces to:** REQ-STREAM-INDEXER-004B, REQ-STREAM-INDEXER-020A,
+REQ-STREAM-INDEXER-132
+
+### VAL-STREAM-INDEXER-005C
 
 Inspect the constrained v3 public construction surface.
 
@@ -683,7 +697,8 @@ tasks.
 
 **Pass condition:** both executions produce identical partition identities,
 child ordinals, parent-assembly order, root block ID, and persisted block set,
-demonstrating schedule-independent v3 determinism.
+demonstrating v3 determinism independent of scheduling order, Redb insertion
+order, or other backend-private database layout details.
 
 **Traces to:** REQ-STREAM-INDEXER-016A, REQ-STREAM-INDEXER-037
 
