@@ -3,14 +3,17 @@
 //! Redb-backed durable local `BlockStore` implementation for LexonGraph blocks.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use futures::stream;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError};
-use redb::{Database, Durability, ReadableTable, TableDefinition};
+use lexongraph_block_store::{
+    BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError, BlockStoreTelemetryCallback,
+    BlockStoreTelemetryEvent,
+};
+use redb::{Database, Durability, ReadableTable, RepairSession, TableDefinition};
 
 const BLOCKS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 const DATABASE_FILE_NAME: &str = "blocks.redb";
@@ -25,6 +28,7 @@ struct SharedState {
     database: Database,
     durability_mode: RedbBlockStoreDurabilityMode,
     pending_flush: AtomicBool,
+    telemetry_callback: Arc<Mutex<Option<BlockStoreTelemetryCallback>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,12 +49,35 @@ impl std::fmt::Debug for RedbBlockStore {
 
 impl RedbBlockStore {
     pub fn new(store_root: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
-        Self::new_with_durability(store_root, RedbBlockStoreDurabilityMode::Durable)
+        Self::new_with_durability_and_telemetry(
+            store_root,
+            RedbBlockStoreDurabilityMode::Durable,
+            None,
+        )
     }
 
     pub fn new_with_durability(
         store_root: impl AsRef<Path>,
         durability_mode: RedbBlockStoreDurabilityMode,
+    ) -> Result<Self, BlockStoreError> {
+        Self::new_with_durability_and_telemetry(store_root, durability_mode, None)
+    }
+
+    pub fn new_with_telemetry(
+        store_root: impl AsRef<Path>,
+        telemetry_callback: BlockStoreTelemetryCallback,
+    ) -> Result<Self, BlockStoreError> {
+        Self::new_with_durability_and_telemetry(
+            store_root,
+            RedbBlockStoreDurabilityMode::Durable,
+            Some(telemetry_callback),
+        )
+    }
+
+    pub fn new_with_durability_and_telemetry(
+        store_root: impl AsRef<Path>,
+        durability_mode: RedbBlockStoreDurabilityMode,
+        telemetry_callback: Option<BlockStoreTelemetryCallback>,
     ) -> Result<Self, BlockStoreError> {
         let requested_root = store_root.as_ref();
         std::fs::create_dir_all(requested_root).map_err(|error| {
@@ -81,17 +108,14 @@ impl RedbBlockStore {
         }
 
         let database_path = canonical_root.join(DATABASE_FILE_NAME);
-        let database = Database::create(&database_path).map_err(|error| {
-            backend_failure(format!(
-                "failed to open redb database {}: {error}",
-                database_path.display()
-            ))
-        })?;
+        let telemetry_callback = Arc::new(Mutex::new(telemetry_callback));
+        let database = open_database(&database_path, telemetry_callback.clone())?;
         initialize_blocks_table(&database, &database_path)?;
         let state = Arc::new(SharedState {
             database,
             durability_mode,
             pending_flush: AtomicBool::new(false),
+            telemetry_callback,
         });
 
         Ok(Self {
@@ -165,6 +189,19 @@ impl RedbBlockStore {
 
 #[async_trait]
 impl BlockStore for RedbBlockStore {
+    fn set_telemetry_callback(
+        &self,
+        telemetry_callback: Option<BlockStoreTelemetryCallback>,
+    ) -> Result<(), BlockStoreError> {
+        *self.state.telemetry_callback.lock().map_err(|_| {
+            backend_failure(format!(
+                "failed to update redb telemetry callback for {} because the callback state lock is poisoned",
+                self.store_root.display()
+            ))
+        })? = telemetry_callback;
+        Ok(())
+    }
+
     async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
@@ -465,6 +502,40 @@ fn initialize_blocks_table(
             database_path.display()
         ))
     })
+}
+
+fn open_database(
+    database_path: &Path,
+    telemetry_callback: Arc<Mutex<Option<BlockStoreTelemetryCallback>>>,
+) -> Result<Database, BlockStoreError> {
+    let mut builder = Database::builder();
+    let database_path_for_callback = database_path.to_path_buf();
+    builder.set_repair_callback(move |session| {
+        emit_repair_telemetry(&telemetry_callback, &database_path_for_callback, session);
+    });
+    builder.create(database_path).map_err(|error| {
+        backend_failure(format!(
+            "failed to open redb database {}: {error}",
+            database_path.display()
+        ))
+    })
+}
+
+fn emit_repair_telemetry(
+    telemetry_callback: &Mutex<Option<BlockStoreTelemetryCallback>>,
+    database_path: &Path,
+    session: &RepairSession,
+) {
+    let callback = telemetry_callback.lock().ok().and_then(|callback| callback.clone());
+    if let Some(callback) = callback {
+        callback(
+            BlockStoreTelemetryEvent::new("repair_status")
+                .with_message("redb reported database repair progress")
+                .with_attribute("backend", "redb")
+                .with_attribute("database_path", database_path.display().to_string())
+                .with_attribute("progress", format!("{:.3}", session.progress())),
+        );
+    }
 }
 
 fn backend_failure(message: String) -> BlockStoreError {

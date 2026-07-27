@@ -21,7 +21,9 @@
 //! let _ = MemoryBlockStore::default();
 //! ```
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{TryStreamExt, stream::Stream};
@@ -33,6 +35,40 @@ use lexongraph_block::{
 pub type BlockIdStream<'a> =
     std::pin::Pin<Box<dyn Stream<Item = Result<BlockHash, BlockStoreError>> + Send + 'a>>;
 
+pub type BlockStoreTelemetryCallback =
+    Arc<dyn Fn(BlockStoreTelemetryEvent) + Send + Sync + 'static>;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlockStoreTelemetryEvent {
+    pub name: String,
+    pub message: Option<String>,
+    pub attributes: BTreeMap<String, String>,
+}
+
+impl BlockStoreTelemetryEvent {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            message: None,
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    pub fn with_attribute(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.attributes.insert(name.into(), value.into());
+        self
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BlockBytesBatchEntry<'a> {
     pub block_id: &'a BlockHash,
@@ -41,6 +77,14 @@ pub struct BlockBytesBatchEntry<'a> {
 
 #[async_trait]
 pub trait BlockStore: Sync {
+    fn set_telemetry_callback(
+        &self,
+        telemetry_callback: Option<BlockStoreTelemetryCallback>,
+    ) -> Result<(), BlockStoreError> {
+        let _ = telemetry_callback;
+        Ok(())
+    }
+
     async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
@@ -481,8 +525,8 @@ pub mod conformance {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Mutex;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use futures::{StreamExt, TryStreamExt, executor::block_on, stream};
@@ -495,7 +539,10 @@ mod tests {
         resolve_blocks_for_search, run_enumeration_case, run_full_suite, run_idempotence_case,
         run_missing_block_case, run_round_trip_case, sample_branch_block, sample_leaf_block,
     };
-    use super::{BlockBytesBatchEntry, BlockStore, BlockStoreError, BlockStoreExt};
+    use super::{
+        BlockBytesBatchEntry, BlockStore, BlockStoreError, BlockStoreExt,
+        BlockStoreTelemetryCallback, BlockStoreTelemetryEvent,
+    };
 
     #[derive(Default)]
     struct MemoryBlockStore {
@@ -523,6 +570,12 @@ mod tests {
     struct BatchDelegationStore {
         blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
         batch_calls: Mutex<usize>,
+    }
+
+    #[derive(Default)]
+    struct TelemetryAwareStore {
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+        telemetry_callback: Mutex<Option<BlockStoreTelemetryCallback>>,
     }
 
     #[async_trait]
@@ -635,6 +688,55 @@ mod tests {
             let mut blocks = self.blocks.lock().unwrap();
             for entry in entries {
                 blocks.insert(*entry.block_id, entry.block_bytes.to_vec());
+            }
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(self.blocks.lock().unwrap().get(block_id).cloned())
+        }
+
+        fn iter_block_ids(&self) -> Result<super::BlockIdStream<'_>, BlockStoreError> {
+            let block_ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(block_ids.into_iter().map(Ok))))
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for TelemetryAwareStore {
+        fn set_telemetry_callback(
+            &self,
+            telemetry_callback: Option<BlockStoreTelemetryCallback>,
+        ) -> Result<(), BlockStoreError> {
+            *self.telemetry_callback.lock().unwrap() = telemetry_callback;
+            Ok(())
+        }
+
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .insert(*block_id, block_bytes.to_vec());
+            if let Some(callback) = self.telemetry_callback.lock().unwrap().clone() {
+                callback(
+                    BlockStoreTelemetryEvent::new("put_block_bytes")
+                        .with_message("stored canonical block bytes")
+                        .with_attribute("block_id", block_id.to_string())
+                        .with_attribute("byte_len", block_bytes.len().to_string()),
+                );
             }
             Ok(())
         }
@@ -866,6 +968,7 @@ mod tests {
             block: &Block,
             block_id: &BlockHash,
         ) -> Result<(), BlockStoreError> {
+            store.set_telemetry_callback(None)?;
             let serialized = serialize_block(block).map_err(BlockStoreError::ContractViolation)?;
             store
                 .put_block_bytes(&serialized.hash, &serialized.bytes)
@@ -1095,6 +1198,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn val_store_023_absent_telemetry_callback_leaves_store_behavior_unchanged() {
+        let store = TelemetryAwareStore::default();
+        let block = sample_leaf_block("telemetry-optional");
+
+        let block_id = block_on(store.put(&block)).unwrap();
+
+        assert_eq!(block_on(store.get(&block_id)).unwrap().unwrap().block, block);
+    }
+
+    #[test]
+    fn val_store_024_telemetry_events_use_the_shared_generic_event_shape() {
+        let store = TelemetryAwareStore::default();
+        let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
+        let collector = telemetry_collector(events.clone());
+        let block = sample_leaf_block("telemetry");
+
+        store.set_telemetry_callback(Some(collector)).unwrap();
+        let block_id = block_on(store.put(&block)).unwrap();
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].name, "put_block_bytes");
+        assert_eq!(
+            captured[0].message.as_deref(),
+            Some("stored canonical block bytes")
+        );
+        assert_eq!(
+            captured[0].attributes,
+            BTreeMap::from([
+                ("block_id".into(), block_id.to_string()),
+                (
+                    "byte_len".into(),
+                    serialize_block(&block).unwrap().bytes.len().to_string()
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn val_store_025_non_emitting_backends_remain_conformant_with_telemetry_configured() {
+        let store = MemoryBlockStore::default();
+        let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
+        let block = sample_leaf_block("no-emission");
+
+        store
+            .set_telemetry_callback(Some(telemetry_collector(events.clone())))
+            .unwrap();
+        let block_id = block_on(store.put(&block)).unwrap();
+
+        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(block_on(store.get(&block_id)).unwrap().unwrap().block, block);
+    }
+
+    #[test]
+    fn val_store_026_telemetry_callback_is_observational_only() {
+        fn invoke(callback: &BlockStoreTelemetryCallback) {
+            let _: () = callback(
+                BlockStoreTelemetryEvent::new("inspection")
+                    .with_message("telemetry callback returns unit")
+                    .with_attribute("scope", "observational"),
+            );
+        }
+
+        let callback: BlockStoreTelemetryCallback = Arc::new(|_| {});
+        invoke(&callback);
+    }
+
     async fn store_and_reload(
         store: &dyn BlockStore,
         block: &Block,
@@ -1127,6 +1298,14 @@ mod tests {
         }
 
         Some(bytes)
+    }
+
+    fn telemetry_collector(
+        events: Arc<Mutex<Vec<BlockStoreTelemetryEvent>>>,
+    ) -> BlockStoreTelemetryCallback {
+        Arc::new(move |event| {
+            events.lock().unwrap().push(event);
+        })
     }
 
     fn decode_hex_nibble(value: u8) -> Option<u8> {

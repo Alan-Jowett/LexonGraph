@@ -232,6 +232,25 @@ integrity behavior as the default mode, but later store instances opened on the
 same store root are required to observe those writes only after the fast-mode
 graceful-shutdown flush has completed.
 
+### REQ-REDB-STORE-022
+
+When the shared block-store telemetry callback capability is configured, the
+Redb-backed implementation shall translate Redb repair and status updates into
+the shared generic telemetry event representation.
+
+### REQ-REDB-STORE-023
+
+Redb-backed telemetry emission shall remain observational only.
+
+In this revision, telemetry observers shall not gain authority to steer, abort,
+or otherwise alter Redb repair behavior through the shared callback surface.
+
+### REQ-REDB-STORE-024
+
+Redb-specific telemetry payloads shall be expressible through the shared event
+name, optional message, and structured name/value attributes without exposing
+raw Redb repair-session types in the stable caller contract.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -241,6 +260,7 @@ This crate does not define or own:
   parent trait
 - Redb-specific maintenance surfaces other than the concrete-type
   `compact_now` operation defined by this revision
+- raw Redb repair-session control surfaces at the shared telemetry boundary
 - cache-mode byte-budget semantics in this revision
 - consumer-facing integration with evaluator, CLI, or benchmark-profile store
   selection in this revision

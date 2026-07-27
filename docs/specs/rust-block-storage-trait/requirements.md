@@ -186,6 +186,51 @@ For backends that opt in, the batch-write operation shall preserve the same
 backend-neutrality, immutability, idempotence, and explicit-failure rules that
 apply to single-entry writes.
 
+### REQ-BLOCK-STORE-027
+
+The trait crate shall define a backend-neutral telemetry event type suitable for
+observational status reporting by block-store implementations and related helper
+surfaces.
+
+### REQ-BLOCK-STORE-028
+
+The shared storage contract shall define an optional telemetry callback
+capability that callers may provide to observe store events.
+
+Absence of a telemetry callback shall leave store behavior unchanged.
+
+### REQ-BLOCK-STORE-029
+
+The telemetry callback capability shall be observational only.
+
+In this revision, a callback shall not control, cancel, mutate, or otherwise
+steer backend behavior.
+
+### REQ-BLOCK-STORE-030
+
+The shared telemetry event representation shall remain generic rather than
+backend-native.
+
+At minimum it shall support:
+
+- an event name
+- an optional human-readable message
+- structured name/value attributes
+
+### REQ-BLOCK-STORE-031
+
+Concrete backends are not required to emit telemetry in this revision merely
+because the shared capability exists.
+
+Backends that do not opt in remain conformant without synthesizing placeholder
+events.
+
+### REQ-BLOCK-STORE-032
+
+When a backend or shared helper emits telemetry through the shared capability,
+that emission shall not require callers to depend on backend-native types,
+storage layout details, or transport-specific status objects.
+
 ## Out of Scope
 
 This crate does not define or own:
