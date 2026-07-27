@@ -2164,6 +2164,66 @@ impl V3PartitionStore {
         kind: WorkingItemKind,
         partition_id: &str,
     ) -> Result<(), StreamingIndexerError> {
+        let start_key = partition_entry_key(partition_id, 0)?;
+        let end_key = partition_entry_key_end(partition_id);
+        match kind {
+            WorkingItemKind::LeafBlockIds => {
+                let mut table = write_txn
+                    .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
+                    .map_err(|error| {
+                        StreamingIndexerError::LocalSpill(format!(
+                            "could not open the v3 block-id partition table in {}: {error}",
+                            self.database_path.display()
+                        ))
+                    })?;
+                let extracted = table
+                    .extract_from_if(start_key.as_slice()..end_key.as_slice(), |_, _| true)
+                    .map_err(|error| {
+                        StreamingIndexerError::LocalSpill(format!(
+                            "could not start block-id partition cleanup for {} in {}: {error}",
+                            partition_id,
+                            self.database_path.display()
+                        ))
+                    })?;
+                for entry in extracted {
+                    entry.map_err(|error| {
+                        StreamingIndexerError::LocalSpill(format!(
+                            "could not remove block-id partition {} from {}: {error}",
+                            partition_id,
+                            self.database_path.display()
+                        ))
+                    })?;
+                }
+            }
+            WorkingItemKind::IndexedChildren => {
+                let mut table = write_txn
+                    .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
+                    .map_err(|error| {
+                        StreamingIndexerError::LocalSpill(format!(
+                            "could not open the v3 summary partition table in {}: {error}",
+                            self.database_path.display()
+                        ))
+                    })?;
+                let extracted = table
+                    .extract_from_if(start_key.as_slice()..end_key.as_slice(), |_, _| true)
+                    .map_err(|error| {
+                        StreamingIndexerError::LocalSpill(format!(
+                            "could not start summary partition cleanup for {} in {}: {error}",
+                            partition_id,
+                            self.database_path.display()
+                        ))
+                    })?;
+                for entry in extracted {
+                    entry.map_err(|error| {
+                        StreamingIndexerError::LocalSpill(format!(
+                            "could not remove summary partition {} from {}: {error}",
+                            partition_id,
+                            self.database_path.display()
+                        ))
+                    })?;
+                }
+            }
+        }
         let mut counts = write_txn
             .open_table(V3_PARTITION_COUNTS_TABLE)
             .map_err(|error| {
