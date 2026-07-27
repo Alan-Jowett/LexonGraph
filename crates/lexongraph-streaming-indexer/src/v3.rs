@@ -98,7 +98,7 @@ pub struct StreamingIndexingRunV3 {
     embedding_spec: EmbeddingSpec,
     block_size_target: usize,
     temp_root: Option<TempDir>,
-    partition_store: V3PartitionStore,
+    partition_store: Option<Arc<V3PartitionStore>>,
     root_partition_id: String,
     phase: V3Phase,
     ingested_count: usize,
@@ -145,7 +145,7 @@ impl StreamingIndexingRunV3 {
                     working_root.as_ref().display()
                 ))
             })?;
-        let partition_store = V3PartitionStore::new(temp_root.path())?;
+        let partition_store = Arc::new(V3PartitionStore::new(temp_root.path())?);
         Ok(Self {
             observer: None,
             cancellation: StreamingIndexingCancellationHandle::new(),
@@ -154,7 +154,7 @@ impl StreamingIndexingRunV3 {
             embedding_spec,
             block_size_target,
             temp_root: Some(temp_root),
-            partition_store,
+            partition_store: Some(partition_store),
             root_partition_id: "l0.p0".into(),
             phase: V3Phase::Ingesting,
             ingested_count: 0,
@@ -187,10 +187,25 @@ impl StreamingIndexingRunV3 {
         if block_ids.is_empty() {
             return Ok(());
         }
-        self.partition_store
-            .append_block_hashes(&self.root_partition_id, block_ids)?;
+        let partition_store = Arc::clone(
+            self.partition_store
+                .as_ref()
+                .expect("v3 partition store should exist until success"),
+        );
+        let root_partition_id = self.root_partition_id.clone();
+        let batch_len = block_ids.len();
+        let block_ids = block_ids.to_vec();
+        tokio::task::spawn_blocking(move || {
+            partition_store.append_block_hashes(&root_partition_id, block_ids.as_slice())
+        })
+        .await
+        .map_err(|error| {
+            StreamingIndexerError::ClusteringFailure(format!(
+                "v3 block-id ingestion task failed: {error}"
+            ))
+        })??;
         self.check_cancelled_mut("block-id ingestion")?;
-        self.ingested_count += block_ids.len();
+        self.ingested_count += batch_len;
         Ok(())
     }
 
@@ -235,6 +250,7 @@ impl StreamingIndexingRunV3 {
                 dedup_sort_ids(&mut persisted_ids);
                 let root_id = next_layer_inputs[0].child;
                 self.phase = V3Phase::Finalized;
+                drop(self.partition_store.take());
                 if let Some(temp_root) = self.temp_root.take() {
                     let cleanup_root = temp_root.path().display().to_string();
                     if let Err(error) = temp_root.close() {
@@ -250,7 +266,7 @@ impl StreamingIndexingRunV3 {
             layer_index += 1;
             let next_root_id = format!("l{layer_index}.p0");
             write_indexed_child_partition(
-                &self.partition_store,
+                self.partition_store(),
                 &next_root_id,
                 next_layer_inputs.as_slice(),
             )?;
@@ -459,7 +475,7 @@ impl StreamingIndexingRunV3 {
             match partition.kind {
                 WorkingItemKind::LeafBlockIds => {
                     let mut writers = BlockHashPartitionWriters::create(
-                        &self.partition_store,
+                        self.partition_store(),
                         child_ids.as_slice(),
                     )?;
                     self.classify_leaf_partition_batches(
@@ -473,7 +489,7 @@ impl StreamingIndexingRunV3 {
                 }
                 WorkingItemKind::IndexedChildren => {
                     let mut writers = IndexedChildPartitionWriters::create(
-                        &self.partition_store,
+                        self.partition_store(),
                         child_ids.as_slice(),
                     )?;
                     self.classify_summary_partition_batches(
@@ -493,7 +509,7 @@ impl StreamingIndexingRunV3 {
                 .collect::<Vec<_>>();
             let used_fallback = non_empty.len() <= 1;
             if used_fallback {
-                self.partition_store
+                self.partition_store()
                     .clear_partitions(partition.kind, child_ids.as_slice())?;
                 let fallback_groups =
                     fallback_partition_groups(partition.item_count, materializability_bound, None)
@@ -509,7 +525,7 @@ impl StreamingIndexingRunV3 {
                 match partition.kind {
                     WorkingItemKind::LeafBlockIds => {
                         rewrite_block_hash_partition_with_assignments(
-                            &self.partition_store,
+                            self.partition_store(),
                             &partition.id,
                             child_ids.as_slice(),
                             fallback_assignment.as_slice(),
@@ -517,7 +533,7 @@ impl StreamingIndexingRunV3 {
                     }
                     WorkingItemKind::IndexedChildren => {
                         rewrite_indexed_child_partition_with_assignments(
-                            &self.partition_store,
+                            self.partition_store(),
                             &partition.id,
                             child_ids.as_slice(),
                             fallback_assignment.as_slice(),
@@ -624,7 +640,7 @@ impl StreamingIndexingRunV3 {
     ) -> Result<IndexedChild, StreamingIndexerError> {
         match partition.kind {
             WorkingItemKind::LeafBlockIds => {
-                let block_ids = read_all_block_hashes(&self.partition_store, &partition.id)?;
+                let block_ids = read_all_block_hashes(self.partition_store(), &partition.id)?;
                 let loaded = self
                     .load_leaf_batch(
                         block_ids.as_slice(),
@@ -662,21 +678,19 @@ impl StreamingIndexingRunV3 {
                 .await
             }
             WorkingItemKind::IndexedChildren => {
-                let phase = StreamingIndexingPhase::V3TerminalMaterializationLoad {
-                    layer_index: partition.layer_index,
-                };
-                let mut children =
-                    self.run_v3_partition_phase(phase.clone(), partition.item_count, |progress| {
-                        let mut reader =
-                            IndexedChildPartitionReader::open(&self.partition_store, &partition.id);
-                        let mut children = Vec::with_capacity(partition.item_count);
-                        while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                            self.check_cancelled_for_phase(&phase)?;
-                            progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);
-                            children.extend(batch);
-                        }
-                        Ok(children)
-                    })?;
+                let mut children = self.run_v3_partition_phase(
+                    StreamingIndexingPhase::V3TerminalMaterializationLoad {
+                        layer_index: partition.layer_index,
+                    },
+                    partition.item_count,
+                    |progress| {
+                        read_all_indexed_children(
+                            self.partition_store(),
+                            &partition.id,
+                            Some(progress.as_ref()),
+                        )
+                    },
+                )?;
                 if children.len() == 1 {
                     return Ok(children.remove(0));
                 }
@@ -1014,7 +1028,7 @@ impl StreamingIndexingRunV3 {
             partition.item_count,
             |progress| {
                 let mut reader =
-                    BlockHashPartitionReader::open(&self.partition_store, &partition.id);
+                    BlockHashPartitionReader::open(self.partition_store(), &partition.id);
                 let embedding_spec = self.embedding_spec.clone();
                 run_prepared_batch_pipeline(
                     V3_PREPARED_BATCH_LOOKAHEAD,
@@ -1058,7 +1072,7 @@ impl StreamingIndexingRunV3 {
             partition.item_count,
             |progress| {
                 let mut reader =
-                    IndexedChildPartitionReader::open(&self.partition_store, &partition.id);
+                    IndexedChildPartitionReader::open(self.partition_store(), &partition.id);
                 let embedding_spec = self.embedding_spec.clone();
                 run_prepared_batch_pipeline(
                     V3_PREPARED_BATCH_LOOKAHEAD,
@@ -1100,7 +1114,7 @@ impl StreamingIndexingRunV3 {
             partition.item_count,
             |progress| {
                 let mut reader =
-                    BlockHashPartitionReader::open(&self.partition_store, &partition.id);
+                    BlockHashPartitionReader::open(self.partition_store(), &partition.id);
                 let embedding_spec = self.embedding_spec.clone();
                 run_prepared_batch_pipeline(
                     V3_PREPARED_BATCH_LOOKAHEAD,
@@ -1160,7 +1174,7 @@ impl StreamingIndexingRunV3 {
             partition.item_count,
             |progress| {
                 let mut reader =
-                    IndexedChildPartitionReader::open(&self.partition_store, &partition.id);
+                    IndexedChildPartitionReader::open(self.partition_store(), &partition.id);
                 let embedding_spec = self.embedding_spec.clone();
                 run_prepared_batch_pipeline(
                     V3_PREPARED_BATCH_LOOKAHEAD,
@@ -1309,7 +1323,45 @@ impl StreamingIndexingRunV3 {
         phase: &StreamingIndexingPhase,
     ) -> Result<(), StreamingIndexerError> {
         self.check_cancelled(v3_phase_description(phase))
+}
+
+    fn partition_store(&self) -> &V3PartitionStore {
+        self.partition_store
+            .as_deref()
+            .expect("v3 partition store should exist until success")
+}
+
+fn check_cancelled_mut(&mut self, context: &str) -> Result<(), StreamingIndexerError> {
+    if self.cancellation.is_cancelled() {
+        self.phase = V3Phase::Cancelled;
+        return Err(StreamingIndexerError::Cancelled(format!(
+            "caller requested cancellation during {context}"
+        )));
     }
+    Ok(())
+}
+
+fn record_terminal_error(&mut self, error: StreamingIndexerError) -> StreamingIndexerError {
+    if matches!(error, StreamingIndexerError::Cancelled(_)) {
+        self.phase = V3Phase::Cancelled;
+    }
+    error
+}
+}
+
+fn v3_phase_description(phase: &StreamingIndexingPhase) -> &'static str {
+match phase {
+    StreamingIndexingPhase::PlanningPass { .. } => "planning pass",
+    StreamingIndexingPhase::HierarchyPlanning { .. } => "partition planning",
+    StreamingIndexingPhase::V3PartitionLoad { .. } => "partition load",
+    StreamingIndexingPhase::V3PartitionTrainIngest { .. } => "partition trainer ingest",
+    StreamingIndexingPhase::V3PartitionClassify { .. } => "partition classification",
+    StreamingIndexingPhase::V3TerminalMaterializationLoad { .. } => {
+        "terminal materialization load"
+    }
+    StreamingIndexingPhase::FinalMaterializationReplay => "final materialization replay",
+    StreamingIndexingPhase::BottomUpAssembly { .. } => "bottom-up assembly",
+}
 }
 
 fn decode_loaded_leaf(
@@ -2351,7 +2403,7 @@ fn partition_entry_key(partition_id: &str, index: usize) -> Result<Vec<u8>, Stre
 fn partition_entry_key_end(partition_id: &str) -> Vec<u8> {
     let mut key = Vec::with_capacity(partition_id.len() + 2);
     key.extend_from_slice(partition_id.as_bytes());
-    key.push(0xff);
+    key.push(1);
     key
 }
 
@@ -2735,7 +2787,7 @@ mod tests {
             store_leaf(&source, [10.0, 10.0], "c").await,
             store_leaf(&source, [10.1, 10.0], "d").await,
         ];
-        run.partition_store
+        run.partition_store()
             .append_block_hashes(&run.root_partition_id, ids.as_slice())
             .unwrap();
 
@@ -2768,7 +2820,7 @@ mod tests {
         };
         let child_ids = ["l0.p0.0".to_string(), "l0.p0.1".to_string()];
         let mut writers =
-            BlockHashPartitionWriters::create(&run.partition_store, child_ids.as_slice()).unwrap();
+            BlockHashPartitionWriters::create(run.partition_store(), child_ids.as_slice()).unwrap();
         let mut child_item_counts = vec![0usize; child_ids.len()];
         run.classify_leaf_partition_batches(
             &partition,
@@ -2821,7 +2873,7 @@ mod tests {
 
         let missing_a = BlockHash::from_bytes([11u8; BlockHash::LEN]);
         let missing_b = BlockHash::from_bytes([12u8; BlockHash::LEN]);
-        run.partition_store
+        run.partition_store()
             .append_block_hashes(&run.root_partition_id, &[missing_a, missing_b])
             .unwrap();
 
@@ -2952,6 +3004,25 @@ mod tests {
             StreamingIndexerError::LocalSpill(message)
                 if message.contains("truncated v3 block-id partition entry")
         ));
+    }
+
+    #[test]
+    fn v3_partition_reads_do_not_include_prefix_related_partitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = V3PartitionStore::new(dir.path()).unwrap();
+        let parent_block = BlockHash::from_bytes([1u8; BlockHash::LEN]);
+        let child_block = BlockHash::from_bytes([2u8; BlockHash::LEN]);
+
+        store.append_block_hashes("l0.p0", &[parent_block]).unwrap();
+        store
+            .append_block_hashes("l0.p0.0", &[child_block])
+            .unwrap();
+
+        let parent = read_all_block_hashes(&store, "l0.p0").unwrap();
+        let child = read_all_block_hashes(&store, "l0.p0.0").unwrap();
+
+        assert_eq!(parent, vec![parent_block]);
+        assert_eq!(child, vec![child_block]);
     }
 
     #[test]
