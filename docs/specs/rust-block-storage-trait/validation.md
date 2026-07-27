@@ -252,3 +252,40 @@ bytes and block IDs for a typed batch without re-implementing codec selection
 inside the backend crate.
 
 **Traces to:** REQ-BLOCK-STORE-021, REQ-BLOCK-STORE-023
+
+### VAL-STORE-023
+
+Exercise the shared storage surface with no telemetry callback configured.
+
+**Pass condition:** ordinary storage behavior remains unchanged.
+
+**Traces to:** REQ-BLOCK-STORE-028, REQ-BLOCK-STORE-031
+
+### VAL-STORE-024
+
+Exercise a backend or harness that emits telemetry through the shared
+capability.
+
+**Pass condition:** observed events use the shared generic event representation
+rather than backend-native callback or status types.
+
+**Traces to:** REQ-BLOCK-STORE-027, REQ-BLOCK-STORE-028, REQ-BLOCK-STORE-030, REQ-BLOCK-STORE-032
+
+### VAL-STORE-025
+
+Exercise a backend that does not emit telemetry even when a callback is
+configured.
+
+**Pass condition:** lack of telemetry emission does not by itself constitute
+contract failure.
+
+**Traces to:** REQ-BLOCK-STORE-028, REQ-BLOCK-STORE-031
+
+### VAL-STORE-026
+
+Inspect the shared telemetry callback boundary.
+
+**Pass condition:** the telemetry surface is observational only and does not
+define cancellation, control, or repair-steering semantics.
+
+**Traces to:** REQ-BLOCK-STORE-029

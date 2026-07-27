@@ -96,6 +96,14 @@ Such methods remain concrete-type-only surfaces: they do not appear on
 semantics, and do not expose Redb internals beyond the approved operation's
 result.
 
+### DSG-REDB-STORE-003B `Telemetry attachment boundary`
+
+The Redb crate may accept or attach the shared optional telemetry callback
+through crate-owned configuration and runtime registration surfaces.
+
+This attachment path does not require callers to construct or retain a raw
+`redb::Builder`, `Database`, or `RepairSession` value.
+
 ### DSG-REDB-STORE-004 `Backend-private storage model`
 
 This revision uses one backend-private Redb database file below the store root.
@@ -209,6 +217,14 @@ graceful-shutdown flush, a successful `compact_now` satisfies the persistence
 work needed for compaction so later store instances observe those writes after
 the compaction operation completes.
 
+### DSG-REDB-STORE-006B `Repair/status translation`
+
+When Redb invokes its repair callback or status update path, the backend maps
+that update into the shared telemetry event shape.
+
+The emitted event may include repair progress and related diagnostic attributes,
+but the mapping keeps Redb-native repair-session control private to the backend.
+
 ### DSG-REDB-STORE-007 `get`
 
 `get`:
@@ -249,6 +265,13 @@ If the fast-mode graceful-shutdown flush fails while the final handle is
 dropping, the implementation emits an explicit shutdown-visible error and does
 not claim that the fast-mode durability guarantee was satisfied.
 
+### DSG-REDB-STORE-009A `Telemetry privacy boundary`
+
+The public telemetry contract exposes shared events only.
+
+It does not expose raw Redb database handles, builder objects, file-format
+internals, or repair-session control surfaces to callers.
+
 ## Verification Strategy
 
 ### DSG-REDB-STORE-010 `Conformance and backend-specific verification`
@@ -267,6 +290,9 @@ The crate adds backend-specific tests for:
 - fast-mode crash-durability boundary as an explicitly documented non-guarantee
 - public exposure of the Redb-specific `compact_now` method without widening
   `BlockStore`
+- repair/status telemetry emitted through the shared generic callback surface
+- unchanged behavior when the shared telemetry callback is absent
+- observational-only telemetry semantics with no caller repair control
 - successful compaction preserving block visibility and reopen behavior
 - explicit compaction failure when exclusive ownership is unavailable
 - explicit absence for missing block IDs
@@ -291,12 +317,12 @@ The crate adds backend-specific tests for:
 |---|---|
 | DSG-REDB-STORE-001 | REQ-REDB-STORE-001, REQ-REDB-STORE-002 |
 | DSG-REDB-STORE-002..004 | REQ-REDB-STORE-001, REQ-REDB-STORE-003, REQ-REDB-STORE-004 |
-| DSG-REDB-STORE-003A | REQ-REDB-STORE-002, REQ-REDB-STORE-003, REQ-REDB-STORE-015 |
+| DSG-REDB-STORE-003A..003B | REQ-REDB-STORE-002, REQ-REDB-STORE-003, REQ-REDB-STORE-015, REQ-REDB-STORE-022 |
 | DSG-REDB-STORE-005 | REQ-REDB-STORE-005, REQ-REDB-STORE-008, REQ-REDB-STORE-012 |
 | DSG-REDB-STORE-005A | REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021 |
-| DSG-REDB-STORE-006 | REQ-REDB-STORE-013, REQ-REDB-STORE-014 |
+| DSG-REDB-STORE-006..006B | REQ-REDB-STORE-013, REQ-REDB-STORE-014, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024 |
 | DSG-REDB-STORE-006A | REQ-REDB-STORE-005, REQ-REDB-STORE-013, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017 |
 | DSG-REDB-STORE-007 | REQ-REDB-STORE-006, REQ-REDB-STORE-007 |
 | DSG-REDB-STORE-008 | REQ-REDB-STORE-009, REQ-REDB-STORE-010 |
-| DSG-REDB-STORE-009 | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017, REQ-REDB-STORE-018 |
-| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021 |
+| DSG-REDB-STORE-009..009A | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-023, REQ-REDB-STORE-024 |
+| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024 |

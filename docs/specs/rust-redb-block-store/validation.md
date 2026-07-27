@@ -245,3 +245,41 @@ commit, and the reopened store observes the full batch after the graceful
 shutdown flush completes.
 
 **Traces to:** REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-021
+
+### VAL-REDB-STORE-019
+
+Configure the Redb-backed store with the shared telemetry callback capability
+and exercise a path that triggers Redb repair/status callback activity.
+
+**Pass condition:** the caller observes one or more shared telemetry events
+representing that repair/status activity.
+
+**Traces to:** REQ-REDB-STORE-022, REQ-REDB-STORE-024
+
+### VAL-REDB-STORE-020
+
+Inspect the Redb-backed telemetry event surface.
+
+**Pass condition:** emitted events use the shared generic fields of event name,
+optional message, and structured attributes rather than raw Redb-native
+callback or repair-session types.
+
+**Traces to:** REQ-REDB-STORE-022, REQ-REDB-STORE-024
+
+### VAL-REDB-STORE-021
+
+Exercise the Redb-backed store without telemetry configured while still taking a
+repair path.
+
+**Pass condition:** ordinary open/store/load behavior remains unchanged.
+
+**Traces to:** REQ-REDB-STORE-022
+
+### VAL-REDB-STORE-022
+
+Inspect the Redb-backed shared telemetry boundary for repair control semantics.
+
+**Pass condition:** telemetry observers cannot steer, abort, or otherwise alter
+repair behavior through the shared callback surface.
+
+**Traces to:** REQ-REDB-STORE-023

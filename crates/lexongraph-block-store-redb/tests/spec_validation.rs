@@ -2,6 +2,9 @@
 // Copyright (c) 2026 LexonGraph contributors
 use std::collections::HashSet;
 use std::future::Future;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use futures::TryStreamExt;
 #[cfg(feature = "inject")]
@@ -9,7 +12,10 @@ use lexongraph_block::{BlockError, compute_block_hash};
 use lexongraph_block::{BlockHash, serialize_block};
 #[cfg(feature = "inject")]
 use lexongraph_block_store::conformance::run_full_suite;
-use lexongraph_block_store::{BlockBytesBatchEntry, BlockStore, BlockStoreError, BlockStoreExt};
+use lexongraph_block_store::{
+    BlockBytesBatchEntry, BlockStore, BlockStoreError, BlockStoreExt, BlockStoreTelemetryCallback,
+    BlockStoreTelemetryEvent,
+};
 use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 
 mod support;
@@ -19,6 +25,17 @@ use support::RedbHarness;
 use support::{sample_leaf_block, validated_block};
 
 const DATABASE_FILE_NAME: &str = "blocks.redb";
+// These header values mirror the redb internal page-store header layout used by
+// the version currently resolved in Cargo.lock (at the time of writing, redb
+// 2.6.3), even though Cargo.toml declares 2.1.0 as the semver minimum:
+// - GOD_BYTE_OFFSET is immediately after the 9-byte magic number
+// - RECOVERY_REQUIRED marks the file as needing repair on next open
+// - TWO_PHASE_COMMIT is cleared here to match redb's own repair-path tests
+// See redb's local source under:
+// src/tree_store/page_store/header.rs
+const GOD_BYTE_OFFSET: u64 = 9;
+const RECOVERY_REQUIRED: u8 = 2;
+const TWO_PHASE_COMMIT: u8 = 4;
 
 trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
     fn unwrap(self) -> T
@@ -108,6 +125,19 @@ fn val_redb_store_003b_fast_mode_put_skips_immediate_flush_but_remains_readable_
     assert_eq!(block_id, expected.hash);
     assert!(store.pending_fast_mode_flush());
     assert_eq!(store.get(&block_id).unwrap(), Some(expected));
+}
+
+#[test]
+fn redb_store_shared_telemetry_callback_can_be_updated_after_construction() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+    let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
+
+    store
+        .set_telemetry_callback(Some(telemetry_collector(events.clone())))
+        .unwrap();
+
+    assert_eq!(events.lock().unwrap().len(), 0);
 }
 
 #[test]
@@ -411,6 +441,91 @@ fn val_redb_store_018_fast_mode_batch_writes_flush_after_graceful_shutdown() {
     );
 }
 
+#[test]
+fn val_redb_store_019_repair_status_updates_emit_shared_telemetry_events() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&sample_leaf_block("repair-a")).unwrap();
+        store.put(&sample_leaf_block("repair-b")).unwrap();
+    }
+    mark_database_as_repair_required(&temp_dir.path().join(DATABASE_FILE_NAME));
+    let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
+
+    let store =
+        RedbBlockStore::new_with_telemetry(temp_dir.path(), telemetry_collector(events.clone()))
+            .unwrap();
+
+    let captured = events.lock().unwrap();
+    assert!(!captured.is_empty());
+    assert!(captured.iter().all(|event| event.name == "repair_status"));
+    assert!(captured.iter().all(|event| {
+        event.attributes.get("backend").map(String::as_str) == Some("redb")
+            && event.attributes.contains_key("database_path")
+            && event.attributes.contains_key("progress")
+    }));
+    drop(captured);
+    assert!(store.iter_block_ids().is_ok());
+}
+
+#[test]
+fn val_redb_store_020_repair_events_use_generic_name_message_and_attributes() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&sample_leaf_block("repair-shape")).unwrap();
+    }
+    mark_database_as_repair_required(&temp_dir.path().join(DATABASE_FILE_NAME));
+    let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
+
+    let _store =
+        RedbBlockStore::new_with_telemetry(temp_dir.path(), telemetry_collector(events.clone()))
+            .unwrap();
+
+    let captured = events.lock().unwrap();
+    let first = captured
+        .first()
+        .expect("expected at least one repair event");
+    assert_eq!(first.name, "repair_status");
+    assert_eq!(
+        first.message.as_deref(),
+        Some("redb reported database repair progress")
+    );
+    assert_eq!(
+        first.attributes.get("backend").map(String::as_str),
+        Some("redb")
+    );
+}
+
+#[test]
+fn val_redb_store_021_repair_without_shared_telemetry_preserves_existing_behavior() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let expected = validated_block("repair-without-telemetry");
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&expected.block).unwrap();
+    }
+    mark_database_as_repair_required(&temp_dir.path().join(DATABASE_FILE_NAME));
+
+    let reopened = RedbBlockStore::new(temp_dir.path()).unwrap();
+
+    assert_eq!(reopened.get(&expected.hash).unwrap(), Some(expected));
+}
+
+#[test]
+fn val_redb_store_022_shared_telemetry_observers_cannot_control_repair() {
+    fn observe(callback: &BlockStoreTelemetryCallback) {
+        let _: () = callback(
+            BlockStoreTelemetryEvent::new("repair_status")
+                .with_message("observers receive events only")
+                .with_attribute("backend", "redb"),
+        );
+    }
+
+    let callback: BlockStoreTelemetryCallback = Arc::new(|_| {});
+    observe(&callback);
+}
+
 fn persisted_ids(store: &RedbBlockStore) -> HashSet<BlockHash> {
     pollster::block_on(store.iter_block_ids().unwrap().try_collect()).unwrap()
 }
@@ -423,4 +538,37 @@ fn expect_backend_failure_contains(error: BlockStoreError, needle: &str) {
         ),
         other => panic!("expected backend failure containing {needle:?}, got {other:?}"),
     }
+}
+
+fn mark_database_as_repair_required(database_path: &Path) {
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(database_path)
+        .unwrap();
+    let file_len = file.metadata().unwrap().len();
+    assert!(
+        file_len > GOD_BYTE_OFFSET,
+        "expected redb database header in {} to be longer than byte offset {}, got {} bytes",
+        database_path.display(),
+        GOD_BYTE_OFFSET,
+        file_len
+    );
+    file.seek(SeekFrom::Start(GOD_BYTE_OFFSET)).unwrap();
+    let mut buffer = [0u8; 1];
+    file.read_exact(&mut buffer).unwrap();
+    file.seek(SeekFrom::Start(GOD_BYTE_OFFSET)).unwrap();
+    buffer[0] |= RECOVERY_REQUIRED;
+    buffer[0] &= !TWO_PHASE_COMMIT;
+    file.write_all(&buffer).unwrap();
+    file.flush().unwrap();
+    file.sync_all().unwrap();
+}
+
+fn telemetry_collector(
+    events: Arc<Mutex<Vec<BlockStoreTelemetryEvent>>>,
+) -> BlockStoreTelemetryCallback {
+    Arc::new(move |event| {
+        events.lock().unwrap().push(event);
+    })
 }

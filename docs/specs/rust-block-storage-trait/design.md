@@ -112,6 +112,26 @@ surface includes the method, but a backend may explicitly decline support
 through the existing error taxonomy instead of widening the required
 lowest-common-denominator contract for all backends.
 
+### DSG-STORE-006B `Telemetry event type`
+
+The trait crate owns a crate-defined telemetry event value with:
+
+- a stable event name
+- an optional message
+- an extensible structured attribute set expressed as name/value pairs
+
+The event shape is intentionally generic so block-store backends and related
+crates can reuse it without surfacing backend-native callback or status types.
+
+### DSG-STORE-006C `Optional telemetry sink`
+
+The shared surface includes an optional telemetry callback or sink registration
+path usable by implementations that support telemetry.
+
+The capability is runtime-wide rather than constructor-only; implementations may
+emit telemetry during open, repair, read, write, compaction, enumeration, or
+other relevant lifecycle points.
+
 ## Behavioral Rules
 
 ### DSG-STORE-007 Immutability and idempotence
@@ -162,6 +182,16 @@ explicitly when a backend does not override it.
 This keeps the API shape uniform for callers while making support observable and
 avoiding any false guarantee that a non-opting backend performed a batch write
 atomically.
+
+### DSG-STORE-009B `Telemetry neutrality`
+
+Telemetry remains outside the core correctness contract for `put`, `get`,
+optional batch write, and identifier enumeration.
+
+A missing callback or non-emitting backend does not alter conformance.
+
+The telemetry surface is observational only and does not expose backend-private
+handles, storage layout, or mutation authority.
 
 ### DSG-STORE-010 `Enumeration semantics`
 
@@ -291,10 +321,11 @@ raw-byte boundary when those helpers are exposed.
 | DSG-STORE-005 | REQ-BLOCK-STORE-002, REQ-BLOCK-STORE-004, REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008 |
 | DSG-STORE-006 | REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-014, REQ-BLOCK-STORE-015, REQ-BLOCK-STORE-017 |
 | DSG-STORE-006A | REQ-BLOCK-STORE-019, REQ-BLOCK-STORE-023, REQ-BLOCK-STORE-024 |
+| DSG-STORE-006B..006C | REQ-BLOCK-STORE-027, REQ-BLOCK-STORE-028, REQ-BLOCK-STORE-029, REQ-BLOCK-STORE-030 |
 | DSG-STORE-007 | REQ-BLOCK-STORE-003, REQ-BLOCK-STORE-006 |
 | DSG-STORE-008 | REQ-BLOCK-STORE-005, REQ-BLOCK-STORE-008 |
 | DSG-STORE-009A | REQ-BLOCK-STORE-024, REQ-BLOCK-STORE-025, REQ-BLOCK-STORE-026 |
-| DSG-STORE-009 | REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-007, REQ-BLOCK-STORE-016 |
+| DSG-STORE-009..009B | REQ-BLOCK-STORE-001, REQ-BLOCK-STORE-007, REQ-BLOCK-STORE-016, REQ-BLOCK-STORE-031, REQ-BLOCK-STORE-032 |
 | DSG-STORE-010 | REQ-BLOCK-STORE-015, REQ-BLOCK-STORE-017, REQ-BLOCK-STORE-018 |
 | DSG-STORE-011 | REQ-BLOCK-STORE-009 |
 | DSG-STORE-012 | REQ-BLOCK-STORE-010 |
