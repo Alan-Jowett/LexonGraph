@@ -365,6 +365,7 @@ pub enum StreamingIndexerError {
     EmptyInput,
     EmptyPass(String),
     UnsupportedPublishedProfileVersion(PublishedProfileVersion),
+    Cancelled(String),
     ReplayMismatch(String),
     InvalidMetadata(String),
     ContentResolution(String),
@@ -397,6 +398,7 @@ impl fmt::Display for StreamingIndexerError {
                     "unsupported published indexing profile version {version}"
                 )
             }
+            Self::Cancelled(m) => write!(f, "streaming indexing cancelled: {m}"),
             Self::ReplayMismatch(m) => write!(f, "replay mismatch: {m}"),
             Self::InvalidMetadata(m) => write!(f, "metadata is invalid: {m}"),
             Self::ContentResolution(m) => write!(f, "content resolution failed: {m}"),
@@ -689,6 +691,25 @@ pub type StreamingIndexingStatusObserver =
     Arc<dyn Fn(StreamingIndexingStatus) + Send + Sync + 'static>;
 
 const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Clone, Default)]
+pub struct StreamingIndexingCancellationHandle {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl StreamingIndexingCancellationHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, AtomicOrdering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(AtomicOrdering::Relaxed)
+    }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Built-in canonical-embedding policy
@@ -5900,6 +5921,7 @@ fn v2_error_variant_name(error: &StreamingIndexerError) -> &'static str {
     match error {
         StreamingIndexerError::EmptyInput => "EmptyInput",
         StreamingIndexerError::EmptyPass(_) => "EmptyPass",
+        StreamingIndexerError::Cancelled(_) => "Cancelled",
         StreamingIndexerError::ContentResolution(_) => "ContentResolution",
         StreamingIndexerError::InvalidMetadata(_) => "InvalidMetadata",
         StreamingIndexerError::EmbeddingFailure(_) => "EmbeddingFailure",
@@ -5938,6 +5960,7 @@ fn annotate_v2_failure_summary_write_error(
     );
     match error {
         StreamingIndexerError::EmptyPass(_) => StreamingIndexerError::EmptyPass(note),
+        StreamingIndexerError::Cancelled(_) => StreamingIndexerError::Cancelled(note),
         StreamingIndexerError::ReplayMismatch(_) => StreamingIndexerError::ReplayMismatch(note),
         StreamingIndexerError::InvalidMetadata(_) => StreamingIndexerError::InvalidMetadata(note),
         StreamingIndexerError::ContentResolution(_) => {

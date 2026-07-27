@@ -97,6 +97,17 @@ completion.
 **Traces to:** REQ-STREAM-INDEXER-004B, REQ-STREAM-INDEXER-004D,
 REQ-STREAM-INDEXER-020A
 
+### VAL-STREAM-INDEXER-005B
+
+Inspect the constrained v3 public construction surface.
+
+**Pass condition:** the surface accepts a caller-supplied run-scoped
+cancellation handle in addition to the writable temp working root, and no new
+standalone public cancellation API is required on the shared streaming
+clustering trainer boundary.
+
+**Traces to:** REQ-STREAM-INDEXER-004E
+
 ### VAL-STREAM-INDEXER-006
 
 Use an embedding-provider implementation satisfying the shared
@@ -393,6 +404,25 @@ without fabricating a completion percentage when totals are not yet known.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-039
+
+### VAL-STREAM-INDEXER-023B
+
+Attach a caller-owned observer to a constrained v3 run whose active partition
+work is long-running enough to emit in-progress updates, then request
+cancellation through the caller-supplied run-scoped cancellation handle while
+partition-trainer ingest, partition classification, partition planning,
+terminal materialization load, or bottom-up assembly is active.
+
+**Pass condition:** the run terminates with an explicit cancellation failure
+rather than success or an unrelated generic error; cancellation is observed at
+a deterministic safe checkpoint before whole-run or whole-layer completion when
+the active stage already exposes finer-grained deterministic work units; the
+observer stream reaches a terminal failure update rather than stopping
+silently; and any later completion attempt requires a fresh v3 run rather than
+resume of the cancelled one.
+
+**Traces to:** REQ-STREAM-INDEXER-004C, REQ-STREAM-INDEXER-004E,
+REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-024
 
 ### VAL-STREAM-INDEXER-024
 
