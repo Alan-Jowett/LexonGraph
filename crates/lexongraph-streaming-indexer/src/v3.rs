@@ -2376,17 +2376,16 @@ mod tests {
         let output = MemoryBlockStore::default();
         let cancellation = StreamingIndexingCancellationHandle::new();
         let statuses = Arc::new(Mutex::new(Vec::new()));
-        let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
         let observer = {
+            let cancellation = cancellation.clone();
             let statuses = Arc::clone(&statuses);
-            let cancel_tx = cancel_tx.clone();
             Arc::new(move |status: crate::StreamingIndexingStatus| {
                 if matches!(
                     status.phase,
                     StreamingIndexingPhase::V3PartitionTrainIngest { layer_index: 0 }
                 ) && status.state == StreamingIndexingStatusState::Started
                 {
-                    let _ = cancel_tx.send(());
+                    cancellation.cancel();
                 }
                 statuses.lock().unwrap().push(status);
             }) as StreamingIndexingStatusObserver
@@ -2414,15 +2413,7 @@ mod tests {
         }
         run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
 
-        let cancel_thread = {
-            let cancellation = cancellation.clone();
-            std::thread::spawn(move || {
-                cancel_rx.recv().unwrap();
-                cancellation.cancel();
-            })
-        };
         let error = run.finalize(&source, &output).await.unwrap_err();
-        cancel_thread.join().unwrap();
         assert!(matches!(error, StreamingIndexerError::Cancelled(_)));
 
         let statuses = statuses.lock().unwrap().clone();
