@@ -703,11 +703,11 @@ impl StreamingIndexingCancellationHandle {
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, AtomicOrdering::SeqCst);
+        self.cancelled.store(true, AtomicOrdering::Relaxed);
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(AtomicOrdering::SeqCst)
+        self.cancelled.load(AtomicOrdering::Relaxed)
     }
 }
 
