@@ -1138,7 +1138,8 @@ impl StreamingIndexingRunV3 {
                             .assign_batch(prepared.embeddings.as_slice())
                             .map_err(map_clustering_error)?;
                         let batch_len = prepared.block_ids.len();
-                        let mut grouped = vec![Vec::new(); writers.len()];
+                        let mut grouped =
+                            grouped_partition_buffers::<BlockHash>(writers.len(), batch_len);
                         for (block_id, assignment) in prepared.block_ids.iter().zip(assignments) {
                             let cluster = usize::try_from(assignment).map_err(|_| {
                                 StreamingIndexerError::HierarchyValidation(
@@ -1195,7 +1196,8 @@ impl StreamingIndexingRunV3 {
                             .assign_batch(embeddings.as_slice())
                             .map_err(map_clustering_error)?;
                         let batch_len = children.len();
-                        let mut grouped = vec![Vec::new(); writers.len()];
+                        let mut grouped =
+                            grouped_partition_buffers::<IndexedChild>(writers.len(), batch_len);
                         for (child, assignment) in children.into_iter().zip(assignments) {
                             let cluster = usize::try_from(assignment).map_err(|_| {
                                 StreamingIndexerError::HierarchyValidation(
@@ -2405,6 +2407,15 @@ fn read_all_indexed_children(
     }
     Ok(all)
 }
+fn grouped_partition_buffers<T>(group_count: usize, batch_len: usize) -> Vec<Vec<T>> {
+    if group_count == 0 {
+        return Vec::new();
+    }
+    let per_group_capacity = batch_len.div_ceil(group_count);
+    std::iter::repeat_with(|| Vec::with_capacity(per_group_capacity))
+        .take(group_count)
+        .collect()
+}
 fn fallback_assignment_map(
     item_count: usize,
     groups: &[Vec<usize>],
@@ -2447,7 +2458,7 @@ fn rewrite_block_hash_partition_with_assignments(
     let mut writers = BlockHashPartitionWriters::create(store, destination_partition_ids)?;
     let mut item_index = 0usize;
     while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-        let mut grouped = vec![Vec::new(); writers.len()];
+        let mut grouped = grouped_partition_buffers::<BlockHash>(writers.len(), batch.len());
         for block_id in batch {
             let group_index = *assignment.get(item_index).ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
@@ -2479,7 +2490,7 @@ fn rewrite_indexed_child_partition_with_assignments(
     let mut writers = IndexedChildPartitionWriters::create(store, destination_partition_ids)?;
     let mut item_index = 0usize;
     while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-        let mut grouped = vec![Vec::new(); writers.len()];
+        let mut grouped = grouped_partition_buffers::<IndexedChild>(writers.len(), batch.len());
         for child in batch {
             let group_index = *assignment.get(item_index).ok_or_else(|| {
                 StreamingIndexerError::HierarchyValidation(format!(
