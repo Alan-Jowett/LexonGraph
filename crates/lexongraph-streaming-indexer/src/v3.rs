@@ -2004,43 +2004,6 @@ mod tests {
         }
     }
 
-    struct DelayedMemoryBlockStore {
-        delay: Duration,
-        inner: MemoryBlockStore,
-    }
-
-    impl DelayedMemoryBlockStore {
-        fn new(delay: Duration) -> Self {
-            Self {
-                delay,
-                inner: MemoryBlockStore::default(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl BlockStore for DelayedMemoryBlockStore {
-        async fn put_block_bytes(
-            &self,
-            block_id: &BlockHash,
-            block_bytes: &[u8],
-        ) -> Result<(), BlockStoreError> {
-            self.inner.put_block_bytes(block_id, block_bytes).await
-        }
-
-        async fn get_block_bytes(
-            &self,
-            block_id: &BlockHash,
-        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
-            tokio::time::sleep(self.delay).await;
-            self.inner.get_block_bytes(block_id).await
-        }
-
-        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
-            self.inner.iter_block_ids()
-        }
-    }
-
     fn spec() -> EmbeddingSpec {
         EmbeddingSpec {
             dims: 2,
@@ -2056,30 +2019,6 @@ mod tests {
     }
 
     async fn store_leaf(store: &MemoryBlockStore, values: [f32; 2], body: &str) -> BlockHash {
-        let block = Block::Leaf(
-            build_leaf_block(
-                VERSION_1,
-                spec(),
-                vec![LeafEntry {
-                    embedding: embedding_bytes(values),
-                    metadata: vec![],
-                    content: Content {
-                        media_type: "text/plain".into(),
-                        body: body.as_bytes().to_vec(),
-                    },
-                }],
-                None,
-            )
-            .unwrap(),
-        );
-        store.put(&block).await.unwrap()
-    }
-
-    async fn store_leaf_delayed(
-        store: &DelayedMemoryBlockStore,
-        values: [f32; 2],
-        body: &str,
-    ) -> BlockHash {
         let block = Block::Leaf(
             build_leaf_block(
                 VERSION_1,
@@ -2433,13 +2372,22 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn v3_finalize_cancellation_returns_explicit_error_and_requires_fresh_run() {
         let parent = tempfile::tempdir().unwrap();
-        let source = DelayedMemoryBlockStore::new(Duration::from_millis(5));
+        let source = MemoryBlockStore::default();
         let output = MemoryBlockStore::default();
         let cancellation = StreamingIndexingCancellationHandle::new();
         let statuses = Arc::new(Mutex::new(Vec::new()));
+        let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
         let observer = {
             let statuses = Arc::clone(&statuses);
+            let cancel_tx = cancel_tx.clone();
             Arc::new(move |status: crate::StreamingIndexingStatus| {
+                if matches!(
+                    status.phase,
+                    StreamingIndexingPhase::V3PartitionTrainIngest { layer_index: 0 }
+                ) && status.state == StreamingIndexingStatusState::Started
+                {
+                    let _ = cancel_tx.send(());
+                }
                 statuses.lock().unwrap().push(status);
             }) as StreamingIndexingStatusObserver
         };
@@ -2456,7 +2404,7 @@ mod tests {
         let mut ids = Vec::new();
         for index in 0..(V3_BATCH_SIZE * 8) {
             ids.push(
-                store_leaf_delayed(
+                store_leaf(
                     &source,
                     [index as f32, ((index * 7) % 97) as f32],
                     &format!("leaf-{index}"),
@@ -2469,7 +2417,7 @@ mod tests {
         let cancel_thread = {
             let cancellation = cancellation.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(100));
+                cancel_rx.recv().unwrap();
                 cancellation.cancel();
             })
         };
