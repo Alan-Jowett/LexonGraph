@@ -1814,6 +1814,9 @@ impl V3PartitionStore {
                     ))
                 })?;
             for (partition_id, block_ids) in partition_ids.iter().zip(groups) {
+                if block_ids.is_empty() {
+                    continue;
+                }
                 let start_index = self.partition_count_from_write_txn(
                     &write_txn,
                     partition_id,
@@ -1877,6 +1880,9 @@ impl V3PartitionStore {
                     ))
                 })?;
             for (partition_id, children) in partition_ids.iter().zip(groups) {
+                if children.is_empty() {
+                    continue;
+                }
                 let start_index = self.partition_count_from_write_txn(
                     &write_txn,
                     partition_id,
