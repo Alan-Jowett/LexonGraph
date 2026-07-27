@@ -1187,19 +1187,23 @@ impl StreamingIndexingRunV3 {
                         Ok(())
                     },
                     |prepared| {
+                        let PreparedIndexedChildAssignmentBatch {
+                            children,
+                            embeddings,
+                        } = prepared;
                         let assignments = classifier
-                            .assign_batch(prepared.embeddings.as_slice())
+                            .assign_batch(embeddings.as_slice())
                             .map_err(map_clustering_error)?;
-                        let batch_len = prepared.children.len();
+                        let batch_len = children.len();
                         let mut grouped = vec![Vec::new(); writers.len()];
-                        for (child, assignment) in prepared.children.iter().zip(assignments) {
+                        for (child, assignment) in children.into_iter().zip(assignments) {
                             let cluster = usize::try_from(assignment).map_err(|_| {
                                 StreamingIndexerError::HierarchyValidation(
                                     "v3 cluster id does not fit usize".into(),
                                 )
                             })?;
                             let target = validate_v3_cluster_assignment(cluster, writers.len())?;
-                            grouped[target].push(child.clone());
+                            grouped[target].push(child);
                             child_item_counts[target] += 1;
                         }
                         writers.write_batch(grouped.as_slice())?;
@@ -1963,9 +1967,19 @@ impl V3PartitionStore {
                     self.database_path.display()
                 ))
             })?;
+        let count = self.partition_count_from_read_txn(
+            &read_txn,
+            partition_id,
+            WorkingItemKind::LeafBlockIds,
+        )?;
+        if start_index >= count {
+            return Ok(Vec::new());
+        }
         let start_key = partition_entry_key(partition_id, start_index)?;
         let end_key = partition_entry_key_end(partition_id);
-        let mut block_ids = Vec::with_capacity(batch_size);
+        let remaining = count - start_index;
+        let limit = remaining.min(batch_size);
+        let mut block_ids = Vec::with_capacity(limit);
         let entries = table
             .range(start_key.as_slice()..end_key.as_slice())
             .map_err(|error| {
@@ -1975,7 +1989,7 @@ impl V3PartitionStore {
                     self.database_path.display()
                 ))
             })?;
-        for entry in entries.take(batch_size) {
+        for entry in entries.take(limit) {
             let (_, value) = entry.map_err(|error| {
                 StreamingIndexerError::LocalSpill(format!(
                     "could not read block-id partition {} in {}: {error}",
@@ -2018,9 +2032,19 @@ impl V3PartitionStore {
                     self.database_path.display()
                 ))
             })?;
+        let count = self.partition_count_from_read_txn(
+            &read_txn,
+            partition_id,
+            WorkingItemKind::IndexedChildren,
+        )?;
+        if start_index >= count {
+            return Ok(Vec::new());
+        }
         let start_key = partition_entry_key(partition_id, start_index)?;
         let end_key = partition_entry_key_end(partition_id);
-        let mut children = Vec::with_capacity(batch_size);
+        let remaining = count - start_index;
+        let limit = remaining.min(batch_size);
+        let mut children = Vec::with_capacity(limit);
         let entries = table
             .range(start_key.as_slice()..end_key.as_slice())
             .map_err(|error| {
@@ -2030,7 +2054,7 @@ impl V3PartitionStore {
                     self.database_path.display()
                 ))
             })?;
-        for entry in entries.take(batch_size) {
+        for entry in entries.take(limit) {
             let (_, value) = entry.map_err(|error| {
                 StreamingIndexerError::LocalSpill(format!(
                     "could not read summary partition {} in {}: {error}",
@@ -2041,6 +2065,34 @@ impl V3PartitionStore {
             children.push(deserialize_spilled_indexed_child_bytes(value.value())?);
         }
         Ok(children)
+    }
+
+    fn partition_count_from_read_txn(
+        &self,
+        read_txn: &redb::ReadTransaction,
+        partition_id: &str,
+        kind: WorkingItemKind,
+    ) -> Result<usize, StreamingIndexerError> {
+        let counts = read_txn
+            .open_table(V3_PARTITION_COUNTS_TABLE)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not open the v3 partition count table in {}: {error}",
+                    self.database_path.display()
+                ))
+            })?;
+        let key = partition_count_key(kind, partition_id);
+        let count = counts.get(key.as_slice()).map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not read the v3 partition count for {} in {}: {error}",
+                partition_id,
+                self.database_path.display()
+            ))
+        })?;
+        match count {
+            Some(count) => decode_partition_count(count.value(), partition_id),
+            None => Ok(0),
+        }
     }
 
     fn partition_count_from_write_txn(
@@ -2112,51 +2164,6 @@ impl V3PartitionStore {
         kind: WorkingItemKind,
         partition_id: &str,
     ) -> Result<(), StreamingIndexerError> {
-        let count = self.partition_count_from_write_txn(write_txn, partition_id, kind)?;
-        match kind {
-            WorkingItemKind::LeafBlockIds => {
-                let mut table = write_txn
-                    .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
-                    .map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not open the v3 block-id partition table in {}: {error}",
-                            self.database_path.display()
-                        ))
-                    })?;
-                let mut key = partition_entry_key_buffer(partition_id);
-                for index in 0..count {
-                    set_partition_entry_key_index(&mut key, partition_id, index)?;
-                    table.remove(key.as_slice()).map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not remove block-id partition {} from {}: {error}",
-                            partition_id,
-                            self.database_path.display()
-                        ))
-                    })?;
-                }
-            }
-            WorkingItemKind::IndexedChildren => {
-                let mut table = write_txn
-                    .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
-                    .map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not open the v3 summary partition table in {}: {error}",
-                            self.database_path.display()
-                        ))
-                    })?;
-                let mut key = partition_entry_key_buffer(partition_id);
-                for index in 0..count {
-                    set_partition_entry_key_index(&mut key, partition_id, index)?;
-                    table.remove(key.as_slice()).map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not remove summary partition {} from {}: {error}",
-                            partition_id,
-                            self.database_path.display()
-                        ))
-                    })?;
-                }
-            }
-        }
         let mut counts = write_txn
             .open_table(V3_PARTITION_COUNTS_TABLE)
             .map_err(|error| {
@@ -2526,6 +2533,13 @@ fn serialize_spilled_indexed_child_bytes(
 fn deserialize_spilled_indexed_child_bytes(
     bytes: &[u8],
 ) -> Result<IndexedChild, StreamingIndexerError> {
+    let minimum_trailer_len =
+        BlockHash::LEN + std::mem::size_of::<u64>() + std::mem::size_of::<u64>();
+    if bytes.len() < std::mem::size_of::<u32>() + minimum_trailer_len {
+        return Err(StreamingIndexerError::LocalSpill(
+            "spilled summary partition entry is malformed".into(),
+        ));
+    }
     let mut reader = std::io::Cursor::new(bytes);
     let mut embedding_len_bytes = [0u8; 4];
     reader
@@ -2536,6 +2550,19 @@ fn deserialize_spilled_indexed_child_bytes(
             "spilled summary embedding length does not fit usize".into(),
         )
     })?;
+    let required_len = std::mem::size_of::<u32>()
+        .checked_add(embedding_len)
+        .and_then(|total| total.checked_add(minimum_trailer_len))
+        .ok_or_else(|| {
+            StreamingIndexerError::LocalSpill(
+                "spilled summary embedding length overflows entry size".into(),
+            )
+        })?;
+    if bytes.len() != required_len {
+        return Err(StreamingIndexerError::LocalSpill(
+            "spilled summary partition entry is malformed".into(),
+        ));
+    }
     let mut embedding = vec![0u8; embedding_len];
     reader
         .read_exact(embedding.as_mut_slice())
@@ -3097,6 +3124,36 @@ mod tests {
 
         assert_eq!(parent, vec![parent_block]);
         assert_eq!(child, vec![child_block]);
+    }
+
+    #[test]
+    fn v3_clearing_partition_hides_stale_entries_from_later_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = V3PartitionStore::new(dir.path()).unwrap();
+        let old_a = BlockHash::from_bytes([1u8; BlockHash::LEN]);
+        let old_b = BlockHash::from_bytes([2u8; BlockHash::LEN]);
+        let replacement = BlockHash::from_bytes([3u8; BlockHash::LEN]);
+
+        store.append_block_hashes("l0.p0", &[old_a, old_b]).unwrap();
+        store
+            .clear_partitions(WorkingItemKind::LeafBlockIds, &["l0.p0".to_string()])
+            .unwrap();
+        store.append_block_hashes("l0.p0", &[replacement]).unwrap();
+
+        let items = read_all_block_hashes(&store, "l0.p0").unwrap();
+        assert_eq!(items, vec![replacement]);
+    }
+
+    #[test]
+    fn v3_indexed_child_reader_rejects_malformed_entry_length_before_allocating_payload() {
+        let bytes = 1_000_000u32.to_le_bytes();
+        match deserialize_spilled_indexed_child_bytes(bytes.as_slice()) {
+            Err(StreamingIndexerError::LocalSpill(message)) => {
+                assert!(message.contains("spilled summary partition entry is malformed"));
+            }
+            Err(other) => panic!("unexpected error: {other}"),
+            Ok(_) => panic!("expected malformed spilled summary partition entry"),
+        }
     }
 
     #[test]
