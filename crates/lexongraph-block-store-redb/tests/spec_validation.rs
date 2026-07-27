@@ -25,6 +25,13 @@ use support::RedbHarness;
 use support::{sample_leaf_block, validated_block};
 
 const DATABASE_FILE_NAME: &str = "blocks.redb";
+// These header values mirror redb's internal page-store header layout in
+// redb 2.6.3:
+// - GOD_BYTE_OFFSET is immediately after the 9-byte magic number
+// - RECOVERY_REQUIRED marks the file as needing repair on next open
+// - TWO_PHASE_COMMIT is cleared here to match redb's own repair-path tests
+// See redb's local source under:
+// src/tree_store/page_store/header.rs
 const GOD_BYTE_OFFSET: u64 = 9;
 const RECOVERY_REQUIRED: u8 = 2;
 const TWO_PHASE_COMMIT: u8 = 4;
@@ -120,7 +127,7 @@ fn val_redb_store_003b_fast_mode_put_skips_immediate_flush_but_remains_readable_
 }
 
 #[test]
-fn val_redb_store_003c_shared_telemetry_callback_can_be_updated_after_construction() {
+fn redb_store_shared_telemetry_callback_can_be_updated_after_construction() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store = RedbBlockStore::new(temp_dir.path()).unwrap();
     let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
