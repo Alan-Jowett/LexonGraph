@@ -6213,9 +6213,8 @@ fn val_stream_indexer_005b_v3_uses_temp_redb_instead_of_per_partition_files() {
     assert!(src.contains("open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)"));
     assert!(src.contains("partition_entry_key_buffer(partition_id)"));
     assert!(
-        src.contains(
-            "set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?"
-        )
+        src.contains("checked_partition_entry_index(partition_id, start_index, offset)?")
+            || src.contains("checked_partition_entry_index(partition_id, start_index, offset);")
     );
     assert!(!src.contains("partition_file_path("));
 }
@@ -6308,9 +6307,8 @@ fn val_stream_indexer_034a_v3_partition_identity_is_schedule_independent() {
     assert!(src.contains("format!(\"l{layer_index}.p0\")"));
     assert!(src.contains("format!(\"{}.{}\", partition.id, child_index)"));
     assert!(
-        src.contains(
-            "set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?"
-        )
+        src.contains("checked_partition_entry_index(partition_id, start_index, offset)?")
+            || src.contains("checked_partition_entry_index(partition_id, start_index, offset);")
     );
     assert!(src.contains("v3_is_deterministic_and_cleans_up_successfully"));
 }
@@ -6332,7 +6330,7 @@ fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     assert!(src.contains("read_all_indexed_children("));
     assert!(src.contains("Some(progress.as_ref())"));
     assert!(src.contains("progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);"));
-    assert!(src.contains("children.extend(batch);"));
+    assert!(src.contains("all.extend(batch);"));
     assert!(src.contains("validate_v3_cluster_assignment("));
     assert!(src.contains("load_leaf_batch_raw("));
 }

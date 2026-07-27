@@ -1325,45 +1325,45 @@ impl StreamingIndexingRunV3 {
         phase: &StreamingIndexingPhase,
     ) -> Result<(), StreamingIndexerError> {
         self.check_cancelled(v3_phase_description(phase))
-}
+    }
 
     fn partition_store(&self) -> &V3PartitionStore {
         self.partition_store
             .as_deref()
             .expect("v3 partition store should exist until success")
-}
-
-fn check_cancelled_mut(&mut self, context: &str) -> Result<(), StreamingIndexerError> {
-    if self.cancellation.is_cancelled() {
-        self.phase = V3Phase::Cancelled;
-        return Err(StreamingIndexerError::Cancelled(format!(
-            "caller requested cancellation during {context}"
-        )));
     }
-    Ok(())
-}
 
-fn record_terminal_error(&mut self, error: StreamingIndexerError) -> StreamingIndexerError {
-    if matches!(error, StreamingIndexerError::Cancelled(_)) {
-        self.phase = V3Phase::Cancelled;
+    fn check_cancelled_mut(&mut self, context: &str) -> Result<(), StreamingIndexerError> {
+        if self.cancellation.is_cancelled() {
+            self.phase = V3Phase::Cancelled;
+            return Err(StreamingIndexerError::Cancelled(format!(
+                "caller requested cancellation during {context}"
+            )));
+        }
+        Ok(())
     }
-    error
-}
+
+    fn record_terminal_error(&mut self, error: StreamingIndexerError) -> StreamingIndexerError {
+        if matches!(error, StreamingIndexerError::Cancelled(_)) {
+            self.phase = V3Phase::Cancelled;
+        }
+        error
+    }
 }
 
 fn v3_phase_description(phase: &StreamingIndexingPhase) -> &'static str {
-match phase {
-    StreamingIndexingPhase::PlanningPass { .. } => "planning pass",
-    StreamingIndexingPhase::HierarchyPlanning { .. } => "partition planning",
-    StreamingIndexingPhase::V3PartitionLoad { .. } => "partition load",
-    StreamingIndexingPhase::V3PartitionTrainIngest { .. } => "partition trainer ingest",
-    StreamingIndexingPhase::V3PartitionClassify { .. } => "partition classification",
-    StreamingIndexingPhase::V3TerminalMaterializationLoad { .. } => {
-        "terminal materialization load"
+    match phase {
+        StreamingIndexingPhase::PlanningPass { .. } => "planning pass",
+        StreamingIndexingPhase::HierarchyPlanning { .. } => "partition planning",
+        StreamingIndexingPhase::V3PartitionLoad { .. } => "partition load",
+        StreamingIndexingPhase::V3PartitionTrainIngest { .. } => "partition trainer ingest",
+        StreamingIndexingPhase::V3PartitionClassify { .. } => "partition classification",
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { .. } => {
+            "terminal materialization load"
+        }
+        StreamingIndexingPhase::FinalMaterializationReplay => "final materialization replay",
+        StreamingIndexingPhase::BottomUpAssembly { .. } => "bottom-up assembly",
     }
-    StreamingIndexingPhase::FinalMaterializationReplay => "final materialization replay",
-    StreamingIndexingPhase::BottomUpAssembly { .. } => "bottom-up assembly",
-}
 }
 
 fn decode_loaded_leaf(
@@ -1706,7 +1706,8 @@ impl V3PartitionStore {
                 })?;
             let mut key = partition_entry_key_buffer(partition_id);
             for (offset, block_id) in block_ids.iter().enumerate() {
-                set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
+                let entry_index = checked_partition_entry_index(partition_id, start_index, offset)?;
+                set_partition_entry_key_index(&mut key, partition_id, entry_index)?;
                 table
                     .insert(key.as_slice(), &block_id.as_bytes()[..])
                     .map_err(|error| {
@@ -1718,11 +1719,12 @@ impl V3PartitionStore {
                     })?;
             }
         }
+        let next_count = checked_partition_entry_index(partition_id, start_index, block_ids.len())?;
         self.set_partition_count_in_write_txn(
             &write_txn,
             partition_id,
             WorkingItemKind::LeafBlockIds,
-            start_index + block_ids.len(),
+            next_count,
         )?;
         write_txn.commit().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
@@ -1763,7 +1765,8 @@ impl V3PartitionStore {
                 })?;
             let mut key = partition_entry_key_buffer(partition_id);
             for (offset, child) in children.iter().enumerate() {
-                set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
+                let entry_index = checked_partition_entry_index(partition_id, start_index, offset)?;
+                set_partition_entry_key_index(&mut key, partition_id, entry_index)?;
                 let bytes = serialize_spilled_indexed_child_bytes(child)?;
                 table
                     .insert(key.as_slice(), bytes.as_slice())
@@ -1776,11 +1779,12 @@ impl V3PartitionStore {
                     })?;
             }
         }
+        let next_count = checked_partition_entry_index(partition_id, start_index, children.len())?;
         self.set_partition_count_in_write_txn(
             &write_txn,
             partition_id,
             WorkingItemKind::IndexedChildren,
-            start_index + children.len(),
+            next_count,
         )?;
         write_txn.commit().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
@@ -1830,7 +1834,9 @@ impl V3PartitionStore {
                 )?;
                 let mut key = partition_entry_key_buffer(partition_id);
                 for (offset, block_id) in block_ids.iter().enumerate() {
-                    set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
+                    let entry_index =
+                        checked_partition_entry_index(partition_id, start_index, offset)?;
+                    set_partition_entry_key_index(&mut key, partition_id, entry_index)?;
                     table
                         .insert(key.as_slice(), &block_id.as_bytes()[..])
                         .map_err(|error| {
@@ -1841,11 +1847,13 @@ impl V3PartitionStore {
                             ))
                         })?;
                 }
+                let next_count =
+                    checked_partition_entry_index(partition_id, start_index, block_ids.len())?;
                 self.set_partition_count_in_write_txn(
                     &write_txn,
                     partition_id,
                     WorkingItemKind::LeafBlockIds,
-                    start_index + block_ids.len(),
+                    next_count,
                 )?;
             }
         }
@@ -1896,7 +1904,9 @@ impl V3PartitionStore {
                 )?;
                 let mut key = partition_entry_key_buffer(partition_id);
                 for (offset, child) in children.iter().enumerate() {
-                    set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
+                    let entry_index =
+                        checked_partition_entry_index(partition_id, start_index, offset)?;
+                    set_partition_entry_key_index(&mut key, partition_id, entry_index)?;
                     let bytes = serialize_spilled_indexed_child_bytes(child)?;
                     table
                         .insert(key.as_slice(), bytes.as_slice())
@@ -1908,11 +1918,13 @@ impl V3PartitionStore {
                             ))
                         })?;
                 }
+                let next_count =
+                    checked_partition_entry_index(partition_id, start_index, children.len())?;
                 self.set_partition_count_in_write_txn(
                     &write_txn,
                     partition_id,
                     WorkingItemKind::IndexedChildren,
-                    start_index + children.len(),
+                    next_count,
                 )?;
             }
         }
@@ -2559,6 +2571,19 @@ fn partition_entry_key_end(partition_id: &str) -> Vec<u8> {
     key
 }
 
+fn checked_partition_entry_index(
+    partition_id: &str,
+    start_index: usize,
+    delta: usize,
+) -> Result<usize, StreamingIndexerError> {
+    start_index.checked_add(delta).ok_or_else(|| {
+        StreamingIndexerError::LocalSpill(format!(
+            "v3 partition index for {} overflows usize",
+            partition_id
+        ))
+    })
+}
+
 fn decode_partition_count(
     bytes: &[u8],
     partition_id: &str,
@@ -2668,7 +2693,6 @@ fn deserialize_spilled_indexed_child_bytes(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::io::Write;
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
 
