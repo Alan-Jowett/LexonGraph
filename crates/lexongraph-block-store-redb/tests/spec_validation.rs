@@ -546,6 +546,14 @@ fn mark_database_as_repair_required(database_path: &Path) {
         .write(true)
         .open(database_path)
         .unwrap();
+    let file_len = file.metadata().unwrap().len();
+    assert!(
+        file_len > GOD_BYTE_OFFSET,
+        "expected redb database header in {} to be longer than byte offset {}, got {} bytes",
+        database_path.display(),
+        GOD_BYTE_OFFSET,
+        file_len
+    );
     file.seek(SeekFrom::Start(GOD_BYTE_OFFSET)).unwrap();
     let mut buffer = [0u8; 1];
     file.read_exact(&mut buffer).unwrap();
