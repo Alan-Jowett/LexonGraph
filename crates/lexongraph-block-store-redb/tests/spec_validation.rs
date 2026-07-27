@@ -444,11 +444,9 @@ fn val_redb_store_019_repair_status_updates_emit_shared_telemetry_events() {
     mark_database_as_repair_required(&temp_dir.path().join(DATABASE_FILE_NAME));
     let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
 
-    let store = RedbBlockStore::new_with_telemetry(
-        temp_dir.path(),
-        telemetry_collector(events.clone()),
-    )
-    .unwrap();
+    let store =
+        RedbBlockStore::new_with_telemetry(temp_dir.path(), telemetry_collector(events.clone()))
+            .unwrap();
 
     let captured = events.lock().unwrap();
     assert!(!captured.is_empty());
@@ -472,14 +470,14 @@ fn val_redb_store_020_repair_events_use_generic_name_message_and_attributes() {
     mark_database_as_repair_required(&temp_dir.path().join(DATABASE_FILE_NAME));
     let events = Arc::new(Mutex::new(Vec::<BlockStoreTelemetryEvent>::new()));
 
-    let _store = RedbBlockStore::new_with_telemetry(
-        temp_dir.path(),
-        telemetry_collector(events.clone()),
-    )
-    .unwrap();
+    let _store =
+        RedbBlockStore::new_with_telemetry(temp_dir.path(), telemetry_collector(events.clone()))
+            .unwrap();
 
     let captured = events.lock().unwrap();
-    let first = captured.first().expect("expected at least one repair event");
+    let first = captured
+        .first()
+        .expect("expected at least one repair event");
     assert_eq!(first.name, "repair_status");
     assert_eq!(
         first.message.as_deref(),

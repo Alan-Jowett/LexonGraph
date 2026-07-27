@@ -59,11 +59,7 @@ impl BlockStoreTelemetryEvent {
         self
     }
 
-    pub fn with_attribute(
-        mut self,
-        name: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
+    pub fn with_attribute(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.attributes.insert(name.into(), value.into());
         self
     }
@@ -1205,7 +1201,10 @@ mod tests {
 
         let block_id = block_on(store.put(&block)).unwrap();
 
-        assert_eq!(block_on(store.get(&block_id)).unwrap().unwrap().block, block);
+        assert_eq!(
+            block_on(store.get(&block_id)).unwrap().unwrap().block,
+            block
+        );
     }
 
     #[test]
@@ -1249,7 +1248,10 @@ mod tests {
         let block_id = block_on(store.put(&block)).unwrap();
 
         assert!(events.lock().unwrap().is_empty());
-        assert_eq!(block_on(store.get(&block_id)).unwrap().unwrap().block, block);
+        assert_eq!(
+            block_on(store.get(&block_id)).unwrap().unwrap().block,
+            block
+        );
     }
 
     #[test]

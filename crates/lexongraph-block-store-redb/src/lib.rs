@@ -3,8 +3,8 @@
 //! Redb-backed durable local `BlockStore` implementation for LexonGraph blocks.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::stream;
@@ -526,7 +526,10 @@ fn emit_repair_telemetry(
     database_path: &Path,
     session: &RepairSession,
 ) {
-    let callback = telemetry_callback.lock().ok().and_then(|callback| callback.clone());
+    let callback = telemetry_callback
+        .lock()
+        .ok()
+        .and_then(|callback| callback.clone());
     if let Some(callback) = callback {
         callback(
             BlockStoreTelemetryEvent::new("repair_status")
