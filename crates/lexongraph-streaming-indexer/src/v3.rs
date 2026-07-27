@@ -1149,9 +1149,7 @@ impl StreamingIndexingRunV3 {
                             grouped[target].push(*block_id);
                             child_item_counts[target] += 1;
                         }
-                        for (target, block_ids) in grouped.iter().enumerate() {
-                            writers.write_batch(target, block_ids.as_slice())?;
-                        }
+                        writers.write_batch(grouped.as_slice())?;
                         progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
                         Ok(())
                     },
@@ -1204,9 +1202,7 @@ impl StreamingIndexingRunV3 {
                             grouped[target].push(child.clone());
                             child_item_counts[target] += 1;
                         }
-                        for (target, children) in grouped.iter().enumerate() {
-                            writers.write_batch(target, children.as_slice())?;
-                        }
+                        writers.write_batch(grouped.as_slice())?;
                         progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
                         Ok(())
                     },
@@ -1787,6 +1783,131 @@ impl V3PartitionStore {
         })
     }
 
+    fn append_block_hash_groups(
+        &self,
+        partition_ids: &[String],
+        groups: &[Vec<BlockHash>],
+    ) -> Result<(), StreamingIndexerError> {
+        if partition_ids.len() != groups.len() {
+            return Err(StreamingIndexerError::LocalSpill(
+                "v3 block-id partition append groups length mismatch".into(),
+            ));
+        }
+        if groups.iter().all(Vec::is_empty) {
+            return Ok(());
+        }
+        let write_txn = self.database.begin_write().map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not start a grouped v3 block-id partition write in {}: {error}",
+                self.database_path.display()
+            ))
+        })?;
+        {
+            let mut table = write_txn
+                .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
+                .map_err(|error| {
+                    StreamingIndexerError::LocalSpill(format!(
+                        "could not open the v3 block-id partition table in {}: {error}",
+                        self.database_path.display()
+                    ))
+                })?;
+            for (partition_id, block_ids) in partition_ids.iter().zip(groups) {
+                let start_index = self.partition_count_from_write_txn(
+                    &write_txn,
+                    partition_id,
+                    WorkingItemKind::LeafBlockIds,
+                )?;
+                for (offset, block_id) in block_ids.iter().enumerate() {
+                    let key = partition_entry_key(partition_id, start_index + offset)?;
+                    table
+                        .insert(key.as_slice(), &block_id.as_bytes()[..])
+                        .map_err(|error| {
+                            StreamingIndexerError::LocalSpill(format!(
+                                "could not append grouped block-id partition data for {} in {}: {error}",
+                                partition_id,
+                                self.database_path.display()
+                            ))
+                        })?;
+                }
+                self.set_partition_count_in_write_txn(
+                    &write_txn,
+                    partition_id,
+                    WorkingItemKind::LeafBlockIds,
+                    start_index + block_ids.len(),
+                )?;
+            }
+        }
+        write_txn.commit().map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not commit grouped v3 block-id partition data in {}: {error}",
+                self.database_path.display()
+            ))
+        })
+    }
+
+    fn append_indexed_child_groups(
+        &self,
+        partition_ids: &[String],
+        groups: &[Vec<IndexedChild>],
+    ) -> Result<(), StreamingIndexerError> {
+        if partition_ids.len() != groups.len() {
+            return Err(StreamingIndexerError::LocalSpill(
+                "v3 summary partition append groups length mismatch".into(),
+            ));
+        }
+        if groups.iter().all(Vec::is_empty) {
+            return Ok(());
+        }
+        let write_txn = self.database.begin_write().map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not start a grouped v3 summary partition write in {}: {error}",
+                self.database_path.display()
+            ))
+        })?;
+        {
+            let mut table = write_txn
+                .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
+                .map_err(|error| {
+                    StreamingIndexerError::LocalSpill(format!(
+                        "could not open the v3 summary partition table in {}: {error}",
+                        self.database_path.display()
+                    ))
+                })?;
+            for (partition_id, children) in partition_ids.iter().zip(groups) {
+                let start_index = self.partition_count_from_write_txn(
+                    &write_txn,
+                    partition_id,
+                    WorkingItemKind::IndexedChildren,
+                )?;
+                for (offset, child) in children.iter().enumerate() {
+                    let key = partition_entry_key(partition_id, start_index + offset)?;
+                    let bytes = serialize_spilled_indexed_child_bytes(child)?;
+                    table
+                        .insert(key.as_slice(), bytes.as_slice())
+                        .map_err(|error| {
+                            StreamingIndexerError::LocalSpill(format!(
+                                "could not append grouped summary partition data for {} in {}: {error}",
+                                partition_id,
+                                self.database_path.display()
+                            ))
+                        })?;
+                }
+                self.set_partition_count_in_write_txn(
+                    &write_txn,
+                    partition_id,
+                    WorkingItemKind::IndexedChildren,
+                    start_index + children.len(),
+                )?;
+            }
+        }
+        write_txn.commit().map_err(|error| {
+            StreamingIndexerError::LocalSpill(format!(
+                "could not commit grouped v3 summary partition data in {}: {error}",
+                self.database_path.display()
+            ))
+        })
+    }
+
     fn clear_partitions(
         &self,
         kind: WorkingItemKind,
@@ -1981,11 +2102,10 @@ impl V3PartitionStore {
         kind: WorkingItemKind,
         partition_id: &str,
     ) -> Result<(), StreamingIndexerError> {
-        let start_key = partition_entry_key(partition_id, 0)?;
-        let end_key = partition_entry_key_end(partition_id);
-        let keys = match kind {
+        let count = self.partition_count_from_write_txn(write_txn, partition_id, kind)?;
+        match kind {
             WorkingItemKind::LeafBlockIds => {
-                let table = write_txn
+                let mut table = write_txn
                     .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
                     .map_err(|error| {
                         StreamingIndexerError::LocalSpill(format!(
@@ -1993,71 +2113,8 @@ impl V3PartitionStore {
                             self.database_path.display()
                         ))
                     })?;
-                let iter = table
-                    .range(start_key.as_slice()..end_key.as_slice())
-                    .map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not iterate block-id partition {} in {}: {error}",
-                            partition_id,
-                            self.database_path.display()
-                        ))
-                    })?;
-                let mut keys = Vec::new();
-                for entry in iter {
-                    let (key, _) = entry.map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not enumerate block-id partition {} in {}: {error}",
-                            partition_id,
-                            self.database_path.display()
-                        ))
-                    })?;
-                    keys.push(key.value().to_vec());
-                }
-                keys
-            }
-            WorkingItemKind::IndexedChildren => {
-                let table = write_txn
-                    .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
-                    .map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not open the v3 summary partition table in {}: {error}",
-                            self.database_path.display()
-                        ))
-                    })?;
-                let iter = table
-                    .range(start_key.as_slice()..end_key.as_slice())
-                    .map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not iterate summary partition {} in {}: {error}",
-                            partition_id,
-                            self.database_path.display()
-                        ))
-                    })?;
-                let mut keys = Vec::new();
-                for entry in iter {
-                    let (key, _) = entry.map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not enumerate summary partition {} in {}: {error}",
-                            partition_id,
-                            self.database_path.display()
-                        ))
-                    })?;
-                    keys.push(key.value().to_vec());
-                }
-                keys
-            }
-        };
-        match kind {
-            WorkingItemKind::LeafBlockIds => {
-                let mut table = write_txn
-                    .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
-                    .map_err(|error| {
-                        StreamingIndexerError::LocalSpill(format!(
-                            "could not reopen the v3 block-id partition table in {}: {error}",
-                            self.database_path.display()
-                        ))
-                    })?;
-                for key in keys {
+                for index in 0..count {
+                    let key = partition_entry_key(partition_id, index)?;
                     table.remove(key.as_slice()).map_err(|error| {
                         StreamingIndexerError::LocalSpill(format!(
                             "could not remove block-id partition {} from {}: {error}",
@@ -2072,11 +2129,12 @@ impl V3PartitionStore {
                     .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
                     .map_err(|error| {
                         StreamingIndexerError::LocalSpill(format!(
-                            "could not reopen the v3 summary partition table in {}: {error}",
+                            "could not open the v3 summary partition table in {}: {error}",
                             self.database_path.display()
                         ))
                     })?;
-                for key in keys {
+                for index in 0..count {
+                    let key = partition_entry_key(partition_id, index)?;
                     table.remove(key.as_slice()).map_err(|error| {
                         StreamingIndexerError::LocalSpill(format!(
                             "could not remove summary partition {} from {}: {error}",
@@ -2188,13 +2246,9 @@ impl<'a> BlockHashPartitionWriters<'a> {
         self.partition_ids.len()
     }
 
-    fn write_batch(
-        &mut self,
-        index: usize,
-        block_ids: &[BlockHash],
-    ) -> Result<(), StreamingIndexerError> {
+    fn write_batch(&mut self, groups: &[Vec<BlockHash>]) -> Result<(), StreamingIndexerError> {
         self.store
-            .append_block_hashes(self.partition_ids[index].as_str(), block_ids)
+            .append_block_hash_groups(&self.partition_ids, groups)
     }
 
     fn finish(self) -> Result<(), StreamingIndexerError> {
@@ -2223,13 +2277,9 @@ impl<'a> IndexedChildPartitionWriters<'a> {
         self.partition_ids.len()
     }
 
-    fn write_batch(
-        &mut self,
-        index: usize,
-        children: &[IndexedChild],
-    ) -> Result<(), StreamingIndexerError> {
+    fn write_batch(&mut self, groups: &[Vec<IndexedChild>]) -> Result<(), StreamingIndexerError> {
         self.store
-            .append_indexed_children(self.partition_ids[index].as_str(), children)
+            .append_indexed_child_groups(&self.partition_ids, groups)
     }
 
     fn finish(self) -> Result<(), StreamingIndexerError> {
@@ -2329,9 +2379,7 @@ fn rewrite_block_hash_partition_with_assignments(
             grouped[group_index].push(block_id);
             item_index += 1;
         }
-        for (group_index, block_ids) in grouped.iter().enumerate() {
-            writers.write_batch(group_index, block_ids.as_slice())?;
-        }
+        writers.write_batch(grouped.as_slice())?;
     }
     if item_index != assignment.len() {
         return Err(StreamingIndexerError::HierarchyValidation(format!(
@@ -2363,9 +2411,7 @@ fn rewrite_indexed_child_partition_with_assignments(
             grouped[group_index].push(child);
             item_index += 1;
         }
-        for (group_index, children) in grouped.iter().enumerate() {
-            writers.write_batch(group_index, children.as_slice())?;
-        }
+        writers.write_batch(grouped.as_slice())?;
     }
     if item_index != assignment.len() {
         return Err(StreamingIndexerError::HierarchyValidation(format!(
