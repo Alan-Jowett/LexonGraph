@@ -106,6 +106,19 @@ That boundary does not imply blocking-only execution: the same process may
 overlap storage work and CPU work while preserving deterministic externally
 visible results.
 
+### DSG-STREAM-INDEXER-003D `V3 cancellation boundary`
+
+The constrained v3 surface accepts one caller-supplied run-scoped cancellation
+handle.
+
+That handle is the only caller-visible cancellation mechanism added by this
+revision. Standalone public streaming clustering trainer APIs remain unchanged.
+
+When the constrained v3 runtime invokes built-in clustering work, it propagates
+the same run-scoped cancellation request internally so partition-local
+clustering can terminate cooperatively without widening the clustering crates'
+public contracts.
+
 ### DSG-STREAM-INDEXER-004 `IndexItem`
 
 A public input type representing one application-supplied indexing unit. Each
@@ -485,6 +498,11 @@ changing the meaning of unrelated existing fields.
 The observer surface is sink-agnostic and does not require console output,
 tracing integration, or repository-specific telemetry.
 
+When a caller requests cancellation for the constrained v3 surface, the same
+observer contract continues to apply until the runtime reaches its terminal
+failure update for that phase rather than silently ceasing updates while work
+is still active.
+
 ### DSG-STREAM-INDEXER-018 `Explicit error taxonomy`
 
 The crate defines an explicit error surface covering at least:
@@ -492,6 +510,7 @@ The crate defines an explicit error surface covering at least:
 - empty input or empty pass
 - replay mismatch
 - invalid metadata
+- caller-requested cancellation observed during constrained v3 execution
 - content-resolution failure
 - unusable resolved content
 - embedding failure
@@ -504,6 +523,30 @@ The crate defines an explicit error surface covering at least:
 - terminal-partition materialization failure
 - storage failure
 - invalid lifecycle transition
+
+For the constrained v3 surface, cancellation is a terminal outcome for the
+current run rather than an implicit pause or resumable checkpoint.
+
+### DSG-STREAM-INDEXER-018A `V3 cooperative cancellation checkpoints`
+
+The constrained v3 runtime observes the run-scoped cancellation handle only at
+deterministic safe checkpoints where abandoning future work cannot corrupt the
+observable contract.
+
+At minimum, those checkpoints align with ordered batch-commit boundaries for
+partition-trainer ingest, partition classification, and terminal
+materialization load, plus bounded planning or assembly-unit boundaries for
+partition planning and bottom-up assembly.
+
+Cancellation need not preempt a tight compute loop immediately, but the design
+does require checks often enough that a caller is not forced to wait for an
+entire pass or layer when the active stage already exposes finer-grained
+deterministic work units.
+
+After cancellation is observed, the runtime stops scheduling additional
+partition work, returns the explicit cancellation outcome, and leaves any
+already-created scratch artifacts as implementation-owned temporary state with
+the same no-resume semantics as any other interrupted v3 run.
 
 ### DSG-STREAM-INDEXER-019 `Determinism boundary`
 

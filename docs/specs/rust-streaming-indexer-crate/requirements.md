@@ -166,7 +166,8 @@ input leaf blocks and persist the final result.
 The first v3 slice shall be single-process only and shall not provide crash
 recovery or resume semantics.
 
-An interrupted v3 run may require restart from the beginning.
+An interrupted or caller-cancelled v3 run may require restart from the
+beginning.
 
 ### REQ-STREAM-INDEXER-004D
 
@@ -175,6 +176,20 @@ temporary working subtree.
 
 Those intermediate artifacts are implementation-owned and are not part of the
 durable production result contract.
+
+### REQ-STREAM-INDEXER-004E
+
+The constrained v3 surface shall accept a caller-supplied cancellation handle
+for one run.
+
+That handle shall support caller-requested cooperative cancellation of
+long-running v3 work without changing the standalone public streaming
+clustering trainer contracts.
+
+When the constrained v3 runtime invokes built-in clustering work internally,
+that work shall honor the same run-scoped cancellation request through
+implementation-owned propagation rather than through a separate public
+clustering-surface cancellation API.
 
 ### REQ-STREAM-INDEXER-005
 
@@ -648,6 +663,19 @@ terminal completion.
 The constrained v3 runtime shall emit the more specific phase identities when
 those activities are separately observable.
 
+For the constrained v3 surface, those same long-running activities shall
+observe the caller-supplied cancellation handle cooperatively at deterministic
+safe checkpoints.
+
+Those checkpoints shall be fine-grained enough that cancellation is not
+deferred until whole-run or whole-layer completion when the active operation is
+already partitioned into deterministic batches or planning units.
+
+For stages whose committed progress unit is already batch-shaped or
+planning-unit-shaped in this revision, cancellation shall be observed no later
+than the next such deterministic commit boundary after the runtime has an
+opportunity to observe the caller request.
+
 ### REQ-STREAM-INDEXER-024
 
 The crate shall surface explicit failure when:
@@ -657,6 +685,7 @@ The crate shall surface explicit failure when:
 - content resolution fails, is inaccessible, or returns content unusable for
   indexing
 - embedding generation fails
+- caller-requested cancellation is observed during constrained v3 execution
 - the caller omits a required built-in planning algorithm selection, built-in
   hierarchy construction direction selection, or required planning settings
 - a later replay differs from the established logical item set or replay order

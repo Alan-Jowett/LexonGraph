@@ -6205,6 +6205,17 @@ fn val_stream_indexer_005a_v3_uses_temp_working_root_and_cleans_it_on_success() 
 }
 
 #[test]
+fn val_stream_indexer_005b_v3_public_surface_accepts_run_scoped_cancellation_handle() {
+    let src = include_str!("../src/v3.rs");
+    let lib = include_str!("../src/lib.rs");
+    assert!(lib.contains("pub struct StreamingIndexingCancellationHandle"));
+    assert!(lib.contains("pub fn cancel(&self)"));
+    assert!(lib.contains("pub fn is_cancelled(&self) -> bool"));
+    assert!(src.contains("pub fn with_cancellation_handle("));
+    assert!(src.contains("cancellation: StreamingIndexingCancellationHandle"));
+}
+
+#[test]
 fn val_stream_indexer_017a_v3_removes_terminal_partitions_from_later_refinement() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains(
@@ -6248,6 +6259,17 @@ fn val_stream_indexer_023a_v3_observer_surface_reports_phase_specific_progress()
 }
 
 #[test]
+fn val_stream_indexer_023b_v3_cancellation_is_explicit_and_non_resumable() {
+    let src = include_str!("../src/v3.rs");
+    let lib = include_str!("../src/lib.rs");
+    assert!(lib.contains("Cancelled(String)"));
+    assert!(src.contains("fn check_cancelled("));
+    assert!(src.contains("self.phase = V3Phase::Cancelled;"));
+    assert!(src.contains("v3_finalize_cancellation_returns_explicit_error_and_requires_fresh_run"));
+    assert!(src.contains("StreamingIndexingStatusState::Failed"));
+}
+
+#[test]
 fn val_stream_indexer_025h_v3_hot_state_is_bounded_to_active_partitions_and_buffers() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("const V3_IO_QUEUE_DEPTH: usize = 32;"));
@@ -6286,8 +6308,9 @@ fn val_stream_indexer_036b_v3_progress_counts_track_committed_work() {
     assert!(src.contains("StreamingIndexingStatusState::Completed"));
     assert!(src.contains("progress.load(AtomicOrdering::Relaxed)"));
     assert!(src.contains("progress.fetch_add(batch_len, AtomicOrdering::Relaxed);"));
-    assert!(src.contains("read_all_indexed_children(&partition.path, Some(progress.as_ref()))"));
+    assert!(src.contains("let mut reader = IndexedChildPartitionReader::open(&partition.path)?;"));
     assert!(src.contains("progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);"));
+    assert!(src.contains("children.extend(batch);"));
     assert!(src.contains("validate_v3_cluster_assignment("));
     assert!(src.contains("load_leaf_batch_raw("));
 }
