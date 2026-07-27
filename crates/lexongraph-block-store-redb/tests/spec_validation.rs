@@ -25,8 +25,9 @@ use support::RedbHarness;
 use support::{sample_leaf_block, validated_block};
 
 const DATABASE_FILE_NAME: &str = "blocks.redb";
-// These header values mirror redb's internal page-store header layout in
-// redb 2.6.3:
+// These header values mirror the redb internal page-store header layout used by
+// the version currently resolved in Cargo.lock (at the time of writing, redb
+// 2.6.3), even though Cargo.toml declares 2.1.0 as the semver minimum:
 // - GOD_BYTE_OFFSET is immediately after the 9-byte magic number
 // - RECOVERY_REQUIRED marks the file as needing repair on next open
 // - TWO_PHASE_COMMIT is cleared here to match redb's own repair-path tests
@@ -459,7 +460,7 @@ fn val_redb_store_019_repair_status_updates_emit_shared_telemetry_events() {
     assert!(!captured.is_empty());
     assert!(captured.iter().all(|event| event.name == "repair_status"));
     assert!(captured.iter().all(|event| {
-        event.attributes.get("backend") == Some(&"redb".to_string())
+        event.attributes.get("backend").map(String::as_str) == Some("redb")
             && event.attributes.contains_key("database_path")
             && event.attributes.contains_key("progress")
     }));
@@ -490,7 +491,10 @@ fn val_redb_store_020_repair_events_use_generic_name_message_and_attributes() {
         first.message.as_deref(),
         Some("redb reported database repair progress")
     );
-    assert_eq!(first.attributes.get("backend"), Some(&"redb".to_string()));
+    assert_eq!(
+        first.attributes.get("backend").map(String::as_str),
+        Some("redb")
+    );
 }
 
 #[test]

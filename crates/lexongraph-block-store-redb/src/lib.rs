@@ -2,6 +2,7 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Redb-backed durable local `BlockStore` implementation for LexonGraph blocks.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -531,13 +532,17 @@ fn emit_repair_telemetry(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
     if let Some(callback) = callback {
-        callback(
-            BlockStoreTelemetryEvent::new("repair_status")
-                .with_message("redb reported database repair progress")
-                .with_attribute("backend", "redb")
-                .with_attribute("database_path", database_path.display().to_string())
-                .with_attribute("progress", format!("{:.3}", session.progress())),
-        );
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_message("redb reported database repair progress")
+            .with_attribute("backend", "redb")
+            .with_attribute("database_path", database_path.display().to_string())
+            .with_attribute("progress", format!("{:.3}", session.progress()));
+        if catch_unwind(AssertUnwindSafe(|| callback(event))).is_err() {
+            eprintln!(
+                "redb repair telemetry callback panicked for {}",
+                database_path.display()
+            );
+        }
     }
 }
 
