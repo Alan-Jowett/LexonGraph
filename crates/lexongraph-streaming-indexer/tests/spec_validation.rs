@@ -6201,17 +6201,22 @@ fn val_stream_indexer_005a_v3_uses_temp_working_root_and_cleans_it_on_success() 
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("tempdir_in(working_root.as_ref())"));
     assert!(src.contains("temp_root: Option<TempDir>"));
-    assert!(src.contains("V3_PARTITION_STORE_FILE_NAME"));
     assert!(src.contains("V3PartitionStore::new(temp_root.path())"));
+    assert!(src.contains("Database::create(&database_path)"));
     assert!(src.contains("temp_root.close()"));
 }
 
 #[test]
 fn val_stream_indexer_005b_v3_uses_temp_redb_instead_of_per_partition_files() {
     let src = include_str!("../src/v3.rs");
-    assert!(src.contains("TableDefinition::new(\"v3_block_hash_partitions\")"));
-    assert!(src.contains("TableDefinition::new(\"v3_indexed_child_partitions\")"));
-    assert!(src.contains("partition_entry_key(partition_id, start_index + offset)?"));
+    assert!(src.contains("open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)"));
+    assert!(src.contains("open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)"));
+    assert!(src.contains("partition_entry_key_buffer(partition_id)"));
+    assert!(
+        src.contains(
+            "set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?"
+        )
+    );
     assert!(!src.contains("partition_file_path("));
 }
 
@@ -6302,7 +6307,11 @@ fn val_stream_indexer_034a_v3_partition_identity_is_schedule_independent() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("format!(\"l{layer_index}.p0\")"));
     assert!(src.contains("format!(\"{}.{}\", partition.id, child_index)"));
-    assert!(src.contains("partition_entry_key(partition_id, start_index + offset)?"));
+    assert!(
+        src.contains(
+            "set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?"
+        )
+    );
     assert!(src.contains("v3_is_deterministic_and_cleans_up_successfully"));
 }
 

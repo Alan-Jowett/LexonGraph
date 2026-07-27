@@ -697,8 +697,8 @@ tasks.
 
 **Pass condition:** both executions produce identical partition identities,
 child ordinals, parent-assembly order, root block ID, and persisted block set,
-demonstrating schedule-independent v3 determinism independent of Redb insertion
-order or other backend-private database layout details.
+demonstrating v3 determinism independent of scheduling order, Redb insertion
+order, or other backend-private database layout details.
 
 **Traces to:** REQ-STREAM-INDEXER-016A, REQ-STREAM-INDEXER-037
 

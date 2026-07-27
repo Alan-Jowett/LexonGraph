@@ -1698,8 +1698,9 @@ impl V3PartitionStore {
                         self.database_path.display()
                     ))
                 })?;
+            let mut key = partition_entry_key_buffer(partition_id);
             for (offset, block_id) in block_ids.iter().enumerate() {
-                let key = partition_entry_key(partition_id, start_index + offset)?;
+                set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
                 table
                     .insert(key.as_slice(), &block_id.as_bytes()[..])
                     .map_err(|error| {
@@ -1754,8 +1755,9 @@ impl V3PartitionStore {
                         self.database_path.display()
                     ))
                 })?;
+            let mut key = partition_entry_key_buffer(partition_id);
             for (offset, child) in children.iter().enumerate() {
-                let key = partition_entry_key(partition_id, start_index + offset)?;
+                set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
                 let bytes = serialize_spilled_indexed_child_bytes(child)?;
                 table
                     .insert(key.as_slice(), bytes.as_slice())
@@ -1817,8 +1819,9 @@ impl V3PartitionStore {
                     partition_id,
                     WorkingItemKind::LeafBlockIds,
                 )?;
+                let mut key = partition_entry_key_buffer(partition_id);
                 for (offset, block_id) in block_ids.iter().enumerate() {
-                    let key = partition_entry_key(partition_id, start_index + offset)?;
+                    set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
                     table
                         .insert(key.as_slice(), &block_id.as_bytes()[..])
                         .map_err(|error| {
@@ -1879,8 +1882,9 @@ impl V3PartitionStore {
                     partition_id,
                     WorkingItemKind::IndexedChildren,
                 )?;
+                let mut key = partition_entry_key_buffer(partition_id);
                 for (offset, child) in children.iter().enumerate() {
-                    let key = partition_entry_key(partition_id, start_index + offset)?;
+                    set_partition_entry_key_index(&mut key, partition_id, start_index + offset)?;
                     let bytes = serialize_spilled_indexed_child_bytes(child)?;
                     table
                         .insert(key.as_slice(), bytes.as_slice())
@@ -2113,8 +2117,9 @@ impl V3PartitionStore {
                             self.database_path.display()
                         ))
                     })?;
+                let mut key = partition_entry_key_buffer(partition_id);
                 for index in 0..count {
-                    let key = partition_entry_key(partition_id, index)?;
+                    set_partition_entry_key_index(&mut key, partition_id, index)?;
                     table.remove(key.as_slice()).map_err(|error| {
                         StreamingIndexerError::LocalSpill(format!(
                             "could not remove block-id partition {} from {}: {error}",
@@ -2133,8 +2138,9 @@ impl V3PartitionStore {
                             self.database_path.display()
                         ))
                     })?;
+                let mut key = partition_entry_key_buffer(partition_id);
                 for index in 0..count {
-                    let key = partition_entry_key(partition_id, index)?;
+                    set_partition_entry_key_index(&mut key, partition_id, index)?;
                     table.remove(key.as_slice()).map_err(|error| {
                         StreamingIndexerError::LocalSpill(format!(
                             "could not remove summary partition {} from {}: {error}",
@@ -2432,17 +2438,33 @@ fn partition_count_key(kind: WorkingItemKind, partition_id: &str) -> Vec<u8> {
     key
 }
 
-fn partition_entry_key(partition_id: &str, index: usize) -> Result<Vec<u8>, StreamingIndexerError> {
+fn partition_entry_key_buffer(partition_id: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(partition_id.len() + 1 + std::mem::size_of::<u64>());
+    key.extend_from_slice(partition_id.as_bytes());
+    key.push(0);
+    key.extend_from_slice(&0u64.to_be_bytes());
+    key
+}
+
+fn set_partition_entry_key_index(
+    key: &mut Vec<u8>,
+    partition_id: &str,
+    index: usize,
+) -> Result<(), StreamingIndexerError> {
     let index = u64::try_from(index).map_err(|_| {
         StreamingIndexerError::LocalSpill(format!(
             "v3 partition index for {} does not fit u64",
             partition_id
         ))
     })?;
-    let mut key = Vec::with_capacity(partition_id.len() + 1 + std::mem::size_of::<u64>());
-    key.extend_from_slice(partition_id.as_bytes());
-    key.push(0);
-    key.extend_from_slice(&index.to_be_bytes());
+    let start = partition_id.len() + 1;
+    key[start..].copy_from_slice(&index.to_be_bytes());
+    Ok(())
+}
+
+fn partition_entry_key(partition_id: &str, index: usize) -> Result<Vec<u8>, StreamingIndexerError> {
+    let mut key = partition_entry_key_buffer(partition_id);
+    set_partition_entry_key_index(&mut key, partition_id, index)?;
     Ok(key)
 }
 
