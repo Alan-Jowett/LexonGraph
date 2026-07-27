@@ -684,10 +684,15 @@ impl StreamingIndexingRunV3 {
                     },
                     partition.item_count,
                     |progress| {
+                        let phase = StreamingIndexingPhase::V3TerminalMaterializationLoad {
+                            layer_index: partition.layer_index,
+                        };
                         read_all_indexed_children(
                             self.partition_store(),
                             &partition.id,
                             Some(progress.as_ref()),
+                            Some(&self.cancellation),
+                            Some(&phase),
                         )
                     },
                 )?;
@@ -1021,43 +1026,43 @@ impl StreamingIndexingRunV3 {
         source_store: &dyn BlockStore,
         trainer: &mut DirectionalPcaStreamingTrainer,
     ) -> Result<(), StreamingIndexerError> {
-        self.run_v3_partition_phase(
-            StreamingIndexingPhase::V3PartitionTrainIngest {
-                layer_index: partition.layer_index,
-            },
-            partition.item_count,
-            |progress| {
-                let mut reader =
-                    BlockHashPartitionReader::open(self.partition_store(), &partition.id);
-                let embedding_spec = self.embedding_spec.clone();
-                run_prepared_batch_pipeline(
-                    V3_PREPARED_BATCH_LOOKAHEAD,
-                    move |sender| {
-                        let runtime = build_v3_prepare_runtime()?;
-                        while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                            let prepared = runtime.block_on(prepare_leaf_training_batch(
-                                batch,
-                                source_store,
-                                &embedding_spec,
-                                None,
-                            ))?;
-                            if sender.send(Ok(prepared)).is_err() {
-                                return Ok(());
-                            }
+        let phase = StreamingIndexingPhase::V3PartitionTrainIngest {
+            layer_index: partition.layer_index,
+        };
+        self.run_v3_partition_phase(phase.clone(), partition.item_count, |progress| {
+            let mut reader = BlockHashPartitionReader::open(self.partition_store(), &partition.id);
+            let embedding_spec = self.embedding_spec.clone();
+            let produce_phase = phase.clone();
+            let consume_phase = phase.clone();
+            run_prepared_batch_pipeline(
+                V3_PREPARED_BATCH_LOOKAHEAD,
+                move |sender| {
+                    let runtime = build_v3_prepare_runtime()?;
+                    while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+                        self.check_cancelled_for_phase(&produce_phase)?;
+                        let prepared = runtime.block_on(prepare_leaf_training_batch(
+                            batch,
+                            source_store,
+                            &embedding_spec,
+                            None,
+                        ))?;
+                        if sender.send(Ok(prepared)).is_err() {
+                            return Ok(());
                         }
-                        Ok(())
-                    },
-                    |prepared| {
-                        let batch_len = prepared.len();
-                        trainer
-                            .ingest_batch(prepared.as_slice())
-                            .map_err(map_clustering_error)?;
-                        progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
-                        Ok(())
-                    },
-                )
-            },
-        )
+                    }
+                    Ok(())
+                },
+                |prepared| {
+                    self.check_cancelled_for_phase(&consume_phase)?;
+                    let batch_len = prepared.len();
+                    trainer
+                        .ingest_batch(prepared.as_slice())
+                        .map_err(map_clustering_error)?;
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
     }
 
     fn ingest_summary_training_partition_batches(
@@ -1065,38 +1070,39 @@ impl StreamingIndexingRunV3 {
         partition: &WorkingPartition,
         trainer: &mut DirectionalPcaStreamingTrainer,
     ) -> Result<(), StreamingIndexerError> {
-        self.run_v3_partition_phase(
-            StreamingIndexingPhase::V3PartitionTrainIngest {
-                layer_index: partition.layer_index,
-            },
-            partition.item_count,
-            |progress| {
-                let mut reader =
-                    IndexedChildPartitionReader::open(self.partition_store(), &partition.id);
-                let embedding_spec = self.embedding_spec.clone();
-                run_prepared_batch_pipeline(
-                    V3_PREPARED_BATCH_LOOKAHEAD,
-                    move |sender| {
-                        while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                            let prepared =
-                                prepare_summary_training_batch(batch, &embedding_spec, None)?;
-                            if sender.send(Ok(prepared)).is_err() {
-                                return Ok(());
-                            }
+        let phase = StreamingIndexingPhase::V3PartitionTrainIngest {
+            layer_index: partition.layer_index,
+        };
+        self.run_v3_partition_phase(phase.clone(), partition.item_count, |progress| {
+            let mut reader =
+                IndexedChildPartitionReader::open(self.partition_store(), &partition.id);
+            let embedding_spec = self.embedding_spec.clone();
+            let produce_phase = phase.clone();
+            let consume_phase = phase.clone();
+            run_prepared_batch_pipeline(
+                V3_PREPARED_BATCH_LOOKAHEAD,
+                move |sender| {
+                    while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+                        self.check_cancelled_for_phase(&produce_phase)?;
+                        let prepared =
+                            prepare_summary_training_batch(batch, &embedding_spec, None)?;
+                        if sender.send(Ok(prepared)).is_err() {
+                            return Ok(());
                         }
-                        Ok(())
-                    },
-                    |prepared| {
-                        let batch_len = prepared.len();
-                        trainer
-                            .ingest_batch(prepared.as_slice())
-                            .map_err(map_clustering_error)?;
-                        progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
-                        Ok(())
-                    },
-                )
-            },
-        )
+                    }
+                    Ok(())
+                },
+                |prepared| {
+                    self.check_cancelled_for_phase(&consume_phase)?;
+                    let batch_len = prepared.len();
+                    trainer
+                        .ingest_batch(prepared.as_slice())
+                        .map_err(map_clustering_error)?;
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
     }
 
     fn classify_leaf_partition_batches(
@@ -1107,56 +1113,56 @@ impl StreamingIndexingRunV3 {
         writers: &mut BlockHashPartitionWriters,
         child_item_counts: &mut [usize],
     ) -> Result<(), StreamingIndexerError> {
-        self.run_v3_partition_phase(
-            StreamingIndexingPhase::V3PartitionClassify {
-                layer_index: partition.layer_index,
-            },
-            partition.item_count,
-            |progress| {
-                let mut reader =
-                    BlockHashPartitionReader::open(self.partition_store(), &partition.id);
-                let embedding_spec = self.embedding_spec.clone();
-                run_prepared_batch_pipeline(
-                    V3_PREPARED_BATCH_LOOKAHEAD,
-                    move |sender| {
-                        let runtime = build_v3_prepare_runtime()?;
-                        while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                            let prepared = runtime.block_on(prepare_leaf_assignment_batch(
-                                batch,
-                                source_store,
-                                &embedding_spec,
-                                None,
-                            ))?;
-                            if sender.send(Ok(prepared)).is_err() {
-                                return Ok(());
-                            }
+        let phase = StreamingIndexingPhase::V3PartitionClassify {
+            layer_index: partition.layer_index,
+        };
+        self.run_v3_partition_phase(phase.clone(), partition.item_count, |progress| {
+            let mut reader = BlockHashPartitionReader::open(self.partition_store(), &partition.id);
+            let embedding_spec = self.embedding_spec.clone();
+            let produce_phase = phase.clone();
+            let consume_phase = phase.clone();
+            run_prepared_batch_pipeline(
+                V3_PREPARED_BATCH_LOOKAHEAD,
+                move |sender| {
+                    let runtime = build_v3_prepare_runtime()?;
+                    while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+                        self.check_cancelled_for_phase(&produce_phase)?;
+                        let prepared = runtime.block_on(prepare_leaf_assignment_batch(
+                            batch,
+                            source_store,
+                            &embedding_spec,
+                            None,
+                        ))?;
+                        if sender.send(Ok(prepared)).is_err() {
+                            return Ok(());
                         }
-                        Ok(())
-                    },
-                    |prepared| {
-                        let assignments = classifier
-                            .assign_batch(prepared.embeddings.as_slice())
-                            .map_err(map_clustering_error)?;
-                        let batch_len = prepared.block_ids.len();
-                        let mut grouped =
-                            grouped_partition_buffers::<BlockHash>(writers.len(), batch_len);
-                        for (block_id, assignment) in prepared.block_ids.iter().zip(assignments) {
-                            let cluster = usize::try_from(assignment).map_err(|_| {
-                                StreamingIndexerError::HierarchyValidation(
-                                    "v3 cluster id does not fit usize".into(),
-                                )
-                            })?;
-                            let target = validate_v3_cluster_assignment(cluster, writers.len())?;
-                            grouped[target].push(*block_id);
-                            child_item_counts[target] += 1;
-                        }
-                        writers.write_batch(grouped.as_slice())?;
-                        progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
-                        Ok(())
-                    },
-                )
-            },
-        )
+                    }
+                    Ok(())
+                },
+                |prepared| {
+                    self.check_cancelled_for_phase(&consume_phase)?;
+                    let assignments = classifier
+                        .assign_batch(prepared.embeddings.as_slice())
+                        .map_err(map_clustering_error)?;
+                    let batch_len = prepared.block_ids.len();
+                    let mut grouped =
+                        grouped_partition_buffers::<BlockHash>(writers.len(), batch_len);
+                    for (block_id, assignment) in prepared.block_ids.iter().zip(assignments) {
+                        let cluster = usize::try_from(assignment).map_err(|_| {
+                            StreamingIndexerError::HierarchyValidation(
+                                "v3 cluster id does not fit usize".into(),
+                            )
+                        })?;
+                        let target = validate_v3_cluster_assignment(cluster, writers.len())?;
+                        grouped[target].push(*block_id);
+                        child_item_counts[target] += 1;
+                    }
+                    writers.write_batch(grouped.as_slice())?;
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
     }
 
     fn classify_summary_partition_batches(
@@ -1166,55 +1172,56 @@ impl StreamingIndexingRunV3 {
         writers: &mut IndexedChildPartitionWriters,
         child_item_counts: &mut [usize],
     ) -> Result<(), StreamingIndexerError> {
-        self.run_v3_partition_phase(
-            StreamingIndexingPhase::V3PartitionClassify {
-                layer_index: partition.layer_index,
-            },
-            partition.item_count,
-            |progress| {
-                let mut reader =
-                    IndexedChildPartitionReader::open(self.partition_store(), &partition.id);
-                let embedding_spec = self.embedding_spec.clone();
-                run_prepared_batch_pipeline(
-                    V3_PREPARED_BATCH_LOOKAHEAD,
-                    move |sender| {
-                        while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
-                            let prepared =
-                                prepare_summary_assignment_batch(batch, &embedding_spec, None)?;
-                            if sender.send(Ok(prepared)).is_err() {
-                                return Ok(());
-                            }
+        let phase = StreamingIndexingPhase::V3PartitionClassify {
+            layer_index: partition.layer_index,
+        };
+        self.run_v3_partition_phase(phase.clone(), partition.item_count, |progress| {
+            let mut reader =
+                IndexedChildPartitionReader::open(self.partition_store(), &partition.id);
+            let embedding_spec = self.embedding_spec.clone();
+            let produce_phase = phase.clone();
+            let consume_phase = phase.clone();
+            run_prepared_batch_pipeline(
+                V3_PREPARED_BATCH_LOOKAHEAD,
+                move |sender| {
+                    while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+                        self.check_cancelled_for_phase(&produce_phase)?;
+                        let prepared =
+                            prepare_summary_assignment_batch(batch, &embedding_spec, None)?;
+                        if sender.send(Ok(prepared)).is_err() {
+                            return Ok(());
                         }
-                        Ok(())
-                    },
-                    |prepared| {
-                        let PreparedIndexedChildAssignmentBatch {
-                            children,
-                            embeddings,
-                        } = prepared;
-                        let assignments = classifier
-                            .assign_batch(embeddings.as_slice())
-                            .map_err(map_clustering_error)?;
-                        let batch_len = children.len();
-                        let mut grouped =
-                            grouped_partition_buffers::<IndexedChild>(writers.len(), batch_len);
-                        for (child, assignment) in children.into_iter().zip(assignments) {
-                            let cluster = usize::try_from(assignment).map_err(|_| {
-                                StreamingIndexerError::HierarchyValidation(
-                                    "v3 cluster id does not fit usize".into(),
-                                )
-                            })?;
-                            let target = validate_v3_cluster_assignment(cluster, writers.len())?;
-                            grouped[target].push(child);
-                            child_item_counts[target] += 1;
-                        }
-                        writers.write_batch(grouped.as_slice())?;
-                        progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
-                        Ok(())
-                    },
-                )
-            },
-        )
+                    }
+                    Ok(())
+                },
+                |prepared| {
+                    self.check_cancelled_for_phase(&consume_phase)?;
+                    let PreparedIndexedChildAssignmentBatch {
+                        children,
+                        embeddings,
+                    } = prepared;
+                    let assignments = classifier
+                        .assign_batch(embeddings.as_slice())
+                        .map_err(map_clustering_error)?;
+                    let batch_len = children.len();
+                    let mut grouped =
+                        grouped_partition_buffers::<IndexedChild>(writers.len(), batch_len);
+                    for (child, assignment) in children.into_iter().zip(assignments) {
+                        let cluster = usize::try_from(assignment).map_err(|_| {
+                            StreamingIndexerError::HierarchyValidation(
+                                "v3 cluster id does not fit usize".into(),
+                            )
+                        })?;
+                        let target = validate_v3_cluster_assignment(cluster, writers.len())?;
+                        grouped[target].push(child);
+                        child_item_counts[target] += 1;
+                    }
+                    writers.write_batch(grouped.as_slice())?;
+                    progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
     }
 
     fn run_v3_partition_phase<T>(
@@ -2408,10 +2415,20 @@ fn read_all_indexed_children(
     store: &V3PartitionStore,
     partition_id: &str,
     progress: Option<&AtomicUsize>,
+    cancellation: Option<&StreamingIndexingCancellationHandle>,
+    phase: Option<&StreamingIndexingPhase>,
 ) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
     let mut reader = IndexedChildPartitionReader::open(store, partition_id);
     let mut all = Vec::new();
     while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
+        if let (Some(cancellation), Some(phase)) = (cancellation, phase)
+            && cancellation.is_cancelled()
+        {
+            return Err(StreamingIndexerError::Cancelled(format!(
+                "caller requested cancellation during {}",
+                v3_phase_description(phase)
+            )));
+        }
         if let Some(progress) = progress {
             progress.fetch_add(batch.len(), AtomicOrdering::Relaxed);
         }
