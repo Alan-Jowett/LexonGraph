@@ -6236,6 +6236,28 @@ fn val_stream_indexer_005b_v3_uses_temp_redb_instead_of_per_partition_files() {
 }
 
 #[test]
+fn val_stream_indexer_005d_v3_partition_store_uses_non_durable_writes() {
+    let src = include_str!("../src/v3.rs");
+    let write_positions = src
+        .match_indices("begin_write()")
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let durability_positions = src
+        .match_indices("set_durability(Durability::None)")
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    assert_eq!(write_positions.len(), durability_positions.len());
+    for (index, write_position) in write_positions.iter().enumerate() {
+        let next_write_position = write_positions.get(index + 1).copied();
+        assert!(
+            durability_positions[index] > *write_position
+                && next_write_position
+                    .is_none_or(|next_position| durability_positions[index] < next_position)
+        );
+    }
+}
+
+#[test]
 fn val_stream_indexer_005c_v3_public_surface_accepts_run_scoped_cancellation_handle() {
     let src = include_str!("../src/v3.rs");
     let lib = include_str!("../src/lib.rs");
