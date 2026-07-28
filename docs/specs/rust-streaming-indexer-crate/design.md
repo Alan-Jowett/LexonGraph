@@ -106,6 +106,20 @@ That boundary does not imply blocking-only execution: the same process may
 overlap storage work and CPU work while preserving deterministic externally
 visible results.
 
+### DSG-STREAM-INDEXER-003E `V3 temporary partition durability boundary`
+
+The v3 backend-private partition-working Redb database uses non-durable write
+behavior for all run-scoped partition mutations, including initialization.
+Non-durable mode avoids forcing intermediate partition state to stable storage
+while preserving Redb transaction atomicity and visibility to the active
+process.
+
+The partition-working database is not a recovery artifact. If the process is
+interrupted, its contents may be incomplete or unusable, and the run restarts
+from the beginning rather than attempting repair or resume. This policy applies
+only to temporary partition state; production block stores and final result
+blocks retain their own durability contracts.
+
 ### DSG-STREAM-INDEXER-003D `V3 cancellation boundary`
 
 The constrained v3 surface accepts one caller-supplied run-scoped cancellation

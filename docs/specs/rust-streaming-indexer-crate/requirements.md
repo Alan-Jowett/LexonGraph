@@ -181,6 +181,17 @@ temporary working subtree.
 Those intermediate artifacts are implementation-owned and are not part of the
 durable production result contract.
 
+### REQ-STREAM-INDEXER-004F
+
+The v3 partition-working database shall use non-durable write behavior because
+it is run-scoped implementation state and the v3 surface provides no crash
+recovery or resume semantics.
+
+Non-durable writes shall retain transaction atomicity and in-process read
+visibility, but need not force pending data to stable storage. A process
+interruption may leave the temporary database incomplete or unusable; recovery
+shall be restart-from-beginning rather than repair or resume.
+
 ### REQ-STREAM-INDEXER-004E
 
 The constrained v3 surface shall accept a caller-supplied cancellation handle

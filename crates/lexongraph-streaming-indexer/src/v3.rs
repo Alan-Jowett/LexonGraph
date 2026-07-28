@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use rayon::prelude::*;
-use redb::{Database, ReadOnlyTable, ReadableTable, TableDefinition};
+use redb::{Database, Durability, ReadOnlyTable, ReadableTable, TableDefinition};
 use tempfile::TempDir;
 
 use crate::{
@@ -1699,12 +1699,13 @@ impl V3PartitionStore {
                 database_path.display()
             ))
         })?;
-        let write_txn = database.begin_write().map_err(|error| {
+        let mut write_txn = database.begin_write().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
                 "could not start v3 partition database initialization for {}: {error}",
                 database_path.display()
             ))
         })?;
+        write_txn.set_durability(Durability::None);
         {
             write_txn
                 .open_table(V3_PARTITION_COUNTS_TABLE)
@@ -1751,12 +1752,13 @@ impl V3PartitionStore {
         if block_ids.is_empty() {
             return Ok(());
         }
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let mut write_txn = self.database.begin_write().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
                 "could not start a v3 block-id partition write in {}: {error}",
                 self.database_path.display()
             ))
         })?;
+        write_txn.set_durability(Durability::None);
         let start_index = self.partition_count_from_write_txn(
             &write_txn,
             partition_id,
@@ -1810,12 +1812,13 @@ impl V3PartitionStore {
         if children.is_empty() {
             return Ok(());
         }
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let mut write_txn = self.database.begin_write().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
                 "could not start a v3 summary partition write in {}: {error}",
                 self.database_path.display()
             ))
         })?;
+        write_txn.set_durability(Durability::None);
         let start_index = self.partition_count_from_write_txn(
             &write_txn,
             partition_id,
@@ -1875,12 +1878,13 @@ impl V3PartitionStore {
         if groups.iter().all(Vec::is_empty) {
             return Ok(());
         }
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let mut write_txn = self.database.begin_write().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
                 "could not start a grouped v3 block-id partition write in {}: {error}",
                 self.database_path.display()
             ))
         })?;
+        write_txn.set_durability(Durability::None);
         {
             let mut table = write_txn
                 .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
@@ -1945,12 +1949,13 @@ impl V3PartitionStore {
         if groups.iter().all(Vec::is_empty) {
             return Ok(());
         }
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let mut write_txn = self.database.begin_write().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
                 "could not start a grouped v3 summary partition write in {}: {error}",
                 self.database_path.display()
             ))
         })?;
+        write_txn.set_durability(Durability::None);
         {
             let mut table = write_txn
                 .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
@@ -2011,12 +2016,13 @@ impl V3PartitionStore {
         if partition_ids.is_empty() {
             return Ok(());
         }
-        let write_txn = self.database.begin_write().map_err(|error| {
+        let mut write_txn = self.database.begin_write().map_err(|error| {
             StreamingIndexerError::LocalSpill(format!(
                 "could not start a v3 partition cleanup in {}: {error}",
                 self.database_path.display()
             ))
         })?;
+        write_txn.set_durability(Durability::None);
         for partition_id in partition_ids {
             self.clear_partition_in_write_txn(&write_txn, kind, partition_id)?;
         }
@@ -3232,7 +3238,8 @@ mod tests {
     fn v3_block_hash_partition_reader_rejects_truncated_hash() {
         let dir = tempfile::tempdir().unwrap();
         let store = V3PartitionStore::new(dir.path()).unwrap();
-        let write_txn = store.database.begin_write().unwrap();
+        let mut write_txn = store.database.begin_write().unwrap();
+        write_txn.set_durability(Durability::None);
         {
             let mut table = write_txn
                 .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)

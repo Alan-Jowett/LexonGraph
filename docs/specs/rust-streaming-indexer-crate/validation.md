@@ -111,6 +111,21 @@ filesystem file per partition.
 **Traces to:** REQ-STREAM-INDEXER-004B, REQ-STREAM-INDEXER-020A,
 REQ-STREAM-INDEXER-132
 
+### VAL-STREAM-INDEXER-005D
+
+Inspect the v3 partition-working Redb write path and exercise a run that
+performs partition mutations.
+
+**Pass condition:** initialization and all run-scoped partition write
+transactions use non-durable write behavior, active-process reads remain
+visible and transactionally consistent, and no production block-store or final
+result durability contract is changed. The validation also confirms that an
+interrupted run is treated as restart-from-beginning rather than as a
+recoverable or resumable run.
+
+**Traces to:** REQ-STREAM-INDEXER-004C, REQ-STREAM-INDEXER-004D,
+REQ-STREAM-INDEXER-004F
+
 ### VAL-STREAM-INDEXER-005C
 
 Inspect the constrained v3 public construction surface.
