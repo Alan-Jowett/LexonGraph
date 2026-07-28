@@ -1662,6 +1662,55 @@ An immediate `"did not become partition-ready"` error on the first successful
 earlier successful pass reached `PartitionReady` before training completion was
 possible.
 
+### DSG-STREAM-INDEXER-127 `0.8.0 publication boundary`
+
+Published profile `0.8.0` is added as an independently addressable catalog
+entry. It preserves the `0.7.0` planning, fanout, branch-encoding, summary,
+materialization, and determinism contract; only the rank-zero fallback policy
+differs. Resolving or executing `0.8.0` does not alter `0.7.0` or earlier
+profile mappings.
+
+### DSG-STREAM-INDEXER-128 `0.8.0 rank-zero fallback`
+
+When the selected profile is `0.8.0` and a non-degenerate directional-PCA
+partition reports effective rank `0` against a minimum required rank of `1`,
+the v2 and v3 partition-planning flows bypass immediate rank-constraint
+failure and invoke the repository-owned balanced grouping helper.
+
+The fallback operates on the partition's existing deterministic order. It does
+not inspect embedding similarity and is not represented as a successful PCA
+split.
+
+### DSG-STREAM-INDEXER-129 `0.8.0 fallback bounds and assignment`
+
+Fallback grouping uses the applicable materializability bound to choose the
+minimum conforming group count and distributes indexes as evenly as possible.
+The assignment is total, one-to-one, and replayable. A required split produces
+at least two non-empty groups; impossible bounds remain explicit failures.
+
+### DSG-STREAM-INDEXER-130 `0.8.0 fallback telemetry`
+
+The fallback increments the existing fallback counter and emits the existing
+partition-planning lifecycle details for the affected partition. The reported
+partition identity, size, recursion depth, and planning-unit state remain
+deterministic, and the event does not claim semantic clustering success.
+
+### DSG-STREAM-INDEXER-131 `0.8.0 v2/v3 parity`
+
+The same profile gate and fallback assignment contract applies to both v2
+published-profile planning and constrained v3 partition planning. Membership
+rewrites, classifier/replay validation, topology conversion, and terminal
+materialization consume the fallback groups without changing the published
+block encoding contract.
+
+### DSG-STREAM-INDEXER-132 `0.8.0 replay determinism`
+
+Given the same ordered partition input and resolved profile configuration,
+fallback grouping produces the same child assignment, child ordering,
+hierarchy topology, and persisted output across repeated executions. The
+implementation preserves the fallback reason in existing observable reporting
+rather than silently presenting structural grouping as semantic routing.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1779,4 +1828,10 @@ possible.
 | DSG-STREAM-INDEXER-123 | REQ-STREAM-INDEXER-126, REQ-STREAM-INDEXER-129 |
 | DSG-STREAM-INDEXER-124..125 | REQ-STREAM-INDEXER-130 |
 | DSG-STREAM-INDEXER-126 | REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-131 |
+| DSG-STREAM-INDEXER-127 | REQ-STREAM-INDEXER-133 |
+| DSG-STREAM-INDEXER-128 | REQ-STREAM-INDEXER-134 |
+| DSG-STREAM-INDEXER-129 | REQ-STREAM-INDEXER-135 |
+| DSG-STREAM-INDEXER-130 | REQ-STREAM-INDEXER-137 |
+| DSG-STREAM-INDEXER-131 | REQ-STREAM-INDEXER-136 |
+| DSG-STREAM-INDEXER-132 | REQ-STREAM-INDEXER-138 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

@@ -824,6 +824,7 @@ pub const PUBLISHED_PROFILE_V0_6_3: PublishedProfileVersion = PublishedProfileVe
 pub const PUBLISHED_PROFILE_V0_6_4: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 4);
 pub const PUBLISHED_PROFILE_V0_6_5: PublishedProfileVersion = PublishedProfileVersion::new(0, 6, 5);
 pub const PUBLISHED_PROFILE_V0_7_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 7, 0);
+pub const PUBLISHED_PROFILE_V0_8_0: PublishedProfileVersion = PublishedProfileVersion::new(0, 8, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishedHierarchyMetric {
@@ -1496,6 +1497,23 @@ pub fn published_indexing_profile(
                 lowest_routing_bits: 6,
             },
         )),
+        PUBLISHED_PROFILE_V0_8_0 => Ok(directional_pca_published_profile(
+            version,
+            64,
+            directional_pca_published_profile_params(
+                DirectionalPcaRetainedAxisPolicy::AdaptiveAllEligible,
+                DirectionalPcaAllocationPolicy::EigenvalueLogBits,
+                DirectionalPcaBinningPolicy::Quantile,
+                DirectionalPcaClusterCardinalityMode::UnderfullSuccess,
+                1,
+                0.0,
+            ),
+            PublishedBranchEncodingPolicy::AmbientDeltaUniform {
+                root_bits: 12,
+                interior_bits: 8,
+                lowest_routing_bits: 6,
+            },
+        )),
         _ => Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(version)),
     }
 }
@@ -2045,6 +2063,7 @@ struct StreamingV2PassState {
     replay_order_offsets: Vec<usize>,
     directional_pca_replay_states: Vec<Option<DirectionalPcaReplayState>>,
     classifier_assignment_counts: Vec<Option<Vec<usize>>>,
+    fallback_count: usize,
     started: Instant,
     last_progress_at: Option<Duration>,
     planning_started_emitted: bool,
@@ -2267,7 +2286,7 @@ fn validate_published_profile_configuration(
             profile.version
         )));
     }
-    if !matches!((major, minor), (0, 4) | (0, 5) | (0, 6) | (0, 7)) {
+    if !matches!((major, minor), (0, 4) | (0, 5) | (0, 6) | (0, 7) | (0, 8)) {
         return Ok(());
     }
 
@@ -3613,7 +3632,9 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         block_size_target: usize,
         planner_state_root: impl AsRef<Path>,
     ) -> Result<Self, StreamingIndexerError> {
-        if profile_version != PUBLISHED_PROFILE_V0_7_0 {
+        if profile_version != PUBLISHED_PROFILE_V0_7_0
+            && profile_version != PUBLISHED_PROFILE_V0_8_0
+        {
             return Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(
                 profile_version,
             ));
@@ -3635,7 +3656,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
             })
         {
             return Err(StreamingIndexerError::ClusteringFailure(
-                "streaming v2 currently supports only the exact 0.7.0 ambient-delta-uq branch encoding contract".into(),
+                "streaming v2 currently supports only the exact 0.7.0 or 0.8.0 ambient-delta-uq branch encoding contract".into(),
             ));
         }
         let planner_state_root = PlannerStateRoot::new(planner_state_root)?;
@@ -3933,7 +3954,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                 finalized_partition_count: None,
                 terminal_partition_count: None,
                 completed_planner_invocation_count: Some(completed_unit_count),
-                fallback_count: None,
+                fallback_count: Some(current_pass.fallback_count),
                 last_progress_at: match state {
                     StreamingIndexingStatusState::Started => Some(Duration::ZERO),
                     _ => current_pass.last_progress_at.or(Some(elapsed)),
@@ -4281,24 +4302,81 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
                             "pending partition {label:?} has no trainer"
                         ))
                     })?;
-                    let report = trainer.finish_pass().map_err(map_clustering_error)?;
-                    metrics.observe(&report);
-                    if report.observed_count != expected_item_count {
+                    match trainer.finish_pass() {
+                        Ok(report) => {
+                            metrics.observe(&report);
+                            if report.observed_count != expected_item_count {
+                                return Err(StreamingIndexerError::HierarchyValidation(format!(
+                                    "pending partition {label:?} observed {} items but expected {}",
+                                    report.observed_count, expected_item_count
+                                )));
+                            }
+                            Ok(Some(match trainer.complete_training() {
+                                Ok(()) => true,
+                                Err(StreamingClusteringError::InvalidTransition {
+                                    state,
+                                    operation,
+                                }) if state == TrainerState::PassComplete
+                                    && operation == "complete_training" =>
+                                {
+                                    false
+                                }
+                                Err(error) => return Err(map_clustering_error(error)),
+                            }))
+                        }
+                        Err(error)
+                            if self.profile.version == PUBLISHED_PROFILE_V0_8_0
+                                && is_rank_zero_constraint(&error) =>
+                        {
+                            Ok(None)
+                        }
+                        Err(error) => Err(map_clustering_error(error)),
+                    }
+                }?;
+                let Some(completed_training) = completed_training else {
+                    let child_counts = fallback_partition_groups(
+                        expected_item_count,
+                        materializability_bound,
+                        None,
+                    )
+                    .map_err(StreamingIndexerError::HierarchyValidation)?
+                    .into_iter()
+                    .map(|group| group.len())
+                    .collect::<Vec<_>>();
+                    if child_counts.len() < 2 {
                         return Err(StreamingIndexerError::HierarchyValidation(format!(
-                            "pending partition {label:?} observed {} items but expected {}",
-                            report.observed_count, expected_item_count
+                            "partition {label:?} rank-zero fallback produced fewer than two child groups"
                         )));
                     }
-                    match trainer.complete_training() {
-                        Ok(()) => true,
-                        Err(StreamingClusteringError::InvalidTransition { state, operation })
-                            if state == TrainerState::PassComplete
-                                && operation == "complete_training" =>
-                        {
-                            false
-                        }
-                        Err(error) => return Err(map_clustering_error(error)),
-                    }
+                    let routing_debug_state = Some(format!(
+                        "RankZeroFallbackReplayOrderPlan {{ child_counts: {} }}",
+                        format_usize_list(child_counts.as_slice())
+                    ));
+                    let children = self.create_child_nodes(
+                        partition_id,
+                        child_counts.clone(),
+                        materializability_bound,
+                    )?;
+                    let routing = StreamingV2RoutingStrategy::ReplayOrder(
+                        StreamingV2ReplayOrderPlan::new(child_counts),
+                    );
+                    current_pass.fallback_count += 1;
+                    completed_unit_count += 1;
+                    completed.push(StreamingV2CompletedPartition {
+                        partition_id,
+                        routing,
+                        routing_debug_state,
+                        children,
+                    });
+                    current_pass.last_progress_at = Some(current_pass.started.elapsed());
+                    let _ = self.emit_v2_hierarchy_status(
+                        &mut current_pass,
+                        partition_id,
+                        StreamingIndexingStatusState::Completed,
+                        completed_unit_count,
+                        None,
+                    )?;
+                    continue;
                 };
                 unit_heartbeat.stop();
                 if completed_training {
@@ -5420,6 +5498,7 @@ impl StreamingV2PassState {
             replay_order_offsets: Vec::new(),
             directional_pca_replay_states: Vec::new(),
             classifier_assignment_counts: Vec::new(),
+            fallback_count: 0,
             started: Instant::now(),
             last_progress_at: None,
             planning_started_emitted: false,
@@ -9744,6 +9823,9 @@ fn balanced_groups(len: usize, materializability_bound: usize) -> Result<Vec<Vec
     if len == 0 {
         return Err("cannot materialize an empty child set".into());
     }
+    if materializability_bound == 0 {
+        return Err("materializability bound must be positive".into());
+    }
     if len == 1 {
         return Ok(vec![vec![0]]);
     }
@@ -9820,6 +9902,14 @@ fn invalid_config(message: String) -> StreamingClusteringError {
 
 fn map_clustering_configuration_error(message: String) -> StreamingIndexerError {
     StreamingIndexerError::ClusteringFailure(message)
+}
+
+fn is_rank_zero_constraint(error: &StreamingClusteringError) -> bool {
+    matches!(
+        error,
+        StreamingClusteringError::UnsatisfiableConstraint { message }
+            if message.starts_with("effective rank 0 is smaller than the required minimum 1")
+    )
 }
 
 fn map_clustering_error(error: StreamingClusteringError) -> StreamingIndexerError {
@@ -10955,11 +11045,11 @@ mod tests {
     use super::{
         BlockHash, ChildSummaryInput, DirectionalPcaAllocationPolicy,
         DirectionalPcaOutOfCorePlannerState, EmbeddingSpec, PUBLISHED_PROFILE_V0_1_0,
-        PUBLISHED_PROFILE_V0_7_0, PartitionId, PlannerStateRoot, ROOT_PARTITION_ID, RunPhase,
-        StreamingClusteringConfig, StreamingIndexerError, StreamingIndexingRunV2,
-        StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot, StreamingV2Partition,
-        StreamingV2PartitionNode, StreamingV2PartitionTopology, StreamingV2PassState,
-        StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
+        PUBLISHED_PROFILE_V0_7_0, PUBLISHED_PROFILE_V0_8_0, PartitionId, PlannerStateRoot,
+        ROOT_PARTITION_ID, RunPhase, StreamingClusteringConfig, StreamingIndexerError,
+        StreamingIndexingRunV2, StreamingIndexingTrainerSubphase, StreamingV2CompletedPassSnapshot,
+        StreamingV2Partition, StreamingV2PartitionNode, StreamingV2PartitionTopology,
+        StreamingV2PassState, StreamingV2PendingPartitionStatus, StreamingV2QuantilePlannerState,
         StreamingV2RoutingStrategy, V2_FAILURE_ARTIFACT_DIR_NAME, V2_FAILURE_DETAIL_FILE_NAME,
         V2_FAILURE_SUMMARY_FILE_NAME, allocate_variable_bit_widths,
         branch_encoding_policy_for_profile, effective_directional_pca_cluster_count,
@@ -10989,6 +11079,27 @@ mod tests {
         assert_eq!(groups.len(), 64);
         assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 5_000);
         assert!(groups.iter().all(|group| !group.is_empty()));
+    }
+
+    #[test]
+    fn fallback_partition_groups_rejects_zero_materializability_bound() {
+        let error = fallback_partition_groups(2, 0, None)
+            .expect_err("zero materializability bound should fail explicitly");
+        assert!(error.contains("materializability bound must be positive"));
+    }
+
+    #[test]
+    fn rank_zero_fallback_does_not_match_other_unsatisfiable_constraints() {
+        assert!(!super::is_rank_zero_constraint(
+            &lexongraph_streaming_clustering::StreamingClusteringError::UnsatisfiableConstraint {
+                message: "effective rank 1 is smaller than the required minimum 2".into(),
+            }
+        ));
+        assert!(!super::is_rank_zero_constraint(
+            &lexongraph_streaming_clustering::StreamingClusteringError::UnsatisfiableConstraint {
+                message: "first pass requires at least two items".into(),
+            }
+        ));
     }
 
     #[test]
@@ -11292,6 +11403,71 @@ mod tests {
             },
             _item_ref: PhantomData,
         }
+    }
+
+    #[test]
+    fn streaming_v2_v0_8_0_uses_rank_zero_fallback_routing() {
+        let planner_state_root = tempfile::tempdir().expect("test planner state root should exist");
+        let mut run: StreamingIndexingRunV2<(), (), ()> =
+            StreamingIndexingRunV2::with_published_profile(
+                (),
+                (),
+                PUBLISHED_PROFILE_V0_8_0,
+                EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                4096,
+                planner_state_root.path(),
+            )
+            .expect("0.8.0 v2 run should initialize");
+        let settings = run.profile_settings().expect("profile settings").clone();
+        let mut trainer = DirectionalPcaStreamingTrainer::new(
+            StreamingClusteringConfig {
+                cluster_count: settings.cluster_count,
+                dimensions: 2,
+                balance_constraints: None,
+                random_seed: settings.random_seed,
+            },
+            settings.params,
+        )
+        .expect("rank-zero trainer should initialize");
+        let embeddings = (0..128)
+            .map(|index| {
+                if index % 2 == 0 {
+                    vec![0.0, 0.0]
+                } else {
+                    vec![0.0007, 0.0]
+                }
+            })
+            .collect::<Vec<_>>();
+        trainer
+            .ingest_batch(embeddings.as_slice())
+            .expect("rank-zero embeddings should ingest");
+        run.partitions.push(StreamingV2PartitionNode {
+            parent_id: None,
+            child_ids: Vec::new(),
+            item_count: embeddings.len(),
+            terminal: false,
+            pending_trainer: Some(trainer),
+            routing: None,
+            routing_debug_state: None,
+        });
+        run.next_partition_id = 1;
+        let mut current_pass = StreamingV2PassState::new();
+        current_pass.fingerprint.observed_count = embeddings.len();
+        current_pass.ensure_partition_capacity(1);
+        run.current_pass = Some(current_pass);
+
+        run.finish_pass()
+            .expect("rank-zero fallback should complete");
+
+        let root = &run.partitions[ROOT_PARTITION_ID.0];
+        assert!(matches!(
+            root.routing,
+            Some(StreamingV2RoutingStrategy::ReplayOrder(_))
+        ));
+        assert_eq!(root.child_ids.len(), 2);
     }
 
     #[test]

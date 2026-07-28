@@ -16,14 +16,15 @@ use tempfile::TempDir;
 use crate::{
     Block, BlockHash, BranchEncodingPolicy, BranchEntry, ChildSummaryInput, ChildSummaryPolicy,
     EmbeddingSpec, ExactCentroidChildSummaryPolicy, HierarchyPlanningDetailFields, IndexedChild,
-    LayerBuildStatus, PUBLISHED_PROFILE_V0_7_0, PlanningStage, PublishedBranchEncodingPolicy,
-    PublishedDirectionalPcaProfileSettings, PublishedIndexingProfile, PublishedPlanningStrategy,
-    PublishedProfileVersion, StreamingClusteringConfig, StreamingIndexerError,
-    StreamingIndexingCancellationHandle, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
-    StreamingIndexingResult, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
-    VERSION_1, balanced_groups, branch_encoding_policy_for_profile, build_branch_block,
-    decode_embedding_as_f32, dedup_sort_ids, effective_directional_pca_cluster_count, emit_status,
-    encode_branch_entries, fallback_partition_groups, map_clustering_configuration_error,
+    LayerBuildStatus, PUBLISHED_PROFILE_V0_7_0, PUBLISHED_PROFILE_V0_8_0, PlanningStage,
+    PublishedBranchEncodingPolicy, PublishedDirectionalPcaProfileSettings,
+    PublishedIndexingProfile, PublishedPlanningStrategy, PublishedProfileVersion,
+    StreamingClusteringConfig, StreamingIndexerError, StreamingIndexingCancellationHandle,
+    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingResult,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState, VERSION_1, balanced_groups,
+    branch_encoding_policy_for_profile, build_branch_block, decode_embedding_as_f32,
+    dedup_sort_ids, effective_directional_pca_cluster_count, emit_status, encode_branch_entries,
+    fallback_partition_groups, is_rank_zero_constraint, map_clustering_configuration_error,
     map_clustering_error, materializability_bound, normalize_branch_entries,
     normalize_child_summary_inputs, normalize_current_layer, partition_depth,
     published_indexing_profile, read_spilled_indexed_child, serialize_block,
@@ -112,7 +113,9 @@ impl StreamingIndexingRunV3 {
         block_size_target: usize,
         working_root: impl AsRef<Path>,
     ) -> Result<Self, StreamingIndexerError> {
-        if profile_version != PUBLISHED_PROFILE_V0_7_0 {
+        if profile_version != PUBLISHED_PROFILE_V0_7_0
+            && profile_version != PUBLISHED_PROFILE_V0_8_0
+        {
             return Err(StreamingIndexerError::UnsupportedPublishedProfileVersion(
                 profile_version,
             ));
@@ -134,7 +137,7 @@ impl StreamingIndexingRunV3 {
             })
         {
             return Err(StreamingIndexerError::ClusteringFailure(
-                "streaming v3 currently supports only the exact 0.7.0 ambient-delta-uq branch encoding contract".into(),
+                "streaming v3 currently supports only the exact 0.7.0 or 0.8.0 ambient-delta-uq branch encoding contract".into(),
             ));
         }
         let temp_root = tempfile::Builder::new()
@@ -432,7 +435,63 @@ impl StreamingIndexingRunV3 {
                     }
                 }
                 self.check_cancelled("partition planning")?;
-                let pass_report = trainer.finish_pass().map_err(map_clustering_error)?;
+                let pass_report = match trainer.finish_pass() {
+                    Ok(report) => report,
+                    Err(error)
+                        if self.profile.version == PUBLISHED_PROFILE_V0_8_0
+                            && is_rank_zero_constraint(&error) =>
+                    {
+                        let fallback_groups = fallback_partition_groups(
+                            partition.item_count,
+                            materializability_bound,
+                            None,
+                        )
+                        .map_err(|error| {
+                            StreamingIndexerError::HierarchyValidation(error.to_string())
+                        })?;
+                        let fallback_assignment = fallback_assignment_map(
+                            partition.item_count,
+                            fallback_groups.as_slice(),
+                        )?;
+                        let child_ids = (0..fallback_groups.len())
+                            .map(|child_index| format!("{}.{}", partition.id, child_index))
+                            .collect::<Vec<_>>();
+                        self.partition_store()
+                            .clear_partitions(partition.kind, child_ids.as_slice())?;
+                        match partition.kind {
+                            WorkingItemKind::LeafBlockIds => {
+                                rewrite_block_hash_partition_with_assignments(
+                                    self.partition_store(),
+                                    &partition.id,
+                                    child_ids.as_slice(),
+                                    fallback_assignment.as_slice(),
+                                )?;
+                            }
+                            WorkingItemKind::IndexedChildren => {
+                                rewrite_indexed_child_partition_with_assignments(
+                                    self.partition_store(),
+                                    &partition.id,
+                                    child_ids.as_slice(),
+                                    fallback_assignment.as_slice(),
+                                )?;
+                            }
+                        }
+                        return Ok((
+                            fallback_groups
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, group)| WorkingPartition {
+                                    id: child_ids[index].clone(),
+                                    layer_index: partition.layer_index,
+                                    item_count: group.len(),
+                                    kind: partition.kind,
+                                })
+                                .collect(),
+                            true,
+                        ));
+                    }
+                    Err(error) => return Err(map_clustering_error(error)),
+                };
                 self.check_cancelled("partition planning")?;
                 if pass_report.observed_count != partition.item_count {
                     return Err(StreamingIndexerError::HierarchyValidation(format!(
@@ -2827,6 +2886,47 @@ mod tests {
         assert_eq!(result_a.root_id, result_b.root_id);
         assert_eq!(result_a.block_ids, result_b.block_ids);
         assert!(std::fs::read_dir(parent.path()).unwrap().next().is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn v3_v0_8_0_uses_rank_zero_fallback() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = MemoryBlockStore::default();
+        let output = MemoryBlockStore::default();
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let observer = {
+            let statuses = Arc::clone(&statuses);
+            Arc::new(move |status: crate::StreamingIndexingStatus| {
+                statuses.lock().unwrap().push(status);
+            }) as StreamingIndexingStatusObserver
+        };
+        let mut ids = Vec::with_capacity(128);
+        for index in 0..128 {
+            let values = if index % 2 == 0 {
+                [0.0, 0.0]
+            } else {
+                [0.0007, 0.0]
+            };
+            ids.push(store_leaf(&source, values, &format!("item-{index}")).await);
+        }
+        let mut run = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_8_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap()
+        .with_observer(observer);
+        run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
+        run.finalize(&source, &output).await.unwrap();
+
+        assert!(
+            statuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|status| status.fallback_count == Some(1))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

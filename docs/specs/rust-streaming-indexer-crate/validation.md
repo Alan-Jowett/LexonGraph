@@ -1799,3 +1799,68 @@ replay-pass limit is exceeded, not earlier on the first successful
 
 **Traces to:** REQ-STREAM-INDEXER-021, REQ-STREAM-INDEXER-026,
 REQ-STREAM-INDEXER-131
+
+### VAL-STREAM-INDEXER-121
+
+Resolve published profiles `0.7.0` and `0.8.0` repeatedly under identical
+conditions and compare their declared settings and mappings.
+
+**Pass condition:** `0.8.0` resolves independently, preserves the `0.7.0`
+planning/topology/encoding/materialization contract, and resolution or
+execution of `0.8.0` does not mutate `0.7.0` or earlier profiles.
+
+**Traces to:** REQ-STREAM-INDEXER-133
+
+### VAL-STREAM-INDEXER-122
+
+Run a deterministic v2 fixture under profile `0.8.0` containing a
+non-degenerate partition whose directional-PCA effective rank is `0`.
+
+**Pass condition:** planning does not fail at the rank constraint; balanced
+fallback groups are produced, every item is assigned exactly once, every child
+respects the materializability bound, and the fallback counter increments.
+
+**Traces to:** REQ-STREAM-INDEXER-134, REQ-STREAM-INDEXER-135,
+REQ-STREAM-INDEXER-137
+
+### VAL-STREAM-INDEXER-123
+
+Run the equivalent deterministic rank-zero fixture through the constrained v3
+profile `0.8.0` surface.
+
+**Pass condition:** v3 applies the same rank-zero-only fallback policy,
+rewrites/stages membership correctly, and completes hierarchy construction and
+materialization without changing the `0.7.0` path.
+
+**Traces to:** REQ-STREAM-INDEXER-136
+
+### VAL-STREAM-INDEXER-124
+
+Repeat the v2 and v3 rank-zero fallback fixtures with identical ordered inputs
+and configuration.
+
+**Pass condition:** child assignments, child ordering, hierarchy topology,
+persisted output, and fallback telemetry are deterministic across runs.
+
+**Traces to:** REQ-STREAM-INDEXER-138
+
+### VAL-STREAM-INDEXER-125
+
+Run `0.8.0` fixtures for non-rank-zero failures, including non-finite input,
+invalid configuration, replay inconsistency, and cumulative-variance
+constraint failure.
+
+**Pass condition:** those failures remain explicit and are not converted into
+fallback grouping.
+
+**Traces to:** REQ-STREAM-INDEXER-134
+
+### VAL-STREAM-INDEXER-126
+
+Run a `0.8.0` rank-zero fixture whose materializability constraints cannot
+produce two conforming non-empty groups.
+
+**Pass condition:** the planner fails explicitly rather than emitting an
+oversized or invalid child partition.
+
+**Traces to:** REQ-STREAM-INDEXER-135
