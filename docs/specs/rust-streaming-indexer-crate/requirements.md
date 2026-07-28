@@ -1780,6 +1780,71 @@ file per partition.
 The database filename, schema, tables, key encoding, and physical layout remain
 implementation-owned and are not part of the public API or production block-
 store contract.
+
+### REQ-STREAM-INDEXER-133
+
+The repository shall publish indexing profile `0.8.0` alongside the existing
+published indexing profiles.
+
+Published profile `0.8.0` shall preserve the declared planning, topology,
+encoding, summary, materialization, and determinism contract of published
+profile `0.7.0`, except for the rank-zero fallback behavior defined by
+REQ-STREAM-INDEXER-134 through REQ-STREAM-INDEXER-138.
+
+Publishing or executing `0.8.0` shall not mutate the declared mapping or
+behavior of `0.7.0` or any earlier published profile.
+
+### REQ-STREAM-INDEXER-134
+
+When published profile `0.8.0` encounters a non-degenerate partition whose
+directional-PCA effective rank is `0` while the configured minimum effective
+rank is `1`, the planner shall use deterministic fallback grouping instead of
+failing immediately.
+
+This fallback trigger is specific to the rank-zero condition. Other clustering
+errors, including non-finite input, invalid configuration, replay
+inconsistency, and cumulative-variance constraint failures, shall remain fatal
+unless separately specified.
+
+### REQ-STREAM-INDEXER-135
+
+The `0.8.0` rank-zero fallback shall use the repository's balanced grouping
+semantics over the partition's existing deterministic order and applicable
+materializability bound.
+
+Every item shall be assigned exactly once. When a split is required, every
+non-empty child group shall satisfy the materializability bound and at least
+two non-empty child groups shall be produced. If those constraints cannot be
+satisfied, the run shall fail explicitly.
+
+### REQ-STREAM-INDEXER-136
+
+The `0.8.0` rank-zero fallback shall be applied consistently by both the v2
+published-profile execution surface and the constrained v3 published-profile
+execution surface.
+
+Fallback assignments shall remain compatible with partition membership
+rewriting, replay validation, hierarchy construction, and final materialization.
+
+### REQ-STREAM-INDEXER-137
+
+Rank-zero fallback shall increment the existing planning fallback telemetry and
+shall preserve deterministic reporting of the affected partition identity,
+partition size, recursion depth, and planning-unit completion state.
+
+Telemetry shall distinguish fallback grouping from a successful directional-PCA
+split without introducing unsupported semantic-quality or convergence claims.
+
+### REQ-STREAM-INDEXER-138
+
+Repeated `0.8.0` executions over identical ordered inputs and configuration
+shall produce identical rank-zero fallback assignments, hierarchy topology, and
+persisted output.
+
+The fallback shall be treated as structural grouping rather than a semantic
+similarity claim, and its order-sensitive nature shall remain observable through
+the existing fallback reporting.
+
 ## Out of Scope
 
 This crate does not define or own:

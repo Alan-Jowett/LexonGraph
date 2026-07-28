@@ -48,14 +48,15 @@ use lexongraph_streaming_indexer::{
     PUBLISHED_PROFILE_V0_5_2, PUBLISHED_PROFILE_V0_5_3, PUBLISHED_PROFILE_V0_5_4,
     PUBLISHED_PROFILE_V0_5_5, PUBLISHED_PROFILE_V0_6_0, PUBLISHED_PROFILE_V0_6_1,
     PUBLISHED_PROFILE_V0_6_2, PUBLISHED_PROFILE_V0_6_3, PUBLISHED_PROFILE_V0_6_4,
-    PUBLISHED_PROFILE_V0_6_5, PUBLISHED_PROFILE_V0_7_0, PlanningPassOutcome, PlanningStage,
-    PublishedBranchEncodingPolicy, PublishedHierarchyMetric, PublishedIndexingProfile,
-    PublishedPlanningStrategy, PublishedProfilePlanningPolicy, PublishedProfileVersion,
-    SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory, StreamingIndexerError,
-    StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingRun,
-    StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, StreamingIndexingTrainerSubphase, StreamingV2BlockerKind,
-    StreamingV2ConvergenceState, StreamingV2PartitionTopology, published_indexing_profile,
+    PUBLISHED_PROFILE_V0_6_5, PUBLISHED_PROFILE_V0_7_0, PUBLISHED_PROFILE_V0_8_0,
+    PlanningPassOutcome, PlanningStage, PublishedBranchEncodingPolicy, PublishedHierarchyMetric,
+    PublishedIndexingProfile, PublishedPlanningStrategy, PublishedProfilePlanningPolicy,
+    PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
+    StreamingIndexingRun, StreamingIndexingRunV2, StreamingIndexingStatus,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    StreamingIndexingTrainerSubphase, StreamingV2BlockerKind, StreamingV2ConvergenceState,
+    StreamingV2PartitionTopology, published_indexing_profile,
 };
 use sha2::{Digest, Sha256};
 
@@ -5223,7 +5224,7 @@ async fn val_stream_indexer_102_published_profile_v0_7_0_uses_ambient_uniform_qu
 }
 
 #[test]
-fn val_stream_indexer_103_all_profiles_resolve_deterministically_with_v0_7_0_included() {
+fn val_stream_indexer_103_all_profiles_resolve_deterministically_with_v0_8_0_included() {
     let baseline_0_6_5 = published_indexing_profile(PUBLISHED_PROFILE_V0_6_5).unwrap();
     let baseline_0_5_0 = published_indexing_profile(PUBLISHED_PROFILE_V0_5_0).unwrap();
 
@@ -5264,6 +5265,7 @@ fn val_stream_indexer_103_all_profiles_resolve_deterministically_with_v0_7_0_inc
         PUBLISHED_PROFILE_V0_6_4,
         PUBLISHED_PROFILE_V0_6_5,
         PUBLISHED_PROFILE_V0_7_0,
+        PUBLISHED_PROFILE_V0_8_0,
     ] {
         assert_eq!(
             published_indexing_profile(version).unwrap(),
@@ -5278,6 +5280,20 @@ fn val_stream_indexer_103_all_profiles_resolve_deterministically_with_v0_7_0_inc
     assert_eq!(
         published_indexing_profile(PUBLISHED_PROFILE_V0_5_0).unwrap(),
         baseline_0_5_0
+    );
+}
+
+#[test]
+fn val_stream_indexer_121_published_profile_v0_8_0_preserves_v0_7_0_contract() {
+    let baseline = published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap();
+    let profile = published_indexing_profile(PUBLISHED_PROFILE_V0_8_0).unwrap();
+    let mut expected = baseline.clone();
+    expected.version = PUBLISHED_PROFILE_V0_8_0;
+
+    assert_eq!(profile, expected);
+    assert_eq!(
+        published_indexing_profile(PUBLISHED_PROFILE_V0_7_0).unwrap(),
+        baseline
     );
 }
 
