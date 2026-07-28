@@ -9823,6 +9823,9 @@ fn balanced_groups(len: usize, materializability_bound: usize) -> Result<Vec<Vec
     if len == 0 {
         return Err("cannot materialize an empty child set".into());
     }
+    if materializability_bound == 0 {
+        return Err("materializability bound must be positive".into());
+    }
     if len == 1 {
         return Ok(vec![vec![0]]);
     }
@@ -11076,6 +11079,27 @@ mod tests {
         assert_eq!(groups.len(), 64);
         assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 5_000);
         assert!(groups.iter().all(|group| !group.is_empty()));
+    }
+
+    #[test]
+    fn fallback_partition_groups_rejects_zero_materializability_bound() {
+        let error = fallback_partition_groups(2, 0, None)
+            .expect_err("zero materializability bound should fail explicitly");
+        assert!(error.contains("materializability bound must be positive"));
+    }
+
+    #[test]
+    fn rank_zero_fallback_does_not_match_other_unsatisfiable_constraints() {
+        assert!(!super::is_rank_zero_constraint(
+            &lexongraph_streaming_clustering::StreamingClusteringError::UnsatisfiableConstraint {
+                message: "effective rank 1 is smaller than the required minimum 2".into(),
+            }
+        ));
+        assert!(!super::is_rank_zero_constraint(
+            &lexongraph_streaming_clustering::StreamingClusteringError::UnsatisfiableConstraint {
+                message: "first pass requires at least two items".into(),
+            }
+        ));
     }
 
     #[test]
