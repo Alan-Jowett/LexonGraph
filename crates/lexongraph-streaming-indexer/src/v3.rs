@@ -285,10 +285,11 @@ impl V3LayerAggregateStatus {
         if used_fallback {
             self.fallback_count.fetch_add(1, AtomicOrdering::Relaxed);
         }
-        for phase in [&self.planning, &self.train_ingest, &self.classify] {
-            if let Some(phase) = phase {
-                phase.complete(index);
-            }
+        for phase in [&self.planning, &self.train_ingest, &self.classify]
+            .into_iter()
+            .flatten()
+        {
+            phase.complete(index);
         }
     }
 
@@ -305,10 +306,11 @@ impl V3LayerAggregateStatus {
                 Some(self.fallback_count.load(AtomicOrdering::Relaxed)),
             );
         }
-        for phase in [&self.train_ingest, &self.classify, &self.terminal_load] {
-            if let Some(phase) = phase {
-                phase.finish(error.clone());
-            }
+        for phase in [&self.train_ingest, &self.classify, &self.terminal_load]
+            .into_iter()
+            .flatten()
+        {
+            phase.finish(error.clone());
         }
     }
 }
@@ -524,17 +526,21 @@ impl StreamingIndexingRunV3 {
             let refinement_weights = active
                 .iter()
                 .map(|partition| {
-                    (partition.item_count > materializability_bound && partition.item_count > 1)
-                        .then_some(partition.item_count)
-                        .unwrap_or(0)
+                    if partition.item_count > materializability_bound && partition.item_count > 1 {
+                        partition.item_count
+                    } else {
+                        0
+                    }
                 })
                 .collect();
             let terminal_weights = active
                 .iter()
                 .map(|partition| {
-                    (partition.item_count <= materializability_bound || partition.item_count <= 1)
-                        .then_some(partition.item_count)
-                        .unwrap_or(0)
+                    if partition.item_count <= materializability_bound || partition.item_count <= 1 {
+                        partition.item_count
+                    } else {
+                        0
+                    }
                 })
                 .collect();
             let aggregate_status = Arc::new(V3LayerAggregateStatus::new(
