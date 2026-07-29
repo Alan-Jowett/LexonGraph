@@ -371,7 +371,10 @@ than full-dataset payloads as the progression contract.
 
 The constrained v3 surface shall keep hot memory bounded to the currently
 active partition work set plus bounded pipeline buffers, rather than retaining
-planner-hot state for all discovered partitions simultaneously.
+planner-hot state for all discovered partitions simultaneously. When independent
+partitions execute concurrently, the active work set and its per-partition
+buffers shall be bounded by the existing Rayon/global worker-pool capacity and
+shall not grow with the total discovered partition count.
 
 Transient pipeline buffers may support overlapped storage and CPU work, but
 they shall not grow with the total discovered partition count or become a
@@ -907,14 +910,17 @@ surface when the caller does not need descendant-count-aware summary semantics.
 
 ### REQ-STREAM-INDEXER-037
 
-Independent subpartitions may be processed concurrently only if partition
-identity, pass reports, root block ID, and persisted block set remain
-deterministic and schedule-independent.
+The constrained v3 surface shall process independent subpartitions concurrently
+whenever independent work exists, including recursively discovered refinement
+partitions, independent terminal materialization units, and independent
+bottom-up assembly groups. Partition identity, pass reports, root block ID, and
+persisted block set shall remain deterministic and schedule-independent.
 
 For the constrained v3 surface:
 
-- non-trivial independent CPU-bound work should default to rayon-backed
-  parallel execution when ordering is not needed to preserve determinism
+- non-trivial independent CPU-bound work shall use the existing Rayon/global
+  worker pool as the concurrency bound when ordering is not needed to preserve
+  determinism; no new caller-facing concurrency setting is required
 - production-store and temp-working-store disk I/O should be orchestrated
   through async/await-style non-blocking progression rather than a
   single-threaded blocking storage pipeline
@@ -928,6 +934,39 @@ For the constrained v3 surface:
   floating-point reductions, and deterministic child-partition emission shall
   commit in deterministic batch order even when later batches have already been
   prepared
+
+### REQ-STREAM-INDEXER-037A
+
+Concurrent v3 work shall preserve the following invariants:
+
+- independent partitions shall not share mutable trainer state
+- concurrent results shall be reconciled in deterministic partition or group
+  order before becoming externally visible
+- active and queued work shall honor the run-scoped cancellation request
+- the first non-cancellation failure in deterministic partition or group order
+  shall terminate the run explicitly and shall not produce success-shaped
+  output, regardless of task completion timing
+- Redb and production-store access shall respect the storage contracts of those
+  components rather than assuming that parallel writes are inherently safe
+
+### REQ-STREAM-INDEXER-037B
+
+The constrained v3 surface shall establish a completion barrier at every
+semantic layer. All refinement, terminal materialization, and bottom-up
+assembly work scheduled for layer `N` shall complete and reconcile
+successfully before any work for layer `N+1` begins. Failures and cancellation
+shall be reconciled at that barrier before the run may advance.
+
+### REQ-STREAM-INDEXER-037C
+
+For concurrent v3 work, observer updates for a shared phase and semantic layer
+shall expose one deterministic aggregate view of that layer's scheduled work.
+The aggregate total, completed count, remaining count, current state, and
+failure detail shall be derived from deterministic partition or group order and
+shall not depend on task completion timing. Internal task-level progress may be
+retained for diagnostics, but shall not cause externally visible counts to
+regress, exceed their total, or report a layer complete before the completion
+barrier.
 
 ### REQ-STREAM-INDEXER-038
 

@@ -695,13 +695,34 @@ realization rather than by a caller-specified coarse/fine boundary.
 
 ### DSG-STREAM-INDEXER-028 `Concurrent subpartition execution`
 
-Independent subpartitions may be planned or assembled concurrently, but the
-crate normalizes work ordering and output ordering so observable results remain
-schedule-independent.
+Independent v3 subpartitions shall be planned, refined, materialized, and
+assembled concurrently whenever independent work exists. The crate normalizes
+partition and output ordering so observable results remain schedule-independent.
 
 For the constrained v3 surface, non-trivial independent CPU-bound work defaults
-to rayon-backed parallel execution when the required deterministic reduction
-order is preserved or explicitly normalized at the output boundary.
+to the existing Rayon/global worker pool when the required deterministic
+reduction order is preserved or explicitly normalized at the output boundary.
+The worker pool is the concurrency bound; this surface does not add a new
+caller-facing concurrency setting.
+
+Concurrency is layer-scoped. All work for one semantic layer is scheduled and
+reconciled behind a completion barrier before the next semantic layer begins.
+The barrier collects task results in deterministic partition or group order,
+selects the first non-cancellation failure in that deterministic order
+regardless of completion timing, and observes run-scoped cancellation before
+advancing.
+
+Each concurrent task owns its partition-local trainer and mutable staging
+state. Shared Redb and production-store access follows the owning storage
+contract, so parallel planning or assembly does not imply unsafe concurrent
+writes.
+
+Observer updates for a shared v3 phase and semantic layer are emitted as one
+deterministic aggregate view. The aggregate total is the reconciled scheduled
+work, completed is the prefix of partition/group results committed in
+deterministic order, remaining is derived from total minus completed, and the
+layer cannot report completion before its barrier succeeds. Task-local
+diagnostics may be retained separately without changing aggregate counts.
 
 Within one active v3 partition, the implementation separates:
 
@@ -1750,7 +1771,7 @@ rather than silently presenting structural grouping as semantic routing.
 | DSG-STREAM-INDEXER-024 | REQ-STREAM-INDEXER-016A, REQ-STREAM-INDEXER-034, REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-120 |
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
-| DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037 |
+| DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-037A, REQ-STREAM-INDEXER-037B, REQ-STREAM-INDEXER-037C |
 | DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-121 |
 | DSG-STREAM-INDEXER-030 | REQ-STREAM-INDEXER-040 |
 | DSG-STREAM-INDEXER-031 | REQ-STREAM-INDEXER-041 |
