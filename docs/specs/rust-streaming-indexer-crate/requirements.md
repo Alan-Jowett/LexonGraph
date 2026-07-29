@@ -373,7 +373,8 @@ The constrained v3 surface shall keep hot memory bounded to the currently
 active partition work set plus bounded pipeline buffers, rather than retaining
 planner-hot state for all discovered partitions simultaneously. When independent
 partitions execute concurrently, the active work set and its per-partition
-buffers shall be bounded by the existing Rayon/global worker-pool capacity and
+buffers shall be bounded by the outer partition scheduler, the dedicated inner
+CPU pool, and bounded pipeline capacity and
 shall not grow with the total discovered partition count.
 
 Transient pipeline buffers may support overlapped storage and CPU work, but
@@ -918,9 +919,12 @@ persisted block set shall remain deterministic and schedule-independent.
 
 For the constrained v3 surface:
 
-- non-trivial independent CPU-bound work shall use the existing Rayon/global
+- non-trivial independent partition-level CPU work shall use the outer Rayon
   worker pool as the concurrency bound when ordering is not needed to preserve
   determinism; no new caller-facing concurrency setting is required
+- per-partition and per-batch CPU work, including embedding decode, validation,
+  PCA-related transforms, and equivalent order-independent transforms, shall
+  use a dedicated inner Rayon pool rather than the outer/global pool
 - production-store and temp-working-store disk I/O should be orchestrated
   through async/await-style non-blocking progression rather than a
   single-threaded blocking storage pipeline
@@ -967,6 +971,32 @@ shall not depend on task completion timing. Internal task-level progress may be
 retained for diagnostics, but shall not cause externally visible counts to
 regress, exceed their total, or report a layer complete before the completion
 barrier.
+
+### REQ-STREAM-INDEXER-037D
+
+The constrained v3 surface shall create and reuse one dedicated inner Rayon
+pool for per-partition and per-batch CPU work during an indexing run. The inner
+pool shall cover leaf and summary decode, validation, PCA-related transforms,
+and any equivalent order-independent CPU-bound operation performed while
+processing a partition.
+
+### REQ-STREAM-INDEXER-037E
+
+The inner Rayon pool shall be sized by an internal policy derived from
+host-visible parallelism, with no new caller-facing concurrency setting. Pool
+creation, worker startup, and shutdown failures shall be surfaced explicitly.
+
+### REQ-STREAM-INDEXER-037F
+
+The v3 execution dependency between pools shall be acyclic: outer partition
+work may wait for inner per-batch work, but inner work shall not synchronously
+submit to or await the outer pool.
+
+### REQ-STREAM-INDEXER-037G
+
+The v3 implementation shall make progress when outer partition workers
+synchronously await inner decode, transform, or other per-batch work, including
+when all outer workers are concurrently waiting.
 
 ### REQ-STREAM-INDEXER-038
 

@@ -559,9 +559,11 @@ exercise intra-partition batch pipelining.
 **Pass condition:** the implementation bounds prepared-but-not-yet-committed
 future batches to a lead window of at most three, and that prepared-batch state
 does not grow with total partition size beyond the current batch plus that
-fixed lookahead.
+fixed lookahead. Per-batch CPU preparation is routed through the dedicated
+inner pool rather than the outer partition pool.
 
-**Traces to:** REQ-STREAM-INDEXER-017A, REQ-STREAM-INDEXER-037
+**Traces to:** REQ-STREAM-INDEXER-017A, REQ-STREAM-INDEXER-037,
+REQ-STREAM-INDEXER-037D
 
 ### VAL-STREAM-INDEXER-025F
 
@@ -777,13 +779,47 @@ partitions and performs enough leaf loading, partition computation, terminal
 materialization, and bottom-up assembly to make overlap observable.
 
 **Pass condition:** the verification artifacts demonstrate overlapped storage
-and CPU progression, Rayon/global-worker-pool execution for non-trivial
-independent work where determinism permits, bounded concurrency, and no
+and CPU progression, outer-pool execution for independent partition work,
+inner-pool execution for per-batch CPU work, bounded concurrency, and no
 dependence of the final externally visible result on the overlap schedule
 itself.
 
 **Traces to:** REQ-STREAM-INDEXER-017A, REQ-STREAM-INDEXER-037,
-REQ-STREAM-INDEXER-037A
+REQ-STREAM-INDEXER-037A, REQ-STREAM-INDEXER-037D
+
+### VAL-STREAM-INDEXER-036C
+
+Instrument a constrained v3 run that exercises leaf decode, summary decode,
+PCA-related batch transforms, and independent partition work.
+
+**Pass condition:** partition-level work and per-batch CPU work execute on
+distinct pool identities; representative decode and transform operations use
+the dedicated inner pool; and no qualifying per-batch operation falls back to
+the outer/global pool.
+
+**Traces to:** REQ-STREAM-INDEXER-037D, REQ-STREAM-INDEXER-037E
+
+### VAL-STREAM-INDEXER-036D
+
+Saturate the outer partition pool with tasks that synchronously await inner
+decode or transform work.
+
+**Pass condition:** the fixture completes within a bounded timeout, including
+when every outer worker is waiting; no inner operation waits on the exhausted
+outer pool; and results and failures are reconciled through the existing
+deterministic barrier.
+
+**Traces to:** REQ-STREAM-INDEXER-037F, REQ-STREAM-INDEXER-037G
+
+### VAL-STREAM-INDEXER-036E
+
+Run multiple partitions and batches through one v3 indexing lifecycle.
+
+**Pass condition:** the inner pool is reused rather than recreated per batch or
+partition, its size is derived from host-visible parallelism, pool failures are
+explicit, and no caller-facing pool-size setting is required.
+
+**Traces to:** REQ-STREAM-INDEXER-037E
 
 ### VAL-STREAM-INDEXER-036B
 

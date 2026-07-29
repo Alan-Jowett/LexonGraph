@@ -699,11 +699,14 @@ Independent v3 subpartitions shall be planned, refined, materialized, and
 assembled concurrently whenever independent work exists. The crate normalizes
 partition and output ordering so observable results remain schedule-independent.
 
-For the constrained v3 surface, non-trivial independent CPU-bound work defaults
-to the existing Rayon/global worker pool when the required deterministic
-reduction order is preserved or explicitly normalized at the output boundary.
-The worker pool is the concurrency bound; this surface does not add a new
-caller-facing concurrency setting.
+For the constrained v3 surface, non-trivial independent partition-level
+CPU-bound work defaults to the outer Rayon worker pool when the required
+deterministic reduction order is preserved or explicitly normalized at the
+output boundary. Per-partition and per-batch CPU work is executed through a
+dedicated inner Rayon pool, including decode, validation, PCA-related
+transforms, and equivalent order-independent transforms. The two pools are
+internal concurrency boundaries; this surface does not add a new caller-facing
+concurrency setting.
 
 Concurrency is layer-scoped. All work for one semantic layer is scheduled and
 reconciled behind a completion barrier before the next semantic layer begins.
@@ -733,6 +736,31 @@ Within one active v3 partition, the implementation separates:
 
 The preparation stage may overlap with ordered commit for earlier batches, but
 commit remains deterministic in batch order.
+
+### DSG-STREAM-INDEXER-028A `Dedicated inner execution pool`
+
+Each v3 indexing run creates one long-lived inner Rayon pool and reuses it
+across partition and batch processing. The pool is sized by an internal policy
+derived from host-visible parallelism, has explicit worker initialization and
+shutdown error propagation, and is not recreated per batch or partition.
+
+All order-independent CPU-bound work invoked within partition processing uses
+the inner pool. The boundary is behavioral rather than limited to the current
+decode or transform helper names, so equivalent future per-batch operations
+remain on the inner pool.
+
+### DSG-STREAM-INDEXER-028B `Acyclic pool dependency`
+
+Outer partition work may synchronously wait for inner-pool work. Inner-pool
+work must not synchronously submit to or await the outer pool, preventing
+same-pool starvation cycles.
+
+### DSG-STREAM-INDEXER-028C `Two-pool resource bounds`
+
+Active partition work, inner-pool work, and prepared pipeline buffers remain
+bounded by the outer scheduler, the inner pool, and the existing three-batch
+prepare-ahead window. The bounds do not grow with total discovered partition
+count, and layer barriers and deterministic reconciliation remain unchanged.
 
 ### DSG-STREAM-INDEXER-029 `Phase-specific status progress semantics`
 
