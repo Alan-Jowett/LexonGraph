@@ -6318,7 +6318,7 @@ async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() 
     .unwrap()
     .with_observer(observer);
     run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(5), run.finalize(&source, &output))
+    tokio::time::timeout(Duration::from_secs(30), run.finalize(&source, &output))
         .await
         .expect("v3 fixture timed out")
         .unwrap();

@@ -201,7 +201,7 @@ impl V3AggregatePhase {
         self.heartbeat
             .lock()
             .expect("v3 aggregate heartbeat lock poisoned")
-            .as_mut()
+            .take()
             .expect("v3 aggregate phase finished more than once")
             .stop();
         let completed = self.progress.committed.load(AtomicOrdering::Acquire);
