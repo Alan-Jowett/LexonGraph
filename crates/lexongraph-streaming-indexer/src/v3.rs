@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
 use redb::{Database, Durability, ReadOnlyTable, ReadableTable, TableDefinition};
 use tempfile::TempDir;
 
@@ -44,6 +44,7 @@ const V3_IO_QUEUE_DEPTH: usize = 32;
 const V3_BATCH_SIZE: usize = 256;
 const V3_PREPARED_BATCH_LOOKAHEAD: usize = 3;
 const V3_MAX_REPLAY_PASSES: usize = 4096;
+const V3_INNER_POOL_THREAD_NAME: &str = "lexongraph-v3-inner";
 const V3_PARTITION_STORE_FILE_NAME: &str = "partitions.redb";
 const V3_PARTITION_COUNTS_TABLE: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("v3_partition_counts");
@@ -101,6 +102,7 @@ pub struct StreamingIndexingRunV3 {
     block_size_target: usize,
     temp_root: Option<TempDir>,
     partition_store: Option<Arc<V3PartitionStore>>,
+    inner_pool: Arc<ThreadPool>,
     root_partition_id: String,
     phase: V3Phase,
     ingested_count: usize,
@@ -150,6 +152,7 @@ impl StreamingIndexingRunV3 {
                 ))
             })?;
         let partition_store = Arc::new(V3PartitionStore::new(temp_root.path())?);
+        let inner_pool = build_v3_inner_pool()?;
         Ok(Self {
             observer: None,
             cancellation: StreamingIndexingCancellationHandle::new(),
@@ -159,6 +162,7 @@ impl StreamingIndexingRunV3 {
             block_size_target,
             temp_root: Some(temp_root),
             partition_store: Some(partition_store),
+            inner_pool,
             root_partition_id: "l0.p0".into(),
             phase: V3Phase::Ingesting,
             ingested_count: 0,
@@ -1307,12 +1311,14 @@ impl StreamingIndexingRunV3 {
             for batch in block_ids.chunks(V3_BATCH_SIZE) {
                 self.check_cancelled_for_phase(&phase)?;
                 let ordered = load_leaf_blocks_raw(batch, source_store).await?;
-                let decoded = ordered
-                    .into_par_iter()
-                    .map(|(block_id, block)| {
-                        decode_loaded_leaf(block_id, block, &self.embedding_spec)
-                    })
-                    .collect::<Vec<_>>();
+                let decoded = self.inner_pool.install(|| {
+                    ordered
+                        .into_par_iter()
+                        .map(|(block_id, block)| {
+                            decode_loaded_leaf(block_id, block, &self.embedding_spec)
+                        })
+                        .collect::<Vec<_>>()
+                });
                 for leaf in decoded {
                     loaded.push(leaf?);
                     progress.fetch_add(1, AtomicOrdering::Relaxed);
@@ -1378,6 +1384,8 @@ impl StreamingIndexingRunV3 {
                 let mut reader =
                     BlockHashPartitionReader::open(self.partition_store(), &partition.id)?;
                 let embedding_spec = self.embedding_spec.clone();
+                let inner_pool = Arc::clone(&self.inner_pool);
+                let producer_pool = Arc::clone(&inner_pool);
                 let produce_phase = phase.clone();
                 let consume_phase = phase.clone();
                 run_prepared_batch_pipeline(
@@ -1390,6 +1398,7 @@ impl StreamingIndexingRunV3 {
                                 batch,
                                 source_store,
                                 &embedding_spec,
+                                producer_pool.as_ref(),
                                 None,
                             ))?;
                             if sender.send(Ok(prepared)).is_err() {
@@ -1401,8 +1410,8 @@ impl StreamingIndexingRunV3 {
                     |prepared| {
                         self.check_cancelled_for_phase(&consume_phase)?;
                         let batch_len = prepared.len();
-                        trainer
-                            .ingest_batch(prepared.as_slice())
+                        inner_pool
+                            .install(|| trainer.ingest_batch(prepared.as_slice()))
                             .map_err(map_clustering_error)?;
                         progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
                         Ok(())
@@ -1429,6 +1438,8 @@ impl StreamingIndexingRunV3 {
                 let mut reader =
                     IndexedChildPartitionReader::open(self.partition_store(), &partition.id)?;
                 let embedding_spec = self.embedding_spec.clone();
+                let inner_pool = Arc::clone(&self.inner_pool);
+                let producer_pool = Arc::clone(&inner_pool);
                 let produce_phase = phase.clone();
                 let consume_phase = phase.clone();
                 run_prepared_batch_pipeline(
@@ -1436,8 +1447,12 @@ impl StreamingIndexingRunV3 {
                     move |sender| {
                         while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
                             self.check_cancelled_for_phase(&produce_phase)?;
-                            let prepared =
-                                prepare_summary_training_batch(batch, &embedding_spec, None)?;
+                            let prepared = prepare_summary_training_batch(
+                                batch,
+                                &embedding_spec,
+                                producer_pool.as_ref(),
+                                None,
+                            )?;
                             if sender.send(Ok(prepared)).is_err() {
                                 return Ok(());
                             }
@@ -1447,8 +1462,8 @@ impl StreamingIndexingRunV3 {
                     |prepared| {
                         self.check_cancelled_for_phase(&consume_phase)?;
                         let batch_len = prepared.len();
-                        trainer
-                            .ingest_batch(prepared.as_slice())
+                        inner_pool
+                            .install(|| trainer.ingest_batch(prepared.as_slice()))
                             .map_err(map_clustering_error)?;
                         progress.fetch_add(batch_len, AtomicOrdering::Relaxed);
                         Ok(())
@@ -1462,7 +1477,7 @@ impl StreamingIndexingRunV3 {
         &self,
         partition: &WorkingPartition,
         source_store: &dyn BlockStore,
-        classifier: &impl StreamingClusterClassifier,
+        classifier: &(impl StreamingClusterClassifier + Sync),
         writers: &mut BlockHashPartitionWriters,
         child_item_counts: &mut [usize],
         emit_partition_status: bool,
@@ -1478,6 +1493,8 @@ impl StreamingIndexingRunV3 {
                 let mut reader =
                     BlockHashPartitionReader::open(self.partition_store(), &partition.id)?;
                 let embedding_spec = self.embedding_spec.clone();
+                let inner_pool = Arc::clone(&self.inner_pool);
+                let producer_pool = Arc::clone(&inner_pool);
                 let produce_phase = phase.clone();
                 let consume_phase = phase.clone();
                 run_prepared_batch_pipeline(
@@ -1490,6 +1507,7 @@ impl StreamingIndexingRunV3 {
                                 batch,
                                 source_store,
                                 &embedding_spec,
+                                producer_pool.as_ref(),
                                 None,
                             ))?;
                             if sender.send(Ok(prepared)).is_err() {
@@ -1500,8 +1518,8 @@ impl StreamingIndexingRunV3 {
                     },
                     |prepared| {
                         self.check_cancelled_for_phase(&consume_phase)?;
-                        let assignments = classifier
-                            .assign_batch(prepared.embeddings.as_slice())
+                        let assignments = inner_pool
+                            .install(|| classifier.assign_batch(prepared.embeddings.as_slice()))
                             .map_err(map_clustering_error)?;
                         let batch_len = prepared.block_ids.len();
                         let mut grouped =
@@ -1528,7 +1546,7 @@ impl StreamingIndexingRunV3 {
     fn classify_summary_partition_batches(
         &self,
         partition: &WorkingPartition,
-        classifier: &impl StreamingClusterClassifier,
+        classifier: &(impl StreamingClusterClassifier + Sync),
         writers: &mut IndexedChildPartitionWriters,
         child_item_counts: &mut [usize],
         emit_partition_status: bool,
@@ -1544,6 +1562,8 @@ impl StreamingIndexingRunV3 {
                 let mut reader =
                     IndexedChildPartitionReader::open(self.partition_store(), &partition.id)?;
                 let embedding_spec = self.embedding_spec.clone();
+                let inner_pool = Arc::clone(&self.inner_pool);
+                let producer_pool = Arc::clone(&inner_pool);
                 let produce_phase = phase.clone();
                 let consume_phase = phase.clone();
                 run_prepared_batch_pipeline(
@@ -1551,8 +1571,12 @@ impl StreamingIndexingRunV3 {
                     move |sender| {
                         while let Some(batch) = reader.next_batch(V3_BATCH_SIZE)? {
                             self.check_cancelled_for_phase(&produce_phase)?;
-                            let prepared =
-                                prepare_summary_assignment_batch(batch, &embedding_spec, None)?;
+                            let prepared = prepare_summary_assignment_batch(
+                                batch,
+                                &embedding_spec,
+                                producer_pool.as_ref(),
+                                None,
+                            )?;
                             if sender.send(Ok(prepared)).is_err() {
                                 return Ok(());
                             }
@@ -1565,8 +1589,8 @@ impl StreamingIndexingRunV3 {
                             children,
                             embeddings,
                         } = prepared;
-                        let assignments = classifier
-                            .assign_batch(embeddings.as_slice())
+                        let assignments = inner_pool
+                            .install(|| classifier.assign_batch(embeddings.as_slice()))
                             .map_err(map_clustering_error)?;
                         let batch_len = children.len();
                         let mut grouped =
@@ -1839,6 +1863,26 @@ fn build_v3_prepare_runtime() -> Result<tokio::runtime::Runtime, StreamingIndexe
         })
 }
 
+fn build_v3_inner_pool() -> Result<Arc<ThreadPool>, StreamingIndexerError> {
+    let thread_count = thread::available_parallelism()
+        .map_err(|error| {
+            StreamingIndexerError::ClusteringFailure(format!(
+                "could not determine v3 inner Rayon pool size: {error}"
+            ))
+        })?
+        .get();
+    ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .thread_name(|index| format!("{V3_INNER_POOL_THREAD_NAME}-{index}"))
+        .build()
+        .map(Arc::new)
+        .map_err(|error| {
+            StreamingIndexerError::ClusteringFailure(format!(
+                "could not initialize v3 inner Rayon pool: {error}"
+            ))
+        })
+}
+
 fn run_prepared_batch_pipeline<Prepared>(
     lookahead: usize,
     produce: impl FnOnce(
@@ -1909,13 +1953,16 @@ async fn load_leaf_batch_raw(
     block_ids: &[BlockHash],
     source_store: &dyn BlockStore,
     embedding_spec: &EmbeddingSpec,
+    inner_pool: &ThreadPool,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
     let ordered = load_leaf_blocks_raw(block_ids, source_store).await?;
-    let decoded = ordered
-        .into_par_iter()
-        .map(|(block_id, block)| decode_leaf_embedding_f32(block_id, block, embedding_spec))
-        .collect::<Vec<_>>();
+    let decoded = inner_pool.install(|| {
+        ordered
+            .into_par_iter()
+            .map(|(block_id, block)| decode_leaf_embedding_f32(block_id, block, embedding_spec))
+            .collect::<Vec<_>>()
+    });
     let mut loaded = Vec::with_capacity(decoded.len());
     for embedding in decoded {
         loaded.push(embedding?);
@@ -1930,19 +1977,34 @@ async fn prepare_leaf_training_batch(
     block_ids: Vec<BlockHash>,
     source_store: &dyn BlockStore,
     embedding_spec: &EmbeddingSpec,
+    inner_pool: &ThreadPool,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-    load_leaf_batch_raw(block_ids.as_slice(), source_store, embedding_spec, progress).await
+    load_leaf_batch_raw(
+        block_ids.as_slice(),
+        source_store,
+        embedding_spec,
+        inner_pool,
+        progress,
+    )
+    .await
 }
 
 async fn prepare_leaf_assignment_batch(
     block_ids: Vec<BlockHash>,
     source_store: &dyn BlockStore,
     embedding_spec: &EmbeddingSpec,
+    inner_pool: &ThreadPool,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<PreparedLeafAssignmentBatch, StreamingIndexerError> {
-    let embeddings =
-        load_leaf_batch_raw(block_ids.as_slice(), source_store, embedding_spec, progress).await?;
+    let embeddings = load_leaf_batch_raw(
+        block_ids.as_slice(),
+        source_store,
+        embedding_spec,
+        inner_pool,
+        progress,
+    )
+    .await?;
     Ok(PreparedLeafAssignmentBatch {
         block_ids,
         embeddings,
@@ -1952,17 +2014,20 @@ async fn prepare_leaf_assignment_batch(
 fn prepare_summary_training_batch(
     batch: Vec<IndexedChild>,
     embedding_spec: &EmbeddingSpec,
+    inner_pool: &ThreadPool,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-    decode_summary_embeddings(batch.as_slice(), embedding_spec, progress)
+    decode_summary_embeddings(batch.as_slice(), embedding_spec, inner_pool, progress)
 }
 
 fn prepare_summary_assignment_batch(
     children: Vec<IndexedChild>,
     embedding_spec: &EmbeddingSpec,
+    inner_pool: &ThreadPool,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<PreparedIndexedChildAssignmentBatch, StreamingIndexerError> {
-    let embeddings = decode_summary_embeddings(children.as_slice(), embedding_spec, progress)?;
+    let embeddings =
+        decode_summary_embeddings(children.as_slice(), embedding_spec, inner_pool, progress)?;
     Ok(PreparedIndexedChildAssignmentBatch {
         children,
         embeddings,
@@ -1972,12 +2037,15 @@ fn prepare_summary_assignment_batch(
 fn decode_summary_embeddings(
     children: &[IndexedChild],
     embedding_spec: &EmbeddingSpec,
+    inner_pool: &ThreadPool,
     progress: Option<&Arc<AtomicUsize>>,
 ) -> Result<Vec<Vec<f32>>, StreamingIndexerError> {
-    let embeddings = children
-        .par_iter()
-        .map(|child| decode_embedding_as_f32(child.embedding.as_slice(), embedding_spec))
-        .collect::<Vec<_>>();
+    let embeddings = inner_pool.install(|| {
+        children
+            .par_iter()
+            .map(|child| decode_embedding_as_f32(child.embedding.as_slice(), embedding_spec))
+            .collect::<Vec<_>>()
+    });
     let mut decoded = Vec::with_capacity(embeddings.len());
     for embedding in embeddings {
         decoded.push(embedding?);
@@ -3680,6 +3748,69 @@ mod tests {
             StreamingIndexerError::HierarchyValidation(message)
                 if message.contains("exceeds available child partitions")
         ));
+    }
+
+    #[test]
+    fn v3_inner_pool_uses_dedicated_named_workers() {
+        let pool = build_v3_inner_pool().unwrap();
+        assert_eq!(
+            pool.current_num_threads(),
+            thread::available_parallelism().unwrap().get()
+        );
+        let (sender, receiver) = mpsc::sync_channel(1);
+        pool.spawn(move || {
+            let worker_name = thread::current()
+                .name()
+                .expect("inner pool worker should have a name")
+                .to_owned();
+            sender.send(worker_name).unwrap();
+        });
+        let worker_name = receiver.recv().unwrap();
+        assert!(worker_name.starts_with(V3_INNER_POOL_THREAD_NAME));
+    }
+
+    #[test]
+    fn v3_inner_pool_runs_nested_parallel_work_on_inner_workers() {
+        let pool = build_v3_inner_pool().unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        pool.spawn(move || {
+            let worker_names = (0..32)
+                .into_par_iter()
+                .map(|_| thread::current().name().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>();
+            sender.send(worker_names).unwrap();
+        });
+        let worker_names = receiver.recv().unwrap();
+        assert!(!worker_names.is_empty());
+        assert!(
+            worker_names
+                .iter()
+                .all(|name| name.starts_with(V3_INNER_POOL_THREAD_NAME))
+        );
+    }
+
+    #[test]
+    fn v3_outer_workers_can_wait_on_inner_pool_without_starvation() {
+        let outer_pool = ThreadPoolBuilder::new()
+            .num_threads(2)
+            .thread_name(|index| format!("lexongraph-v3-outer-{index}"))
+            .build()
+            .unwrap();
+        let inner_pool = build_v3_inner_pool().unwrap();
+        outer_pool.scope(|scope| {
+            for _ in 0..2 {
+                let inner_pool = Arc::clone(&inner_pool);
+                scope.spawn(move |_| {
+                    let total = inner_pool.install(|| {
+                        (0..128)
+                            .into_par_iter()
+                            .map(|value| value + 1)
+                            .sum::<usize>()
+                    });
+                    assert_eq!(total, 8256);
+                });
+            }
+        });
     }
 
     #[test]
