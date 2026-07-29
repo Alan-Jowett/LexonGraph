@@ -536,7 +536,8 @@ impl StreamingIndexingRunV3 {
             let terminal_weights = active
                 .iter()
                 .map(|partition| {
-                    if partition.item_count <= materializability_bound || partition.item_count <= 1 {
+                    if partition.item_count <= materializability_bound || partition.item_count <= 1
+                    {
                         partition.item_count
                     } else {
                         0
