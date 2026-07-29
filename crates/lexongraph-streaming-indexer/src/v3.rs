@@ -3757,24 +3757,30 @@ mod tests {
             pool.current_num_threads(),
             thread::available_parallelism().unwrap().get()
         );
-        let worker_name = pool.install(|| {
-            thread::current()
+        let (sender, receiver) = mpsc::sync_channel(1);
+        pool.spawn(move || {
+            let worker_name = thread::current()
                 .name()
                 .expect("inner pool worker should have a name")
-                .to_owned()
+                .to_owned();
+            sender.send(worker_name).unwrap();
         });
+        let worker_name = receiver.recv().unwrap();
         assert!(worker_name.starts_with(V3_INNER_POOL_THREAD_NAME));
     }
 
     #[test]
     fn v3_inner_pool_runs_nested_parallel_work_on_inner_workers() {
         let pool = build_v3_inner_pool().unwrap();
-        let worker_names = pool.install(|| {
-            (0..32)
+        let (sender, receiver) = mpsc::sync_channel(1);
+        pool.spawn(move || {
+            let worker_names = (0..32)
                 .into_par_iter()
                 .map(|_| thread::current().name().unwrap_or_default().to_owned())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            sender.send(worker_names).unwrap();
         });
+        let worker_names = receiver.recv().unwrap();
         assert!(!worker_names.is_empty());
         assert!(
             worker_names
