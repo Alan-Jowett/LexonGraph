@@ -6271,13 +6271,8 @@ fn val_stream_indexer_005c_v3_public_surface_accepts_run_scoped_cancellation_han
 #[test]
 fn val_stream_indexer_017a_v3_removes_terminal_partitions_from_later_refinement() {
     let src = include_str!("../src/v3.rs");
-    assert!(
-        src.contains("let is_terminal = partition.item_count <= materializability_bound")
-            && src.contains("|| partition.item_count <= 1")
-            || src.contains(
-                "if partition.item_count <= materializability_bound || partition.item_count <= 1"
-            )
-    );
+    assert!(src.contains("partition.item_count <= materializability_bound"));
+    assert!(src.contains("partition.item_count <= 1"));
     assert!(src.contains("terminals.push("));
     assert!(src.contains("active = next;"));
 }
