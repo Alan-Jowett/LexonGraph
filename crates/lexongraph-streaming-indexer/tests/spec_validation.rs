@@ -12,8 +12,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::stream;
 use lexongraph_block::{
-    BlockError, BlockHash, BranchBlock, Content, EbcpQuantization, EmbeddingSpec, TypedEntries,
-    into_entries, parse_branch_ebcp_descriptor,
+    Block, BlockError, BlockHash, BranchBlock, Content, EbcpQuantization, EmbeddingSpec, LeafEntry,
+    TypedEntries, build_leaf_block, into_entries, parse_branch_ebcp_descriptor,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_dcbc_streaming::DcbcStreamingTrainer;
@@ -53,7 +53,7 @@ use lexongraph_streaming_indexer::{
     PublishedIndexingProfile, PublishedPlanningStrategy, PublishedProfilePlanningPolicy,
     PublishedProfileVersion, SphericalKmeansBuiltInPlanningSettings, StreamingClusteringFactory,
     StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingProgressUnitKind,
-    StreamingIndexingRun, StreamingIndexingRunV2, StreamingIndexingStatus,
+    StreamingIndexingRun, StreamingIndexingRunV2, StreamingIndexingRunV3, StreamingIndexingStatus,
     StreamingIndexingStatusObserver, StreamingIndexingStatusState,
     StreamingIndexingTrainerSubphase, StreamingV2BlockerKind, StreamingV2ConvergenceState,
     StreamingV2PartitionTopology, published_indexing_profile,
@@ -6268,6 +6268,109 @@ fn val_stream_indexer_005c_v3_public_surface_accepts_run_scoped_cancellation_han
     assert!(src.contains("cancellation: StreamingIndexingCancellationHandle"));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() {
+    let source = MemoryBlockStore::default();
+    let output = SlowBranchStore::default();
+    let working_root = tempfile::tempdir().unwrap();
+    let statuses = Arc::new(Mutex::new(Vec::new()));
+    let observer = {
+        let statuses = Arc::clone(&statuses);
+        Arc::new(move |status: StreamingIndexingStatus| {
+            statuses.lock().unwrap().push(status);
+        }) as StreamingIndexingStatusObserver
+    };
+    let mut ids = Vec::new();
+    for index in 0..128 {
+        let block = Block::Leaf(
+            build_leaf_block(
+                1,
+                EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                vec![LeafEntry {
+                    embedding: [index as f32, (index % 7) as f32]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                    metadata: vec![],
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: index.to_string().into_bytes(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        ids.push(source.put(&block).await.unwrap());
+    }
+    let mut run = StreamingIndexingRunV3::with_published_profile(
+        PUBLISHED_PROFILE_V0_7_0,
+        EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        },
+        4096,
+        working_root.path(),
+    )
+    .unwrap()
+    .with_observer(observer);
+    run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), run.finalize(&source, &output))
+        .await
+        .expect("v3 fixture timed out")
+        .unwrap();
+
+    let statuses = statuses.lock().unwrap().clone();
+    for phase in [
+        StreamingIndexingPhase::HierarchyPlanning {
+            stage: PlanningStage::Custom,
+        },
+        StreamingIndexingPhase::V3PartitionTrainIngest { layer_index: 0 },
+        StreamingIndexingPhase::V3PartitionClassify { layer_index: 0 },
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index: 0 },
+        StreamingIndexingPhase::BottomUpAssembly { layer_index: 0 },
+    ] {
+        let updates = statuses
+            .iter()
+            .filter(|status| status.phase == phase)
+            .collect::<Vec<_>>();
+        assert!(!updates.is_empty(), "missing {phase:?} status");
+        let mut wave_start = 0;
+        for (index, status) in updates.iter().enumerate() {
+            if matches!(
+                status.state,
+                StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed
+            ) {
+                let wave = &updates[wave_start..=index];
+                assert!(wave.windows(2).all(|pair| {
+                    pair[0].completed_unit_count <= pair[1].completed_unit_count
+                        && pair[1].remaining_unit_count
+                            == pair[1]
+                                .phase_total_unit_count
+                                .map(|total| total - pair[1].completed_unit_count)
+                }));
+                wave_start = index + 1;
+            }
+        }
+        assert_eq!(wave_start, updates.len(), "unterminated {phase:?} wave");
+    }
+    assert!(
+        statuses
+            .iter()
+            .filter(|status| {
+                matches!(
+                    status.phase,
+                    StreamingIndexingPhase::BottomUpAssembly { layer_index: 0 }
+                ) && status.state == StreamingIndexingStatusState::InProgress
+            })
+            .count()
+            >= 2
+    );
+}
+
 #[test]
 fn val_stream_indexer_017a_v3_removes_terminal_partitions_from_later_refinement() {
     let src = include_str!("../src/v3.rs");
@@ -6282,32 +6385,6 @@ fn val_stream_indexer_020a_v3_terminality_uses_materializability_bound() {
     let src = include_str!("../src/v3.rs");
     assert!(src.contains("materializability_bound(&self.embedding_spec, self.block_size_target)"));
     assert!(src.contains("partition.item_count <= materializability_bound"));
-}
-
-#[test]
-fn val_stream_indexer_023a_v3_observer_surface_reports_phase_specific_progress() {
-    let src = include_str!("../src/v3.rs");
-    let lib = include_str!("../src/lib.rs");
-    assert!(src.contains("StreamingIndexingPhase::V3PartitionTrainIngest"));
-    assert!(src.contains("StreamingIndexingPhase::V3PartitionClassify"));
-    assert!(src.contains("StreamingIndexingPhase::V3TerminalMaterializationLoad"));
-    assert!(src.contains("let phases = phases.lock().unwrap().clone();"));
-    assert!(
-        src.contains(
-            ".any(|phase| matches!(phase, StreamingIndexingPhase::V3PartitionLoad { .. }))"
-        )
-    );
-    assert!(src.contains("StreamingIndexingPhase::V3PartitionLoad { .. }"));
-    assert!(src.contains("StreamingIndexingPhase::HierarchyPlanning {"));
-    assert!(src.contains("StreamingIndexingPhase::BottomUpAssembly { layer_index }"));
-    assert!(src.contains("start_status_heartbeat("));
-    assert!(lib.contains("V3PartitionLoad { layer_index: usize }"));
-    assert!(lib.contains("V3PartitionTrainIngest { layer_index: usize }"));
-    assert!(lib.contains("V3PartitionClassify { layer_index: usize }"));
-    assert!(lib.contains("V3TerminalMaterializationLoad { layer_index: usize }"));
-    assert!(lib.contains("V3TrainIngestItem"));
-    assert!(lib.contains("V3ClassifiedItem"));
-    assert!(lib.contains("V3MaterializationLoadItem"));
 }
 
 #[test]
