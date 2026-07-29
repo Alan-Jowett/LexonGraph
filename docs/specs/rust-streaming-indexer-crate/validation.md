@@ -717,6 +717,25 @@ order, or other backend-private database layout details.
 
 **Traces to:** REQ-STREAM-INDEXER-016A, REQ-STREAM-INDEXER-037
 
+### VAL-STREAM-INDEXER-034B
+
+Run a deterministic constrained v3 fixture that creates multiple independent
+partitions at one semantic layer and descendants at a later layer. Instrument
+or otherwise inspect execution so that independent work is concurrent within a
+layer, while the next layer cannot begin until the prior layer's work has been
+reconciled.
+
+**Pass condition:** the fixture demonstrates concurrent execution of independent
+refinement, terminal-materialization, or assembly work within a layer; no
+layer-`N+1` work starts before the layer-`N` completion barrier; cancellation
+and the deterministic partition/group-ordered failure are surfaced at the
+barrier; aggregate status totals are monotonic and do not report completion
+before the barrier; and repeated runs produce identical hierarchy, status
+results, root block ID, and persisted block set.
+
+**Traces to:** REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-037A,
+REQ-STREAM-INDEXER-037B, REQ-STREAM-INDEXER-037C
+
 ### VAL-STREAM-INDEXER-035
 
 Construct terminal partitions that collapse to singleton or undersized child
@@ -753,15 +772,18 @@ REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064
 
 ### VAL-STREAM-INDEXER-036A
 
-Run a deterministic constrained v3 fixture that performs enough leaf loading
-and partition computation to make overlap observable.
+Run a deterministic constrained v3 fixture that creates multiple independent
+partitions and performs enough leaf loading, partition computation, terminal
+materialization, and bottom-up assembly to make overlap observable.
 
 **Pass condition:** the verification artifacts demonstrate overlapped storage
-and CPU progression, rayon-backed execution for non-trivial independent CPU
-work where determinism permits, and no dependence of the final externally
-visible result on the overlap schedule itself.
+and CPU progression, Rayon/global-worker-pool execution for non-trivial
+independent work where determinism permits, bounded concurrency, and no
+dependence of the final externally visible result on the overlap schedule
+itself.
 
-**Traces to:** REQ-STREAM-INDEXER-037
+**Traces to:** REQ-STREAM-INDEXER-017A, REQ-STREAM-INDEXER-037,
+REQ-STREAM-INDEXER-037A
 
 ### VAL-STREAM-INDEXER-036B
 
@@ -779,6 +801,7 @@ specific prepared-batch detail does not masquerade as completed work.
 
 Run a deterministic fixture whose finalized hierarchy causes multiple bottom-up
 assemblies at the same semantic depth plus at least one higher-layer merge.
+Allow independent same-layer assemblies to execute concurrently.
 
 Capture the observer stream and inspect the reported
 `BottomUpAssembly { layer_index }` phases.
@@ -786,10 +809,13 @@ Capture the observer stream and inspect the reported
 **Pass condition:** the recorded `layer_index` values identify the semantic
 parent layer being materialized rather than the temporal count of recursive
 assembly operations. Distinct subtree or sibling assemblies that build the same
-semantic layer reuse the same `layer_index`, and the observed layer indexes are
-bounded by the assembled tree depth implied by the hierarchy and block levels.
+semantic layer reuse the same `layer_index`, execute concurrently when
+independent, and complete behind a barrier before a higher semantic layer
+begins. The observed layer indexes are bounded by the assembled tree depth
+implied by the hierarchy and block levels.
 
-**Traces to:** REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-040
+**Traces to:** REQ-STREAM-INDEXER-037B, REQ-STREAM-INDEXER-039,
+REQ-STREAM-INDEXER-040
 
 ### VAL-STREAM-INDEXER-038
 

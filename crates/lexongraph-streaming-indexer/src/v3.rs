@@ -296,32 +296,227 @@ impl StreamingIndexingRunV3 {
         let mut terminals = Vec::new();
         while !active.is_empty() {
             self.check_cancelled("layer processing")?;
+            let refinement_total = active
+                .iter()
+                .filter(|partition| {
+                    partition.item_count > materializability_bound && partition.item_count > 1
+                })
+                .map(|partition| partition.item_count)
+                .sum::<usize>();
+            let terminal_total = active
+                .iter()
+                .filter(|partition| {
+                    partition.item_count <= materializability_bound || partition.item_count <= 1
+                })
+                .map(|partition| partition.item_count)
+                .sum::<usize>();
+            let layer_started = Instant::now();
+            if refinement_total > 0 {
+                self.emit_aggregate_v3_phase(
+                    StreamingIndexingPhase::V3PartitionTrainIngest {
+                        layer_index: active[0].layer_index,
+                    },
+                    StreamingIndexingStatusState::Started,
+                    refinement_total,
+                    0,
+                    layer_started,
+                    None,
+                );
+                self.emit_aggregate_v3_phase(
+                    StreamingIndexingPhase::V3PartitionClassify {
+                        layer_index: active[0].layer_index,
+                    },
+                    StreamingIndexingStatusState::Started,
+                    refinement_total,
+                    0,
+                    layer_started,
+                    None,
+                );
+            }
+            if terminal_total > 0 {
+                self.emit_aggregate_v3_phase(
+                    StreamingIndexingPhase::V3TerminalMaterializationLoad {
+                        layer_index: active[0].layer_index,
+                    },
+                    StreamingIndexingStatusState::Started,
+                    terminal_total,
+                    0,
+                    layer_started,
+                    None,
+                );
+            }
+            let results = active
+                .par_iter()
+                .map(
+                    |partition| -> Result<
+                        (
+                            Vec<WorkingPartition>,
+                            Option<(IndexedChild, Vec<BlockHash>)>,
+                        ),
+                        StreamingIndexerError,
+                    > {
+                        self.check_cancelled("layer processing")?;
+                        let is_terminal = partition.item_count <= materializability_bound
+                            || partition.item_count <= 1;
+                        if is_terminal {
+                            let terminal = thread::scope(|scope| {
+                                let handle = scope.spawn(|| {
+                                    let runtime = build_v3_prepare_runtime()?;
+                                    runtime.block_on(self.materialize_terminal_partition(
+                                        partition,
+                                        source_store,
+                                        output_store,
+                                    ))
+                                });
+                                handle.join().map_err(|panic| {
+                                    StreamingIndexerError::ClusteringFailure(format!(
+                                        "v3 terminal materialization thread panicked: {panic:?}"
+                                    ))
+                                })?
+                            })?;
+                            Ok((Vec::new(), Some(terminal)))
+                        } else {
+                            Ok((
+                                self.split_partition(
+                                    partition,
+                                    materializability_bound,
+                                    source_store,
+                                )?,
+                                None,
+                            ))
+                        }
+                    },
+                )
+                .collect::<Vec<_>>();
             let mut next = Vec::new();
-            for partition in active {
-                self.check_cancelled("layer processing")?;
-                if partition.item_count <= materializability_bound || partition.item_count <= 1 {
-                    terminals.push(
-                        self.materialize_terminal_partition(
-                            &partition,
-                            source_store,
-                            output_store,
-                            persisted_ids,
-                        )
-                        .await?,
-                    );
-                } else {
-                    next.extend(
-                        self.split_partition(&partition, materializability_bound, source_store)
-                            .await?,
+            let mut first_error = None;
+            for result in results {
+                let (children, terminal) = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        first_error = Some(error);
+                        break;
+                    }
+                };
+                next.extend(children);
+                let Some((child, ids)) = terminal else {
+                    continue;
+                };
+                persisted_ids.extend(ids);
+                terminals.push(child);
+            }
+            if let Some(error) = first_error {
+                if matches!(&error, StreamingIndexerError::Cancelled(_)) {
+                    let partition = &active[0];
+                    emit_status(
+                        &self.observer,
+                        status_with_hierarchy_details(
+                            StreamingIndexingPhase::HierarchyPlanning {
+                                stage: PlanningStage::Custom,
+                            },
+                            StreamingIndexingStatusState::Failed,
+                            Some(1),
+                            1,
+                            layer_started.elapsed(),
+                            Some(error.to_string()),
+                            HierarchyPlanningDetailFields {
+                                legacy_item_count: Some(partition.item_count),
+                                progress_unit_kind: Some(
+                                    StreamingIndexingProgressUnitKind::PartitionPlanningInvocation,
+                                ),
+                                discovered_unit_count: Some(1),
+                                current_unit_elapsed: Some(layer_started.elapsed()),
+                                current_partition_path: Some(partition.id.clone()),
+                                current_partition_size: Some(partition.item_count),
+                                current_recursion_depth: Some(partition_depth(&partition.id)),
+                                started_subproblem_count: Some(1),
+                                completed_subproblem_count: Some(1),
+                                visited_partition_count: Some(1),
+                                finalized_partition_count: Some(0),
+                                terminal_partition_count: Some(0),
+                                completed_planner_invocation_count: Some(1),
+                                fallback_count: Some(0),
+                                last_progress_at: Some(layer_started.elapsed()),
+                            },
+                        ),
                     );
                 }
+                if refinement_total > 0 {
+                    self.emit_aggregate_v3_phase(
+                        StreamingIndexingPhase::V3PartitionTrainIngest {
+                            layer_index: active[0].layer_index,
+                        },
+                        StreamingIndexingStatusState::Failed,
+                        refinement_total,
+                        0,
+                        layer_started,
+                        Some(error.to_string()),
+                    );
+                    self.emit_aggregate_v3_phase(
+                        StreamingIndexingPhase::V3PartitionClassify {
+                            layer_index: active[0].layer_index,
+                        },
+                        StreamingIndexingStatusState::Failed,
+                        refinement_total,
+                        0,
+                        layer_started,
+                        Some(error.to_string()),
+                    );
+                }
+                if terminal_total > 0 {
+                    self.emit_aggregate_v3_phase(
+                        StreamingIndexingPhase::V3TerminalMaterializationLoad {
+                            layer_index: active[0].layer_index,
+                        },
+                        StreamingIndexingStatusState::Failed,
+                        terminal_total,
+                        0,
+                        layer_started,
+                        Some(error.to_string()),
+                    );
+                }
+                return Err(error);
+            }
+            if refinement_total > 0 {
+                self.emit_aggregate_v3_phase(
+                    StreamingIndexingPhase::V3PartitionTrainIngest {
+                        layer_index: active[0].layer_index,
+                    },
+                    StreamingIndexingStatusState::Completed,
+                    refinement_total,
+                    refinement_total,
+                    layer_started,
+                    None,
+                );
+                self.emit_aggregate_v3_phase(
+                    StreamingIndexingPhase::V3PartitionClassify {
+                        layer_index: active[0].layer_index,
+                    },
+                    StreamingIndexingStatusState::Completed,
+                    refinement_total,
+                    refinement_total,
+                    layer_started,
+                    None,
+                );
+            }
+            if terminal_total > 0 {
+                self.emit_aggregate_v3_phase(
+                    StreamingIndexingPhase::V3TerminalMaterializationLoad {
+                        layer_index: active[0].layer_index,
+                    },
+                    StreamingIndexingStatusState::Completed,
+                    terminal_total,
+                    terminal_total,
+                    layer_started,
+                    None,
+                );
             }
             active = next;
         }
         Ok(normalize_current_layer(terminals))
     }
 
-    async fn split_partition(
+    fn split_partition(
         &self,
         partition: &WorkingPartition,
         materializability_bound: usize,
@@ -696,8 +891,8 @@ impl StreamingIndexingRunV3 {
         partition: &WorkingPartition,
         source_store: &dyn BlockStore,
         output_store: &dyn BlockStore,
-        persisted_ids: &mut Vec<BlockHash>,
-    ) -> Result<IndexedChild, StreamingIndexerError> {
+    ) -> Result<(IndexedChild, Vec<BlockHash>), StreamingIndexerError> {
+        let mut persisted_ids = Vec::new();
         match partition.kind {
             WorkingItemKind::LeafBlockIds => {
                 let block_ids = read_all_block_hashes(self.partition_store(), &partition.id)?;
@@ -727,15 +922,17 @@ impl StreamingIndexingRunV3 {
                     });
                 }
                 if children.len() == 1 {
-                    return Ok(children.remove(0));
+                    return Ok((children.remove(0), persisted_ids));
                 }
-                self.assemble_child_set(
-                    children,
-                    partition.id == format!("l{}.p0", partition.layer_index),
-                    output_store,
-                    persisted_ids,
-                )
-                .await
+                let child = self
+                    .assemble_child_set(
+                        children,
+                        partition.id == format!("l{}.p0", partition.layer_index),
+                        output_store,
+                        &mut persisted_ids,
+                    )
+                    .await?;
+                Ok((child, persisted_ids))
             }
             WorkingItemKind::IndexedChildren => {
                 let mut children = self.run_v3_partition_phase(
@@ -757,15 +954,17 @@ impl StreamingIndexingRunV3 {
                     },
                 )?;
                 if children.len() == 1 {
-                    return Ok(children.remove(0));
+                    return Ok((children.remove(0), persisted_ids));
                 }
-                self.assemble_child_set(
-                    children,
-                    partition.id == format!("l{}.p0", partition.layer_index),
-                    output_store,
-                    persisted_ids,
-                )
-                .await
+                let child = self
+                    .assemble_child_set(
+                        children,
+                        partition.id == format!("l{}.p0", partition.layer_index),
+                        output_store,
+                        &mut persisted_ids,
+                    )
+                    .await?;
+                Ok((child, persisted_ids))
             }
         }
     }
@@ -845,7 +1044,7 @@ impl StreamingIndexingRunV3 {
                 started,
             ));
             let next_level = current.iter().map(|child| child.level).max().unwrap_or(0) + 1;
-            let next_layer = match self
+            let (next_layer, branch_ids) = match self
                 .build_branch_layer(
                     current.as_slice(),
                     groups.as_slice(),
@@ -858,7 +1057,6 @@ impl StreamingIndexingRunV3 {
                         is_global_root_partition,
                     },
                     store,
-                    persisted_ids,
                 )
                 .await
             {
@@ -882,6 +1080,7 @@ impl StreamingIndexingRunV3 {
                     return Err(error);
                 }
             };
+            persisted_ids.extend(branch_ids);
             current = normalize_current_layer(next_layer);
             heartbeat.stop();
             emit_status(
@@ -908,86 +1107,127 @@ impl StreamingIndexingRunV3 {
         parent_level: u64,
         status: LayerBuildStatus<'_>,
         store: &dyn BlockStore,
-        persisted_ids: &mut Vec<BlockHash>,
-    ) -> Result<Vec<IndexedChild>, StreamingIndexerError> {
-        let mut next_layer = Vec::with_capacity(groups.len());
-        for group in groups {
-            self.check_cancelled("bottom-up assembly")?;
-            let raw_entries = group
-                .iter()
-                .map(|&index| BranchEntry {
-                    embedding: children[index].embedding.clone(),
-                    child: children[index].child,
-                })
-                .collect::<Vec<_>>();
-            let raw_child_summaries = group
-                .iter()
-                .map(|&index| ChildSummaryInput {
-                    embedding: children[index].embedding.clone(),
-                    child: children[index].child,
-                    level: children[index].level,
-                    descendant_count: children[index].descendant_count,
-                })
-                .collect::<Vec<_>>();
-            let entries = normalize_branch_entries(raw_entries);
-            let child_summaries = normalize_child_summary_inputs(raw_child_summaries);
-            if entries.len() < 2 || child_summaries.len() < 2 {
-                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
-                    "normalized child-bearing entry set has fewer than two unique children".into(),
-                ));
-            }
-            let encoded_branch = encode_branch_entries(
-                self.branch_encoding_policy,
-                &self.embedding_spec,
-                entries.as_slice(),
-                parent_level,
-                uses_root_branch_budget(status.is_global_root_partition, groups.len()),
-            )?;
-            let branch = build_branch_block(
-                VERSION_1,
-                parent_level,
-                encoded_branch.embedding_spec,
-                encoded_branch.entries,
-                encoded_branch.ext,
+    ) -> Result<(Vec<IndexedChild>, Vec<BlockHash>), StreamingIndexerError> {
+        let progress = Arc::clone(status.progress);
+        let is_global_root_partition = status.is_global_root_partition;
+        let prepared = groups
+            .par_iter()
+            .enumerate()
+            .map(|(index, group)| {
+                let result = (|| {
+                    self.check_cancelled("bottom-up assembly")?;
+                    let raw_entries = group
+                        .iter()
+                        .map(|&child_index| BranchEntry {
+                            embedding: children[child_index].embedding.clone(),
+                            child: children[child_index].child,
+                        })
+                        .collect::<Vec<_>>();
+                    let raw_child_summaries = group
+                        .iter()
+                        .map(|&child_index| ChildSummaryInput {
+                            embedding: children[child_index].embedding.clone(),
+                            child: children[child_index].child,
+                            level: children[child_index].level,
+                            descendant_count: children[child_index].descendant_count,
+                        })
+                        .collect::<Vec<_>>();
+                    let entries = normalize_branch_entries(raw_entries);
+                    let child_summaries = normalize_child_summary_inputs(raw_child_summaries);
+                    if entries.len() < 2 || child_summaries.len() < 2 {
+                        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                            "normalized child-bearing entry set has fewer than two unique children"
+                                .into(),
+                        ));
+                    }
+                    let encoded_branch = encode_branch_entries(
+                        self.branch_encoding_policy,
+                        &self.embedding_spec,
+                        entries.as_slice(),
+                        parent_level,
+                        uses_root_branch_budget(is_global_root_partition, groups.len()),
+                    )?;
+                    let branch = build_branch_block(
+                        VERSION_1,
+                        parent_level,
+                        encoded_branch.embedding_spec,
+                        encoded_branch.entries,
+                        encoded_branch.ext,
+                    )
+                    .map_err(StreamingIndexerError::BlockConstruction)?;
+                    let branch_block = Block::Branch(branch);
+                    let serialized = serialize_block(&branch_block)
+                        .map_err(StreamingIndexerError::BlockConstruction)?;
+                    if serialized.bytes.len() > self.block_size_target {
+                        return Err(StreamingIndexerError::TerminalPartitionMaterialization(
+                            format!(
+                                "branch block serialized to {} bytes, exceeding block size target {}",
+                                serialized.bytes.len(),
+                                self.block_size_target
+                            ),
+                        ));
+                    }
+                    let canonical = ExactCentroidChildSummaryPolicy
+                        .summarize_children(&self.embedding_spec, &child_summaries)
+                        .map_err(|error| {
+                            StreamingIndexerError::CanonicalEmbeddingFailure(error.to_string())
+                        })?;
+                    validate_embedding_bytes(&canonical, &self.embedding_spec, "canonical")
+                        .map_err(StreamingIndexerError::CanonicalEmbeddingFailure)?;
+                    let descendant_count = child_summaries
+                        .iter()
+                        .map(|child| child.descendant_count)
+                        .sum();
+                    Ok((
+                        index,
+                        branch_block,
+                        serialized.hash,
+                        canonical,
+                        descendant_count,
+                    ))
+                })();
+                result
+            })
+            .collect::<Vec<_>>();
+        let prepared = prepared.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let results = futures::stream::iter(prepared.into_iter())
+            .map(
+                |(index, branch_block, expected_hash, embedding, descendant_count)| async move {
+                    let result: Result<(IndexedChild, BlockHash), StreamingIndexerError> = async {
+                        let block_id = store
+                            .put(&branch_block)
+                            .await
+                            .map_err(StreamingIndexerError::Storage)?;
+                        verify_persisted_block_id(block_id, expected_hash)?;
+                        Ok((
+                            IndexedChild {
+                                embedding,
+                                child: block_id,
+                                level: parent_level,
+                                descendant_count,
+                            },
+                            block_id,
+                        ))
+                    }
+                    .await;
+                    (index, result)
+                },
             )
-            .map_err(StreamingIndexerError::BlockConstruction)?;
-            let branch_block = Block::Branch(branch.clone());
-            let serialized =
-                serialize_block(&branch_block).map_err(StreamingIndexerError::BlockConstruction)?;
-            if serialized.bytes.len() > self.block_size_target {
-                return Err(StreamingIndexerError::TerminalPartitionMaterialization(
-                    format!(
-                        "branch block serialized to {} bytes, exceeding block size target {}",
-                        serialized.bytes.len(),
-                        self.block_size_target
-                    ),
-                ));
-            }
-            let block_id = store
-                .put(&branch_block)
-                .await
-                .map_err(StreamingIndexerError::Storage)?;
-            verify_persisted_block_id(block_id, serialized.hash)?;
+            .buffer_unordered(V3_IO_QUEUE_DEPTH)
+            .collect::<Vec<_>>()
+            .await;
+        let mut results = results;
+        results.sort_by_key(|(index, _)| *index);
+        let mut next_layer = Vec::with_capacity(results.len());
+        let mut persisted_ids = Vec::with_capacity(results.len());
+        for result in results {
+            let (_, result) = result;
+            let (child, block_id) = result?;
+            next_layer.push(child);
             persisted_ids.push(block_id);
-            let canonical = ExactCentroidChildSummaryPolicy
-                .summarize_children(&self.embedding_spec, &child_summaries)
-                .map_err(|error| {
-                    StreamingIndexerError::CanonicalEmbeddingFailure(error.to_string())
-                })?;
-            validate_embedding_bytes(&canonical, &self.embedding_spec, "canonical")
-                .map_err(StreamingIndexerError::CanonicalEmbeddingFailure)?;
-            next_layer.push(IndexedChild {
-                embedding: canonical,
-                child: block_id,
-                level: parent_level,
-                descendant_count: child_summaries
-                    .iter()
-                    .map(|child| child.descendant_count)
-                    .sum(),
-            });
-            status.progress.fetch_add(1, AtomicOrdering::Relaxed);
+            progress.fetch_add(1, AtomicOrdering::Relaxed);
         }
-        Ok(next_layer)
+        Ok((next_layer, persisted_ids))
     }
 
     async fn load_leaf_batch(
@@ -1357,6 +1597,21 @@ impl StreamingIndexingRunV3 {
                 Err(error)
             }
         }
+    }
+
+    fn emit_aggregate_v3_phase(
+        &self,
+        phase: StreamingIndexingPhase,
+        state: StreamingIndexingStatusState,
+        total: usize,
+        completed: usize,
+        started: Instant,
+        error: Option<String>,
+    ) {
+        emit_status(
+            &self.observer,
+            status_with_known_total(phase, state, total, completed, started.elapsed(), error),
+        );
     }
 
     fn dimensions(&self) -> Result<usize, StreamingIndexerError> {
@@ -2926,13 +3181,28 @@ mod tests {
         run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
         run.finalize(&source, &output).await.unwrap();
 
+        let statuses = statuses.lock().unwrap();
         assert!(
             statuses
-                .lock()
-                .unwrap()
                 .iter()
                 .any(|status| status.fallback_count == Some(1))
         );
+        assert!(statuses.iter().any(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::V3PartitionTrainIngest { layer_index: 0 }
+            ) && status.state == StreamingIndexingStatusState::Completed
+                && status.phase_total_unit_count == Some(128)
+                && status.completed_unit_count == 128
+        }));
+        assert!(statuses.iter().any(|status| {
+            matches!(
+                status.phase,
+                StreamingIndexingPhase::V3PartitionClassify { layer_index: 0 }
+            ) && status.state == StreamingIndexingStatusState::Completed
+                && status.phase_total_unit_count == Some(128)
+                && status.completed_unit_count == 128
+        }));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3144,10 +3414,7 @@ mod tests {
             kind: WorkingItemKind::LeafBlockIds,
         };
         let source = MemoryBlockStore::default();
-        let error = run
-            .split_partition(&partition, 1, &source)
-            .await
-            .unwrap_err();
+        let error = run.split_partition(&partition, 1, &source).unwrap_err();
         assert!(matches!(error, StreamingIndexerError::Storage(_)));
         assert!(statuses.lock().unwrap().iter().any(|status| {
             matches!(
