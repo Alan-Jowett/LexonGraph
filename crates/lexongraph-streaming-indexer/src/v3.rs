@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
 use redb::{Database, Durability, ReadOnlyTable, ReadableTable, TableDefinition};
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use tempfile::TempDir;
 
 use crate::{
@@ -638,23 +640,19 @@ impl StreamingIndexingRunV3 {
                 &partition.id,
                 partition.item_count,
                 || self.check_cancelled("partition planning"),
-                |trainer| {
-                    let result = match partition.kind {
-                        WorkingItemKind::LeafBlockIds => self
-                            .ingest_leaf_training_partition_batches(
-                                partition,
-                                source_store,
-                                trainer,
-                                emit_partition_status,
-                            ),
-                        WorkingItemKind::IndexedChildren => self
-                            .ingest_summary_training_partition_batches(
-                                partition,
-                                trainer,
-                                emit_partition_status,
-                            ),
-                    };
-                    result
+                |trainer| match partition.kind {
+                    WorkingItemKind::LeafBlockIds => self.ingest_leaf_training_partition_batches(
+                        partition,
+                        source_store,
+                        trainer,
+                        emit_partition_status,
+                    ),
+                    WorkingItemKind::IndexedChildren => self
+                        .ingest_summary_training_partition_batches(
+                            partition,
+                            trainer,
+                            emit_partition_status,
+                        ),
                 },
             ) {
                 Ok(()) => {}
@@ -1285,15 +1283,21 @@ impl StreamingIndexingRunV3 {
         });
         let result = async {
             let mut loaded = Vec::with_capacity(block_ids.len());
+            #[cfg(test)]
+            let recorded_inner_pool_worker = Arc::new(AtomicBool::new(false));
             for batch in block_ids.chunks(V3_BATCH_SIZE) {
                 self.check_cancelled_for_phase(&phase)?;
                 let ordered = load_leaf_blocks_raw(batch, source_store).await?;
+                #[cfg(test)]
+                let recorded_inner_pool_worker = Arc::clone(&recorded_inner_pool_worker);
                 let decoded = self.inner_pool.install(|| {
-                    #[cfg(test)]
-                    self.record_inner_pool_worker();
                     ordered
                         .into_par_iter()
                         .map(|(block_id, block)| {
+                            #[cfg(test)]
+                            if !recorded_inner_pool_worker.swap(true, AtomicOrdering::Relaxed) {
+                                self.record_inner_pool_worker();
+                            }
                             decode_loaded_leaf(block_id, block, &self.embedding_spec)
                         })
                         .collect::<Vec<_>>()
@@ -3289,11 +3293,7 @@ mod tests {
             .collect()
     }
 
-    async fn store_leaf(
-        store: &(impl BlockStore + Sync),
-        values: [f32; 2],
-        body: &str,
-    ) -> BlockHash {
+    async fn store_leaf(store: &impl BlockStore, values: [f32; 2], body: &str) -> BlockHash {
         let block = Block::Leaf(
             build_leaf_block(
                 VERSION_1,
