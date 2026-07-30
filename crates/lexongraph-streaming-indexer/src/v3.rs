@@ -581,8 +581,11 @@ impl StreamingIndexingRunV3 {
             .buffer_unordered(V3_IO_QUEUE_DEPTH)
             .collect::<Vec<_>>()
             .await;
+            // Do not run blocking partition pipelines inside the outer Rayon
+            // iterator. Each pipeline waits on the dedicated inner pool, and
+            // Rayon can recursively execute more outer jobs while waiting.
             let refinement_results = active
-                .par_iter()
+                .iter()
                 .enumerate()
                 .filter(|(_, partition)| {
                     partition.item_count > materializability_bound && partition.item_count > 1
