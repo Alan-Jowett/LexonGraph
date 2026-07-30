@@ -3162,7 +3162,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::VecDeque;
     use std::sync::atomic::Ordering;
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use futures::stream;
@@ -3171,6 +3171,7 @@ mod tests {
     };
     use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
     use lexongraph_streaming_clustering::{MetricDirection, PassReport};
+    use tokio::sync::Barrier;
 
     #[derive(Default)]
     struct MemoryBlockStore {
@@ -3255,7 +3256,7 @@ mod tests {
             let active = self.active_gets.fetch_add(1, Ordering::SeqCst) + 1;
             self.record_active_get(active);
             if self.first_gets.fetch_add(1, Ordering::SeqCst) < 2 {
-                self.rendezvous.wait();
+                self.rendezvous.wait().await;
             }
             let block = self.blocks.lock().unwrap().get(block_id).cloned();
             self.active_gets.fetch_sub(1, Ordering::SeqCst);
