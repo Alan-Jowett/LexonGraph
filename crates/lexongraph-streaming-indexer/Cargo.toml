@@ -35,4 +35,4 @@ tokio = { version = "1.52.3", features = ["rt", "time"] }
 
 [dev-dependencies]
 pollster = "1.0.1"
-tokio = { version = "1.52.3", features = ["macros", "rt", "time"] }
+tokio = { version = "1.52.3", features = ["macros", "rt", "sync", "time"] }
