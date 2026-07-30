@@ -1941,3 +1941,25 @@ produce two conforming non-empty groups.
 oversized or invalid child partition.
 
 **Traces to:** REQ-STREAM-INDEXER-135
+
+### VAL-STREAM-INDEXER-127
+
+Attach a caller-owned observer to a constrained v3 run with one large active
+partition and enough work to emit multiple heartbeats during partition trainer
+ingest, partition classification, and terminal-materialization load. Also run a
+fixture with multiple independently processed partitions in one layer.
+
+**Pass condition:** for every exercised item-processing phase, the observer
+receives partition-local in-progress updates containing the phase identity,
+deterministic partition path, processed item count, total partition item count,
+and derived remaining count. The processed count advances monotonically at
+committed batch or item boundaries before the partition or layer completes.
+Partition-local totals and counts describe the current partition rather than
+the aggregate layer, and the aggregate layer heartbeat stream remains present
+with its existing deterministic completion semantics. Prepared-but-not-
+committed batches do not advance partition-local completed counts, and repeated
+runs preserve deterministic results and status semantics.
+
+**Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
+REQ-STREAM-INDEXER-037C, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-139,
+REQ-STREAM-INDEXER-140

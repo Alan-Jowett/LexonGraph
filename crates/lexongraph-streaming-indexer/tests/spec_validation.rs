@@ -6338,13 +6338,27 @@ async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() 
             .filter(|status| status.phase == phase)
             .collect::<Vec<_>>();
         assert!(!updates.is_empty(), "missing {phase:?} status");
+        let aggregate_updates = if matches!(
+            phase,
+            StreamingIndexingPhase::V3PartitionTrainIngest { .. }
+                | StreamingIndexingPhase::V3PartitionClassify { .. }
+                | StreamingIndexingPhase::V3TerminalMaterializationLoad { .. }
+        ) {
+            updates
+                .iter()
+                .copied()
+                .filter(|status| status.current_partition_path.is_none())
+                .collect::<Vec<_>>()
+        } else {
+            updates.clone()
+        };
         let mut wave_start = 0;
-        for (index, status) in updates.iter().enumerate() {
+        for (index, status) in aggregate_updates.iter().enumerate() {
             if matches!(
                 status.state,
                 StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed
             ) {
-                let wave = &updates[wave_start..=index];
+                let wave = &aggregate_updates[wave_start..=index];
                 assert!(wave.windows(2).all(|pair| {
                     pair[0].completed_unit_count <= pair[1].completed_unit_count
                         && pair[1].remaining_unit_count
@@ -6355,7 +6369,56 @@ async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() 
                 wave_start = index + 1;
             }
         }
-        assert_eq!(wave_start, updates.len(), "unterminated {phase:?} wave");
+        assert_eq!(
+            wave_start,
+            aggregate_updates.len(),
+            "unterminated {phase:?} aggregate wave"
+        );
+        if matches!(
+            phase,
+            StreamingIndexingPhase::V3PartitionTrainIngest { .. }
+                | StreamingIndexingPhase::V3PartitionClassify { .. }
+                | StreamingIndexingPhase::V3TerminalMaterializationLoad { .. }
+        ) {
+            assert!(
+                updates.iter().any(|status| {
+                    status.current_partition_path.is_some()
+                        && status.current_partition_size.is_some()
+                }),
+                "missing partition-local {phase:?} status"
+            );
+            let mut partition_updates = HashMap::new();
+            for status in updates.iter().filter(|status| {
+                status.current_partition_path.is_some() && status.current_partition_size.is_some()
+            }) {
+                partition_updates
+                    .entry(status.current_partition_path.as_deref().unwrap())
+                    .or_insert_with(Vec::new)
+                    .push(*status);
+            }
+            for (partition_path, partition_statuses) in partition_updates {
+                assert!(partition_statuses.iter().all(|status| {
+                    status.current_partition_path.as_deref() == Some(partition_path)
+                        && status.current_partition_size == status.phase_total_unit_count
+                }));
+                let mut local_wave_start = 0;
+                for index in 1..=partition_statuses.len() {
+                    let starts_new_wave = index == partition_statuses.len()
+                        || partition_statuses[index].state == StreamingIndexingStatusState::Started;
+                    if starts_new_wave {
+                        let wave = &partition_statuses[local_wave_start..index];
+                        assert!(wave.windows(2).all(|pair| {
+                            pair[0].completed_unit_count <= pair[1].completed_unit_count
+                                && pair[1].remaining_unit_count
+                                    == pair[1]
+                                        .phase_total_unit_count
+                                        .map(|total| total - pair[1].completed_unit_count)
+                        }));
+                        local_wave_start = index;
+                    }
+                }
+            }
+        }
     }
     assert!(
         statuses
