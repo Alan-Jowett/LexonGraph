@@ -103,6 +103,8 @@ pub struct StreamingIndexingRunV3 {
     temp_root: Option<TempDir>,
     partition_store: Option<Arc<V3PartitionStore>>,
     inner_pool: Arc<ThreadPool>,
+    #[cfg(test)]
+    inner_pool_worker_names: Arc<std::sync::Mutex<Vec<String>>>,
     root_partition_id: String,
     phase: V3Phase,
     ingested_count: usize,
@@ -163,6 +165,8 @@ impl StreamingIndexingRunV3 {
             temp_root: Some(temp_root),
             partition_store: Some(partition_store),
             inner_pool,
+            #[cfg(test)]
+            inner_pool_worker_names: Arc::new(std::sync::Mutex::new(Vec::new())),
             root_partition_id: "l0.p0".into(),
             phase: V3Phase::Ingesting,
             ingested_count: 0,
@@ -629,111 +633,84 @@ impl StreamingIndexingRunV3 {
         );
 
         let result = (|| -> Result<(Vec<WorkingPartition>, bool), StreamingIndexerError> {
-            let mut replay_passes = 0usize;
-            let max_passes = v3_replay_pass_limit(partition.item_count);
-            loop {
-                self.check_cancelled("partition planning")?;
-                replay_passes += 1;
-                if replay_passes > max_passes {
-                    return Err(StreamingIndexerError::ClusteringFailure(format!(
-                        "v3 planner exceeded the maximum replay pass count of {max_passes}"
-                    )));
-                }
-                match partition.kind {
-                    WorkingItemKind::LeafBlockIds => {
-                        self.ingest_leaf_training_partition_batches(
-                            partition,
-                            source_store,
-                            &mut trainer,
-                            emit_partition_status,
-                        )?;
-                    }
-                    WorkingItemKind::IndexedChildren => {
-                        self.ingest_summary_training_partition_batches(
-                            partition,
-                            &mut trainer,
-                            emit_partition_status,
-                        )?;
-                    }
-                }
-                self.check_cancelled("partition planning")?;
-                let pass_report = match trainer.finish_pass() {
-                    Ok(report) => report,
-                    Err(error)
-                        if self.profile.version == PUBLISHED_PROFILE_V0_8_0
-                            && is_rank_zero_constraint(&error) =>
-                    {
-                        let fallback_groups = fallback_partition_groups(
-                            partition.item_count,
-                            materializability_bound,
-                            None,
-                        )
-                        .map_err(|error| {
-                            StreamingIndexerError::HierarchyValidation(error.to_string())
-                        })?;
-                        let fallback_assignment = fallback_assignment_map(
-                            partition.item_count,
-                            fallback_groups.as_slice(),
-                        )?;
-                        let child_ids = (0..fallback_groups.len())
-                            .map(|child_index| format!("{}.{}", partition.id, child_index))
-                            .collect::<Vec<_>>();
-                        self.partition_store()
-                            .clear_partitions(partition.kind, child_ids.as_slice())?;
-                        match partition.kind {
-                            WorkingItemKind::LeafBlockIds => {
-                                rewrite_block_hash_partition_with_assignments(
-                                    self.partition_store(),
-                                    &partition.id,
-                                    child_ids.as_slice(),
-                                    fallback_assignment.as_slice(),
-                                )?;
-                            }
-                            WorkingItemKind::IndexedChildren => {
-                                rewrite_indexed_child_partition_with_assignments(
-                                    self.partition_store(),
-                                    &partition.id,
-                                    child_ids.as_slice(),
-                                    fallback_assignment.as_slice(),
-                                )?;
-                            }
+            match run_v3_replay_until_ready(
+                &mut trainer,
+                &partition.id,
+                partition.item_count,
+                || self.check_cancelled("partition planning"),
+                |trainer| {
+                    let result = match partition.kind {
+                        WorkingItemKind::LeafBlockIds => self
+                            .ingest_leaf_training_partition_batches(
+                                partition,
+                                source_store,
+                                trainer,
+                                emit_partition_status,
+                            ),
+                        WorkingItemKind::IndexedChildren => self
+                            .ingest_summary_training_partition_batches(
+                                partition,
+                                trainer,
+                                emit_partition_status,
+                            ),
+                    };
+                    result
+                },
+            ) {
+                Ok(()) => {}
+                Err(V3ReplayError::Clustering(error))
+                    if self.profile.version == PUBLISHED_PROFILE_V0_8_0
+                        && is_rank_zero_constraint(&error) =>
+                {
+                    let fallback_groups = fallback_partition_groups(
+                        partition.item_count,
+                        materializability_bound,
+                        None,
+                    )
+                    .map_err(|error| {
+                        StreamingIndexerError::HierarchyValidation(error.to_string())
+                    })?;
+                    let fallback_assignment =
+                        fallback_assignment_map(partition.item_count, fallback_groups.as_slice())?;
+                    let child_ids = (0..fallback_groups.len())
+                        .map(|child_index| format!("{}.{}", partition.id, child_index))
+                        .collect::<Vec<_>>();
+                    self.partition_store()
+                        .clear_partitions(partition.kind, child_ids.as_slice())?;
+                    match partition.kind {
+                        WorkingItemKind::LeafBlockIds => {
+                            rewrite_block_hash_partition_with_assignments(
+                                self.partition_store(),
+                                &partition.id,
+                                child_ids.as_slice(),
+                                fallback_assignment.as_slice(),
+                            )?;
                         }
-                        return Ok((
-                            fallback_groups
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, group)| WorkingPartition {
-                                    id: child_ids[index].clone(),
-                                    layer_index: partition.layer_index,
-                                    item_count: group.len(),
-                                    kind: partition.kind,
-                                })
-                                .collect(),
-                            true,
-                        ));
+                        WorkingItemKind::IndexedChildren => {
+                            rewrite_indexed_child_partition_with_assignments(
+                                self.partition_store(),
+                                &partition.id,
+                                child_ids.as_slice(),
+                                fallback_assignment.as_slice(),
+                            )?;
+                        }
                     }
-                    Err(error) => return Err(map_clustering_error(error)),
-                };
-                self.check_cancelled("partition planning")?;
-                if pass_report.observed_count != partition.item_count {
-                    return Err(StreamingIndexerError::HierarchyValidation(format!(
-                        "v3 partition {:?} observed {} items but expected {}",
-                        partition.id, pass_report.observed_count, partition.item_count
-                    )));
+                    return Ok((
+                        fallback_groups
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, group)| WorkingPartition {
+                                id: child_ids[index].clone(),
+                                layer_index: partition.layer_index,
+                                item_count: group.len(),
+                                kind: partition.kind,
+                            })
+                            .collect(),
+                        true,
+                    ));
                 }
-                if pass_report.readiness == PassReadiness::AnalysisOnly {
-                    continue;
-                }
-                match trainer.complete_training() {
-                    Ok(()) => break,
-                    Err(StreamingClusteringError::InvalidTransition { state, operation })
-                        if state == TrainerState::PassComplete
-                            && operation == "complete_training" =>
-                    {
-                        continue;
-                    }
-                    Err(error) => return Err(map_clustering_error(error)),
-                }
+                Err(V3ReplayError::Clustering(error)) => return Err(map_clustering_error(error)),
+                Err(V3ReplayError::Indexing(error)) => return Err(error),
             }
             let classifier = trainer.into_classifier().map_err(map_clustering_error)?;
 
@@ -1312,6 +1289,8 @@ impl StreamingIndexingRunV3 {
                 self.check_cancelled_for_phase(&phase)?;
                 let ordered = load_leaf_blocks_raw(batch, source_store).await?;
                 let decoded = self.inner_pool.install(|| {
+                    #[cfg(test)]
+                    self.record_inner_pool_worker();
                     ordered
                         .into_par_iter()
                         .map(|(block_id, block)| {
@@ -1774,6 +1753,15 @@ impl StreamingIndexingRunV3 {
         }
         error
     }
+
+    #[cfg(test)]
+    fn record_inner_pool_worker(&self) {
+        let worker_name = thread::current().name().unwrap_or_default().to_owned();
+        self.inner_pool_worker_names
+            .lock()
+            .unwrap()
+            .push(worker_name);
+    }
 }
 
 fn v3_phase_description(phase: &StreamingIndexingPhase) -> &'static str {
@@ -1838,6 +1826,60 @@ fn decode_leaf_embedding_f32(
 
 fn v3_replay_pass_limit(item_count: usize) -> usize {
     item_count.saturating_add(4).clamp(1, V3_MAX_REPLAY_PASSES)
+}
+
+#[derive(Debug)]
+enum V3ReplayError {
+    Indexing(StreamingIndexerError),
+    Clustering(StreamingClusteringError),
+}
+
+fn run_v3_replay_until_ready<T>(
+    trainer: &mut T,
+    partition_id: &str,
+    item_count: usize,
+    mut check_cancelled: impl FnMut() -> Result<(), StreamingIndexerError>,
+    mut replay_partition: impl FnMut(&mut T) -> Result<(), StreamingIndexerError>,
+) -> Result<(), V3ReplayError>
+where
+    T: StreamingClusterTrainer,
+{
+    let max_passes = v3_replay_pass_limit(item_count);
+    let mut replay_passes = 0usize;
+    loop {
+        check_cancelled().map_err(V3ReplayError::Indexing)?;
+        replay_passes += 1;
+        if replay_passes > max_passes {
+            return Err(V3ReplayError::Indexing(
+                StreamingIndexerError::ClusteringFailure(format!(
+                    "v3 planner exceeded the maximum replay pass count of {max_passes}"
+                )),
+            ));
+        }
+        replay_partition(trainer).map_err(V3ReplayError::Indexing)?;
+        check_cancelled().map_err(V3ReplayError::Indexing)?;
+        let pass_report = trainer.finish_pass().map_err(V3ReplayError::Clustering)?;
+        if pass_report.observed_count != item_count {
+            return Err(V3ReplayError::Indexing(
+                StreamingIndexerError::HierarchyValidation(format!(
+                    "v3 partition {partition_id:?} observed {} items but expected {item_count}",
+                    pass_report.observed_count,
+                )),
+            ));
+        }
+        if pass_report.readiness == PassReadiness::AnalysisOnly {
+            continue;
+        }
+        match trainer.complete_training() {
+            Ok(()) => return Ok(()),
+            Err(StreamingClusteringError::InvalidTransition { state, operation })
+                if state == TrainerState::PassComplete && operation == "complete_training" =>
+            {
+                continue;
+            }
+            Err(error) => return Err(V3ReplayError::Clustering(error)),
+        }
+    }
 }
 
 fn validate_v3_cluster_assignment(
@@ -3118,8 +3160,9 @@ fn deserialize_spilled_indexed_child_bytes(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::collections::VecDeque;
     use std::sync::atomic::Ordering;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Barrier, Mutex};
 
     use async_trait::async_trait;
     use futures::stream;
@@ -3127,6 +3170,7 @@ mod tests {
         Block, BranchEntry, Content, LeafEntry, build_branch_block, build_leaf_block,
     };
     use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
+    use lexongraph_streaming_clustering::{MetricDirection, PassReport};
 
     #[derive(Default)]
     struct MemoryBlockStore {
@@ -3166,6 +3210,81 @@ mod tests {
         }
     }
 
+    struct LayerBarrierBlockStore {
+        blocks: Mutex<HashMap<BlockHash, Vec<u8>>>,
+        first_gets: AtomicUsize,
+        active_gets: AtomicUsize,
+        max_active_gets: AtomicUsize,
+        rendezvous: Barrier,
+    }
+
+    impl LayerBarrierBlockStore {
+        fn new() -> Self {
+            Self {
+                blocks: Mutex::new(HashMap::new()),
+                first_gets: AtomicUsize::new(0),
+                active_gets: AtomicUsize::new(0),
+                max_active_gets: AtomicUsize::new(0),
+                rendezvous: Barrier::new(2),
+            }
+        }
+
+        fn record_active_get(&self, active: usize) {
+            let mut maximum = self.max_active_gets.load(Ordering::SeqCst);
+            while active > maximum {
+                match self.max_active_gets.compare_exchange(
+                    maximum,
+                    active,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(observed) => maximum = observed,
+                }
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for LayerBarrierBlockStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .insert(*block_id, block_bytes.to_vec());
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            let active = self.active_gets.fetch_add(1, Ordering::SeqCst) + 1;
+            self.record_active_get(active);
+            if self.first_gets.fetch_add(1, Ordering::SeqCst) < 2 {
+                self.rendezvous.wait();
+            }
+            let block = self.blocks.lock().unwrap().get(block_id).cloned();
+            self.active_gets.fetch_sub(1, Ordering::SeqCst);
+            Ok(block)
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            let ids = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
+        }
+    }
+
     fn spec() -> EmbeddingSpec {
         EmbeddingSpec {
             dims: 2,
@@ -3180,7 +3299,11 @@ mod tests {
             .collect()
     }
 
-    async fn store_leaf(store: &MemoryBlockStore, values: [f32; 2], body: &str) -> BlockHash {
+    async fn store_leaf(
+        store: &(impl BlockStore + Sync),
+        values: [f32; 2],
+        body: &str,
+    ) -> BlockHash {
         let block = Block::Leaf(
             build_leaf_block(
                 VERSION_1,
@@ -3198,6 +3321,154 @@ mod tests {
             .unwrap(),
         );
         store.put(&block).await.unwrap()
+    }
+
+    struct ScriptedClassifier {
+        config: StreamingClusteringConfig,
+    }
+
+    impl StreamingClusterClassifier for ScriptedClassifier {
+        fn config(&self) -> &StreamingClusteringConfig {
+            &self.config
+        }
+
+        fn assign(&self, _embedding: &[f32]) -> Result<u32, StreamingClusteringError> {
+            Ok(0)
+        }
+    }
+
+    struct ScriptedReplayTrainer {
+        config: StreamingClusteringConfig,
+        readiness: VecDeque<PassReadiness>,
+        state: TrainerState,
+        observed_count: usize,
+        complete_calls: usize,
+    }
+
+    impl ScriptedReplayTrainer {
+        fn new(observed_count: usize, readiness: impl IntoIterator<Item = PassReadiness>) -> Self {
+            Self {
+                config: StreamingClusteringConfig {
+                    cluster_count: 2,
+                    dimensions: 2,
+                    balance_constraints: None,
+                    random_seed: Some(7),
+                },
+                readiness: readiness.into_iter().collect(),
+                state: TrainerState::Idle,
+                observed_count,
+                complete_calls: 0,
+            }
+        }
+    }
+
+    impl StreamingClusterTrainer for ScriptedReplayTrainer {
+        type Classifier = ScriptedClassifier;
+
+        fn config(&self) -> &StreamingClusteringConfig {
+            &self.config
+        }
+
+        fn state(&self) -> TrainerState {
+            self.state
+        }
+
+        fn ingest_batch(
+            &mut self,
+            _embeddings: &[Vec<f32>],
+        ) -> Result<(), StreamingClusteringError> {
+            self.state = TrainerState::Ingesting;
+            Ok(())
+        }
+
+        fn finish_pass(&mut self) -> Result<PassReport, StreamingClusteringError> {
+            self.state = TrainerState::PassComplete;
+            Ok(PassReport {
+                observed_count: self.observed_count,
+                requested_cluster_count: self.config.cluster_count,
+                readiness: self
+                    .readiness
+                    .pop_front()
+                    .expect("script must provide one readiness result per pass"),
+                realized_cluster_count: Some(2),
+                quality_metric: 0.0,
+                balance_metric: 0.0,
+                quality_direction: MetricDirection::SmallerIsBetter,
+                balance_direction: MetricDirection::SmallerIsBetter,
+                cluster_ids: Some(vec![0, 1]),
+            })
+        }
+
+        fn complete_training(&mut self) -> Result<(), StreamingClusteringError> {
+            self.complete_calls += 1;
+            self.state = TrainerState::TrainingComplete;
+            Ok(())
+        }
+
+        fn into_classifier(self) -> Result<Self::Classifier, StreamingClusteringError> {
+            Ok(ScriptedClassifier {
+                config: self.config,
+            })
+        }
+    }
+
+    #[test]
+    fn v3_replay_decision_replays_analysis_only_until_partition_ready() {
+        let mut trainer = ScriptedReplayTrainer::new(
+            3,
+            [PassReadiness::AnalysisOnly, PassReadiness::PartitionReady],
+        );
+        let mut replay_count = 0;
+
+        run_v3_replay_until_ready(
+            &mut trainer,
+            "scripted",
+            3,
+            || Ok(()),
+            |trainer| {
+                replay_count += 1;
+                trainer
+                    .ingest_batch(&[vec![0.0, 1.0]])
+                    .map_err(map_clustering_error)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(replay_count, 2);
+        assert_eq!(trainer.complete_calls, 1);
+        assert_eq!(trainer.state(), TrainerState::TrainingComplete);
+    }
+
+    #[test]
+    fn v3_replay_decision_reports_exhaustion_only_after_the_replay_bound() {
+        let item_count = 3;
+        let replay_limit = v3_replay_pass_limit(item_count);
+        let mut trainer = ScriptedReplayTrainer::new(
+            item_count,
+            std::iter::repeat_n(PassReadiness::AnalysisOnly, replay_limit),
+        );
+        let mut replay_count = 0;
+
+        let error = run_v3_replay_until_ready(
+            &mut trainer,
+            "scripted",
+            item_count,
+            || Ok(()),
+            |trainer| {
+                replay_count += 1;
+                trainer
+                    .ingest_batch(&[vec![0.0, 1.0]])
+                    .map_err(map_clustering_error)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(replay_count, replay_limit);
+        assert!(matches!(
+            error,
+            V3ReplayError::Indexing(StreamingIndexerError::ClusteringFailure(message))
+                if message.contains("maximum replay pass count")
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3326,7 +3597,20 @@ mod tests {
         .unwrap()
         .with_observer(observer);
         run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
-        run.finalize(&source, &output).await.unwrap();
+        let result = run.finalize(&source, &output).await.unwrap();
+
+        let repeat_output = MemoryBlockStore::default();
+        let mut repeat = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_8_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap();
+        repeat.ingest_block_id_batch(ids.as_slice()).await.unwrap();
+        let repeat_result = repeat.finalize(&source, &repeat_output).await.unwrap();
+        assert_eq!(result.root_id, repeat_result.root_id);
+        assert_eq!(result.block_ids, repeat_result.block_ids);
 
         let statuses = statuses.lock().unwrap();
         assert!(
@@ -3350,6 +3634,74 @@ mod tests {
                 && status.phase_total_unit_count == Some(128)
                 && status.completed_unit_count == 128
         }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn v3_v0_8_0_preserves_non_rank_zero_failures() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = MemoryBlockStore::default();
+        let output = MemoryBlockStore::default();
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let observer = {
+            let statuses = Arc::clone(&statuses);
+            Arc::new(move |status: crate::StreamingIndexingStatus| {
+                statuses.lock().unwrap().push(status);
+            }) as StreamingIndexingStatusObserver
+        };
+        let mut ids = Vec::with_capacity(128);
+        for index in 0..128 {
+            let values = if index == 0 {
+                [f32::NAN, 0.0]
+            } else {
+                [index as f32, (index * 3) as f32]
+            };
+            ids.push(store_leaf(&source, values, &format!("item-{index}")).await);
+        }
+        let mut run = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_8_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap()
+        .with_observer(observer);
+        run.ingest_block_id_batch(ids.as_slice()).await.unwrap();
+
+        let error = run.finalize(&source, &output).await.unwrap_err();
+        assert!(matches!(
+            error,
+            StreamingIndexerError::ClusteringFailure(message)
+                if message.contains("embeddings must not contain NaN or infinite values")
+        ));
+        assert!(
+            !statuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|status| status.fallback_count == Some(1))
+        );
+    }
+
+    #[test]
+    fn v3_v0_8_0_rejects_impossible_fallback_materialization_bounds() {
+        let minimum_two_child_size = crate::serialized_branch_size(&spec(), 2).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+
+        let error = match StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_8_0,
+            spec(),
+            minimum_two_child_size - 1,
+            parent.path(),
+        ) {
+            Ok(_) => panic!("an impossible two-child materialization bound must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            StreamingIndexerError::ClusteringFailure(message)
+                if message.contains("minimum 2-child branch serializes")
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3748,6 +4100,169 @@ mod tests {
             StreamingIndexerError::HierarchyValidation(message)
                 if message.contains("exceeds available child partitions")
         ));
+    }
+
+    #[test]
+    fn v3_layer_processing_accepts_concurrent_refinement_and_reconciles_at_a_barrier() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = LayerBarrierBlockStore::new();
+        let output = MemoryBlockStore::default();
+        let runtime = build_v3_prepare_runtime().unwrap();
+        let run = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_7_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap();
+
+        for partition_index in 0..2 {
+            let mut ids = Vec::new();
+            for item_index in 0..128 {
+                ids.push(runtime.block_on(store_leaf(
+                    &source,
+                    [
+                        (partition_index * 10 + item_index) as f32,
+                        (item_index * item_index) as f32,
+                    ],
+                    &format!("p{partition_index}-{item_index}"),
+                )));
+            }
+            run.partition_store()
+                .append_block_hashes(&format!("l0.p{partition_index}"), ids.as_slice())
+                .unwrap();
+        }
+        let active = (0..2)
+            .map(|partition_index| WorkingPartition {
+                id: format!("l0.p{partition_index}"),
+                layer_index: 0,
+                item_count: 128,
+                kind: WorkingItemKind::LeafBlockIds,
+            })
+            .collect::<Vec<_>>();
+        let outer_pool = ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        let result = outer_pool.install(|| {
+            runtime.block_on(run.process_layer_until_terminal(
+                active,
+                &source,
+                &output,
+                &mut Vec::new(),
+            ))
+        });
+
+        let children = result.unwrap();
+        assert!(!children.is_empty());
+        assert!(source.max_active_gets.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn v3_runtime_reuses_its_inner_pool_for_leaf_decode() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = MemoryBlockStore::default();
+        let ids = [
+            store_leaf(&source, [0.0, 1.0], "a").await,
+            store_leaf(&source, [1.0, 0.0], "b").await,
+        ];
+        let run = StreamingIndexingRunV3::with_published_profile(
+            PUBLISHED_PROFILE_V0_7_0,
+            spec(),
+            4096,
+            parent.path(),
+        )
+        .unwrap();
+        let pool = Arc::clone(&run.inner_pool);
+
+        run.load_leaf_batch(
+            &ids,
+            StreamingIndexingPhase::V3PartitionLoad { layer_index: 0 },
+            &source,
+            false,
+        )
+        .await
+        .unwrap();
+        run.load_leaf_batch(
+            &ids,
+            StreamingIndexingPhase::V3PartitionLoad { layer_index: 1 },
+            &source,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(Arc::ptr_eq(&pool, &run.inner_pool));
+        let worker_names = run.inner_pool_worker_names.lock().unwrap();
+        assert_eq!(worker_names.len(), 2);
+        assert!(
+            worker_names
+                .iter()
+                .all(|name| name.starts_with(V3_INNER_POOL_THREAD_NAME))
+        );
+    }
+
+    #[test]
+    fn v3_runtime_inner_pool_completes_when_outer_workers_wait_on_decode() {
+        let parent = tempfile::tempdir().unwrap();
+        let source = Arc::new(MemoryBlockStore::default());
+        let runtime = build_v3_prepare_runtime().unwrap();
+        let ids = vec![
+            runtime.block_on(store_leaf(source.as_ref(), [0.0, 1.0], "a")),
+            runtime.block_on(store_leaf(source.as_ref(), [1.0, 0.0], "b")),
+        ];
+        drop(runtime);
+        let run = Arc::new(
+            StreamingIndexingRunV3::with_published_profile(
+                PUBLISHED_PROFILE_V0_7_0,
+                spec(),
+                4096,
+                parent.path(),
+            )
+            .unwrap(),
+        );
+        let outer_pool = ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        for layer_index in 0..2 {
+            let run = Arc::clone(&run);
+            let source = Arc::clone(&source);
+            let ids = ids.clone();
+            let sender = sender.clone();
+            outer_pool.spawn(move || {
+                let result = thread::spawn(move || {
+                    build_v3_prepare_runtime().and_then(|runtime| {
+                        runtime
+                            .block_on(run.load_leaf_batch(
+                                ids.as_slice(),
+                                StreamingIndexingPhase::V3PartitionLoad { layer_index },
+                                source.as_ref(),
+                                false,
+                            ))
+                            .map(|_| ())
+                    })
+                })
+                .join()
+                .map_err(|panic| {
+                    StreamingIndexerError::ClusteringFailure(format!(
+                        "v3 decode worker panicked: {panic:?}"
+                    ))
+                })
+                .and_then(|result| result);
+                sender.send(result).unwrap();
+            });
+        }
+        drop(sender);
+
+        for _ in 0..2 {
+            receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("outer workers waiting on v3 decode must not starve the inner pool")
+                .unwrap();
+        }
+        assert!(
+            run.inner_pool_worker_names
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|name| name.starts_with(V3_INNER_POOL_THREAD_NAME))
+        );
     }
 
     #[test]
