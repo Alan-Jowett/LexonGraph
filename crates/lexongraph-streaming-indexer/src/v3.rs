@@ -1454,12 +1454,13 @@ impl StreamingIndexingRunV3 {
             );
         }
         let mut heartbeat = emit_partition_status.then(|| {
-            crate::StatusHeartbeatGuard::new(start_status_heartbeat(
+            crate::StatusHeartbeatGuard::new(start_partition_status_heartbeat(
                 &self.observer,
                 phase.clone(),
-                Some(block_ids.len()),
+                block_ids.len(),
                 Arc::clone(&progress),
-                Some(block_ids.len()),
+                partition_path.to_string(),
+                partition_size,
                 started,
             ))
         });
