@@ -6338,13 +6338,27 @@ async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() 
             .filter(|status| status.phase == phase)
             .collect::<Vec<_>>();
         assert!(!updates.is_empty(), "missing {phase:?} status");
+        let aggregate_updates = if matches!(
+            phase,
+            StreamingIndexingPhase::V3PartitionTrainIngest { .. }
+                | StreamingIndexingPhase::V3PartitionClassify { .. }
+                | StreamingIndexingPhase::V3TerminalMaterializationLoad { .. }
+        ) {
+            updates
+                .iter()
+                .copied()
+                .filter(|status| status.current_partition_path.is_none())
+                .collect::<Vec<_>>()
+        } else {
+            updates.clone()
+        };
         let mut wave_start = 0;
-        for (index, status) in updates.iter().enumerate() {
+        for (index, status) in aggregate_updates.iter().enumerate() {
             if matches!(
                 status.state,
                 StreamingIndexingStatusState::Completed | StreamingIndexingStatusState::Failed
             ) {
-                let wave = &updates[wave_start..=index];
+                let wave = &aggregate_updates[wave_start..=index];
                 assert!(wave.windows(2).all(|pair| {
                     pair[0].completed_unit_count <= pair[1].completed_unit_count
                         && pair[1].remaining_unit_count
@@ -6355,7 +6369,25 @@ async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() 
                 wave_start = index + 1;
             }
         }
-        assert_eq!(wave_start, updates.len(), "unterminated {phase:?} wave");
+        assert_eq!(
+            wave_start,
+            aggregate_updates.len(),
+            "unterminated {phase:?} aggregate wave"
+        );
+        if matches!(
+            phase,
+            StreamingIndexingPhase::V3PartitionTrainIngest { .. }
+                | StreamingIndexingPhase::V3PartitionClassify { .. }
+                | StreamingIndexingPhase::V3TerminalMaterializationLoad { .. }
+        ) {
+            assert!(
+                updates.iter().any(|status| {
+                    status.current_partition_path.is_some()
+                        && status.current_partition_size.is_some()
+                }),
+                "missing partition-local {phase:?} status"
+            );
+        }
     }
     assert!(
         statuses

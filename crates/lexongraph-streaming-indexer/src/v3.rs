@@ -21,16 +21,16 @@ use crate::{
     PublishedIndexingProfile, PublishedPlanningStrategy, PublishedProfileVersion,
     StreamingClusteringConfig, StreamingIndexerError, StreamingIndexingCancellationHandle,
     StreamingIndexingPhase, StreamingIndexingProgressUnitKind, StreamingIndexingResult,
-    StreamingIndexingStatusObserver, StreamingIndexingStatusState, VERSION_1, balanced_groups,
-    branch_encoding_policy_for_profile, build_branch_block, decode_embedding_as_f32,
-    dedup_sort_ids, effective_directional_pca_cluster_count, emit_status, encode_branch_entries,
-    fallback_partition_groups, is_rank_zero_constraint, map_clustering_configuration_error,
-    map_clustering_error, materializability_bound, normalize_branch_entries,
-    normalize_child_summary_inputs, normalize_current_layer, partition_depth,
-    published_indexing_profile, read_spilled_indexed_child, serialize_block,
-    start_status_heartbeat, status_with_hierarchy_details, status_with_known_total,
-    validate_embedding_bytes, validate_published_profile_configuration, verify_persisted_block_id,
-    with_legacy_item_count, write_spilled_indexed_child,
+    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    VERSION_1, balanced_groups, branch_encoding_policy_for_profile, build_branch_block,
+    decode_embedding_as_f32, dedup_sort_ids, effective_directional_pca_cluster_count, emit_status,
+    encode_branch_entries, fallback_partition_groups, is_rank_zero_constraint,
+    map_clustering_configuration_error, map_clustering_error, materializability_bound,
+    normalize_branch_entries, normalize_child_summary_inputs, normalize_current_layer,
+    partition_depth, published_indexing_profile, read_spilled_indexed_child, serialize_block,
+    start_partition_status_heartbeat, start_status_heartbeat, status_with_hierarchy_details,
+    status_with_known_total, validate_embedding_bytes, validate_published_profile_configuration,
+    verify_persisted_block_id, with_legacy_item_count, write_spilled_indexed_child,
 };
 use lexongraph_block::{LeafBlock, ValidatedBlock};
 use lexongraph_block_store::BlockStore;
@@ -567,7 +567,7 @@ impl StreamingIndexingRunV3 {
                                         partition,
                                         source_store,
                                         output_store,
-                                        false,
+                                        true,
                                     )
                                     .await;
                                 if result.is_ok() {
@@ -590,12 +590,7 @@ impl StreamingIndexingRunV3 {
                 .map(|(index, partition)| {
                     (index, {
                         let result = self
-                            .split_partition(
-                                partition,
-                                materializability_bound,
-                                source_store,
-                                false,
-                            )
+                            .split_partition(partition, materializability_bound, source_store, true)
                             .map(|(children, used_fallback)| (children, used_fallback, None));
                         if let Ok((_, used_fallback, _)) = &result {
                             aggregate_status.refinement_complete(index, *used_fallback);
@@ -1088,6 +1083,8 @@ impl StreamingIndexingRunV3 {
                         },
                         source_store,
                         emit_partition_status,
+                        &partition.id,
+                        partition.item_count,
                     )
                     .await?;
                 let mut children = Vec::with_capacity(loaded.len());
@@ -1124,7 +1121,7 @@ impl StreamingIndexingRunV3 {
                     StreamingIndexingPhase::V3TerminalMaterializationLoad {
                         layer_index: partition.layer_index,
                     },
-                    partition.item_count,
+                    partition,
                     emit_partition_status,
                     |progress| {
                         let phase = StreamingIndexingPhase::V3TerminalMaterializationLoad {
@@ -1421,18 +1418,22 @@ impl StreamingIndexingRunV3 {
         phase: StreamingIndexingPhase,
         source_store: &dyn BlockStore,
         emit_partition_status: bool,
+        partition_path: &str,
+        partition_size: usize,
     ) -> Result<Vec<LoadedLeaf>, StreamingIndexerError> {
         let started = Instant::now();
         if emit_partition_status {
             emit_status(
                 &self.observer,
-                status_with_known_total(
+                partition_status_with_known_total(
                     phase.clone(),
                     StreamingIndexingStatusState::Started,
                     block_ids.len(),
                     0,
                     Duration::ZERO,
                     None,
+                    partition_path,
+                    partition_size,
                 ),
             );
         }
@@ -1440,13 +1441,15 @@ impl StreamingIndexingRunV3 {
         if emit_partition_status {
             emit_status(
                 &self.observer,
-                status_with_known_total(
+                partition_status_with_known_total(
                     phase.clone(),
                     StreamingIndexingStatusState::InProgress,
                     block_ids.len(),
                     0,
                     started.elapsed(),
                     None,
+                    partition_path,
+                    partition_size,
                 ),
             );
         }
@@ -1489,13 +1492,15 @@ impl StreamingIndexingRunV3 {
                 if emit_partition_status {
                     emit_status(
                         &self.observer,
-                        status_with_known_total(
+                        partition_status_with_known_total(
                             phase,
                             StreamingIndexingStatusState::Completed,
                             block_ids.len(),
                             block_ids.len(),
                             started.elapsed(),
                             None,
+                            partition_path,
+                            partition_size,
                         ),
                     );
                 }
@@ -1505,13 +1510,15 @@ impl StreamingIndexingRunV3 {
                 if emit_partition_status {
                     emit_status(
                         &self.observer,
-                        status_with_known_total(
+                        partition_status_with_known_total(
                             phase,
                             StreamingIndexingStatusState::Failed,
                             block_ids.len(),
                             progress.load(AtomicOrdering::Relaxed),
                             started.elapsed(),
                             Some(error.to_string()),
+                            partition_path,
+                            partition_size,
                         ),
                     );
                 }
@@ -1532,7 +1539,7 @@ impl StreamingIndexingRunV3 {
         };
         self.run_v3_partition_phase(
             phase.clone(),
-            partition.item_count,
+            partition,
             emit_partition_status,
             |progress| {
                 let mut reader =
@@ -1586,7 +1593,7 @@ impl StreamingIndexingRunV3 {
         };
         self.run_v3_partition_phase(
             phase.clone(),
-            partition.item_count,
+            partition,
             emit_partition_status,
             |progress| {
                 let mut reader =
@@ -1641,7 +1648,7 @@ impl StreamingIndexingRunV3 {
         };
         self.run_v3_partition_phase(
             phase.clone(),
-            partition.item_count,
+            partition,
             emit_partition_status,
             |progress| {
                 let mut reader =
@@ -1710,7 +1717,7 @@ impl StreamingIndexingRunV3 {
         };
         self.run_v3_partition_phase(
             phase.clone(),
-            partition.item_count,
+            partition,
             emit_partition_status,
             |progress| {
                 let mut reader =
@@ -1771,21 +1778,24 @@ impl StreamingIndexingRunV3 {
     fn run_v3_partition_phase<T>(
         &self,
         phase: StreamingIndexingPhase,
-        total_items: usize,
+        partition: &WorkingPartition,
         emit_partition_status: bool,
         operation: impl FnOnce(Arc<AtomicUsize>) -> Result<T, StreamingIndexerError>,
     ) -> Result<T, StreamingIndexerError> {
+        let total_items = partition.item_count;
         let started = Instant::now();
         if emit_partition_status {
             emit_status(
                 &self.observer,
-                status_with_known_total(
+                partition_status_with_known_total(
                     phase.clone(),
                     StreamingIndexingStatusState::Started,
                     total_items,
                     0,
                     Duration::ZERO,
                     None,
+                    &partition.id,
+                    partition.item_count,
                 ),
             );
         }
@@ -1793,23 +1803,26 @@ impl StreamingIndexingRunV3 {
         if emit_partition_status {
             emit_status(
                 &self.observer,
-                status_with_known_total(
+                partition_status_with_known_total(
                     phase.clone(),
                     StreamingIndexingStatusState::InProgress,
                     total_items,
                     0,
                     started.elapsed(),
                     None,
+                    &partition.id,
+                    partition.item_count,
                 ),
             );
         }
         let mut heartbeat = emit_partition_status.then(|| {
-            crate::StatusHeartbeatGuard::new(start_status_heartbeat(
+            crate::StatusHeartbeatGuard::new(start_partition_status_heartbeat(
                 &self.observer,
                 phase.clone(),
-                Some(total_items),
+                total_items,
                 Arc::clone(&progress),
-                Some(total_items),
+                partition.id.clone(),
+                partition.item_count,
                 started,
             ))
         });
@@ -1825,13 +1838,15 @@ impl StreamingIndexingRunV3 {
                 if emit_partition_status {
                     emit_status(
                         &self.observer,
-                        status_with_known_total(
+                        partition_status_with_known_total(
                             phase,
                             StreamingIndexingStatusState::Completed,
                             total_items,
                             completed,
                             started.elapsed(),
                             None,
+                            &partition.id,
+                            partition.item_count,
                         ),
                     );
                 }
@@ -1841,13 +1856,15 @@ impl StreamingIndexingRunV3 {
                 if emit_partition_status {
                     emit_status(
                         &self.observer,
-                        status_with_known_total(
+                        partition_status_with_known_total(
                             phase,
                             StreamingIndexingStatusState::Failed,
                             total_items,
                             progress.load(AtomicOrdering::Relaxed),
                             started.elapsed(),
                             Some(error.to_string()),
+                            &partition.id,
+                            partition.item_count,
                         ),
                     );
                 }
@@ -1928,6 +1945,30 @@ fn v3_phase_description(phase: &StreamingIndexingPhase) -> &'static str {
         StreamingIndexingPhase::FinalMaterializationReplay => "final materialization replay",
         StreamingIndexingPhase::BottomUpAssembly { .. } => "bottom-up assembly",
     }
+}
+
+fn partition_status_with_known_total(
+    phase: StreamingIndexingPhase,
+    state: StreamingIndexingStatusState,
+    phase_total_unit_count: usize,
+    completed_unit_count: usize,
+    elapsed: Duration,
+    error: Option<String>,
+    partition_path: &str,
+    partition_size: usize,
+) -> StreamingIndexingStatus {
+    let mut status = status_with_known_total(
+        phase,
+        state,
+        phase_total_unit_count,
+        completed_unit_count,
+        elapsed,
+        error,
+    );
+    status.current_partition_path = Some(partition_path.to_string());
+    status.current_partition_size = Some(partition_size);
+    status.last_progress_at = Some(elapsed);
+    status
 }
 
 fn decode_loaded_leaf(
@@ -3658,6 +3699,10 @@ mod tests {
             ) && status.state == StreamingIndexingStatusState::Completed
                 && status.progress_unit_kind
                     == Some(StreamingIndexingProgressUnitKind::V3TrainIngestItem)
+                && status.current_partition_path.as_deref() == Some("l0.p0")
+                && status.current_partition_size == Some(ids.len())
+                && status.completed_unit_count == ids.len()
+                && status.phase_total_unit_count == Some(ids.len())
         }));
         assert!(statuses.iter().any(|status| {
             matches!(
@@ -3666,6 +3711,10 @@ mod tests {
             ) && status.state == StreamingIndexingStatusState::Completed
                 && status.progress_unit_kind
                     == Some(StreamingIndexingProgressUnitKind::V3ClassifiedItem)
+                && status.current_partition_path.as_deref() == Some("l0.p0")
+                && status.current_partition_size == Some(ids.len())
+                && status.completed_unit_count == ids.len()
+                && status.phase_total_unit_count == Some(ids.len())
         }));
     }
 
