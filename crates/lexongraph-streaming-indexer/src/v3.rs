@@ -1852,7 +1852,7 @@ where
         if replay_passes > max_passes {
             return Err(V3ReplayError::Indexing(
                 StreamingIndexerError::ClusteringFailure(format!(
-                    "v3 planner exceeded the maximum replay pass count of {max_passes}"
+                    "v3 partition {partition_id:?} with {item_count} items exceeded the maximum replay pass count of {max_passes}"
                 )),
             ));
         }
@@ -3230,18 +3230,7 @@ mod tests {
         }
 
         fn record_active_get(&self, active: usize) {
-            let mut maximum = self.max_active_gets.load(Ordering::SeqCst);
-            while active > maximum {
-                match self.max_active_gets.compare_exchange(
-                    maximum,
-                    active,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                ) {
-                    Ok(_) => break,
-                    Err(observed) => maximum = observed,
-                }
-            }
+            self.max_active_gets.fetch_max(active, Ordering::SeqCst);
         }
     }
 
