@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
-use redb::{Database, Durability, ReadOnlyTable, ReadableTable, TableDefinition};
+use redb::{Database, Durability, ReadOnlyTable, ReadableDatabase, ReadableTable, TableDefinition};
 use tempfile::TempDir;
 
 use crate::{
@@ -2311,7 +2311,14 @@ impl V3PartitionStore {
                 database_path.display()
             ))
         })?;
-        write_txn.set_durability(Durability::None);
+        write_txn
+            .set_durability(Durability::None)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not configure v3 partition database durability in {}: {error}",
+                    database_path.display()
+                ))
+            })?;
         {
             write_txn
                 .open_table(V3_PARTITION_COUNTS_TABLE)
@@ -2364,7 +2371,14 @@ impl V3PartitionStore {
                 self.database_path.display()
             ))
         })?;
-        write_txn.set_durability(Durability::None);
+        write_txn
+            .set_durability(Durability::None)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not configure v3 block-id partition durability in {}: {error}",
+                    self.database_path.display()
+                ))
+            })?;
         let start_index = self.partition_count_from_write_txn(
             &write_txn,
             partition_id,
@@ -2424,7 +2438,14 @@ impl V3PartitionStore {
                 self.database_path.display()
             ))
         })?;
-        write_txn.set_durability(Durability::None);
+        write_txn
+            .set_durability(Durability::None)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not configure v3 summary partition durability in {}: {error}",
+                    self.database_path.display()
+                ))
+            })?;
         let start_index = self.partition_count_from_write_txn(
             &write_txn,
             partition_id,
@@ -2490,7 +2511,14 @@ impl V3PartitionStore {
                 self.database_path.display()
             ))
         })?;
-        write_txn.set_durability(Durability::None);
+        write_txn
+            .set_durability(Durability::None)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not configure grouped v3 block-id partition durability in {}: {error}",
+                    self.database_path.display()
+                ))
+            })?;
         {
             let mut table = write_txn
                 .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
@@ -2561,7 +2589,14 @@ impl V3PartitionStore {
                 self.database_path.display()
             ))
         })?;
-        write_txn.set_durability(Durability::None);
+        write_txn
+            .set_durability(Durability::None)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not configure grouped v3 summary partition durability in {}: {error}",
+                    self.database_path.display()
+                ))
+            })?;
         {
             let mut table = write_txn
                 .open_table(V3_INDEXED_CHILD_PARTITIONS_TABLE)
@@ -2628,7 +2663,14 @@ impl V3PartitionStore {
                 self.database_path.display()
             ))
         })?;
-        write_txn.set_durability(Durability::None);
+        write_txn
+            .set_durability(Durability::None)
+            .map_err(|error| {
+                StreamingIndexerError::LocalSpill(format!(
+                    "could not configure v3 partition cleanup durability in {}: {error}",
+                    self.database_path.display()
+                ))
+            })?;
         for partition_id in partition_ids {
             self.clear_partition_in_write_txn(&write_txn, kind, partition_id)?;
         }
@@ -3868,7 +3910,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = V3PartitionStore::new(dir.path()).unwrap();
         let mut write_txn = store.database.begin_write().unwrap();
-        write_txn.set_durability(Durability::None);
+        write_txn.set_durability(Durability::None).unwrap();
         {
             let mut table = write_txn
                 .open_table(V3_BLOCK_HASH_PARTITIONS_TABLE)
