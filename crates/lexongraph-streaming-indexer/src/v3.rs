@@ -1432,8 +1432,10 @@ impl StreamingIndexingRunV3 {
                     0,
                     Duration::ZERO,
                     None,
-                    partition_path,
-                    partition_size,
+                    PartitionStatusContext {
+                        path: partition_path,
+                        size: partition_size,
+                    },
                 ),
             );
         }
@@ -1448,8 +1450,10 @@ impl StreamingIndexingRunV3 {
                     0,
                     started.elapsed(),
                     None,
-                    partition_path,
-                    partition_size,
+                    PartitionStatusContext {
+                        path: partition_path,
+                        size: partition_size,
+                    },
                 ),
             );
         }
@@ -1500,8 +1504,10 @@ impl StreamingIndexingRunV3 {
                             block_ids.len(),
                             started.elapsed(),
                             None,
-                            partition_path,
-                            partition_size,
+                            PartitionStatusContext {
+                                path: partition_path,
+                                size: partition_size,
+                            },
                         ),
                     );
                 }
@@ -1518,8 +1524,10 @@ impl StreamingIndexingRunV3 {
                             progress.load(AtomicOrdering::Relaxed),
                             started.elapsed(),
                             Some(error.to_string()),
-                            partition_path,
-                            partition_size,
+                            PartitionStatusContext {
+                                path: partition_path,
+                                size: partition_size,
+                            },
                         ),
                     );
                 }
@@ -1795,8 +1803,10 @@ impl StreamingIndexingRunV3 {
                     0,
                     Duration::ZERO,
                     None,
-                    &partition.id,
-                    partition.item_count,
+                    PartitionStatusContext {
+                        path: &partition.id,
+                        size: partition.item_count,
+                    },
                 ),
             );
         }
@@ -1811,8 +1821,10 @@ impl StreamingIndexingRunV3 {
                     0,
                     started.elapsed(),
                     None,
-                    &partition.id,
-                    partition.item_count,
+                    PartitionStatusContext {
+                        path: &partition.id,
+                        size: partition.item_count,
+                    },
                 ),
             );
         }
@@ -1846,8 +1858,10 @@ impl StreamingIndexingRunV3 {
                             completed,
                             started.elapsed(),
                             None,
-                            &partition.id,
-                            partition.item_count,
+                            PartitionStatusContext {
+                                path: &partition.id,
+                                size: partition.item_count,
+                            },
                         ),
                     );
                 }
@@ -1864,8 +1878,10 @@ impl StreamingIndexingRunV3 {
                             progress.load(AtomicOrdering::Relaxed),
                             started.elapsed(),
                             Some(error.to_string()),
-                            &partition.id,
-                            partition.item_count,
+                            PartitionStatusContext {
+                                path: &partition.id,
+                                size: partition.item_count,
+                            },
                         ),
                     );
                 }
@@ -1948,6 +1964,11 @@ fn v3_phase_description(phase: &StreamingIndexingPhase) -> &'static str {
     }
 }
 
+struct PartitionStatusContext<'a> {
+    path: &'a str,
+    size: usize,
+}
+
 fn partition_status_with_known_total(
     phase: StreamingIndexingPhase,
     state: StreamingIndexingStatusState,
@@ -1955,8 +1976,7 @@ fn partition_status_with_known_total(
     completed_unit_count: usize,
     elapsed: Duration,
     error: Option<String>,
-    partition_path: &str,
-    partition_size: usize,
+    partition: PartitionStatusContext<'_>,
 ) -> StreamingIndexingStatus {
     let mut status = status_with_known_total(
         phase,
@@ -1966,8 +1986,8 @@ fn partition_status_with_known_total(
         elapsed,
         error,
     );
-    status.current_partition_path = Some(partition_path.to_string());
-    status.current_partition_size = Some(partition_size);
+    status.current_partition_path = Some(partition.path.to_string());
+    status.current_partition_size = Some(partition.size);
     status.last_progress_at = Some(elapsed);
     status
 }
