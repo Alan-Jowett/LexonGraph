@@ -7,7 +7,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 futures = "0.3"
 httpdate = "1"
 lexongraph-block = { path = "../lexongraph-block" }
