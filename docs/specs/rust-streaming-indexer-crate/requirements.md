@@ -1925,6 +1925,38 @@ The fallback shall be treated as structural grouping rather than a semantic
 similarity claim, and its order-sensitive nature shall remain observable through
 the existing fallback reporting.
 
+### REQ-STREAM-INDEXER-139
+
+For the constrained v3 surface, each active partition-local item-processing
+phase shall emit periodic in-progress status updates carrying:
+
+- the specific v3 phase identity
+- the deterministic partition identity or path
+- the number of items whose processing effects have been committed for that
+  partition and phase
+- the total number of items in that partition and phase
+- the derived remaining count when the total is known
+
+This requirement applies to partition trainer ingest, partition classification,
+and terminal-materialization load. The partition-local completed count shall
+advance at deterministic committed batch or item boundaries and shall remain
+monotonic without waiting for an unrelated partition or the whole layer to
+complete.
+
+**Trace:** `USER-REQUEST: "restore the item level progress reports. I want the heartbeat to report the phase + processed item count + total item count of each partition that is being processed."`
+
+### REQ-STREAM-INDEXER-140
+
+Partition-local v3 status updates shall be additive to the deterministic
+layer-level aggregate status stream. Aggregate counts shall retain their
+existing partition or group completion semantics and shall not suppress,
+replace, or reinterpret partition-local progress.
+
+Partition planning updates may continue to use planning-invocation units and
+hierarchy detail fields rather than item-processing counts.
+
+**Trace:** `USER-REQUEST: selected "Retain aggregate + add per-partition heartbeats (Recommended)"`
+
 ## Out of Scope
 
 This crate does not define or own:

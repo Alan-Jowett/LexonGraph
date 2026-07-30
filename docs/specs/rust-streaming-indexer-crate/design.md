@@ -1774,6 +1774,37 @@ hierarchy topology, and persisted output across repeated executions. The
 implementation preserves the fallback reason in existing observable reporting
 rather than silently presenting structural grouping as semantic routing.
 
+### DSG-STREAM-INDEXER-133 `V3 partition-local progress telemetry`
+
+The constrained v3 runtime emits additive partition-local observer updates for
+each active item-processing phase:
+
+- `V3PartitionTrainIngest { layer_index }`
+- `V3PartitionClassify { layer_index }`
+- `V3TerminalMaterializationLoad { layer_index }`
+
+Each update identifies the deterministic current partition path, reports the
+number of committed items processed for that partition and phase, reports that
+partition's total item count, and derives remaining items as
+`phase_total_unit_count - completed_unit_count` when the total is known.
+
+Partition-local heartbeats are periodic while work remains active. Their
+completed counts advance only after deterministic processing effects are
+committed, including the existing batch pipeline commit boundary, and are
+monotonic within one partition-phase execution. Prepared-but-not-committed
+work does not advance the committed count.
+
+### DSG-STREAM-INDEXER-134 `V3 aggregate and partition telemetry coexistence`
+
+The existing layer-level aggregate status stream remains enabled for concurrent
+v3 work. Its deterministic partition/group completion semantics are unchanged.
+Partition-local updates are additive and are not folded into, substituted for,
+or suppressed by aggregate updates.
+
+`HierarchyPlanning { stage: Custom }` continues to report planning-invocation
+units and recursive planning detail fields. It is not reinterpreted as an
+item-processing phase solely to provide partition-local item counts.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -1800,6 +1831,9 @@ rather than silently presenting structural grouping as semantic routing.
 | DSG-STREAM-INDEXER-025..026 | REQ-STREAM-INDEXER-035, REQ-STREAM-INDEXER-038 |
 | DSG-STREAM-INDEXER-027 | REQ-STREAM-INDEXER-036 |
 | DSG-STREAM-INDEXER-028 | REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-037A, REQ-STREAM-INDEXER-037B, REQ-STREAM-INDEXER-037C |
+| DSG-STREAM-INDEXER-028A | REQ-STREAM-INDEXER-037D, REQ-STREAM-INDEXER-037E |
+| DSG-STREAM-INDEXER-028B | REQ-STREAM-INDEXER-037F, REQ-STREAM-INDEXER-037G |
+| DSG-STREAM-INDEXER-028C | REQ-STREAM-INDEXER-037, REQ-STREAM-INDEXER-037A, REQ-STREAM-INDEXER-037B |
 | DSG-STREAM-INDEXER-029 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-121 |
 | DSG-STREAM-INDEXER-030 | REQ-STREAM-INDEXER-040 |
 | DSG-STREAM-INDEXER-031 | REQ-STREAM-INDEXER-041 |
@@ -1897,4 +1931,6 @@ rather than silently presenting structural grouping as semantic routing.
 | DSG-STREAM-INDEXER-130 | REQ-STREAM-INDEXER-137 |
 | DSG-STREAM-INDEXER-131 | REQ-STREAM-INDEXER-136 |
 | DSG-STREAM-INDEXER-132 | REQ-STREAM-INDEXER-138 |
+| DSG-STREAM-INDEXER-133 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-139 |
+| DSG-STREAM-INDEXER-134 | REQ-STREAM-INDEXER-037C, REQ-STREAM-INDEXER-140 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

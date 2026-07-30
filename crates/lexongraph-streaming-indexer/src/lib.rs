@@ -8251,6 +8251,46 @@ fn start_status_heartbeat(
     legacy_item_count: Option<usize>,
     started: Instant,
 ) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
+    start_status_heartbeat_with_partition(
+        observer,
+        phase,
+        phase_total_unit_count,
+        progress,
+        legacy_item_count,
+        started,
+        None,
+    )
+}
+
+pub(crate) fn start_partition_status_heartbeat(
+    observer: &Option<StreamingIndexingStatusObserver>,
+    phase: StreamingIndexingPhase,
+    phase_total_unit_count: usize,
+    progress: Arc<AtomicUsize>,
+    partition_path: String,
+    partition_size: usize,
+    started: Instant,
+) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
+    start_status_heartbeat_with_partition(
+        observer,
+        phase,
+        Some(phase_total_unit_count),
+        progress,
+        Some(partition_size),
+        started,
+        Some((partition_path, partition_size)),
+    )
+}
+
+fn start_status_heartbeat_with_partition(
+    observer: &Option<StreamingIndexingStatusObserver>,
+    phase: StreamingIndexingPhase,
+    phase_total_unit_count: Option<usize>,
+    progress: Arc<AtomicUsize>,
+    legacy_item_count: Option<usize>,
+    started: Instant,
+    partition: Option<(String, usize)>,
+) -> Option<(mpsc::Sender<()>, thread::JoinHandle<()>)> {
     let observer = observer.as_ref().map(Arc::clone)?;
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let handle = thread::spawn(move || {
@@ -8259,7 +8299,7 @@ fn start_status_heartbeat(
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
             let _ = catch_unwind(AssertUnwindSafe(|| {
-                let status = status_with_progress(
+                let mut status = status_with_progress(
                     phase.clone(),
                     StreamingIndexingStatusState::InProgress,
                     phase_total_unit_count,
@@ -8267,6 +8307,11 @@ fn start_status_heartbeat(
                     started.elapsed(),
                     None,
                 );
+                if let Some((partition_path, partition_size)) = &partition {
+                    status.current_partition_path = Some(partition_path.clone());
+                    status.current_partition_size = Some(*partition_size);
+                    status.last_progress_at = Some(started.elapsed());
+                }
                 observer(if let Some(legacy_item_count) = legacy_item_count {
                     with_legacy_item_count(status, legacy_item_count)
                 } else {

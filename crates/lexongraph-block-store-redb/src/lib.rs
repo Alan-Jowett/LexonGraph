@@ -14,7 +14,7 @@ use lexongraph_block_store::{
     BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError, BlockStoreTelemetryCallback,
     BlockStoreTelemetryEvent,
 };
-use redb::{Database, Durability, ReadableTable, RepairSession, TableDefinition};
+use redb::{Database, Durability, ReadableDatabase, ReadableTable, RepairSession, TableDefinition};
 
 const BLOCKS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 const DATABASE_FILE_NAME: &str = "blocks.redb";
@@ -215,7 +215,14 @@ impl BlockStore for RedbBlockStore {
             ))
         })?;
         if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {
-            write_txn.set_durability(Durability::None);
+            write_txn
+                .set_durability(Durability::None)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to set fast durability for block {}: {error}",
+                        block_id
+                    ))
+                })?;
         }
         let should_commit = {
             let mut table = write_txn.open_table(BLOCKS_TABLE).map_err(|error| {
@@ -296,7 +303,13 @@ impl BlockStore for RedbBlockStore {
             ))
         })?;
         if self.state.durability_mode == RedbBlockStoreDurabilityMode::Fast {
-            write_txn.set_durability(Durability::None);
+            write_txn
+                .set_durability(Durability::None)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to set fast durability for a block batch: {error}"
+                    ))
+                })?;
         }
         let should_commit = {
             let mut table = write_txn.open_table(BLOCKS_TABLE).map_err(|error| {
@@ -462,7 +475,9 @@ impl SharedState {
             .database
             .begin_write()
             .map_err(|error| backend_failure(format!("{begin_context}: {error}")))?;
-        write_txn.set_durability(Durability::Immediate);
+        write_txn
+            .set_durability(Durability::Immediate)
+            .map_err(|error| backend_failure(format!("{begin_context}: {error}")))?;
         write_txn
             .commit()
             .map_err(|error| backend_failure(format!("{commit_context}: {error}")))?;
