@@ -278,6 +278,9 @@ Read-only open shall not mark the on-disk Redb database dirty, publish a new
 repair obligation, or otherwise require a later writable open merely because a
 client opened the store read-only and then terminated unexpectedly.
 
+Read-only open shall use Redb's native read-only database mechanism rather than
+loading the complete database file into a backend-owned heap buffer.
+
 ### REQ-REDB-STORE-027
 
 If the Redb database is already marked recovery-required at read-only open
@@ -288,6 +291,10 @@ without mutating the persisted database state.
 This revision shall not silently fall back from a requested read-only open into
 writable repair behavior.
 
+The native read-only open shall preserve Redb's file-locking semantics. On
+platforms where Redb supports file locking, a read-only handle shall fail
+explicitly when a writable database handle is already open for the same file.
+
 ### REQ-REDB-STORE-028
 
 When a store is opened in read-only mode, mutating operations including `put`,
@@ -296,6 +303,20 @@ operation shall fail explicitly.
 
 These operations shall not silently succeed, no-op, partially commit, or
 upgrade the store to writable behavior.
+
+### REQ-REDB-STORE-029
+
+The Redb-backed implementation shall represent read-only and read-write
+database handles without exposing Redb-native handles through the public
+`RedbBlockStore` API. Read operations shall work through the shared readable
+database behavior, while write and maintenance operations shall remain
+restricted to read-write handles.
+
+### REQ-REDB-STORE-030
+
+Read-only construction and ordinary read operations shall not require a memory
+allocation proportional to the complete persisted database file size. Memory
+usage shall follow Redb's native file-backed page and cache behavior.
 
 ## Out of Scope
 

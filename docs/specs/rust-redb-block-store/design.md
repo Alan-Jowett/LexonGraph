@@ -128,20 +128,25 @@ The database file name, table name, key representation, and any Redb page-level
 layout remain implementation details and do not cross the parent trait
 boundary.
 
-### DSG-REDB-STORE-004A `Read-only snapshot opening strategy`
+### DSG-REDB-STORE-004A `Native read-only opening strategy`
 
-In this revision, read-only open is realized without granting the live
-`RedbBlockStore` handle authority to mutate the on-disk database under the
-configured store root.
+Read-only open uses Redb's native
+`Database::builder().open_read_only(...)` path and retains the resulting
+`ReadOnlyDatabase` handle in the concrete store's private shared state.
 
-When the on-disk database is in a clean state acceptable for read-only open,
-the implementation may load a backend-private read-only snapshot of the Redb
-database bytes into a private backend owned by the concrete store instance and
-then open Redb against that private snapshot.
+The implementation does not copy the database file into a heap buffer or create
+a private full-file snapshot. Redb performs file-backed reads through its
+normal page and cache behavior, while the store's public API continues to
+expose only `RedbBlockStore` and the inherited `BlockStore` contract.
 
-This preserves ordinary Redb-backed read semantics for `get` and identifier
-enumeration while ensuring that read-only open does not dirty the caller's
-persisted database file.
+The private store state represents either a writable `Database` or a native
+`ReadOnlyDatabase`. Read operations use the shared readable-database behavior;
+write transactions, durability flushes, and compaction are available only on
+writable state and are rejected before backend mutation for read-only handles.
+
+Native Redb file-locking behavior is preserved. On platforms where Redb supports
+file locking, a read-only open fails explicitly if a writable database handle
+already owns the file.
 
 If the on-disk state would require repair before the backend can proceed, the
 implementation fails explicitly rather than mutating the persisted database
@@ -364,6 +369,10 @@ The crate adds backend-specific tests for:
 - explicit failure for read-only open when the persisted database already
   requires recovery in a way this revision cannot satisfy safely
 - absence of on-disk dirty-header side effects from read-only open
+- native Redb read-only opening without a full-file heap snapshot
+- manual large-store read-only validation against a database larger than the
+  process's available working memory
+- native locking failure when a writable Redb handle is already open
 - successful compaction preserving block visibility and reopen behavior
 - explicit compaction failure when exclusive ownership is unavailable
 - explicit absence for missing block IDs
@@ -389,7 +398,7 @@ The crate adds backend-specific tests for:
 | DSG-REDB-STORE-001 | REQ-REDB-STORE-001, REQ-REDB-STORE-002 |
 | DSG-REDB-STORE-002..004 | REQ-REDB-STORE-001, REQ-REDB-STORE-003, REQ-REDB-STORE-004 |
 | DSG-REDB-STORE-003A..003C | REQ-REDB-STORE-002, REQ-REDB-STORE-003, REQ-REDB-STORE-015, REQ-REDB-STORE-022, REQ-REDB-STORE-025 |
-| DSG-REDB-STORE-004A | REQ-REDB-STORE-025, REQ-REDB-STORE-026, REQ-REDB-STORE-027 |
+| DSG-REDB-STORE-004A | REQ-REDB-STORE-025, REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-029, REQ-REDB-STORE-030 |
 | DSG-REDB-STORE-005 | REQ-REDB-STORE-005, REQ-REDB-STORE-008, REQ-REDB-STORE-012 |
 | DSG-REDB-STORE-005A | REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021 |
 | DSG-REDB-STORE-006..006D | REQ-REDB-STORE-013, REQ-REDB-STORE-014, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-028 |
@@ -397,4 +406,4 @@ The crate adds backend-specific tests for:
 | DSG-REDB-STORE-007 | REQ-REDB-STORE-006, REQ-REDB-STORE-007 |
 | DSG-REDB-STORE-008 | REQ-REDB-STORE-009, REQ-REDB-STORE-010, REQ-REDB-STORE-026 |
 | DSG-REDB-STORE-009..009A | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-027, REQ-REDB-STORE-028 |
-| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-025, REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-028 |
+| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-025, REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-028, REQ-REDB-STORE-029, REQ-REDB-STORE-030 |
