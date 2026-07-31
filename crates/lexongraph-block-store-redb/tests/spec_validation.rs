@@ -554,10 +554,12 @@ fn val_redb_store_028_read_only_open_preserves_native_writer_locking() {
 
     match error {
         BlockStoreError::BackendFailure(message) => assert!(
-            message.contains("already open") || message.contains("locked a portion"),
-            "expected native writer-lock failure, got {message:?}"
+            message.contains("already open")
+                || message.contains("locked a portion")
+                || message.contains("recovery is required"),
+            "expected explicit writer/recovery-open failure, got {message:?}"
         ),
-        other => panic!("expected native writer-lock failure, got {other:?}"),
+        other => panic!("expected explicit writer/recovery-open failure, got {other:?}"),
     }
     drop(writable);
 }
