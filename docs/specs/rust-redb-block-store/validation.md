@@ -335,3 +335,26 @@ database state. This revision shall not silently fall back to writable repair
 behavior.
 
 **Traces to:** REQ-REDB-STORE-027
+
+### VAL-REDB-STORE-028
+
+Open a clean Redb-backed database in read-only mode while a writable Redb
+database handle owns the same file.
+
+**Pass condition:** on platforms where Redb supports file locking, read-only
+construction fails explicitly with the native database-already-open behavior;
+the implementation does not bypass the lock by creating a copied or
+in-memory database.
+
+**Traces to:** REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-029
+
+### VAL-REDB-STORE-029
+
+Open and read a Redb-backed database whose persisted file is substantially
+larger than the process's available working memory.
+
+**Pass condition:** read-only construction and ordinary `get`/enumeration do
+not attempt an allocation proportional to the complete database file size and
+use Redb's native file-backed read-only path.
+
+**Traces to:** REQ-REDB-STORE-026, REQ-REDB-STORE-029, REQ-REDB-STORE-030

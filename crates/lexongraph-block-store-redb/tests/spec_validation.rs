@@ -544,6 +544,24 @@ fn val_redb_store_023_read_only_open_reads_without_mutating_the_database_header(
     assert_eq!(read_god_byte(&database_path), header_before);
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn val_redb_store_028_read_only_open_preserves_native_writer_locking() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let writable = RedbBlockStore::new(temp_dir.path()).unwrap();
+
+    let error = RedbBlockStore::new_read_only(temp_dir.path()).unwrap_err();
+
+    match error {
+        BlockStoreError::BackendFailure(message) => assert!(
+            message.contains("already open") || message.contains("locked a portion"),
+            "expected native writer-lock failure, got {message:?}"
+        ),
+        other => panic!("expected native writer-lock failure, got {other:?}"),
+    }
+    drop(writable);
+}
+
 #[test]
 fn val_redb_store_024_read_only_enumeration_yields_persisted_block_ids_only() {
     let temp_dir = tempfile::tempdir().unwrap();
