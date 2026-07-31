@@ -2,6 +2,7 @@
 // Copyright (c) 2026 LexonGraph contributors
 //! Redb-backed durable local `BlockStore` implementation for LexonGraph blocks.
 
+use std::io::{Read, Seek, SeekFrom};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -176,7 +177,7 @@ impl RedbBlockStore {
     }
 
     pub fn compact_now(&mut self) -> Result<(), BlockStoreError> {
-        self.ensure_writable("compact the redb database")?;
+        self.ensure_writable(|| "compact the redb database".to_owned())?;
         let state = Arc::get_mut(&mut self.state).ok_or_else(|| {
             backend_failure(format!(
                 "failed to compact redb database under {} because exclusive store ownership is required",
@@ -207,7 +208,7 @@ impl RedbBlockStore {
         key: Vec<u8>,
         bytes: Vec<u8>,
     ) -> Result<(), BlockStoreError> {
-        self.ensure_writable("inject raw bytes into the redb block table")?;
+        self.ensure_writable(|| "inject raw bytes into the redb block table".to_owned())?;
         let write_txn = self.state.database.begin_write().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb write transaction for test injection: {error}"
@@ -239,11 +240,12 @@ impl RedbBlockStore {
         self.state.pending_flush.load(Ordering::Acquire)
     }
 
-    fn ensure_writable(&self, operation: &str) -> Result<(), BlockStoreError> {
+    fn ensure_writable(&self, operation: impl FnOnce() -> String) -> Result<(), BlockStoreError> {
         if self.state.access_mode == RedbBlockStoreAccessMode::ReadOnly {
             return Err(backend_failure(format!(
                 "failed to {operation} under {} because the store was opened in read-only mode",
-                self.store_root.display()
+                self.store_root.display(),
+                operation = operation()
             )));
         }
         Ok(())
@@ -270,7 +272,7 @@ impl BlockStore for RedbBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
-        self.ensure_writable(&format!("persist block {}", block_id))?;
+        self.ensure_writable(|| format!("persist block {}", block_id))?;
         let mut write_txn = self.state.database.begin_write().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb write transaction for block {}: {error}",
@@ -356,7 +358,7 @@ impl BlockStore for RedbBlockStore {
         &self,
         entries: &[BlockBytesBatchEntry<'_>],
     ) -> Result<(), BlockStoreError> {
-        self.ensure_writable("persist a block batch")?;
+        self.ensure_writable(|| "persist a block batch".to_owned())?;
         if entries.is_empty() {
             return Ok(());
         }
@@ -650,19 +652,30 @@ fn backend_failure(message: String) -> BlockStoreError {
 }
 
 fn database_requires_recovery(database_path: &Path) -> Result<bool, BlockStoreError> {
-    let header = std::fs::read(database_path).map_err(|error| {
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(database_path)
+        .map_err(|error| {
+            backend_failure(format!(
+                "failed to inspect redb database header for {}: {error}",
+                database_path.display()
+            ))
+        })?;
+    file.seek(SeekFrom::Start(GOD_BYTE_OFFSET))
+        .map_err(|error| {
+            backend_failure(format!(
+                "failed to seek to the redb header for {}: {error}",
+                database_path.display()
+            ))
+        })?;
+    let mut buffer = [0u8; 1];
+    file.read_exact(&mut buffer).map_err(|error| {
         backend_failure(format!(
             "failed to inspect redb database header for {}: {error}",
             database_path.display()
         ))
     })?;
-    let Some(god_byte) = header.get(GOD_BYTE_OFFSET as usize) else {
-        return Err(backend_failure(format!(
-            "failed to inspect redb database header for {} because the file is shorter than the redb header",
-            database_path.display()
-        )));
-    };
-    Ok(god_byte & RECOVERY_REQUIRED != 0)
+    Ok(buffer[0] & RECOVERY_REQUIRED != 0)
 }
 
 #[derive(Debug)]
@@ -697,11 +710,12 @@ impl StorageBackend for ReadOnlySnapshotBackend {
         Ok(self.read_guard().len() as u64)
     }
 
-    fn read(&self, offset: u64, len: usize) -> Result<Vec<u8>, io::Error> {
+    fn read(&self, offset: u64, out: &mut [u8]) -> Result<(), io::Error> {
         let guard = self.read_guard();
         let offset = usize::try_from(offset).map_err(|_| Self::out_of_range())?;
-        if offset + len <= guard.len() {
-            Ok(guard[offset..offset + len].to_vec())
+        if offset + out.len() <= guard.len() {
+            out.copy_from_slice(&guard[offset..offset + out.len()]);
+            Ok(())
         } else {
             Err(Self::out_of_range())
         }
@@ -718,7 +732,7 @@ impl StorageBackend for ReadOnlySnapshotBackend {
         Ok(())
     }
 
-    fn sync_data(&self, _: bool) -> Result<(), io::Error> {
+    fn sync_data(&self) -> Result<(), io::Error> {
         Ok(())
     }
 
