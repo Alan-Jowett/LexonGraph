@@ -357,4 +357,12 @@ larger than the process's available working memory.
 not attempt an allocation proportional to the complete database file size and
 use Redb's native file-backed read-only path.
 
+**Execution:** manual validation only. Run the target read-only consumer against
+a representative database whose file size exceeds the available process
+working memory, while observing the process working set. Confirm that
+construction, `get`, and enumeration complete without an allocation or failure
+proportional to the database file size. This validation is intentionally not
+part of ordinary CI because creating and storing a multi-gigabyte fixture is
+environment-dependent and needlessly destructive.
+
 **Traces to:** REQ-REDB-STORE-026, REQ-REDB-STORE-029, REQ-REDB-STORE-030

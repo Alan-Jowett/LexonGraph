@@ -370,7 +370,7 @@ The crate adds backend-specific tests for:
   requires recovery in a way this revision cannot satisfy safely
 - absence of on-disk dirty-header side effects from read-only open
 - native Redb read-only opening without a full-file heap snapshot
-- read-only opening and ordinary reads against a database larger than the
+- manual large-store read-only validation against a database larger than the
   process's available working memory
 - native locking failure when a writable Redb handle is already open
 - successful compaction preserving block visibility and reopen behavior
