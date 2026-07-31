@@ -283,3 +283,55 @@ Inspect the Redb-backed shared telemetry boundary for repair control semantics.
 repair behavior through the shared callback surface.
 
 **Traces to:** REQ-REDB-STORE-023
+
+### VAL-REDB-STORE-023
+
+Open an existing clean Redb-backed store in read-only mode and retrieve a
+previously stored block.
+
+**Pass condition:** read-only open succeeds, `get` returns the expected block,
+and the on-disk Redb header remains unchanged across the read-only session.
+
+**Traces to:** REQ-REDB-STORE-025, REQ-REDB-STORE-026
+
+### VAL-REDB-STORE-024
+
+Open an existing clean Redb-backed store in read-only mode and enumerate block
+IDs.
+
+**Pass condition:** read-only enumeration yields the persisted block IDs only
+while preserving the ordinary identifier-only contract.
+
+**Traces to:** REQ-REDB-STORE-025, REQ-REDB-STORE-026
+
+### VAL-REDB-STORE-025
+
+Attempt `put` and raw-byte batch persistence through a read-only Redb-backed
+store handle.
+
+**Pass condition:** each operation fails explicitly, no requested new bytes
+become committed, and the store does not silently upgrade itself to writable
+behavior.
+
+**Traces to:** REQ-REDB-STORE-010, REQ-REDB-STORE-028
+
+### VAL-REDB-STORE-026
+
+Attempt to invoke `compact_now` through a read-only Redb-backed store handle.
+
+**Pass condition:** the operation fails explicitly without mutating the
+persisted Redb database state.
+
+**Traces to:** REQ-REDB-STORE-010, REQ-REDB-STORE-028
+
+### VAL-REDB-STORE-027
+
+Attempt to open a Redb-backed store in read-only mode when the persisted
+database is already marked recovery-required.
+
+**Pass condition:** the store either opens read-only without repair when the
+backend supports that safely or fails explicitly without mutating the persisted
+database state. This revision shall not silently fall back to writable repair
+behavior.
+
+**Traces to:** REQ-REDB-STORE-027

@@ -5,7 +5,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::{io, io::ErrorKind};
 
 use async_trait::async_trait;
 use futures::stream;
@@ -14,10 +15,15 @@ use lexongraph_block_store::{
     BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError, BlockStoreTelemetryCallback,
     BlockStoreTelemetryEvent,
 };
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, RepairSession, TableDefinition};
+use redb::{
+    Database, Durability, ReadableDatabase, ReadableTable, RepairSession, StorageBackend,
+    TableDefinition,
+};
 
 const BLOCKS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 const DATABASE_FILE_NAME: &str = "blocks.redb";
+const GOD_BYTE_OFFSET: u64 = 9;
+const RECOVERY_REQUIRED: u8 = 2;
 
 #[derive(Clone)]
 pub struct RedbBlockStore {
@@ -27,9 +33,17 @@ pub struct RedbBlockStore {
 
 struct SharedState {
     database: Database,
+    access_mode: RedbBlockStoreAccessMode,
     durability_mode: RedbBlockStoreDurabilityMode,
     pending_flush: AtomicBool,
     telemetry_callback: Arc<Mutex<Option<BlockStoreTelemetryCallback>>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RedbBlockStoreAccessMode {
+    #[default]
+    ReadWrite,
+    ReadOnly,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,6 +57,7 @@ impl std::fmt::Debug for RedbBlockStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedbBlockStore")
             .field("store_root", &self.store_root)
+            .field("access_mode", &self.state.access_mode)
             .field("durability_mode", &self.state.durability_mode)
             .finish()
     }
@@ -50,8 +65,9 @@ impl std::fmt::Debug for RedbBlockStore {
 
 impl RedbBlockStore {
     pub fn new(store_root: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
-        Self::new_with_durability_and_telemetry(
+        Self::new_with_options_and_telemetry(
             store_root,
+            RedbBlockStoreAccessMode::ReadWrite,
             RedbBlockStoreDurabilityMode::Durable,
             None,
         )
@@ -61,15 +77,30 @@ impl RedbBlockStore {
         store_root: impl AsRef<Path>,
         durability_mode: RedbBlockStoreDurabilityMode,
     ) -> Result<Self, BlockStoreError> {
-        Self::new_with_durability_and_telemetry(store_root, durability_mode, None)
+        Self::new_with_options_and_telemetry(
+            store_root,
+            RedbBlockStoreAccessMode::ReadWrite,
+            durability_mode,
+            None,
+        )
+    }
+
+    pub fn new_read_only(store_root: impl AsRef<Path>) -> Result<Self, BlockStoreError> {
+        Self::new_with_options_and_telemetry(
+            store_root,
+            RedbBlockStoreAccessMode::ReadOnly,
+            RedbBlockStoreDurabilityMode::Durable,
+            None,
+        )
     }
 
     pub fn new_with_telemetry(
         store_root: impl AsRef<Path>,
         telemetry_callback: BlockStoreTelemetryCallback,
     ) -> Result<Self, BlockStoreError> {
-        Self::new_with_durability_and_telemetry(
+        Self::new_with_options_and_telemetry(
             store_root,
+            RedbBlockStoreAccessMode::ReadWrite,
             RedbBlockStoreDurabilityMode::Durable,
             Some(telemetry_callback),
         )
@@ -80,13 +111,29 @@ impl RedbBlockStore {
         durability_mode: RedbBlockStoreDurabilityMode,
         telemetry_callback: Option<BlockStoreTelemetryCallback>,
     ) -> Result<Self, BlockStoreError> {
+        Self::new_with_options_and_telemetry(
+            store_root,
+            RedbBlockStoreAccessMode::ReadWrite,
+            durability_mode,
+            telemetry_callback,
+        )
+    }
+
+    fn new_with_options_and_telemetry(
+        store_root: impl AsRef<Path>,
+        access_mode: RedbBlockStoreAccessMode,
+        durability_mode: RedbBlockStoreDurabilityMode,
+        telemetry_callback: Option<BlockStoreTelemetryCallback>,
+    ) -> Result<Self, BlockStoreError> {
         let requested_root = store_root.as_ref();
-        std::fs::create_dir_all(requested_root).map_err(|error| {
-            backend_failure(format!(
-                "failed to create store root {}: {error}",
-                requested_root.display()
-            ))
-        })?;
+        if access_mode == RedbBlockStoreAccessMode::ReadWrite {
+            std::fs::create_dir_all(requested_root).map_err(|error| {
+                backend_failure(format!(
+                    "failed to create store root {}: {error}",
+                    requested_root.display()
+                ))
+            })?;
+        }
 
         let canonical_root = requested_root.canonicalize().map_err(|error| {
             backend_failure(format!(
@@ -110,10 +157,13 @@ impl RedbBlockStore {
 
         let database_path = canonical_root.join(DATABASE_FILE_NAME);
         let telemetry_callback = Arc::new(Mutex::new(telemetry_callback));
-        let database = open_database(&database_path, telemetry_callback.clone())?;
-        initialize_blocks_table(&database, &database_path)?;
+        let database = open_database(&database_path, access_mode, telemetry_callback.clone())?;
+        if access_mode == RedbBlockStoreAccessMode::ReadWrite {
+            initialize_blocks_table(&database, &database_path)?;
+        }
         let state = Arc::new(SharedState {
             database,
+            access_mode,
             durability_mode,
             pending_flush: AtomicBool::new(false),
             telemetry_callback,
@@ -126,6 +176,7 @@ impl RedbBlockStore {
     }
 
     pub fn compact_now(&mut self) -> Result<(), BlockStoreError> {
+        self.ensure_writable("compact the redb database")?;
         let state = Arc::get_mut(&mut self.state).ok_or_else(|| {
             backend_failure(format!(
                 "failed to compact redb database under {} because exclusive store ownership is required",
@@ -156,6 +207,7 @@ impl RedbBlockStore {
         key: Vec<u8>,
         bytes: Vec<u8>,
     ) -> Result<(), BlockStoreError> {
+        self.ensure_writable("inject raw bytes into the redb block table")?;
         let write_txn = self.state.database.begin_write().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb write transaction for test injection: {error}"
@@ -186,6 +238,16 @@ impl RedbBlockStore {
     pub fn pending_fast_mode_flush(&self) -> bool {
         self.state.pending_flush.load(Ordering::Acquire)
     }
+
+    fn ensure_writable(&self, operation: &str) -> Result<(), BlockStoreError> {
+        if self.state.access_mode == RedbBlockStoreAccessMode::ReadOnly {
+            return Err(backend_failure(format!(
+                "failed to {operation} under {} because the store was opened in read-only mode",
+                self.store_root.display()
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -208,6 +270,7 @@ impl BlockStore for RedbBlockStore {
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
+        self.ensure_writable(&format!("persist block {}", block_id))?;
         let mut write_txn = self.state.database.begin_write().map_err(|error| {
             backend_failure(format!(
                 "failed to start a redb write transaction for block {}: {error}",
@@ -293,6 +356,7 @@ impl BlockStore for RedbBlockStore {
         &self,
         entries: &[BlockBytesBatchEntry<'_>],
     ) -> Result<(), BlockStoreError> {
+        self.ensure_writable("persist a block batch")?;
         if entries.is_empty() {
             return Ok(());
         }
@@ -465,7 +529,8 @@ impl SharedState {
         begin_context: &str,
         commit_context: &str,
     ) -> Result<(), BlockStoreError> {
-        if self.durability_mode != RedbBlockStoreDurabilityMode::Fast
+        if self.access_mode != RedbBlockStoreAccessMode::ReadWrite
+            || self.durability_mode != RedbBlockStoreDurabilityMode::Fast
             || !self.pending_flush.load(Ordering::Acquire)
         {
             return Ok(());
@@ -522,6 +587,7 @@ fn initialize_blocks_table(
 
 fn open_database(
     database_path: &Path,
+    access_mode: RedbBlockStoreAccessMode,
     telemetry_callback: Arc<Mutex<Option<BlockStoreTelemetryCallback>>>,
 ) -> Result<Database, BlockStoreError> {
     let mut builder = Database::builder();
@@ -529,7 +595,25 @@ fn open_database(
     builder.set_repair_callback(move |session| {
         emit_repair_telemetry(&telemetry_callback, &database_path_for_callback, session);
     });
-    builder.create(database_path).map_err(|error| {
+    match access_mode {
+        RedbBlockStoreAccessMode::ReadWrite => builder.create(database_path),
+        RedbBlockStoreAccessMode::ReadOnly => {
+            if !database_path.is_file() {
+                return Err(backend_failure(format!(
+                    "failed to open redb database {} in read-only mode because the database file does not exist",
+                    database_path.display()
+                )));
+            }
+            if database_requires_recovery(database_path)? {
+                return Err(backend_failure(format!(
+                    "failed to open redb database {} in read-only mode because recovery is required and this revision does not permit read-only repair",
+                    database_path.display()
+                )));
+            }
+            builder.create_with_backend(ReadOnlySnapshotBackend::from_path(database_path)?)
+        }
+    }
+    .map_err(|error| {
         backend_failure(format!(
             "failed to open redb database {}: {error}",
             database_path.display()
@@ -563,4 +647,89 @@ fn emit_repair_telemetry(
 
 fn backend_failure(message: String) -> BlockStoreError {
     BlockStoreError::BackendFailure(message)
+}
+
+fn database_requires_recovery(database_path: &Path) -> Result<bool, BlockStoreError> {
+    let header = std::fs::read(database_path).map_err(|error| {
+        backend_failure(format!(
+            "failed to inspect redb database header for {}: {error}",
+            database_path.display()
+        ))
+    })?;
+    let Some(god_byte) = header.get(GOD_BYTE_OFFSET as usize) else {
+        return Err(backend_failure(format!(
+            "failed to inspect redb database header for {} because the file is shorter than the redb header",
+            database_path.display()
+        )));
+    };
+    Ok(god_byte & RECOVERY_REQUIRED != 0)
+}
+
+#[derive(Debug)]
+struct ReadOnlySnapshotBackend(RwLock<Vec<u8>>);
+
+impl ReadOnlySnapshotBackend {
+    fn from_path(database_path: &Path) -> Result<Self, BlockStoreError> {
+        let bytes = std::fs::read(database_path).map_err(|error| {
+            backend_failure(format!(
+                "failed to snapshot redb database {} for read-only access: {error}",
+                database_path.display()
+            ))
+        })?;
+        Ok(Self(RwLock::new(bytes)))
+    }
+
+    fn out_of_range() -> io::Error {
+        io::Error::new(ErrorKind::InvalidInput, "index out of range")
+    }
+
+    fn read_guard(&self) -> std::sync::RwLockReadGuard<'_, Vec<u8>> {
+        self.0.read().expect("read-only snapshot lock poisoned")
+    }
+
+    fn write_guard(&self) -> std::sync::RwLockWriteGuard<'_, Vec<u8>> {
+        self.0.write().expect("read-only snapshot lock poisoned")
+    }
+}
+
+impl StorageBackend for ReadOnlySnapshotBackend {
+    fn len(&self) -> Result<u64, io::Error> {
+        Ok(self.read_guard().len() as u64)
+    }
+
+    fn read(&self, offset: u64, len: usize) -> Result<Vec<u8>, io::Error> {
+        let guard = self.read_guard();
+        let offset = usize::try_from(offset).map_err(|_| Self::out_of_range())?;
+        if offset + len <= guard.len() {
+            Ok(guard[offset..offset + len].to_vec())
+        } else {
+            Err(Self::out_of_range())
+        }
+    }
+
+    fn set_len(&self, len: u64) -> Result<(), io::Error> {
+        let mut guard = self.write_guard();
+        let len = usize::try_from(len).map_err(|_| Self::out_of_range())?;
+        if guard.len() < len {
+            guard.resize(len, 0);
+        } else {
+            guard.truncate(len);
+        }
+        Ok(())
+    }
+
+    fn sync_data(&self, _: bool) -> Result<(), io::Error> {
+        Ok(())
+    }
+
+    fn write(&self, offset: u64, data: &[u8]) -> Result<(), io::Error> {
+        let mut guard = self.write_guard();
+        let offset = usize::try_from(offset).map_err(|_| Self::out_of_range())?;
+        if offset + data.len() <= guard.len() {
+            guard[offset..offset + data.len()].copy_from_slice(data);
+            Ok(())
+        } else {
+            Err(Self::out_of_range())
+        }
+    }
 }

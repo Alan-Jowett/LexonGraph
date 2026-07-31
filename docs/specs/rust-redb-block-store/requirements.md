@@ -61,8 +61,9 @@ contract.
 
 ### REQ-REDB-STORE-003
 
-Construction shall accept a caller-supplied store-root directory and a
-caller-selectable durability mode outside the `BlockStore` trait boundary.
+Construction shall accept a caller-supplied store-root directory, a
+caller-selectable access mode, and a caller-selectable durability mode outside
+the `BlockStore` trait boundary.
 
 The crate may also expose backend-specific administrative methods on the
 concrete `RedbBlockStore` type outside the `BlockStore` trait boundary.
@@ -72,8 +73,8 @@ directory path or fail explicitly as a backend failure when the requested root
 cannot be created, canonicalized, stat'ed, resolved to a non-directory, or
 used to initialize or open the backend-owned Redb database state.
 
-When the caller does not explicitly select fast mode, construction shall retain
-the crate's default durable write behavior.
+When the caller does not explicitly select writable fast mode, construction
+shall retain the crate's default writable durable behavior.
 
 ### REQ-REDB-STORE-004
 
@@ -134,6 +135,12 @@ database open, transaction, read, write, and iteration errors and shall not
 silently skip unreadable or undecodable persisted state as though the
 operation succeeded.
 
+Read-only open requests that cannot be satisfied without mutating persisted
+state shall also fail explicitly.
+
+Attempted mutating operations through a read-only store handle shall fail
+explicitly.
+
 ### REQ-REDB-STORE-011
 
 The repository shall include automated verification artifacts that realize the
@@ -143,6 +150,11 @@ reuse of the parent trait crate's conformance helpers where applicable.
 The verification surface shall cover both default durable mode and fast mode,
 including mode selection, ordinary-write behavior, graceful-shutdown flush
 behavior, and the crash-durability boundary for fast mode.
+
+The verification surface shall also cover read-only open behavior, read-only
+read and enumeration behavior, explicit refusal of mutating operations through
+read-only handles, failure behavior for recovery-required databases, and the
+absence of dirty-header side effects from read-only open.
 
 ### REQ-REDB-STORE-012
 
@@ -251,6 +263,40 @@ Redb-specific telemetry payloads shall be expressible through the shared event
 name, optional message, and structured name/value attributes without exposing
 raw Redb repair-session types in the stable caller contract.
 
+### REQ-REDB-STORE-025
+
+The Redb block-store crate shall expose an explicit read-only open mode on the
+concrete `RedbBlockStore` type outside the shared `BlockStore` trait boundary.
+
+### REQ-REDB-STORE-026
+
+When opened in read-only mode, the Redb-backed implementation shall permit
+ordinary read and enumeration behavior without mutating the database state
+beneath the configured store root.
+
+Read-only open shall not mark the on-disk Redb database dirty, publish a new
+repair obligation, or otherwise require a later writable open merely because a
+client opened the store read-only and then terminated unexpectedly.
+
+### REQ-REDB-STORE-027
+
+If the Redb database is already marked recovery-required at read-only open
+time, the implementation shall either open successfully without performing
+repair when the backend supports that behavior safely, or fail explicitly
+without mutating the persisted database state.
+
+This revision shall not silently fall back from a requested read-only open into
+writable repair behavior.
+
+### REQ-REDB-STORE-028
+
+When a store is opened in read-only mode, mutating operations including `put`,
+raw-byte batch persistence, and the Redb-specific `compact_now` maintenance
+operation shall fail explicitly.
+
+These operations shall not silently succeed, no-op, partially commit, or
+upgrade the store to writable behavior.
+
 ## Out of Scope
 
 This crate does not define or own:
@@ -266,6 +312,7 @@ This crate does not define or own:
   selection in this revision
 - repository-wide requirement that every `BlockStore` backend implement the
   optional shared batch-write capability
+- repository-wide backend-neutral read-only open semantics in this revision
 
 ## Relationship to Other Specifications
 

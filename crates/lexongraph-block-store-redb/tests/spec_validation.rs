@@ -526,6 +526,98 @@ fn val_redb_store_022_shared_telemetry_observers_cannot_control_repair() {
     observe(&callback);
 }
 
+#[test]
+fn val_redb_store_023_read_only_open_reads_without_mutating_the_database_header() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let expected = validated_block("read-only");
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&expected.block).unwrap();
+    }
+    let database_path = temp_dir.path().join(DATABASE_FILE_NAME);
+    let header_before = read_god_byte(&database_path);
+
+    let store = RedbBlockStore::new_read_only(temp_dir.path()).unwrap();
+
+    assert_eq!(store.get(&expected.hash).unwrap(), Some(expected));
+    drop(store);
+    assert_eq!(read_god_byte(&database_path), header_before);
+}
+
+#[test]
+fn val_redb_store_024_read_only_enumeration_yields_persisted_block_ids_only() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&sample_leaf_block("first")).unwrap();
+        store.put(&sample_leaf_block("second")).unwrap();
+    }
+
+    let store = RedbBlockStore::new_read_only(temp_dir.path()).unwrap();
+
+    assert_eq!(
+        persisted_ids(&store),
+        HashSet::from([
+            validated_block("first").hash,
+            validated_block("second").hash,
+        ])
+    );
+}
+
+#[test]
+fn val_redb_store_025_read_only_write_paths_fail_explicitly() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&sample_leaf_block("existing")).unwrap();
+    }
+    let store = RedbBlockStore::new_read_only(temp_dir.path()).unwrap();
+    let block = sample_leaf_block("blocked-write");
+    let serialized = serialize_block(&block).unwrap();
+    let entries = [BlockBytesBatchEntry {
+        block_id: &serialized.hash,
+        block_bytes: &serialized.bytes,
+    }];
+
+    expect_backend_failure_contains(
+        pollster::block_on(store.put(&block)).unwrap_err(),
+        "read-only mode",
+    );
+    expect_backend_failure_contains(
+        pollster::block_on(store.put_block_bytes_batch(&entries)).unwrap_err(),
+        "read-only mode",
+    );
+    assert_eq!(store.get(&serialized.hash).unwrap(), None);
+}
+
+#[test]
+fn val_redb_store_026_read_only_compact_now_fails_explicitly() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&sample_leaf_block("existing")).unwrap();
+    }
+    let mut store = RedbBlockStore::new_read_only(temp_dir.path()).unwrap();
+
+    let error = store.compact_now().unwrap_err();
+
+    expect_backend_failure_contains(error, "read-only mode");
+}
+
+#[test]
+fn val_redb_store_027_read_only_open_fails_when_recovery_is_required() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    {
+        let store = RedbBlockStore::new(temp_dir.path()).unwrap();
+        store.put(&sample_leaf_block("repair")).unwrap();
+    }
+    mark_database_as_repair_required(&temp_dir.path().join(DATABASE_FILE_NAME));
+
+    let error = RedbBlockStore::new_read_only(temp_dir.path()).unwrap_err();
+
+    expect_backend_failure_contains(error, "recovery is required");
+}
+
 fn persisted_ids(store: &RedbBlockStore) -> HashSet<BlockHash> {
     pollster::block_on(store.iter_block_ids().unwrap().try_collect()).unwrap()
 }
@@ -563,6 +655,17 @@ fn mark_database_as_repair_required(database_path: &Path) {
     file.write_all(&buffer).unwrap();
     file.flush().unwrap();
     file.sync_all().unwrap();
+}
+
+fn read_god_byte(database_path: &Path) -> u8 {
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(database_path)
+        .unwrap();
+    file.seek(SeekFrom::Start(GOD_BYTE_OFFSET)).unwrap();
+    let mut buffer = [0u8; 1];
+    file.read_exact(&mut buffer).unwrap();
+    buffer[0]
 }
 
 fn telemetry_collector(
