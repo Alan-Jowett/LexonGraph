@@ -23,6 +23,7 @@ The crate owns:
 
 - Redb-specific realization of `put`, `get`, and identifier enumeration
 - store-root construction behavior
+- access-mode selection and lifecycle behavior at construction time
 - durability-mode selection and lifecycle behavior at construction time
 - backend-private Redb database initialization under the supplied root
 - Redb-specific error mapping
@@ -86,6 +87,16 @@ Failures to create the root, canonicalize it, stat it, confirm that it is a
 directory, open the database, or initialize the block table map to explicit
 backend failures.
 
+### DSG-REDB-STORE-003C `Access-mode construction boundary`
+
+The crate also resolves one caller-selected access mode at construction time.
+
+The default access mode remains writable.
+
+The read-only access mode remains a concrete `RedbBlockStore` concern and does
+not widen the shared `BlockStore` trait with repository-wide read-only-open
+semantics in this revision.
+
 ### DSG-REDB-STORE-003A `Concrete maintenance boundary`
 
 The crate may expose Redb-specific administrative methods on `RedbBlockStore`
@@ -116,6 +127,25 @@ Within that database, one backend-private table maps:
 The database file name, table name, key representation, and any Redb page-level
 layout remain implementation details and do not cross the parent trait
 boundary.
+
+### DSG-REDB-STORE-004A `Read-only snapshot opening strategy`
+
+In this revision, read-only open is realized without granting the live
+`RedbBlockStore` handle authority to mutate the on-disk database under the
+configured store root.
+
+When the on-disk database is in a clean state acceptable for read-only open,
+the implementation may load a backend-private read-only snapshot of the Redb
+database bytes into a private backend owned by the concrete store instance and
+then open Redb against that private snapshot.
+
+This preserves ordinary Redb-backed read semantics for `get` and identifier
+enumeration while ensuring that read-only open does not dirty the caller's
+persisted database file.
+
+If the on-disk state would require repair before the backend can proceed, the
+implementation fails explicitly rather than mutating the persisted database
+state.
 
 ## Runtime Behavior
 
@@ -217,6 +247,9 @@ graceful-shutdown flush, a successful `compact_now` satisfies the persistence
 work needed for compaction so later store instances observe those writes after
 the compaction operation completes.
 
+When the store was opened in read-only mode, `compact_now` fails explicitly
+before attempting any backend mutation.
+
 ### DSG-REDB-STORE-006B `Repair/status translation`
 
 When Redb invokes its repair callback or status update path, the backend maps
@@ -224,6 +257,33 @@ that update into the shared telemetry event shape.
 
 The emitted event may include repair progress and related diagnostic attributes,
 but the mapping keeps Redb-native repair-session control private to the backend.
+
+### DSG-REDB-STORE-006C `Read-only runtime behavior`
+
+When opened in read-only mode:
+
+1. `get` remains available
+2. `iter_block_ids` remains available
+3. telemetry callback attachment remains observational only
+4. `put` fails explicitly before starting caller-visible persistence work
+5. raw-byte batch persistence fails explicitly before starting caller-visible
+   persistence work
+6. `compact_now` fails explicitly before starting caller-visible backend
+   maintenance work
+
+The read-only runtime surface does not silently upgrade itself to writable
+behavior.
+
+### DSG-REDB-STORE-006D `Read-only recovery gate`
+
+Before opening a store in read-only mode, the implementation inspects the
+backend-owned Redb file for a recovery-required state.
+
+If recovery is already required and the implementation cannot safely provide a
+non-repairing read-only open for that state, construction fails explicitly.
+
+This avoids silently invoking Redb repair on behalf of a caller that requested
+observational-only access.
 
 ### DSG-REDB-STORE-007 `get`
 
@@ -265,6 +325,10 @@ If the fast-mode graceful-shutdown flush fails while the final handle is
 dropping, the implementation emits an explicit shutdown-visible error and does
 not claim that the fast-mode durability guarantee was satisfied.
 
+Read-only open failures caused by a missing database file, a recovery-required
+database, or the inability to realize non-mutating read-only access also map to
+explicit backend failures through the same parent error taxonomy.
+
 ### DSG-REDB-STORE-009A `Telemetry privacy boundary`
 
 The public telemetry contract exposes shared events only.
@@ -293,6 +357,13 @@ The crate adds backend-specific tests for:
 - repair/status telemetry emitted through the shared generic callback surface
 - unchanged behavior when the shared telemetry callback is absent
 - observational-only telemetry semantics with no caller repair control
+- successful read-only open against a clean database
+- ordinary `get` and identifier enumeration through a read-only handle
+- explicit failure for `put`, batch persistence, and `compact_now` through a
+  read-only handle
+- explicit failure for read-only open when the persisted database already
+  requires recovery in a way this revision cannot satisfy safely
+- absence of on-disk dirty-header side effects from read-only open
 - successful compaction preserving block visibility and reopen behavior
 - explicit compaction failure when exclusive ownership is unavailable
 - explicit absence for missing block IDs
@@ -317,12 +388,13 @@ The crate adds backend-specific tests for:
 |---|---|
 | DSG-REDB-STORE-001 | REQ-REDB-STORE-001, REQ-REDB-STORE-002 |
 | DSG-REDB-STORE-002..004 | REQ-REDB-STORE-001, REQ-REDB-STORE-003, REQ-REDB-STORE-004 |
-| DSG-REDB-STORE-003A..003B | REQ-REDB-STORE-002, REQ-REDB-STORE-003, REQ-REDB-STORE-015, REQ-REDB-STORE-022 |
+| DSG-REDB-STORE-003A..003C | REQ-REDB-STORE-002, REQ-REDB-STORE-003, REQ-REDB-STORE-015, REQ-REDB-STORE-022, REQ-REDB-STORE-025 |
+| DSG-REDB-STORE-004A | REQ-REDB-STORE-025, REQ-REDB-STORE-026, REQ-REDB-STORE-027 |
 | DSG-REDB-STORE-005 | REQ-REDB-STORE-005, REQ-REDB-STORE-008, REQ-REDB-STORE-012 |
 | DSG-REDB-STORE-005A | REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021 |
-| DSG-REDB-STORE-006..006B | REQ-REDB-STORE-013, REQ-REDB-STORE-014, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024 |
-| DSG-REDB-STORE-006A | REQ-REDB-STORE-005, REQ-REDB-STORE-013, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017 |
+| DSG-REDB-STORE-006..006D | REQ-REDB-STORE-013, REQ-REDB-STORE-014, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-028 |
+| DSG-REDB-STORE-006A | REQ-REDB-STORE-005, REQ-REDB-STORE-013, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-028 |
 | DSG-REDB-STORE-007 | REQ-REDB-STORE-006, REQ-REDB-STORE-007 |
-| DSG-REDB-STORE-008 | REQ-REDB-STORE-009, REQ-REDB-STORE-010 |
-| DSG-REDB-STORE-009..009A | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-023, REQ-REDB-STORE-024 |
-| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024 |
+| DSG-REDB-STORE-008 | REQ-REDB-STORE-009, REQ-REDB-STORE-010, REQ-REDB-STORE-026 |
+| DSG-REDB-STORE-009..009A | REQ-REDB-STORE-002, REQ-REDB-STORE-004, REQ-REDB-STORE-010, REQ-REDB-STORE-015, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-027, REQ-REDB-STORE-028 |
+| DSG-REDB-STORE-010 | REQ-REDB-STORE-011, REQ-REDB-STORE-015, REQ-REDB-STORE-016, REQ-REDB-STORE-017, REQ-REDB-STORE-018, REQ-REDB-STORE-019, REQ-REDB-STORE-020, REQ-REDB-STORE-021, REQ-REDB-STORE-022, REQ-REDB-STORE-023, REQ-REDB-STORE-024, REQ-REDB-STORE-025, REQ-REDB-STORE-026, REQ-REDB-STORE-027, REQ-REDB-STORE-028 |
