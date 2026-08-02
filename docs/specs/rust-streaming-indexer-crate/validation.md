@@ -1958,8 +1958,10 @@ Partition-local totals and counts describe the current partition rather than
 the aggregate layer, and the aggregate layer heartbeat stream remains present
 with its existing deterministic completion semantics. Prepared-but-not-
 committed batches do not advance partition-local completed counts, and repeated
-runs preserve deterministic results and status semantics.
+runs preserve deterministic results and status semantics. When consecutive
+partition-local heartbeats report the same completed count, their
+`last_progress_at` values do not advance.
 
 **Traces to:** REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023,
 REQ-STREAM-INDEXER-037C, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-139,
-REQ-STREAM-INDEXER-140
+REQ-STREAM-INDEXER-140, REQ-STREAM-INDEXER-141

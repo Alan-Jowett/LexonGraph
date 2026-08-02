@@ -1794,6 +1794,10 @@ committed, including the existing batch pipeline commit boundary, and are
 monotonic within one partition-phase execution. Prepared-but-not-committed
 work does not advance the committed count.
 
+Partition-local heartbeat `last_progress_at` is initialized to zero and
+advances only when the observed completed count increases. Heartbeat emission
+alone does not update the progress timestamp.
+
 ### DSG-STREAM-INDEXER-134 `V3 aggregate and partition telemetry coexistence`
 
 The existing layer-level aggregate status stream remains enabled for concurrent
@@ -1933,4 +1937,5 @@ item-processing phase solely to provide partition-local item counts.
 | DSG-STREAM-INDEXER-132 | REQ-STREAM-INDEXER-138 |
 | DSG-STREAM-INDEXER-133 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-139 |
 | DSG-STREAM-INDEXER-134 | REQ-STREAM-INDEXER-037C, REQ-STREAM-INDEXER-140 |
+| DSG-STREAM-INDEXER-135 | REQ-STREAM-INDEXER-141 |
 | DSG-STREAM-INDEXER-054 | REQ-STREAM-INDEXER-022, REQ-STREAM-INDEXER-023, REQ-STREAM-INDEXER-039, REQ-STREAM-INDEXER-064, REQ-STREAM-INDEXER-120 |

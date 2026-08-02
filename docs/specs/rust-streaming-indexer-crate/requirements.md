@@ -1957,6 +1957,13 @@ hierarchy detail fields rather than item-processing counts.
 
 **Trace:** `USER-REQUEST: selected "Retain aggregate + add per-partition heartbeats (Recommended)"`
 
+### REQ-STREAM-INDEXER-141
+
+Partition-local `last_progress_at` shall represent the time of the most recent
+observed committed progress for that partition-phase execution. It shall be
+initialized to zero for partition-local heartbeats and shall not advance when a
+heartbeat observes the same completed item count as the previous heartbeat.
+
 ## Out of Scope
 
 This crate does not define or own:

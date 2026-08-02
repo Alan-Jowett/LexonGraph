@@ -1084,7 +1084,7 @@ impl StreamingIndexingRunV3 {
                         source_store,
                         emit_partition_status,
                         &partition.id,
-                        partition.item_count,
+                        block_ids.len(),
                     )
                     .await?;
                 let mut children = Vec::with_capacity(loaded.len());

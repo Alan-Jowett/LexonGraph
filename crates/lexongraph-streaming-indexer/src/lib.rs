@@ -8294,23 +8294,30 @@ fn start_status_heartbeat_with_partition(
     let observer = observer.as_ref().map(Arc::clone)?;
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let handle = thread::spawn(move || {
+        let mut last_partition_completed_count = progress.load(AtomicOrdering::Relaxed);
+        let mut last_partition_progress_at = Duration::ZERO;
         while matches!(
             stop_rx.recv_timeout(STATUS_HEARTBEAT_INTERVAL),
             Err(mpsc::RecvTimeoutError::Timeout)
         ) {
             let _ = catch_unwind(AssertUnwindSafe(|| {
+                let completed_unit_count = progress.load(AtomicOrdering::Relaxed);
                 let mut status = status_with_progress(
                     phase.clone(),
                     StreamingIndexingStatusState::InProgress,
                     phase_total_unit_count,
-                    progress.load(AtomicOrdering::Relaxed),
+                    completed_unit_count,
                     started.elapsed(),
                     None,
                 );
                 if let Some((partition_path, partition_size)) = &partition {
+                    if completed_unit_count > last_partition_completed_count {
+                        last_partition_completed_count = completed_unit_count;
+                        last_partition_progress_at = started.elapsed();
+                    }
                     status.current_partition_path = Some(partition_path.clone());
                     status.current_partition_size = Some(*partition_size);
-                    status.last_progress_at = Some(started.elapsed());
+                    status.last_progress_at = Some(last_partition_progress_at);
                 }
                 observer(if let Some(legacy_item_count) = legacy_item_count {
                     with_legacy_item_count(status, legacy_item_count)

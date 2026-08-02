@@ -6414,6 +6414,16 @@ async fn val_stream_indexer_023a_v3_observer_reports_aggregate_phase_progress() 
                                         .phase_total_unit_count
                                         .map(|total| total - pair[1].completed_unit_count)
                         }));
+                        let heartbeat_statuses = wave
+                            .iter()
+                            .filter(|status| {
+                                status.state == StreamingIndexingStatusState::InProgress
+                            })
+                            .collect::<Vec<_>>();
+                        assert!(heartbeat_statuses.windows(2).all(|pair| {
+                            pair[1].completed_unit_count > pair[0].completed_unit_count
+                                || pair[1].last_progress_at == pair[0].last_progress_at
+                        }));
                         local_wave_start = index;
                     }
                 }
