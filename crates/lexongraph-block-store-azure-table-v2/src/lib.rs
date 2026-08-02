@@ -28,11 +28,11 @@ const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ROW_PROPERTY_
 const MAX_STRING_PROPERTY_CHARS: usize = 32 * 1024;
 const RAW_CHUNK_SIZE: usize = 24_576;
 const CONTINUATION_ROW_SUFFIX_WIDTH: usize = 4;
-const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(250);
+const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(500);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(4);
 const RETRY_MAX_ATTEMPTS: usize = 6;
-const AZURE_TABLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const AZURE_TABLE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const AZURE_TABLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const AZURE_TABLE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const AZURE_TABLE_API_VERSION: &str = "2019-02-02";
 const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
@@ -1694,7 +1694,7 @@ struct RowSetMetadata {
 
 fn partition_key_for(block_id: &BlockHash) -> String {
     let hex = block_id.to_string();
-    hex[..4].to_string()
+    hex[..8].to_string()
 }
 
 fn row_key_for(block_id: &BlockHash, row_index: usize) -> String {
@@ -1718,13 +1718,13 @@ fn decode_recognized_block_root_keys(
     partition_key: &str,
     row_key: &str,
 ) -> Result<Option<BlockHash>, String> {
-    if !is_lower_hex(partition_key, 4) {
+    if !is_lower_hex(partition_key, 8) {
         return Ok(None);
     }
     let Some(bytes) = decode_block_hash_hex(row_key) else {
         return Ok(None);
     };
-    if &row_key[..4] != partition_key {
+    if &row_key[..8] != partition_key {
         return Err(format!(
             "failed to decode an enumerated block ID candidate at entity {partition_key} / {row_key}: shard prefix mismatch"
         ));
@@ -2764,7 +2764,7 @@ mod tests {
                         chunk_count: None,
                     },
                     TableBlockEntityMetadata {
-                        partition_key: "5555".into(),
+                        partition_key: "55555555".into(),
                         row_key: format!("{}-0001", BlockHash::from_bytes([0x55; 32])),
                         schema_version: Some(ENTITY_SCHEMA_VERSION),
                         byte_len: Some(8),
@@ -2784,7 +2784,7 @@ mod tests {
         let malformed_backend = Arc::new(MockTableBackend::default());
         let malformed_store = test_store(malformed_backend.clone());
         malformed_backend.insert_entity(TableBlockEntity {
-            partition_key: "aaaa".into(),
+            partition_key: "aaaaaaaa".into(),
             row_key: format!("bbbb{}", "00".repeat(30)),
             schema_version: Some(ENTITY_SCHEMA_VERSION),
             byte_len: Some(3),
@@ -2812,8 +2812,8 @@ mod tests {
             None,
             EntityPage {
                 entities: vec![TableBlockEntityMetadata {
-                    partition_key: "abcd".into(),
-                    row_key: format!("abcd{}", "00".repeat(30)),
+                    partition_key: "abcdabcd".into(),
+                    row_key: format!("abcdabcd{}", "00".repeat(28)),
                     schema_version: None,
                     byte_len: Some(3),
                     row_count: Some(1),
@@ -2832,8 +2832,8 @@ mod tests {
             None,
             EntityPage {
                 entities: vec![TableBlockEntityMetadata {
-                    partition_key: "dcba".into(),
-                    row_key: format!("dcba{}", "11".repeat(30)),
+                    partition_key: "dcbadcba".into(),
+                    row_key: format!("dcbadcba{}", "11".repeat(28)),
                     schema_version: Some(ENTITY_SCHEMA_VERSION),
                     byte_len: Some(0),
                     row_count: Some(1),
@@ -2855,8 +2855,8 @@ mod tests {
             None,
             EntityPage {
                 entities: vec![TableBlockEntityMetadata {
-                    partition_key: "cdef".into(),
-                    row_key: format!("cdef{}", "22".repeat(30)),
+                    partition_key: "cdefcdef".into(),
+                    row_key: format!("cdefcdef{}", "22".repeat(28)),
                     schema_version: Some(ENTITY_SCHEMA_VERSION),
                     byte_len: Some(1),
                     row_count: Some(0),
@@ -2875,8 +2875,8 @@ mod tests {
             None,
             EntityPage {
                 entities: vec![TableBlockEntityMetadata {
-                    partition_key: "beef".into(),
-                    row_key: format!("beef{}", "33".repeat(30)),
+                    partition_key: "beefbeef".into(),
+                    row_key: format!("beefbeef{}", "33".repeat(28)),
                     schema_version: Some(ENTITY_SCHEMA_VERSION),
                     byte_len: Some(1),
                     row_count: Some(2),
@@ -3064,14 +3064,60 @@ mod tests {
         let state = backend.state.lock().unwrap();
         let root_row = state
             .entities
-            .get(&(row_key[..4].to_string(), row_key.clone()))
+            .get(&(row_key[..8].to_string(), row_key.clone()))
             .unwrap();
-        assert_eq!(root_row.partition_key, row_key[..4].to_string());
+        assert_eq!(root_row.partition_key, row_key[..8].to_string());
         assert_eq!(root_row.row_key, row_key);
         assert!(state.entities.contains_key(&(
-            block_id.to_string()[..4].to_string(),
+            block_id.to_string()[..8].to_string(),
             format!("{block_id}-0001")
         )));
+    }
+
+    #[test]
+    fn retry_policy_uses_capped_exponential_backoff() {
+        assert_eq!(RETRY_INITIAL_DELAY, Duration::from_millis(500));
+        assert_eq!(
+            next_retry_delay(RETRY_INITIAL_DELAY),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            next_retry_delay(Duration::from_secs(1)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            next_retry_delay(Duration::from_secs(2)),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            next_retry_delay(Duration::from_secs(4)),
+            Duration::from_secs(4)
+        );
+        assert_eq!(RETRY_MAX_ATTEMPTS, 6);
+    }
+
+    #[test]
+    fn azure_http_timeouts_are_five_seconds() {
+        assert_eq!(AZURE_TABLE_CONNECT_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(AZURE_TABLE_REQUEST_TIMEOUT, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn former_partition_layout_is_not_read_by_v2() {
+        let backend = Arc::new(MockTableBackend::default());
+        let store = test_store(backend.clone());
+        let block_id = BlockHash::from_bytes([0x5a; 32]);
+        let mut legacy_row = TableBlockEntity::from_block_bytes(&block_id, b"legacy").unwrap();
+        legacy_row.partition_key = block_id.to_string()[..4].to_string();
+        backend.insert_entity(legacy_row);
+
+        assert_eq!(block_on(store.get_block_bytes(&block_id)).unwrap(), None);
+        assert!(
+            backend
+                .get_requests()
+                .iter()
+                .all(|(partition, _)| partition.len() == 8)
+        );
     }
 
     #[test]

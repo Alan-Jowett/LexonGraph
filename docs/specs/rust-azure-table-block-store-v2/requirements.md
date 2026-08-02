@@ -33,13 +33,13 @@ parameter.
 `Recognized block-root candidate` means an Azure Table entity whose key shape
 matches the deterministic root-row layout for this crate:
 
-- `PartitionKey`: the first four lowercase hexadecimal characters of the block
-  ID
+- `PartitionKey`: the first eight lowercase hexadecimal characters of the block
+  ID, representing the first four bytes
 - `RowKey`: the full lowercase hexadecimal block ID
 
 A recognized block-root candidate becomes a recognized block root only when the
 `RowKey` is a full valid lowercase block ID and the `PartitionKey` matches the
-first four lowercase hexadecimal characters of that block ID.
+first eight lowercase hexadecimal characters of that block ID.
 
 `v2 chunked row-set format` means the multi-row representation owned by this
 crate revision:
@@ -100,12 +100,13 @@ within the configured table.
 
 This revision shall use the deterministic row-key layout:
 
-- `PartitionKey`: first four lowercase hexadecimal characters of the block ID
+- `PartitionKey`: first eight lowercase hexadecimal characters of the block ID,
+  representing the first four bytes
 - `RowKey`: full lowercase hexadecimal block ID
 
 For continuation rows in the same logical block row set:
 
-- `PartitionKey`: the same first four lowercase hexadecimal characters of the
+- `PartitionKey`: the same first eight lowercase hexadecimal characters of the
   block ID
 - `RowKey`: the full lowercase hexadecimal block ID followed by a deterministic
   row ordinal suffix
@@ -367,6 +368,20 @@ without requiring a live Azure table.
 
 This mock-backed verification surface shall remain internal or test-only and
 shall not broaden the public production `BlockStore` API boundary.
+
+### REQ-AZURE-TABLE-STORE-V2-023
+
+Every Azure HTTP request issued by the v2 backend shall have a total timeout of
+five seconds covering connection establishment, response headers, and response
+body transfer. A timeout shall be treated as a transport failure and shall
+follow the bounded retry policy.
+
+### REQ-AZURE-TABLE-STORE-V2-024
+
+The bounded retry policy shall allow six total attempts and use delays of
+0.5 seconds, 1.0 seconds, 2.0 seconds, 4.0 seconds, and 4.0 seconds before
+the respective retries. Each concurrent deterministic request shall maintain
+its own retry schedule.
 
 ## Out of Scope
 

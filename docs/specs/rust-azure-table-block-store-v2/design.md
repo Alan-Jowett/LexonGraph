@@ -66,12 +66,14 @@ or permission probe.
 
 Each block ID maps to exactly one deterministic root-row key:
 
-- `PartitionKey`: first four lowercase hexadecimal characters of the block ID
+- `PartitionKey`: first eight lowercase hexadecimal characters of the block ID,
+  representing the first four bytes
 - `RowKey`: full lowercase hexadecimal block ID
 
 If a block requires more than one row, each continuation row uses:
 
-- the same `PartitionKey`
+- the same `PartitionKey` (the first eight lowercase hexadecimal characters of
+  the block ID)
 - a `RowKey` equal to the full lowercase hexadecimal block ID plus a
   deterministic zero-padded row ordinal suffix
 
@@ -258,6 +260,17 @@ error taxonomy.
 Row-set payload decoding failures and reconstructed block-ID mismatches continue
 to map to the parent crate's malformed-content and integrity-mismatch errors.
 
+### DSG-AZURE-TABLE-STORE-V2-015 `HTTP timeout and retry timing`
+
+The production reqwest client applies a five-second total request timeout and a
+five-second connection timeout. The total request timeout covers connection,
+response headers, and response body transfer.
+
+Transport failures, including request timeouts, use six total attempts with
+delays of 0.5 seconds, 1.0 seconds, 2.0 seconds, 4.0 seconds, and 4.0 seconds.
+The retry delay is capped at four seconds. Concurrent row requests maintain
+independent retry state.
+
 ## Verification Strategy
 
 ### DSG-AZURE-TABLE-STORE-V2-012 `Mock-backed verification`
@@ -288,6 +301,8 @@ Table-focused tests for:
   continuation row is inaccessible or the backend denies the read
 - explicit backend failure for enumeration when SAS permissions deny table query
 - transient publish, read, and query retries
+- five-second HTTP request and connection timeout configuration
+- exact capped retry back-off schedule and six-attempt bound
 - multi-row `put` verification that continuation rows use one transaction when
   they fit within one Azure Table transaction and otherwise issue concurrent
   inserts before root-row publication
@@ -331,6 +346,7 @@ replaceable internal client interface so mock-backed test doubles can:
 - inject malformed or integrity-mismatched recognized block row sets in the v2
   chunked row-set format
 - simulate transient transport failures, including paginated query retries
+- observe timeout and retry-policy configuration without exposing it publicly
 - simulate otherwise valid Azure outcomes whose responses omit non-decisive
   common storage headers
 
@@ -355,3 +371,4 @@ and is not exposed through the production `BlockStore` trait boundary.
 | DSG-AZURE-TABLE-STORE-V2-012 | REQ-AZURE-TABLE-STORE-V2-022 |
 | DSG-AZURE-TABLE-STORE-V2-013 | REQ-AZURE-TABLE-STORE-V2-017, REQ-AZURE-TABLE-STORE-V2-018 |
 | DSG-AZURE-TABLE-STORE-V2-014 | REQ-AZURE-TABLE-STORE-V2-022 |
+| DSG-AZURE-TABLE-STORE-V2-015 | REQ-AZURE-TABLE-STORE-V2-023, REQ-AZURE-TABLE-STORE-V2-024 |

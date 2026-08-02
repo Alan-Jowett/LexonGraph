@@ -184,7 +184,8 @@ Store a valid typed block through `put`, then inspect the Azure Table row keys
 and payload-property names used for the published state.
 
 **Pass condition:** the implementation derives the deterministic
-root `PartitionKey`/`RowKey` pair from the returned block ID, uses
+root `PartitionKey`/`RowKey` pair from the returned block ID, uses the first
+four bytes (eight lowercase hexadecimal characters) as the partition key, uses
 deterministic continuation-row keys when additional rows are required, and
 stores canonical bytes using deterministic `chunkN` payload properties within
 each row.
@@ -384,3 +385,36 @@ the root row is still attempted only after the continuation-row publication
 path succeeds so the root row remains the publication commit point.
 
 **Traces to:** REQ-AZURE-TABLE-STORE-V2-007, REQ-AZURE-TABLE-STORE-V2-019
+
+### VAL-AZURE-TABLE-STORE-V2-031
+
+Inspect the production Azure HTTP client builder configuration used by
+publish, direct-read, and query requests.
+
+**Pass condition:** every request uses a five-second total timeout covering
+connection, headers, and body transfer, and the configured timeout is handled
+through the existing transport-failure retry path rather than an unbounded
+wait.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-023
+
+### VAL-AZURE-TABLE-STORE-V2-032
+
+Cause repeated transport failures for publish, direct-read, and query
+operations, including transactional and concurrent continuation-row requests.
+
+**Pass condition:** each operation makes at most six total attempts and waits
+0.5 seconds, 1.0 seconds, 2.0 seconds, 4.0 seconds, then 4.0 seconds between
+attempts; concurrent deterministic requests retain independent retry state.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-024
+
+### VAL-AZURE-TABLE-STORE-V2-033
+
+Populate or inspect rows using the former four-hex-character partition layout
+and access them through the v2 implementation after the partition change.
+
+**Pass condition:** v2 uses only the first four bytes/eight lowercase hexadecimal
+characters for partitioning and does not read or migrate former-layout rows.
+
+**Traces to:** REQ-AZURE-TABLE-STORE-V2-005
