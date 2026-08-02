@@ -13,7 +13,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use futures::stream::{self, FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockError, BlockHash};
-use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,8 @@ const CONTINUATION_ROW_SUFFIX_WIDTH: usize = 4;
 const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(250);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(4);
 const RETRY_MAX_ATTEMPTS: usize = 6;
+const AZURE_TABLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const AZURE_TABLE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const AZURE_TABLE_API_VERSION: &str = "2019-02-02";
 const ODATA_NO_METADATA: &str = "application/json;odata=nometadata";
 const PREFER_RETURN_NO_CONTENT: &str = "return-no-content";
@@ -218,6 +220,88 @@ impl AzureTableBlockStoreV2 {
         self.insert_rows_concurrently(block_id, rows).await
     }
 
+    async fn publish_partition_batch(
+        &self,
+        blocks: Vec<(BlockHash, Vec<TableBlockEntity>)>,
+    ) -> Result<(), BlockStoreError> {
+        let mut continuation_rows = Vec::new();
+        let mut root_rows = Vec::new();
+        for (block_id, rows) in blocks {
+            let Some(root_row) = rows.first().cloned() else {
+                continue;
+            };
+            continuation_rows.extend(rows.into_iter().skip(1).map(|row| (block_id, row)));
+            root_rows.push((block_id, root_row));
+        }
+
+        let mut continuation_batch = Vec::new();
+        for (block_id, row) in continuation_rows {
+            continuation_batch.push((block_id, row));
+            let rows = continuation_batch
+                .iter()
+                .map(|(_, row)| row.clone())
+                .collect::<Vec<_>>();
+            if ReqwestTableBackend::build_insert_transaction_request("blocks", &rows)
+                .map_err(|error| {
+                    backend_failure(format!(
+                        "failed to prepare Azure Table batch publication: {error:?}"
+                    ))
+                })?
+                .is_none()
+            {
+                let last = continuation_batch
+                    .pop()
+                    .expect("continuation batch must contain the rejected row");
+                if !continuation_batch.is_empty() {
+                    self.publish_transaction_or_rows(&continuation_batch)
+                        .await?;
+                    continuation_batch.clear();
+                }
+                self.insert_row_with_retries(&last.0, &last.1).await?;
+            }
+        }
+        if !continuation_batch.is_empty() {
+            self.publish_transaction_or_rows(&continuation_batch)
+                .await?;
+        }
+
+        let mut root_writes = FuturesUnordered::new();
+        for (block_id, row) in root_rows {
+            root_writes.push(async move { self.insert_row_with_retries(&block_id, &row).await });
+        }
+        while let Some(result) = root_writes.next().await {
+            result?;
+        }
+        Ok(())
+    }
+
+    async fn publish_transaction_or_rows(
+        &self,
+        rows: &[(BlockHash, TableBlockEntity)],
+    ) -> Result<(), BlockStoreError> {
+        let block_id = rows
+            .first()
+            .map(|(block_id, _)| block_id)
+            .expect("transaction rows must not be empty");
+        let table_rows = rows.iter().map(|(_, row)| row.clone()).collect::<Vec<_>>();
+        match self
+            .insert_rows_transaction_with_retries(block_id, &table_rows)
+            .await?
+        {
+            TransactionInsertOutcome::Committed => Ok(()),
+            TransactionInsertOutcome::AlreadyExists | TransactionInsertOutcome::TooLarge => {
+                let mut writes = FuturesUnordered::new();
+                for (block_id, row) in rows {
+                    writes.push(self.insert_row_with_retries(block_id, row));
+                }
+                while let Some(result) = writes.next().await {
+                    result?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     async fn get_row_with_retries(
         &self,
         block_id: &BlockHash,
@@ -333,6 +417,37 @@ impl BlockStore for AzureTableBlockStoreV2 {
         self.publish_continuation_rows(block_id, &rows[1..]).await?;
         if let Some(root_row) = rows.first() {
             self.insert_row_with_retries(block_id, root_row).await?;
+        }
+        Ok(())
+    }
+
+    async fn put_block_bytes_batch(
+        &self,
+        entries: &[BlockBytesBatchEntry<'_>],
+    ) -> Result<(), BlockStoreError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut partitions = BTreeMap::<String, Vec<(BlockHash, Vec<TableBlockEntity>)>>::new();
+        for entry in entries {
+            let rows = TableBlockEntity::rows_from_block_bytes(entry.block_id, entry.block_bytes)?;
+            let partition_key = rows
+                .first()
+                .map(|row| row.partition_key.clone())
+                .ok_or_else(|| decode_failure("Azure Table block produced no rows"))?;
+            partitions
+                .entry(partition_key)
+                .or_default()
+                .push((*entry.block_id, rows));
+        }
+
+        let mut publications = FuturesUnordered::new();
+        for blocks in partitions.into_values() {
+            publications.push(self.publish_partition_batch(blocks));
+        }
+        while let Some(result) = publications.next().await {
+            result?;
         }
         Ok(())
     }
@@ -526,12 +641,16 @@ impl ReqwestTableBackend {
     }
 
     fn new(endpoint: &TableEndpoint) -> Result<Self, BlockStoreError> {
-        let client = Client::builder().build().map_err(|error| {
-            backend_failure(format!(
-                "failed to prepare Azure Table client for {}: {}",
-                endpoint.display, error
-            ))
-        })?;
+        let client = Client::builder()
+            .connect_timeout(AZURE_TABLE_CONNECT_TIMEOUT)
+            .timeout(AZURE_TABLE_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|error| {
+                backend_failure(format!(
+                    "failed to prepare Azure Table client for {}: {}",
+                    endpoint.display, error
+                ))
+            })?;
         Ok(Self {
             client,
             endpoint: endpoint.clone(),
@@ -2301,6 +2420,56 @@ mod tests {
         backend.state.lock().unwrap().deny_insert = true;
         let denied = block_on(store.put(&sample_leaf_block(12))).unwrap_err();
         assert!(format!("{denied}").contains("HTTP 403"));
+    }
+
+    #[test]
+    fn batch_put_groups_rows_by_partition_and_preserves_idempotence() {
+        let backend = Arc::new(MockTableBackend::default());
+        let store = test_store(backend.clone());
+        let block_bytes =
+            vec![0xaa; max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT) + 1];
+        let first_id = BlockHash::from_bytes([0x11; 32]);
+        let second_id = BlockHash::from_bytes([
+            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+            0x11, 0x11, 0x11, 0x12,
+        ]);
+        let third_id = BlockHash::from_bytes([0x22; 32]);
+        let entries = [
+            BlockBytesBatchEntry {
+                block_id: &first_id,
+                block_bytes: &block_bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &second_id,
+                block_bytes: &block_bytes,
+            },
+            BlockBytesBatchEntry {
+                block_id: &third_id,
+                block_bytes: &block_bytes,
+            },
+        ];
+
+        block_on(store.put_block_bytes_batch(&entries)).unwrap();
+
+        assert_eq!(backend.transaction_requests().len(), 2);
+        assert_eq!(backend.insert_requests().len(), 3);
+        assert!(
+            block_on(store.get_block_bytes(&first_id))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            block_on(store.get_block_bytes(&second_id))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            block_on(store.get_block_bytes(&third_id))
+                .unwrap()
+                .is_some()
+        );
+        block_on(store.put_block_bytes_batch(&entries)).unwrap();
     }
 
     #[test]
