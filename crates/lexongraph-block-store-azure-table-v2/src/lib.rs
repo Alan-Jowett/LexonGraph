@@ -47,6 +47,7 @@ static MULTIPART_BOUNDARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct AzureTableBlockStoreV2 {
     backend: Arc<dyn TableBackend>,
     table_display: String,
+    table_name: String,
 }
 
 impl fmt::Debug for AzureTableBlockStoreV2 {
@@ -65,17 +66,20 @@ impl AzureTableBlockStoreV2 {
         Ok(Self {
             backend: Arc::new(backend),
             table_display,
+            table_name: endpoint.table_name,
         })
     }
 
     #[cfg(test)]
     fn from_backend_for_tests(
         table_display: impl Into<String>,
+        table_name: impl Into<String>,
         backend: Arc<dyn TableBackend>,
     ) -> Self {
         Self {
             backend,
             table_display: table_display.into(),
+            table_name: table_name.into(),
         }
     }
 
@@ -235,30 +239,29 @@ impl AzureTableBlockStoreV2 {
         }
 
         let mut continuation_batch = Vec::new();
+        let mut continuation_batch_size =
+            ReqwestTableBackend::new_transaction_batch_sizer(&self.table_name);
         for (block_id, row) in continuation_rows {
-            continuation_batch.push((block_id, row));
-            let rows = continuation_batch
-                .iter()
-                .map(|(_, row)| row.clone())
-                .collect::<Vec<_>>();
-            if ReqwestTableBackend::build_insert_transaction_request("blocks", &rows)
-                .map_err(|error| {
-                    backend_failure(format!(
-                        "failed to prepare Azure Table batch publication: {error:?}"
-                    ))
-                })?
-                .is_none()
-            {
-                let last = continuation_batch
-                    .pop()
-                    .expect("continuation batch must contain the rejected row");
+            let row_size = ReqwestTableBackend::serialized_entity_size(&row).map_err(|error| {
+                backend_failure(format!(
+                    "failed to prepare Azure Table batch publication: {error:?}"
+                ))
+            })?;
+            if !continuation_batch_size.can_add(row_size) {
                 if !continuation_batch.is_empty() {
                     self.publish_transaction_or_rows(&continuation_batch)
                         .await?;
                     continuation_batch.clear();
+                    continuation_batch_size =
+                        ReqwestTableBackend::new_transaction_batch_sizer(&self.table_name);
                 }
-                self.insert_row_with_retries(&last.0, &last.1).await?;
+                if !continuation_batch_size.can_add(row_size) {
+                    self.insert_row_with_retries(&block_id, &row).await?;
+                    continue;
+                }
             }
+            continuation_batch_size.add(row_size);
+            continuation_batch.push((block_id, row));
         }
         if !continuation_batch.is_empty() {
             self.publish_transaction_or_rows(&continuation_batch)
@@ -623,11 +626,36 @@ struct EntityPage {
 struct ReqwestTableBackend {
     client: Client,
     endpoint: TableEndpoint,
+    timeouts: AzureTableTimeouts,
 }
 
 struct BatchInsertRequest {
     content_type: String,
     body: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AzureTableTimeouts {
+    connect: Duration,
+    request: Duration,
+}
+
+struct TransactionBatchSizer {
+    total_bytes: usize,
+    row_overhead: usize,
+    operation_count: usize,
+}
+
+impl TransactionBatchSizer {
+    fn can_add(&self, entity_size: usize) -> bool {
+        self.operation_count < MAX_TRANSACTION_OPERATIONS
+            && self.total_bytes + self.row_overhead + entity_size <= MAX_TRANSACTION_PAYLOAD_BYTES
+    }
+
+    fn add(&mut self, entity_size: usize) {
+        self.total_bytes += self.row_overhead + entity_size;
+        self.operation_count += 1;
+    }
 }
 
 impl ReqwestTableBackend {
@@ -641,9 +669,22 @@ impl ReqwestTableBackend {
     }
 
     fn new(endpoint: &TableEndpoint) -> Result<Self, BlockStoreError> {
+        Self::new_with_timeouts(
+            endpoint,
+            AzureTableTimeouts {
+                connect: AZURE_TABLE_CONNECT_TIMEOUT,
+                request: AZURE_TABLE_REQUEST_TIMEOUT,
+            },
+        )
+    }
+
+    fn new_with_timeouts(
+        endpoint: &TableEndpoint,
+        timeouts: AzureTableTimeouts,
+    ) -> Result<Self, BlockStoreError> {
         let client = Client::builder()
-            .connect_timeout(AZURE_TABLE_CONNECT_TIMEOUT)
-            .timeout(AZURE_TABLE_REQUEST_TIMEOUT)
+            .connect_timeout(timeouts.connect)
+            .timeout(timeouts.request)
             .build()
             .map_err(|error| {
                 backend_failure(format!(
@@ -654,6 +695,7 @@ impl ReqwestTableBackend {
         Ok(Self {
             client,
             endpoint: endpoint.clone(),
+            timeouts,
         })
     }
 
@@ -673,6 +715,7 @@ impl ReqwestTableBackend {
     fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
         self.client
             .request(method, url)
+            .timeout(self.timeouts.request)
             .headers(self.common_headers())
     }
 
@@ -853,6 +896,34 @@ impl ReqwestTableBackend {
             content_type: format!("multipart/mixed; boundary={batch_boundary}"),
             body,
         }))
+    }
+
+    fn serialized_entity_size(row: &TableBlockEntity) -> Result<usize, TableBackendAttemptError> {
+        serde_json::to_vec(row)
+            .map(|body| body.len())
+            .map_err(|error| {
+                TableBackendAttemptError::Response(format!(
+                    "failed to encode Azure Table entity body: {}",
+                    error
+                ))
+            })
+    }
+
+    fn new_transaction_batch_sizer(table_name: &str) -> TransactionBatchSizer {
+        let batch_boundary = Self::next_multipart_boundary("batch_lexongraph");
+        let changeset_boundary = Self::next_multipart_boundary("changeset_lexongraph");
+        let batch_preamble = format!(
+            "--{batch_boundary}\r\nContent-Type: multipart/mixed; boundary={changeset_boundary}\r\n\r\n"
+        );
+        let batch_epilogue = format!("--{changeset_boundary}--\r\n--{batch_boundary}--\r\n");
+        let row_preamble = format!(
+            "--{changeset_boundary}\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nPOST {table_name} HTTP/1.1\r\nAccept: {ODATA_NO_METADATA}\r\nContent-Type: application/json\r\nPrefer: {PREFER_RETURN_NO_CONTENT}\r\n\r\n"
+        );
+        TransactionBatchSizer {
+            total_bytes: batch_preamble.len() + batch_epilogue.len(),
+            row_overhead: row_preamble.len() + 2,
+            operation_count: 0,
+        }
     }
 
     fn parse_batch_statuses(body: &str) -> Vec<StatusCode> {
@@ -2237,6 +2308,7 @@ mod tests {
     fn test_store(backend: Arc<dyn TableBackend>) -> AzureTableBlockStoreV2 {
         AzureTableBlockStoreV2::from_backend_for_tests(
             "https://example.table.core.windows.net/blocks",
+            "blocks",
             backend,
         )
     }
@@ -3097,9 +3169,67 @@ mod tests {
     }
 
     #[test]
-    fn azure_http_timeouts_are_five_seconds() {
-        assert_eq!(AZURE_TABLE_CONNECT_TIMEOUT, Duration::from_secs(5));
-        assert_eq!(AZURE_TABLE_REQUEST_TIMEOUT, Duration::from_secs(5));
+    fn azure_http_timeouts_are_applied_to_backend_client() {
+        let endpoint =
+            TableEndpoint::parse("https://acct.table.core.windows.net/blocks?sv=test&sig=fake")
+                .unwrap();
+        let backend = ReqwestTableBackend::new(&endpoint).unwrap();
+        assert_eq!(
+            backend.timeouts,
+            AzureTableTimeouts {
+                connect: Duration::from_secs(5),
+                request: Duration::from_secs(5),
+            }
+        );
+    }
+
+    #[test]
+    fn reqwest_backend_enforces_configured_request_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let endpoint = TableEndpoint::parse(&format!(
+            "http://127.0.0.1:{}/blocks?sv=test&sig=fake",
+            address.port()
+        ))
+        .unwrap();
+        let backend = ReqwestTableBackend::new_with_timeouts(
+            &endpoint,
+            AzureTableTimeouts {
+                connect: Duration::from_secs(1),
+                request: Duration::from_millis(20),
+            },
+        )
+        .unwrap();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = runtime
+            .block_on(async {
+                backend
+                    .request(Method::GET, endpoint.table_url.clone())
+                    .send()
+                    .await
+            })
+            .unwrap_err();
+        assert!(error.is_timeout());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn transaction_requests_use_the_configured_table_name() {
+        let block_id = BlockHash::from_bytes([0x4c; 32]);
+        let row = TableBlockEntity::from_block_bytes(&block_id, b"payload").unwrap();
+        let request = ReqwestTableBackend::build_insert_transaction_request("custom-table", &[row])
+            .unwrap()
+            .unwrap();
+        let body = String::from_utf8(request.body).unwrap();
+        assert!(body.contains("POST custom-table HTTP/1.1"));
     }
 
     #[test]
