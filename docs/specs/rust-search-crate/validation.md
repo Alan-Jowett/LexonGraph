@@ -545,3 +545,44 @@ does not silently fall back to another selector or to ranked top-`w`
 expansion.
 
 **Traces to:** REQ-SEARCH-043
+
+### VAL-SEARCH-047
+
+Prepare a target through the public format-neutral API using a validated
+ordinary root block and a logical `f32` vector.
+
+**Pass condition:** the API returns an `EncodedTargetEmbedding` whose
+specification equals the returned effective comparison specification and can be
+used by the default policies.
+
+**Traces to:** REQ-SEARCH-045, REQ-SEARCH-046
+
+### VAL-SEARCH-048
+
+Prepare targets through the public API using valid roots for every supported
+EBCP branch encoding, including quantized encodings.
+
+**Pass condition:** all results use the logical ambient-space comparison
+specification without consumers inspecting encoding names, parsing extensions,
+or encoding EBCP/quantized payloads.
+
+**Traces to:** REQ-SEARCH-045, REQ-SEARCH-046, REQ-SEARCH-047
+
+### VAL-SEARCH-049
+
+Run default-policy search with a prepared EBCP-root target and with the
+equivalent explicitly encoded logical target.
+
+**Pass condition:** both invocations produce the same ordered result.
+
+**Traces to:** REQ-SEARCH-046, REQ-SEARCH-047
+
+### VAL-SEARCH-050
+
+Attempt target preparation with a root or logical input that block-owned
+preparation rejects.
+
+**Pass condition:** the API returns an explicit preparation error before
+search begins and does not substitute a target representation.
+
+**Traces to:** REQ-SEARCH-048

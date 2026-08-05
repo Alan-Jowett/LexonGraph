@@ -190,6 +190,16 @@ pub struct ValidatedBlock {
     pub hash: BlockHash,
 }
 
+/// A target embedding encoded for comparison with a validated root block.
+///
+/// The comparison specification may differ from the root block's stored
+/// specification when the root uses an EBCP branch encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedComparisonTarget {
+    pub bytes: Vec<u8>,
+    pub comparison_spec: EmbeddingSpec,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum VersionedBlock {
     V1(Block),
@@ -292,6 +302,49 @@ pub fn parse_branch_ebcp_descriptor(
         embedding_spec,
         descriptor,
     )?))
+}
+
+/// Prepares a logical `f32` target for comparison against a validated root.
+///
+/// This is the protocol boundary for stored-format detection and target
+/// conversion. EBCP roots compare in their descriptor-declared logical
+/// ambient representation rather than against compressed branch payloads.
+pub fn prepare_root_comparison_target(
+    root: &ValidatedBlock,
+    logical_embedding: &[f32],
+) -> Result<PreparedComparisonTarget, BlockError> {
+    let branch = match &root.block {
+        Block::Branch(branch) => branch,
+        Block::Leaf(_) => {
+            return Err(BlockError::InvalidEntryShape(
+                "a root comparison target requires a non-leaf root block",
+            ));
+        }
+    };
+    let descriptor = parse_branch_ebcp_descriptor(&branch.embedding_spec, branch.ext.as_ref())?;
+    let comparison_spec = descriptor
+        .as_ref()
+        .map(|descriptor| descriptor.logical_embedding_spec.clone())
+        .unwrap_or_else(|| branch.embedding_spec.clone());
+    let dims = usize::try_from(comparison_spec.dims).map_err(|_| {
+        BlockError::InvalidEntryShape("root comparison embedding dimensions exceed usize")
+    })?;
+    if logical_embedding.len() != dims {
+        return Err(BlockError::InvalidEntryShape(
+            "logical target dimensions do not match the root comparison specification",
+        ));
+    }
+    if logical_embedding.iter().any(|value| !value.is_finite()) {
+        return Err(BlockError::InvalidEntryShape(
+            "logical target embedding must contain only finite values",
+        ));
+    }
+
+    let bytes = encode_logical_comparison_embedding(logical_embedding, &comparison_spec)?;
+    Ok(PreparedComparisonTarget {
+        bytes,
+        comparison_spec,
+    })
 }
 
 /// Reconstructs the logical branch embedding values used for comparison.
@@ -738,6 +791,18 @@ fn decode_i8_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockError
         .iter()
         .map(|byte| i8::from_le_bytes([*byte]) as f32)
         .collect())
+}
+
+fn encode_logical_comparison_embedding(
+    values: &[f32],
+    comparison_spec: &EmbeddingSpec,
+) -> Result<Vec<u8>, BlockError> {
+    match comparison_spec.encoding.as_str() {
+        "f32le" => Ok(encode_f32_values(values)),
+        _ => Err(BlockError::UnsupportedValue(
+            "root comparison target encoding is not supported by the default search policies",
+        )),
+    }
 }
 
 fn checked_embedding_byte_len(

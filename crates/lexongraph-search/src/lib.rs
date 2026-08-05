@@ -42,8 +42,8 @@ use futures::future;
 pub use lexongraph_block::{BlockHash, EmbeddingSpec, LeafEntry};
 
 use lexongraph_block::{
-    TypedEntries, ValidatedBlock, into_entries, parse_branch_ebcp_descriptor,
-    reconstruct_logical_branch_embedding_f32,
+    BlockError, TypedEntries, ValidatedBlock, into_entries, parse_branch_ebcp_descriptor,
+    prepare_root_comparison_target, reconstruct_logical_branch_embedding_f32,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 
@@ -72,6 +72,49 @@ impl EncodedTargetEmbedding {
             embedding_spec,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedTargetEmbedding {
+    pub target: EncodedTargetEmbedding,
+    pub comparison_spec: EmbeddingSpec,
+}
+
+#[derive(Debug)]
+pub enum TargetPreparationError {
+    Block(BlockError),
+}
+
+impl fmt::Display for TargetPreparationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Block(error) => write!(f, "failed to prepare target embedding: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for TargetPreparationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Block(error) => Some(error),
+        }
+    }
+}
+
+/// Prepares a logical embedding-service result for the default search policies.
+///
+/// Callers pass the validated root block as loaded from storage. The block crate
+/// owns stored-format detection, EBCP descriptor parsing, and conversion.
+pub fn prepare_target_embedding(
+    root: &ValidatedBlock,
+    logical_embedding: &[f32],
+) -> Result<PreparedTargetEmbedding, TargetPreparationError> {
+    let prepared = prepare_root_comparison_target(root, logical_embedding)
+        .map_err(TargetPreparationError::Block)?;
+    Ok(PreparedTargetEmbedding {
+        target: EncodedTargetEmbedding::new(prepared.bytes, prepared.comparison_spec.clone()),
+        comparison_spec: prepared.comparison_spec,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

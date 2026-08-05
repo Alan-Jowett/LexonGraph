@@ -292,3 +292,35 @@ string such as `branch` or `leaf`.
 silently building a reserved-type block through the custom-block API.
 
 **Traces to:** REQ-BLOCK-CRATE-021, REQ-BLOCK-CRATE-022
+
+### VAL-035
+
+Prepare a root comparison target from a validated ordinary `f32le` branch root
+and a logical `f32` vector.
+
+**Pass condition:** the result contains target bytes encoded for the root's
+effective comparison specification without caller-side format detection.
+
+**Traces to:** REQ-BLOCK-CRATE-025
+
+### VAL-036
+
+Prepare root comparison targets from valid EBCP roots using each supported EBCP
+branch encoding, including quantized encodings.
+
+**Pass condition:** each result uses the descriptor-declared logical
+ambient-space specification and comparison bytes; callers do not parse
+extensions or encode EBCP/quantized payloads.
+
+**Traces to:** REQ-BLOCK-CRATE-025
+
+### VAL-037
+
+Prepare a root comparison target using a leaf root, a vector with mismatched
+dimensions or a non-finite value, an unsupported effective encoding such as
+`f16le`, `i8`, or `pq4`, or an EBCP root with invalid required metadata.
+
+**Pass condition:** every case fails explicitly and no partially prepared
+target is returned.
+
+**Traces to:** REQ-BLOCK-CRATE-025

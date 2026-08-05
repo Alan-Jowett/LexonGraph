@@ -7,7 +7,8 @@ use lexongraph_block::{
     EbcpQuantization, EbcpRotation, EmbeddingSpec, LeafEntry, TypedEntries, VERSION_1,
     VersionedBlock, build_branch_block, build_leaf_block, compute_block_hash, deserialize_block,
     deserialize_versioned_block, ebcp_extension_map, into_entries, parse_branch_ebcp_descriptor,
-    reconstruct_logical_branch_embedding_f32, serialize_block, serialize_versioned_block, v2,
+    prepare_root_comparison_target, reconstruct_logical_branch_embedding_f32, serialize_block,
+    serialize_versioned_block, v2,
 };
 
 #[test]
@@ -900,6 +901,148 @@ fn val_029_branch_embedding_reconstruction_fails_explicitly_for_unsupported_or_m
     let pq4 = reconstruct_logical_branch_embedding_f32(&[0xAB], &embedding_spec("pq4"), None)
         .unwrap_err();
     assert!(matches!(pq4, BlockError::UnsupportedValue(_)));
+}
+
+#[test]
+fn val_035_root_comparison_target_preparation_owns_format_detection() {
+    let ordinary = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            EmbeddingSpec {
+                dims: 1,
+                encoding: "f32le".into(),
+            },
+            vec![branch_entry(vec![0x00, 0x00, 0x80, 0x3f], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&ordinary).unwrap();
+    let ordinary = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    let prepared = prepare_root_comparison_target(&ordinary, &[1.0]).unwrap();
+    assert_eq!(
+        prepared.comparison_spec,
+        EmbeddingSpec {
+            dims: 1,
+            encoding: "f32le".into(),
+        }
+    );
+    assert_eq!(prepared.bytes, vec![0x00, 0x00, 0x80, 0x3f]);
+
+    let descriptor = EbcpDescriptor {
+        version: 1,
+        logical_embedding_spec: EmbeddingSpec {
+            dims: 1,
+            encoding: "f32le".into(),
+        },
+        base_centroid: None,
+        rotation: Some(EbcpRotation {
+            matrix_format: "f32le-row-major".into(),
+            matrix: vec![1.0],
+        }),
+        quantization: None,
+    };
+    let ebcp = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            EmbeddingSpec {
+                dims: 1,
+                encoding: "pca-rot-f32le".into(),
+            },
+            vec![branch_entry(vec![0x00, 0x00, 0x80, 0x3f], [0x11; 32])],
+            Some(ebcp_extension_map(&descriptor)),
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&ebcp).unwrap();
+    let ebcp = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    let prepared = prepare_root_comparison_target(&ebcp, &[1.0]).unwrap();
+    assert_eq!(prepared.comparison_spec, descriptor.logical_embedding_spec);
+    assert_eq!(prepared.bytes, vec![0x00, 0x00, 0x80, 0x3f]);
+}
+
+#[test]
+fn val_037_root_comparison_target_rejects_invalid_inputs() {
+    let leaf = Block::Leaf(
+        build_leaf_block(
+            VERSION_1,
+            embedding_spec("f32le"),
+            vec![leaf_entry(vec![0x00, 0x00, 0x80, 0x3f], vec![])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&leaf).unwrap();
+    let leaf = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    assert!(matches!(
+        prepare_root_comparison_target(&leaf, &[1.0]),
+        Err(BlockError::InvalidEntryShape(_))
+    ));
+
+    let branch = sample_branch_block();
+    let serialized = serialize_block(&branch).unwrap();
+    let branch = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    assert!(matches!(
+        prepare_root_comparison_target(&branch, &[f32::NAN, 0.0]),
+        Err(BlockError::InvalidEntryShape(_))
+    ));
+    assert!(matches!(
+        prepare_root_comparison_target(&branch, &[1.0]),
+        Err(BlockError::InvalidEntryShape(_))
+    ));
+
+    let i8_branch = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            embedding_spec("i8"),
+            vec![branch_entry(vec![0, 0], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&i8_branch).unwrap();
+    let i8_branch = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    assert!(matches!(
+        prepare_root_comparison_target(&i8_branch, &[0.0, 0.0]),
+        Err(BlockError::UnsupportedValue(_))
+    ));
+
+    let f16_branch = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            embedding_spec("f16le"),
+            vec![branch_entry(vec![0, 0, 0, 0], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&f16_branch).unwrap();
+    let f16_branch = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    assert!(matches!(
+        prepare_root_comparison_target(&f16_branch, &[0.0, 0.0]),
+        Err(BlockError::UnsupportedValue(_))
+    ));
+
+    let pq4_branch = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            embedding_spec("pq4"),
+            vec![branch_entry(vec![0], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&pq4_branch).unwrap();
+    let pq4_branch = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    assert!(matches!(
+        prepare_root_comparison_target(&pq4_branch, &[0.0, 0.0]),
+        Err(BlockError::UnsupportedValue(_))
+    ));
 }
 
 #[test]
