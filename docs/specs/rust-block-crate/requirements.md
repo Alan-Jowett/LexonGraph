@@ -178,10 +178,12 @@ with a logical `f32` vector and return comparison-ready target bytes plus the
 effective comparison `EmbeddingSpec`.
 
 The crate shall own stored-format detection, EBCP descriptor parsing,
-logical-to-comparison conversion, and validation for that surface. For an EBCP
-root, the effective comparison representation shall be the descriptor's
-logical ambient-space representation; the surface shall not require callers to
-implement EBCP or quantization codecs.
+logical-to-comparison conversion, and validation for that surface. The initial
+surface supports only the `f32le` effective representation used end-to-end by
+the crate-provided default search policies. For an EBCP root, the effective
+comparison representation shall be the descriptor's logical ambient-space
+representation; the surface shall not require callers to implement EBCP or
+quantization codecs.
 
 The surface shall fail explicitly for a leaf root, unsupported comparison
 encoding, malformed or missing required EBCP metadata, dimensional mismatch,

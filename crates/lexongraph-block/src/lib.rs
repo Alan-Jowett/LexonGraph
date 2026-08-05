@@ -799,33 +799,8 @@ fn encode_logical_comparison_embedding(
 ) -> Result<Vec<u8>, BlockError> {
     match comparison_spec.encoding.as_str() {
         "f32le" => Ok(encode_f32_values(values)),
-        "f16le" => {
-            let mut bytes = Vec::with_capacity(values.len() * std::mem::size_of::<f16>());
-            for value in values {
-                let encoded = f16::from_f32(*value);
-                if !encoded.is_finite() {
-                    return Err(BlockError::InvalidEntryShape(
-                        "logical target value cannot be represented as finite f16",
-                    ));
-                }
-                bytes.extend_from_slice(&encoded.to_le_bytes());
-            }
-            Ok(bytes)
-        }
-        "i8" => {
-            let mut bytes = Vec::with_capacity(values.len());
-            for value in values {
-                if value.fract() != 0.0 || *value < i8::MIN as f32 || *value > i8::MAX as f32 {
-                    return Err(BlockError::InvalidEntryShape(
-                        "logical target value cannot be represented exactly as i8",
-                    ));
-                }
-                bytes.push((*value as i8) as u8);
-            }
-            Ok(bytes)
-        }
         _ => Err(BlockError::UnsupportedValue(
-            "root comparison target encoding is not supported",
+            "root comparison target encoding is not supported by the default search policies",
         )),
     }
 }

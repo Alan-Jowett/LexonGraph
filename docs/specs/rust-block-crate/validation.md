@@ -295,8 +295,8 @@ silently building a reserved-type block through the custom-block API.
 
 ### VAL-035
 
-Prepare a root comparison target from a validated ordinary branch root and a
-logical `f32` vector.
+Prepare a root comparison target from a validated ordinary `f32le` branch root
+and a logical `f32` vector.
 
 **Pass condition:** the result contains target bytes encoded for the root's
 effective comparison specification without caller-side format detection.
@@ -317,8 +317,8 @@ extensions or encode EBCP/quantized payloads.
 ### VAL-037
 
 Prepare a root comparison target using a leaf root, a vector with mismatched
-dimensions or a non-finite value, an unsupported effective encoding, or an
-EBCP root with invalid required metadata.
+dimensions or a non-finite value, an unsupported effective encoding such as
+`f16le`, `i8`, or `pq4`, or an EBCP root with invalid required metadata.
 
 **Pass condition:** every case fails explicitly and no partially prepared
 target is returned.

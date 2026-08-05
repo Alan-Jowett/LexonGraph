@@ -423,7 +423,9 @@ descriptor parsing, logical-to-comparison conversion, and format validation to
 the block crate's protocol-owned preparation surface.
 
 The returned encoded target's embedding specification shall equal the returned
-effective comparison specification.
+effective comparison specification. The API shall accept only effective
+comparison representations supported end-to-end by the crate-provided default
+policies.
 
 ### REQ-SEARCH-047
 

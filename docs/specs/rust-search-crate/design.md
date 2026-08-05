@@ -494,7 +494,9 @@ The crate exposes a public target-preparation façade accepting a validated
 version-1 root block and `&[f32]`. It delegates root representation detection,
 extension handling, descriptor parsing, conversion, and validation to
 `lexongraph-block`, then wraps the returned bytes in
-`EncodedTargetEmbedding`.
+`EncodedTargetEmbedding`. Its initial supported effective comparison
+representation is `f32le`, matching the crate-provided default scorer and
+frontier selector.
 
 Consumers do not branch on encoding names or access EBCP/quantization metadata
 to use this façade.

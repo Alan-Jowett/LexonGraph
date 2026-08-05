@@ -911,9 +911,9 @@ fn val_035_root_comparison_target_preparation_owns_format_detection() {
             1,
             EmbeddingSpec {
                 dims: 1,
-                encoding: "f16le".into(),
+                encoding: "f32le".into(),
             },
-            vec![branch_entry(vec![0x00, 0x3c], [0x11; 32])],
+            vec![branch_entry(vec![0x00, 0x00, 0x80, 0x3f], [0x11; 32])],
             None,
         )
         .unwrap(),
@@ -925,10 +925,10 @@ fn val_035_root_comparison_target_preparation_owns_format_detection() {
         prepared.comparison_spec,
         EmbeddingSpec {
             dims: 1,
-            encoding: "f16le".into(),
+            encoding: "f32le".into(),
         }
     );
-    assert_eq!(prepared.bytes, vec![0x00, 0x3c]);
+    assert_eq!(prepared.bytes, vec![0x00, 0x00, 0x80, 0x3f]);
 
     let descriptor = EbcpDescriptor {
         version: 1,
@@ -1006,8 +1006,25 @@ fn val_037_root_comparison_target_rejects_invalid_inputs() {
     let serialized = serialize_block(&i8_branch).unwrap();
     let i8_branch = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
     assert!(matches!(
-        prepare_root_comparison_target(&i8_branch, &[0.5, 0.0]),
-        Err(BlockError::InvalidEntryShape(_))
+        prepare_root_comparison_target(&i8_branch, &[0.0, 0.0]),
+        Err(BlockError::UnsupportedValue(_))
+    ));
+
+    let f16_branch = Block::Branch(
+        build_branch_block(
+            VERSION_1,
+            1,
+            embedding_spec("f16le"),
+            vec![branch_entry(vec![0, 0, 0, 0], [0x11; 32])],
+            None,
+        )
+        .unwrap(),
+    );
+    let serialized = serialize_block(&f16_branch).unwrap();
+    let f16_branch = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    assert!(matches!(
+        prepare_root_comparison_target(&f16_branch, &[0.0, 0.0]),
+        Err(BlockError::UnsupportedValue(_))
     ));
 
     let pq4_branch = Block::Branch(

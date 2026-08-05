@@ -243,9 +243,11 @@ custom content; those remain owned by higher-layer specifications and consumers.
 
 The crate exposes a public root-comparison preparation primitive accepting a
 `ValidatedBlock` and a logical `&[f32]`. It accepts only validated version-1
-branch roots. It derives the effective comparison specification from the
-stored `EmbeddingSpec` and, when applicable, the parsed EBCP descriptor, then
-returns that specification with target bytes encoded for comparison.
+branch roots whose effective comparison representation is `f32le`, the format
+supported end-to-end by the crate-provided default search policies. It derives
+the effective comparison specification from the stored `EmbeddingSpec` and,
+when applicable, the parsed EBCP descriptor, then returns that specification
+with target bytes encoded for comparison.
 
 For an EBCP root, the effective comparison specification is the descriptor's
 logical ambient-space specification. The primitive serializes the caller's
@@ -255,7 +257,7 @@ lossy EBCP branch payload.
 ### DSG-028 `Preparation ownership and errors`
 
 The root-comparison primitive owns stored-format detection, extension access,
-EBCP descriptor parsing, and ordinary comparison-encoding conversion. It
+EBCP descriptor parsing, and `f32le` comparison-encoding conversion. It
 returns explicit `BlockError` failures for leaf roots, unsupported comparison
 encodings, missing or malformed EBCP metadata, dimensional mismatch,
 non-finite values, and values that cannot be represented in the effective
