@@ -21,9 +21,12 @@ use tokio::time::sleep;
 use url::Url;
 
 const ENTITY_SCHEMA_VERSION: i32 = 3;
+const AZURE_ENTITY_SIZE_LIMIT_BYTES: usize = 1_048_576;
+const AZURE_ENTITY_METADATA_RESERVE_BYTES: usize = 48_576;
 // Azure's 1 MiB entity limit includes service-side entity metadata in addition
 // to property names and values. Keep sufficient room for that metadata.
-const MAX_ROW_PROPERTY_BYTES: usize = 1_000_000;
+const MAX_ROW_PROPERTY_BYTES: usize =
+    AZURE_ENTITY_SIZE_LIMIT_BYTES - AZURE_ENTITY_METADATA_RESERVE_BYTES;
 const MAX_PROPERTY_COUNT: usize = 255;
 const FIXED_ROW_PROPERTY_COUNT: usize = 7;
 const MAX_CHUNK_PROPERTY_COUNT: usize = MAX_PROPERTY_COUNT - FIXED_ROW_PROPERTY_COUNT;
@@ -2879,11 +2882,16 @@ mod tests {
     fn row_layout_reserves_space_for_azure_entity_metadata() {
         let block_id = BlockHash::from_bytes([0x7b; 32]);
         let payload_len = max_supported_row_payload_bytes(0, MAX_CHUNK_PROPERTY_COUNT);
-        let row = TableBlockEntity::rows_from_block_bytes(&block_id, &vec![0xab; payload_len])
-            .unwrap()
-            .remove(0);
-        assert!(row.encoded_property_bytes().unwrap() <= MAX_ROW_PROPERTY_BYTES);
-        assert!(row.encoded_property_bytes().unwrap() <= MAX_ROW_PROPERTY_BYTES);
+        let payload = vec![0xab; payload_len];
+        let rows = TableBlockEntity::rows_from_block_bytes(&block_id, &payload).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].encoded_property_bytes().unwrap() <= MAX_ROW_PROPERTY_BYTES);
+
+        let overflow_rows =
+            TableBlockEntity::rows_from_block_bytes(&block_id, &vec![0xab; payload_len + 1])
+                .unwrap();
+        assert_eq!(overflow_rows.len(), 2);
     }
 
     #[test]
