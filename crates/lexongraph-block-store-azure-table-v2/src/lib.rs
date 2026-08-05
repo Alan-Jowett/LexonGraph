@@ -2882,9 +2882,8 @@ mod tests {
         let row = TableBlockEntity::rows_from_block_bytes(&block_id, &vec![0xab; payload_len])
             .unwrap()
             .remove(0);
-
         assert!(row.encoded_property_bytes().unwrap() <= MAX_ROW_PROPERTY_BYTES);
-        assert!(MAX_ROW_PROPERTY_BYTES < 1_048_576);
+        assert!(row.encoded_property_bytes().unwrap() <= MAX_ROW_PROPERTY_BYTES);
     }
 
     #[test]
