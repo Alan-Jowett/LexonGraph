@@ -12,8 +12,9 @@ use ciborium::value::{Integer, Value};
 use futures::stream;
 use lexongraph_block::{
     Block, BlockHash, BranchEntry, Content, EbcpDescriptor, EbcpRotation, EmbeddingSpec, LeafEntry,
-    VERSION_1, build_branch_block, build_leaf_block, compute_block_hash, ebcp_extension_map,
-    parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32,
+    VERSION_1, build_branch_block, build_leaf_block, compute_block_hash, deserialize_block,
+    ebcp_extension_map, parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32,
+    serialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
@@ -22,7 +23,7 @@ use lexongraph_search::{
     ExpandableFrontierCandidate, FrontierSelector, GeometryAwareFrontierSelector,
     PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_2_0, ProfiledSearcher, PublishedProfileVersion,
     SearchError, SearchProfileError, SearchResult, SearchTelemetryObserver, SearchTerminationKind,
-    Searcher, published_search_profile,
+    Searcher, prepare_target_embedding, published_search_profile,
 };
 
 trait BlockingResultFutureExt<T, E>: Future<Output = Result<T, E>> + Sized {
@@ -1616,6 +1617,68 @@ fn val_search_039_public_block_reconstruction_matches_search_branch_ranking() {
         assert_eq!(result.leaves[0].leaf_block_id, best_child, "{encoding}");
         assert_eq!(result.leaves[0].entry.content.body, b"left", "{encoding}");
     }
+}
+
+#[test]
+fn val_search_047_prepared_target_uses_validated_root_comparison_context() {
+    let store = MemoryBlockStore::default();
+    let root = uncompressed_fixture(&store);
+    let serialized = serialize_block(&root).unwrap();
+    let validated = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+
+    let prepared = prepare_target_embedding(&validated, &[1.0, 0.0]).unwrap();
+    assert_eq!(prepared.target.embedding_spec, embedding_spec_f32());
+    assert_eq!(prepared.comparison_spec, embedding_spec_f32());
+    assert_eq!(prepared.target.bytes, f32_embedding([1.0, 0.0]));
+}
+
+#[test]
+fn val_search_048_prepared_target_hides_ebcp_formats_from_consumers() {
+    for encoding in [
+        "pca-rot-f32le",
+        "pca-rot-delta-f32le",
+        "pca-rot-delta-uq",
+        "pca-rot-delta-vbq",
+        "ambient-delta-uq",
+    ] {
+        let store = MemoryBlockStore::default();
+        let root = ebcp_fixture(&store, encoding);
+        let serialized = serialize_block(&root).unwrap();
+        let validated = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+
+        let prepared = prepare_target_embedding(&validated, &[1.0, 0.0]).unwrap();
+        assert_eq!(prepared.comparison_spec, embedding_spec_f32());
+        assert_eq!(prepared.target.embedding_spec, embedding_spec_f32());
+        assert_eq!(prepared.target.bytes, f32_embedding([1.0, 0.0]));
+    }
+}
+
+#[test]
+fn val_search_049_prepared_target_matches_explicit_logical_target_ordering() {
+    let store = MemoryBlockStore::default();
+    let root = ebcp_fixture(&store, "pca-rot-delta-uq");
+    let serialized = serialize_block(&root).unwrap();
+    let validated = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+    let root_id = store.put(&root).unwrap();
+    let prepared = prepare_target_embedding(&validated, &[1.0, 0.0]).unwrap();
+    let explicit = EncodedTargetEmbedding::new(f32_embedding([1.0, 0.0]), embedding_spec_f32());
+    let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+
+    assert_eq!(
+        searcher
+            .search(&root_id, &prepared.target, 1, 1, &store)
+            .unwrap(),
+        searcher.search(&root_id, &explicit, 1, 1, &store).unwrap()
+    );
+}
+
+#[test]
+fn val_search_050_prepared_target_fails_explicitly_before_search() {
+    let block = leaf_block_with_spec(embedding_spec_f32(), f32_embedding([1.0, 0.0]), "leaf");
+    let serialized = serialize_block(&block).unwrap();
+    let validated = deserialize_block(&serialized.bytes, &serialized.hash).unwrap();
+
+    assert!(prepare_target_embedding(&validated, &[1.0, 0.0]).is_err());
 }
 
 #[test]

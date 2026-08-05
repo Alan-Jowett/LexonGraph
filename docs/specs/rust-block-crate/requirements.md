@@ -170,6 +170,24 @@ The repository shall introduce a separate version-2 protocol authority in
 `docs/protocol/blocks-v2.md`, and the crate's version-2 implementation shall be
 subordinate to that document.
 
+### REQ-BLOCK-CRATE-025
+
+The crate shall expose a public, format-neutral root-comparison preparation
+surface. It shall accept a validated version-1 non-leaf root block together
+with a logical `f32` vector and return comparison-ready target bytes plus the
+effective comparison `EmbeddingSpec`.
+
+The crate shall own stored-format detection, EBCP descriptor parsing,
+logical-to-comparison conversion, and validation for that surface. For an EBCP
+root, the effective comparison representation shall be the descriptor's
+logical ambient-space representation; the surface shall not require callers to
+implement EBCP or quantization codecs.
+
+The surface shall fail explicitly for a leaf root, unsupported comparison
+encoding, malformed or missing required EBCP metadata, dimensional mismatch,
+non-finite logical input, or a value that cannot be represented by the
+effective comparison encoding.
+
 ## Out of Scope
 
 This crate does not define or own:

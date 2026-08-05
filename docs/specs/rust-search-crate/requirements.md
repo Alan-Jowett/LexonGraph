@@ -405,6 +405,42 @@ When a published profile changes frontier-selection behavior, that behavior
 change shall be exposed through a new published profile version rather than
 changing the meaning of an existing published profile version.
 
+### REQ-SEARCH-045
+
+The crate shall expose a public format-neutral target-preparation API for its
+default policy surface. The API shall accept a loaded, validated version-1 root
+block, including its metadata and extensions, together with an embedding
+service's logical `f32` vector.
+
+It shall return an `EncodedTargetEmbedding` and the effective comparison
+`EmbeddingSpec` required by the default search compatibility and scoring
+policies.
+
+### REQ-SEARCH-046
+
+The target-preparation API shall delegate stored-format detection,
+descriptor parsing, logical-to-comparison conversion, and format validation to
+the block crate's protocol-owned preparation surface.
+
+The returned encoded target's embedding specification shall equal the returned
+effective comparison specification.
+
+### REQ-SEARCH-047
+
+For EBCP-encoded non-leaf roots, the target-preparation API shall use the
+descriptor-declared logical ambient-space representation for the returned
+target and effective comparison specification.
+
+Consumers of the API shall not need to inspect encoding names, parse block
+extensions, or implement EBCP or quantization codecs.
+
+### REQ-SEARCH-048
+
+The target-preparation API shall surface explicit failure before search starts
+when root comparison preparation fails. It shall not silently substitute an
+encoding, discard extensions, quantize a target into an EBCP branch payload,
+or begin traversal with a partially prepared target.
+
 ## Out of Scope
 
 This crate does not define or own:

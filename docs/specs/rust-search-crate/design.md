@@ -481,6 +481,31 @@ Search therefore depends on the block crate's public reconstruction surface for
 supported EBCP branch encodings rather than re-implementing those protocol
 semantics privately.
 
+### DSG-SEARCH-036 `PreparedTargetEmbedding`
+
+The crate exposes a public `PreparedTargetEmbedding` result containing an
+`EncodedTargetEmbedding` and its effective comparison `EmbeddingSpec`. The
+encoded target's specification always equals the effective comparison
+specification.
+
+### DSG-SEARCH-037 `Format-neutral target preparation`
+
+The crate exposes a public target-preparation façade accepting a validated
+version-1 root block and `&[f32]`. It delegates root representation detection,
+extension handling, descriptor parsing, conversion, and validation to
+`lexongraph-block`, then wraps the returned bytes in
+`EncodedTargetEmbedding`.
+
+Consumers do not branch on encoding names or access EBCP/quantization metadata
+to use this façade.
+
+### DSG-SEARCH-038 `Preparation failure boundary`
+
+The façade maps block-owned preparation failures into an explicit
+search-owned error before traversal begins. It does not substitute an
+alternative encoding, ignore root extensions, or create a lossy EBCP target
+payload.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -514,3 +539,6 @@ semantics privately.
 | DSG-SEARCH-033 | REQ-SEARCH-041, REQ-SEARCH-042 |
 | DSG-SEARCH-034 | REQ-SEARCH-029, REQ-SEARCH-039, REQ-SEARCH-040, REQ-SEARCH-044 |
 | DSG-SEARCH-035 | REQ-SEARCH-006, REQ-SEARCH-025, REQ-SEARCH-043 |
+| DSG-SEARCH-036 | REQ-SEARCH-045, REQ-SEARCH-046 |
+| DSG-SEARCH-037 | REQ-SEARCH-045, REQ-SEARCH-046, REQ-SEARCH-047 |
+| DSG-SEARCH-038 | REQ-SEARCH-048 |
