@@ -180,3 +180,52 @@ not admitted into the bounded cache layer, and the cache-admission failure
 remains non-fatal to the overall `get`.
 
 **Traces to:** REQ-OVERLAY-STORE-014
+
+### VAL-OVERLAY-019
+
+Exercise a higher-priority miss followed by a lower-priority hit.
+
+**Pass condition:** snapshot entries remain in priority order and report one
+miss for the higher layer, one hit for the lower layer, and zero for
+unconsulted layers.
+
+**Traces to:** REQ-OVERLAY-STORE-015, REQ-OVERLAY-STORE-016,
+REQ-OVERLAY-STORE-018
+
+### VAL-OVERLAY-020
+
+Perform multiple reads, including repeated reads after a cache refill, and
+inspect snapshots.
+
+**Pass condition:** counts are cumulative, indices and roles are stable, and
+snapshot retrieval does not reset counters.
+
+**Traces to:** REQ-OVERLAY-STORE-017, REQ-OVERLAY-STORE-018
+
+### VAL-OVERLAY-021
+
+Exercise a higher-layer error followed by a lower-layer success and an
+all-error/absence path.
+
+**Pass condition:** each error increments only that layer's error counter while
+existing returned-result semantics remain unchanged.
+
+**Traces to:** REQ-OVERLAY-STORE-016
+
+### VAL-OVERLAY-022
+
+Perform direct writes, enumeration, and lower-layer cache refill.
+
+**Pass condition:** lookup counters change only for actual layer
+`get_block_bytes` calls; refill writes do not create hits or misses.
+
+**Traces to:** REQ-OVERLAY-STORE-015, REQ-OVERLAY-STORE-016
+
+### VAL-OVERLAY-023
+
+Run concurrent overlay reads and snapshots.
+
+**Pass condition:** no race or panic occurs, snapshots are internally
+consistent, and final counters equal the observed per-layer lookup outcomes.
+
+**Traces to:** REQ-OVERLAY-STORE-015, REQ-OVERLAY-STORE-017
