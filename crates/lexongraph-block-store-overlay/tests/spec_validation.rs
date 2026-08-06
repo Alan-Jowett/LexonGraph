@@ -453,7 +453,7 @@ fn val_overlay_store_021_stats_count_errors_without_changing_read_results() {
     assert_eq!(stats.layers[1].hits, 1);
 
     let missing = BlockHash::from_bytes([0x55; 32]);
-    let all_error_overlay = OverlayBlockStore::new(vec![
+    let error_then_miss_overlay = OverlayBlockStore::new(vec![
         Box::new(PassiveLayer::read_only(MockStore::for_get(Err(
             backend_failure("first error"),
         )))),
@@ -462,12 +462,12 @@ fn val_overlay_store_021_stats_count_errors_without_changing_read_results() {
     .unwrap();
 
     assert_eq!(
-        all_error_overlay.get(&missing).unwrap_err(),
+        error_then_miss_overlay.get(&missing).unwrap_err(),
         backend_failure("first error")
     );
-    let all_error_stats = all_error_overlay.stats();
-    assert_eq!(all_error_stats.layers[0].errors, 1);
-    assert_eq!(all_error_stats.layers[1].misses, 1);
+    let error_then_miss_stats = error_then_miss_overlay.stats();
+    assert_eq!(error_then_miss_stats.layers[0].errors, 1);
+    assert_eq!(error_then_miss_stats.layers[1].misses, 1);
 }
 
 #[test]
