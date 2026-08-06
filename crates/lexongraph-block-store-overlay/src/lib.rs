@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use futures::{StreamExt, future, stream};
@@ -117,6 +118,46 @@ impl<S: BlockStore + Send + Sync> OverlayStoreLayer for PassiveLayer<S> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlayLayerStats {
+    pub layer_index: usize,
+    pub role: OverlayLayerRole,
+    pub hits: u64,
+    pub misses: u64,
+    pub errors: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlayStats {
+    pub layers: Vec<OverlayLayerStats>,
+}
+
+struct LayerCounters {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    errors: AtomicU64,
+}
+
+impl LayerCounters {
+    fn new() -> Self {
+        Self {
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self, layer_index: usize, role: OverlayLayerRole) -> OverlayLayerStats {
+        OverlayLayerStats {
+            layer_index,
+            role,
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            errors: self.errors.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OverlayBuildError {
     InsufficientLayers { count: usize },
 }
@@ -138,6 +179,7 @@ impl std::error::Error for OverlayBuildError {}
 
 pub struct OverlayBlockStore {
     layers: Vec<Box<dyn OverlayStoreLayer>>,
+    counters: Vec<LayerCounters>,
 }
 
 impl OverlayBlockStore {
@@ -150,7 +192,9 @@ impl OverlayBlockStore {
             });
         }
 
-        Ok(Self { layers })
+        let counters = (0..layers.len()).map(|_| LayerCounters::new()).collect();
+
+        Ok(Self { layers, counters })
     }
 
     pub fn from_layers<I, L>(layers: I) -> Result<Self, OverlayBuildError>
@@ -168,6 +212,19 @@ impl OverlayBlockStore {
 
     pub fn layer_count(&self) -> usize {
         self.layers.len()
+    }
+
+    pub fn stats(&self) -> OverlayStats {
+        OverlayStats {
+            layers: self
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(layer_index, layer)| {
+                    self.counters[layer_index].snapshot(layer_index, layer.role())
+                })
+                .collect(),
+        }
     }
 
     async fn refill_cache_layers(
@@ -235,11 +292,17 @@ impl BlockStore for OverlayBlockStore {
         for (index, layer) in self.layers.iter().enumerate() {
             match layer.get_block_bytes(block_id).await {
                 Ok(Some(bytes)) => {
+                    self.counters[index].hits.fetch_add(1, Ordering::Relaxed);
                     self.refill_cache_layers(index, block_id, &bytes).await;
                     return Ok(Some(bytes));
                 }
-                Ok(None) => {}
-                Err(error) => last_error = Some(error),
+                Ok(None) => {
+                    self.counters[index].misses.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => {
+                    self.counters[index].errors.fetch_add(1, Ordering::Relaxed);
+                    last_error = Some(error);
+                }
             }
         }
 

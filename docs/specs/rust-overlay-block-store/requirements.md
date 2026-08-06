@@ -142,6 +142,31 @@ cache layer and the cache layer rejects that refill because the block cannot be
 admitted within its configured payload-byte budget, the overlay shall still
 return the successful lower-layer `get` result unchanged.
 
+### REQ-OVERLAY-STORE-015
+
+The overlay shall maintain cumulative, thread-safe lookup statistics for every
+configured layer. A layer lookup is one invocation of that layer's
+`get_block_bytes` during an overlay `get`.
+
+### REQ-OVERLAY-STORE-016
+
+For each layer lookup, the overlay shall count `Ok(Some(_))` as a hit,
+`Ok(None)` as a miss, and `Err(BlockStoreError)` as an error.
+
+Statistics shall not alter read fallthrough, error propagation, cache refill,
+or parent `BlockStore` behavior.
+
+### REQ-OVERLAY-STORE-017
+
+The overlay shall expose a read-only snapshot API containing per-layer lookup
+statistics. Counters shall be cumulative for the lifetime of the overlay; a
+reset operation is not required.
+
+### REQ-OVERLAY-STORE-018
+
+Each snapshot entry shall identify its layer deterministically by priority
+index and expose its configured `OverlayLayerRole`.
+
 ## Out of Scope
 
 This crate does not define or own:

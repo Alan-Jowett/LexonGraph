@@ -327,6 +327,8 @@ fn val_overlay_store_016_overlay_public_composition_surface_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
 
     assert_send_sync::<OverlayBlockStore>();
+    assert_send_sync::<lexongraph_block_store_overlay::OverlayLayerStats>();
+    assert_send_sync::<lexongraph_block_store_overlay::OverlayStats>();
     assert_send_sync::<PassiveLayer<MockStore>>();
     assert_send_sync::<Box<dyn OverlayStoreLayer>>();
 }
@@ -367,6 +369,175 @@ fn val_overlay_store_018_cache_capacity_failures_during_refill_remain_non_fatal(
 
     assert_eq!(loaded.hash, block_id);
     assert_eq!(cache.get(&block_id).unwrap(), None);
+}
+
+#[test]
+fn val_overlay_store_019_stats_count_hits_and_misses_per_consulted_layer() {
+    let block = validated_block("stats");
+    let high = MockStore::for_get(Ok(None));
+    let low = MockStore::for_get(Ok(Some(block.clone())));
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::cache(high)),
+        Box::new(PassiveLayer::read_only(low)),
+    ])
+    .unwrap();
+
+    assert_eq!(overlay.get(&block.hash).unwrap(), Some(block));
+    assert_eq!(
+        overlay.stats().layers,
+        vec![
+            lexongraph_block_store_overlay::OverlayLayerStats {
+                layer_index: 0,
+                role: OverlayLayerRole::Cache,
+                hits: 0,
+                misses: 1,
+                errors: 0,
+            },
+            lexongraph_block_store_overlay::OverlayLayerStats {
+                layer_index: 1,
+                role: OverlayLayerRole::ReadOnly,
+                hits: 1,
+                misses: 0,
+                errors: 0,
+            },
+        ]
+    );
+}
+
+#[test]
+fn val_overlay_store_020_stats_are_cumulative_and_preserve_layer_identity() {
+    let block = validated_block("cumulative-stats");
+    let high = SharedMemoryBlockStore::default();
+    let low = SharedMemoryBlockStore::default();
+    low.put(&block.block).unwrap();
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::cache(high.clone())),
+        Box::new(PassiveLayer::read_only(low)),
+    ])
+    .unwrap();
+
+    assert_eq!(overlay.get(&block.hash).unwrap(), Some(block.clone()));
+    assert_eq!(overlay.get(&block.hash).unwrap(), Some(block.clone()));
+
+    let stats = overlay.stats();
+    assert_eq!(stats.layers[0].layer_index, 0);
+    assert_eq!(stats.layers[0].role, OverlayLayerRole::Cache);
+    assert_eq!(stats.layers[0].hits, 1);
+    assert_eq!(stats.layers[0].misses, 1);
+    assert_eq!(stats.layers[0].errors, 0);
+    assert_eq!(stats.layers[1].layer_index, 1);
+    assert_eq!(stats.layers[1].role, OverlayLayerRole::ReadOnly);
+    assert_eq!(stats.layers[1].hits, 1);
+    assert_eq!(stats.layers[1].misses, 0);
+    assert_eq!(stats.layers[1].errors, 0);
+    assert_eq!(high.get(&block.hash).unwrap().unwrap().hash, block.hash);
+}
+
+#[test]
+fn val_overlay_store_021_stats_count_errors_without_changing_read_results() {
+    let block = validated_block("error-stats");
+    let high = MockStore::for_get(Err(backend_failure("higher read failed")));
+    let low = MockStore::for_get(Ok(Some(block.clone())));
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::read_only(high)),
+        Box::new(PassiveLayer::read_only(low)),
+    ])
+    .unwrap();
+
+    assert_eq!(overlay.get(&block.hash).unwrap(), Some(block));
+    let stats = overlay.stats();
+
+    assert_eq!(stats.layers[0].errors, 1);
+    assert_eq!(stats.layers[0].hits, 0);
+    assert_eq!(stats.layers[0].misses, 0);
+    assert_eq!(stats.layers[1].hits, 1);
+
+    let missing = BlockHash::from_bytes([0x55; 32]);
+    let error_then_miss_overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::read_only(MockStore::for_get(Err(
+            backend_failure("first error"),
+        )))),
+        Box::new(PassiveLayer::read_only(MockStore::for_get(Ok(None)))),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        error_then_miss_overlay.get(&missing).unwrap_err(),
+        backend_failure("first error")
+    );
+    let error_then_miss_stats = error_then_miss_overlay.stats();
+    assert_eq!(error_then_miss_stats.layers[0].errors, 1);
+    assert_eq!(error_then_miss_stats.layers[1].misses, 1);
+}
+
+#[test]
+fn val_overlay_store_022_non_lookup_operations_do_not_change_lookup_stats() {
+    let block = sample_leaf_block("non-lookup-stats");
+    let cache = SharedMemoryBlockStore::default();
+    let source = SharedMemoryBlockStore::default();
+    source.put(&block).unwrap();
+    let overlay = OverlayBlockStore::new(vec![
+        Box::new(PassiveLayer::cache(cache.clone())),
+        Box::new(PassiveLayer::writable(source)),
+    ])
+    .unwrap();
+
+    let block_id = serialize_block(&block).unwrap().hash;
+    assert_eq!(overlay.get(&block_id).unwrap().unwrap().hash, block_id);
+    overlay.put(&block).unwrap();
+    let _ = overlay.iter_block_ids().unwrap();
+
+    assert_eq!(
+        overlay.stats(),
+        lexongraph_block_store_overlay::OverlayStats {
+            layers: vec![
+                lexongraph_block_store_overlay::OverlayLayerStats {
+                    layer_index: 0,
+                    role: OverlayLayerRole::Cache,
+                    hits: 0,
+                    misses: 1,
+                    errors: 0,
+                },
+                lexongraph_block_store_overlay::OverlayLayerStats {
+                    layer_index: 1,
+                    role: OverlayLayerRole::Writable,
+                    hits: 1,
+                    misses: 0,
+                    errors: 0,
+                },
+            ],
+        }
+    );
+    assert_eq!(cache.get(&block_id).unwrap().unwrap().hash, block_id);
+}
+
+#[test]
+fn val_overlay_store_023_stats_are_safe_for_concurrent_reads_and_snapshots() {
+    let block = validated_block("concurrent-stats");
+    let high = MockStore::for_get(Ok(None));
+    let low = MockStore::for_get(Ok(Some(block.clone())));
+    let overlay = Arc::new(
+        OverlayBlockStore::new(vec![
+            Box::new(PassiveLayer::cache(high)),
+            Box::new(PassiveLayer::read_only(low)),
+        ])
+        .unwrap(),
+    );
+
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let overlay = Arc::clone(&overlay);
+            let block = block.clone();
+            scope.spawn(move || {
+                assert_eq!(overlay.get(&block.hash).unwrap(), Some(block));
+                let _ = overlay.stats();
+            });
+        }
+    });
+
+    let stats = overlay.stats();
+    assert_eq!(stats.layers[0].misses, 8);
+    assert_eq!(stats.layers[1].hits, 8);
 }
 
 struct OverlayHarness;

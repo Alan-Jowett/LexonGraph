@@ -151,6 +151,35 @@ repository `BlockStore` implementations, including `MemoryBlockStore`,
 `FilesystemBlockStore`, and `AzureBlobBlockStore`, without requiring downstream
 crates to duplicate overlay dispatch behavior.
 
+### DSG-OVERLAY-014 `Per-layer lookup statistics`
+
+`OverlayBlockStore` owns one thread-safe counter set per configured layer.
+Each counter set is associated with the layer's fixed priority index and
+`OverlayLayerRole`.
+
+### DSG-OVERLAY-015 `Lookup classification`
+
+For each layer invocation of `get_block_bytes`:
+
+- `Ok(Some(_))` increments `hits`
+- `Ok(None)` increments `misses`
+- `Err(_)` increments `errors`
+
+Exactly one counter is incremented per consulted layer invocation. `put`,
+`iter_block_ids`, and cache-refill writes do not affect lookup counters.
+
+### DSG-OVERLAY-016 `Snapshot API`
+
+The overlay exposes a read-only snapshot method returning entries in layer
+priority order. Each entry contains `layer_index`, `role`, `hits`, `misses`,
+and `errors`. Snapshot values are cumulative for the overlay lifetime.
+
+### DSG-OVERLAY-017 `Concurrency and behavioral neutrality`
+
+Counter updates and snapshots are safe under concurrent access. Statistics are
+observational only: they cannot change dispatch order, fallthrough, returned
+errors, cache refill behavior, or the inherited `BlockStore` API.
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -163,3 +192,7 @@ crates to duplicate overlay dispatch behavior.
 | DSG-OVERLAY-011 | REQ-OVERLAY-STORE-011 |
 | DSG-OVERLAY-012 | REQ-OVERLAY-STORE-012 |
 | DSG-OVERLAY-013 | REQ-OVERLAY-STORE-001, REQ-OVERLAY-STORE-013 |
+| DSG-OVERLAY-014 | REQ-OVERLAY-STORE-015 |
+| DSG-OVERLAY-015 | REQ-OVERLAY-STORE-016 |
+| DSG-OVERLAY-016 | REQ-OVERLAY-STORE-017, REQ-OVERLAY-STORE-018 |
+| DSG-OVERLAY-017 | REQ-OVERLAY-STORE-012, REQ-OVERLAY-STORE-015, REQ-OVERLAY-STORE-016 |
