@@ -10,7 +10,7 @@ async-trait = "0.1"
 futures = "0.3"
 lexongraph-block = { path = "../lexongraph-block" }
 lexongraph-block-store = { path = "../lexongraph-block-store" }
-quick-xml = { version = "0.41", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 
