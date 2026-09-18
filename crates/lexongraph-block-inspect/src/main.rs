@@ -127,7 +127,7 @@ fn parse_block_hash(input: &str) -> Result<BlockHash, InspectError> {
     }
 
     let mut bytes = [0_u8; BlockHash::LEN];
-    for (index, chunk) in input.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in input.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let high = decode_hex_nibble(chunk[0]).ok_or_else(|| {
             InspectError::InvalidBlockHash(format!(
                 "found non-hexadecimal character {:?} at character {}",

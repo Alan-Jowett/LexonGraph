@@ -1320,7 +1320,7 @@ fn read_f32_vec(bytes: &[u8], offset: &mut usize, count: usize) -> Result<Vec<f3
     *offset += byte_count;
 
     let mut values = Vec::with_capacity(count);
-    for chunk in slice.chunks_exact(4) {
+    for chunk in slice.as_chunks::<4>().0 {
         let mut array = [0u8; 4];
         array.copy_from_slice(chunk);
         values.push(f32::from_le_bytes(array));
