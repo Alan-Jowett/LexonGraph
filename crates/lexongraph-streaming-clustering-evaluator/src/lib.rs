@@ -3961,8 +3961,10 @@ pub(crate) fn decode_embedding_to_f32(
                 ));
             }
             Ok(bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_le_bytes(*chunk))
                 .collect())
         }
         "f16le" => {
@@ -3976,8 +3978,10 @@ pub(crate) fn decode_embedding_to_f32(
                 ));
             }
             Ok(bytes
-                .chunks_exact(2)
-                .map(|chunk| f16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| f16::from_le_bytes(*chunk).to_f32())
                 .collect())
         }
         "i8" => {
@@ -4018,7 +4022,7 @@ pub(crate) fn parse_block_hash_hex(value: &str) -> Result<BlockHash, String> {
         ));
     }
     let mut bytes = [0u8; BlockHash::LEN];
-    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let high = hex_nibble(chunk[0]).ok_or_else(|| {
             format!(
                 "block id contains a non-hex character at byte offset {}",

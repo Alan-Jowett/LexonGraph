@@ -745,9 +745,11 @@ fn decode_f32le_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockEr
         ));
     }
     payload
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| {
-            let value = f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+            let value = f32::from_le_bytes(*chunk);
             if !value.is_finite() {
                 return Err(BlockError::InvalidEntryShape(
                     "f32le branch payload must contain only finite values",
@@ -766,10 +768,11 @@ fn decode_f16le_embedding(payload: &[u8], dims: u64) -> Result<Vec<f32>, BlockEr
         ));
     }
     payload
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| {
-            let value =
-                f16::from_le_bytes(chunk.try_into().expect("chunk size is validated")).to_f32();
+            let value = f16::from_le_bytes(*chunk).to_f32();
             if !value.is_finite() {
                 return Err(BlockError::InvalidEntryShape(
                     "f16le branch payload must contain only finite values",
@@ -843,10 +846,11 @@ fn decode_ebcp_payload_components(
                 ));
             }
             payload
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|chunk| {
-                    let value =
-                        f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+                    let value = f32::from_le_bytes(*chunk);
                     if !value.is_finite() {
                         return Err(BlockError::InvalidEntryShape(
                             "EBCP float payload must contain only finite values",
@@ -1381,9 +1385,11 @@ fn parse_f32_vector_bytes(
         ));
     }
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| {
-            let value = f32::from_le_bytes(chunk.try_into().expect("chunk size is validated"));
+            let value = f32::from_le_bytes(*chunk);
             if !value.is_finite() {
                 return Err(BlockError::NonConforming(
                     "EBCP float payload must contain only finite f32 values",

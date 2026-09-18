@@ -8641,12 +8641,16 @@ fn decode_embedding_as_f32(
             .map(|&b| i8::from_le_bytes([b]) as f32)
             .collect()),
         "f32le" => bytes
-            .chunks_exact(4)
-            .map(|chunk| Ok(f32::from_le_bytes(chunk.try_into().unwrap())))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| Ok(f32::from_le_bytes(*chunk)))
             .collect(),
         "f16le" => bytes
-            .chunks_exact(2)
-            .map(|chunk| Ok(f16::from_le_bytes(chunk.try_into().unwrap()).to_f32()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| Ok(f16::from_le_bytes(*chunk).to_f32()))
             .collect(),
         "pq4" => Err(StreamingIndexerError::ClusteringFailure(
             "pq4 embeddings are not supported by the streaming clustering path".into(),
@@ -8948,9 +8952,11 @@ fn decode_f32_embedding_exact(
         ));
     }
     embedding
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| {
-            let value = f32::from_le_bytes(chunk.try_into().unwrap());
+            let value = f32::from_le_bytes(*chunk);
             if !value.is_finite() {
                 return Err("embedding contains non-finite f32 values".into());
             }
@@ -9511,12 +9517,16 @@ fn decode_embedding_as_f64(
             .map(|&byte| i8::from_le_bytes([byte]) as f64)
             .collect()),
         "f32le" => embedding
-            .chunks_exact(4)
-            .map(|chunk| Ok(f32::from_le_bytes(chunk.try_into().unwrap()) as f64))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| Ok(f32::from_le_bytes(*chunk) as f64))
             .collect(),
         "f16le" => embedding
-            .chunks_exact(2)
-            .map(|chunk| Ok(f16::from_le_bytes(chunk.try_into().unwrap()).to_f64()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| Ok(f16::from_le_bytes(*chunk).to_f64()))
             .collect(),
         "pq4" => Err("pq4 embeddings cannot be decoded as arithmetic vectors".into()),
         other => Err(format!(
