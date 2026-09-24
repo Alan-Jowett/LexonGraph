@@ -197,7 +197,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "rand 0.9.4",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "secrecy",
  "serde",
  "serde_json",
@@ -1942,7 +1942,7 @@ dependencies = [
  "lexongraph-block-store",
  "pollster",
  "quick-xml 0.42.0",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
 ]
 
@@ -1988,7 +1988,7 @@ dependencies = [
  "httpdate",
  "lexongraph-block",
  "lexongraph-block-store",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tokio",
@@ -3155,11 +3155,11 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
+checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-core",
@@ -4000,7 +4000,7 @@ dependencies = [
  "futures",
  "pin-project",
  "rand 0.10.2",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "time",
