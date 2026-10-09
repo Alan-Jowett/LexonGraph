@@ -3003,6 +3003,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::double_must_use)]
     #[async_recursion(?Send)]
     async fn materialize_partition_from_terminal_children(
         &self,
@@ -5237,6 +5238,7 @@ impl<R, CR, EP> StreamingIndexingRunV2<R, CR, EP> {
         }
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_recursion(?Send)]
     async fn materialize_v2_partition_from_terminal_children(
         &self,
