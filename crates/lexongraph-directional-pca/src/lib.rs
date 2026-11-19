@@ -1284,8 +1284,8 @@ impl DirectionalPcaStreamingClassifier {
         validate_embedding(embedding, self.config.dimensions)?;
         let mut best_cluster = 0usize;
         let mut best_distance = squared_distance(embedding, self.centroids[0].as_slice())?;
-        for cluster_index in 1..self.centroids.len() {
-            let distance = squared_distance(embedding, self.centroids[cluster_index].as_slice())?;
+        for (cluster_index, centroid) in self.centroids.iter().enumerate().skip(1) {
+            let distance = squared_distance(embedding, centroid.as_slice())?;
             if distance < best_distance {
                 best_distance = distance;
                 best_cluster = cluster_index;
