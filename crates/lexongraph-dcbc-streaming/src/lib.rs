@@ -241,10 +241,10 @@ impl StreamingClusterClassifier for DcbcStreamingClassifier {
             normalized_embedding.as_slice(),
             self.normalized_centroids[0].as_slice(),
         )?;
-        for cluster_index in 1..self.normalized_centroids.len() {
+        for (cluster_index, centroid) in self.normalized_centroids.iter().enumerate().skip(1) {
             let candidate = cosine_distance_from_normalized(
                 normalized_embedding.as_slice(),
-                self.normalized_centroids[cluster_index].as_slice(),
+                centroid.as_slice(),
             )?;
             if candidate + EPSILON < best_distance {
                 best_distance = candidate;

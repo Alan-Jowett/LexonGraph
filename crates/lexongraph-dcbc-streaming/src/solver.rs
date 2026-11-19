@@ -247,8 +247,7 @@ impl MinCostFlow {
                     if !dist[node].is_finite() {
                         continue;
                     }
-                    for edge_index in 0..self.graph[node].len() {
-                        let edge = &self.graph[node][edge_index];
+                    for (edge_index, edge) in self.graph[node].iter().enumerate() {
                         if edge.capacity == 0 || edge.to == source {
                             continue;
                         }
